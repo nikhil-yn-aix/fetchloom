@@ -42,16 +42,19 @@ synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercia
 
 ## credentials
 
-hugging face credentials use this precedence, ignoring empty environment values:
+fetchloom reads each source's key where the source's own tools keep it, so a key made for them works here too. [`fetchloom auth`](../commands/auth.md) shows what was found and where, and signs you in. the first match wins; empty values and blank files are skipped.
 
-1. `HF_TOKEN`, used directly.
-2. the file named by `HF_TOKEN_PATH`.
-3. `token` inside `HF_HOME`.
-4. `huggingface/token` inside `XDG_CACHE_HOME`.
-5. `~/.cache/huggingface/token`.
+| account | where fetchloom looks, in order |
+|---|---|
+| hugging face | `HF_TOKEN`; the file `HF_TOKEN_PATH` names; `token` in `HF_HOME`; `huggingface/token` in `XDG_CACHE_HOME`; `~/.cache/huggingface/token`; the older `~/.huggingface/token` |
+| kaggle | `KAGGLE_API_TOKEN`, a key or a file holding one; `access_token` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`; `KAGGLE_USERNAME` and `KAGGLE_KEY`; `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle` |
+| zenodo, figshare, osf | `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`; then a key saved by `fetchloom auth login` |
+| dataverse | `DATAVERSE_API_TOKEN` for the installation `DATAVERSE_URL` names, as pyDataverse reads them; then a key saved for that host |
+| a host's login | the `machine` entry for that host in `.netrc`, or the file `NETRC` names; on windows `_netrc` when `.netrc` does not exist. `default` entries are ignored |
 
-the chosen value or file contents are trimmed. an unreadable file or blank token yields no credential; fetchloom does not try lower-priority locations after choosing one.
+| variable | effect |
+|---|---|
+| `FETCHLOOM_KEYRING` | `0` keeps keys out of the system's credential store; `auth login` then asks before saving them in a file only you can read |
+| `NETRC` | the `.netrc` file to read and to save logins in |
 
-other credentials are read from where each source already keeps them: `KAGGLE_API_TOKEN` or `~/.kaggle/access_token`, else `KAGGLE_USERNAME` and `KAGGLE_KEY` or `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`, `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`. a token never appears in `data.toml`, `data.lock`, logs or `--json` output.
-
-`DATAVERSE_TOKEN` is not read. use public dataverse links; an access refusal needs a public copy from the dataset's owner.
+a key goes over https only, to its own host, and never after a redirect leaves that host. a `.netrc` login also answers on later hops to its own host, as curl sends it. no key appears in `data.toml`, `data.lock`, logs or `--json` output.

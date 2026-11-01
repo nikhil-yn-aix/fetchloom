@@ -10,7 +10,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [source.rs](../../../src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `credentials` |
+| [source.rs](../../../src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `refused` |
 | [search.rs](../../../src/source/search.rs), [search/tests.rs](../../../src/source/search/tests.rs) | public catalog queries and interleaved candidates | `Candidate`, `Search`, `search`, `is_search` |
 | [recorded.rs](../../../src/source/recorded.rs) | in-memory answers for adapter tests | `Recorded`, `on`, `fixture`, `next`, `asked`, `block_on` |
 | [doi.rs](../../../src/source/doi.rs) | handle resolution and destination routing | `Doi`, `locate` |
@@ -19,7 +19,6 @@ adapters own source-specific identifiers, versions, listing pages and access err
 | [dataverse.rs](../../../src/source/dataverse.rs), [dataverse/version.rs](../../../src/source/dataverse/version.rs), [dataverse/file.rs](../../../src/source/dataverse/file.rs) | install host, published versions and individual file links | `Dataset`, `Version`, `listing`, `resolve` |
 | [osf.rs](../../../src/source/osf.rs), [osf/walk.rs](../../../src/source/osf/walk.rs) | nodes, folder pages and storage-link expiry | `Node`, `Entry`, `resolve`, `files`, `expiry_check` |
 | [hf.rs](../../../src/source/hf.rs), [hf/listing.rs](../../../src/source/hf/listing.rs), [hf/revision.rs](../../../src/source/hf/revision.rs), [hf/tree.rs](../../../src/source/hf/tree.rs) | repositories resolved and listed at one commit | `Repo`, `RepoKind`, `Info`, `resolve`, `revision`, `tree` |
-| [hf/token.rs](../../../src/source/hf/token.rs) | hugging face token discovery | `find` |
 | [kaggle.rs](../../../src/source/kaggle.rs), [kaggle/listing.rs](../../../src/source/kaggle/listing.rs), [kaggle/token.rs](../../../src/source/kaggle/token.rs) | dataset versions, paged files and credentials | `Dataset`, `resolve`, `find` |
 | [drive.rs](../../../src/source/drive.rs), [drive/folder.rs](../../../src/source/drive/folder.rs), [drive/link.rs](../../../src/source/drive/link.rs) | shared files, recursive folders and ambiguous open links | `Item`, `resolve`, `list`, `opened` |
 | [drive/page.rs](../../../src/source/drive/page.rs), [drive/html.rs](../../../src/source/drive/html.rs) | confirmation forms and access-error pages | `divert`, `between`, `attribute`, `text`, `unescape` |
@@ -51,8 +50,8 @@ listings accept at most 100,000 files per dataset before selection; OSF's walk a
 
 1. declare the adapter module and a `Reference` variant in `source.rs`. implement identifier parsing and display in the adapter, then wire `Reference::parse`, `Display`, pasted links in `link` and the relevant `known_host` cases. keep `Parsed.file` for file-specific links.
 2. wire `resolve_direct` and, for a DOI-capable repository, destination routing in [doi.rs](../../../src/source/doi.rs). return a checked `Listing`, preserve unavailable entries, bound pagination and pin the source's version when it offers one.
-3. update `fetch_plan` only if transfers need a page diversion or expired-link handler. keep credential origins and redirects in `Net`; add discovery through `source::credentials` when needed.
-4. choose existing [error kinds](../../../src/error.rs) for invalid references, refused access, unavailable data and malformed answers. update `source::token_for` and the adapter's access help to name credentials actually read. if a new kind is necessary, update its serialized name, exit mapping and [exit-code reference](../../user/reference/exit-codes.md).
+3. update `fetch_plan` only if transfers need a page diversion or expired-link handler. keep credential origins and redirects in `Net`. a source with an account adds an `Account` in [auth.rs](../../../src/auth.rs): where its key lives, its header and host, its token page and a check request.
+4. choose existing [error kinds](../../../src/error.rs) for invalid references, refused access, unavailable data and malformed answers. return refusals through `source::refused` or `Error::needs`, so the error names `fetchloom auth login` and a person at a terminal is offered to sign in. if a new kind is necessary, update its serialized name, exit mapping and [exit-code reference](../../user/reference/exit-codes.md).
 5. add recorded responses under [tests/fixtures/sources](../../../tests/fixtures/sources) and `Recorded` tests for parsing, display, paging, pins, missing files, access failures and malformed replies. cover command or transfer effects in [CLI tests](../../../tests/cli).
 6. add an ignored live test against a small public record, stating the host in its ignore reason. keep it separate from deterministic recorded coverage.
 7. if the source has a public search catalog, add its query and candidate mapping in [source/search.rs](../../../src/source/search.rs), recorded ranking/error tests in [search/tests.rs](../../../src/source/search/tests.rs), and update the documented catalog order and [CLI search tests](../../../tests/cli/search.rs).

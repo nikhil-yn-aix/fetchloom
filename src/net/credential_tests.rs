@@ -156,6 +156,58 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
 }
 
 #[test]
+fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
+    let net = Net::new(
+        Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials: vec![
+                Credential {
+                    host: "urs.earthdata.nasa.gov".to_owned(),
+                    header: "authorization",
+                    value: "Basic YWRhOnB3".to_owned(),
+                    every_hop: true,
+                },
+                Credential {
+                    host: "zenodo.org".to_owned(),
+                    header: "authorization",
+                    value: "Bearer z".to_owned(),
+                    every_hop: false,
+                },
+            ],
+            split: crate::net::Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    );
+    net.trust([
+        "archive.example".to_owned(),
+        "urs.earthdata.nasa.gov".to_owned(),
+        "zenodo.org".to_owned(),
+    ]);
+    // the way an earthdata archive signs a person in: away to the login host and back
+    let start = Url::parse("https://archive.example/granule").unwrap();
+    let (local, serving) = server(&[
+        "http://urs.earthdata.nasa.gov/oauth".to_owned(),
+        "https://urs.earthdata.nasa.gov/oauth".to_owned(),
+        "https://zenodo.org/not-the-first-origin".to_owned(),
+        "https://archive.example/granule?code=1".to_owned(),
+    ]);
+    let client = transport();
+    let answer = block_on(net.send(&start, |request| {
+        let request = request.build().unwrap();
+        client.get(local.clone()).headers(request.headers().clone())
+    }));
+    assert!(answer.is_ok());
+    assert_eq!(
+        serving.join().unwrap(),
+        [None, None, Some("Basic YWRhOnB3".to_owned()), None, None],
+        "the login goes over https to its host only; the token stays on its first origin"
+    );
+}
+
+#[test]
 fn a_bare_dataverse_token_has_no_host_to_send_it_to() {
     let var = |name: &str| (name == "DATAVERSE_TOKEN").then(|| OsString::from("unscoped-test"));
     assert!(crate::auth::credentials(&var).is_empty());
