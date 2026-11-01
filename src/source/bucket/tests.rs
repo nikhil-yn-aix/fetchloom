@@ -595,11 +595,15 @@ fn live_buckets() {
     let states =
         block_on(reference("gs://cloud-samples-data/bigquery/us-states/").resolve(&net)).unwrap();
     assert!(states.files.iter().any(|file| file.path == "us-states.csv"));
+    let moved = format!("s3://sentinel-cogs/{SENTINEL_PREFIX}");
+    let west = block_on(reference(&moved).resolve(&net)).unwrap();
+    assert!(west.files.iter().any(|file| file.path == "AOT.tif"));
     eprintln!(
-        "buckets: {} + {} + {} files, {} requests, {:?}",
+        "buckets: {} + {} + {} + {} files, {} requests, {:?}",
         openneuro.files.len(),
         folder.files.len(),
         states.files.len(),
+        west.files.len(),
         work.counts().requests,
         start.elapsed()
     );
