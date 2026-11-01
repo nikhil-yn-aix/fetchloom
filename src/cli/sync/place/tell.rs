@@ -113,7 +113,7 @@ fn warn_kept(output: &Output, placement: &Placement) {
                 kept.path
             ),
             Reason::Shared => format!(
-                "{} has changed in place through a hardlink, so every project sharing that file sees the change. it stays; if the change is not yours, `fetchloom sync --force` restores it",
+                "{} was edited, and the file is shared with other projects, so they see the edit too. it stays; `fetchloom sync --force` puts the original back",
                 kept.path
             ),
             Reason::Foreign => format!(

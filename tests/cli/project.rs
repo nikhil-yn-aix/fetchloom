@@ -285,7 +285,7 @@ fn an_edit_through_a_shared_link_says_every_project_sees_it() -> Result {
         assert_eq!(reason, "shared");
         let story = text(&sandbox.run(&["sync"])?.stderr)?;
         assert!(
-            story.contains("if the change is not yours, `fetchloom sync --force` restores it"),
+            story.contains("it stays; `fetchloom sync --force` puts the original back"),
             "{story}"
         );
     } else {

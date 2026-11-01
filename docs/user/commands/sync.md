@@ -54,7 +54,7 @@ a hardlink edit can change every project sharing the cache object. when the loca
 the kept-shared warning uses this wording, with `<path>` replaced by the affected path:
 
 ```text
-<path> has changed in place through a hardlink, so every project sharing that file sees the change. it stays; if the change is not yours, `fetchloom sync --force` restores it
+<path> was edited, and the file is shared with other projects, so they see the edit too. it stays; `fetchloom sync --force` puts the original back
 ```
 
 on windows, a directory listing can still show the recorded size and time after another link changed. a cache change mark then triggers a byte check; if that proves an otherwise unchanged alias damaged, sync repairs it and lists its path in `result.placement.restored`. an unseen change may need the editing project to sync, `cache verify`, or `sync --force` to trigger detection.
