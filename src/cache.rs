@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use changed::Doubt;
+pub(crate) use changed::{Doubt, may_follow};
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{NewObject, Sealed};

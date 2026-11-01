@@ -178,6 +178,13 @@ pub(super) fn doubted(metadata: &fs::Metadata, marked: Option<u64>) -> bool {
         })
 }
 
+/// whether a mark dated `marked` may have been written after `known`, a time read from the disk
+/// or the system clock. hfs+ cuts a file's time down to the second and fat to two, so a mark
+/// written just after `known` can carry an earlier time.
+pub(crate) fn may_follow(marked: u64, known: u64) -> bool {
+    marked.saturating_add(COARSE) > known
+}
+
 /// the step of the coarsest clock a cache may sit on: FAT and exFAT round a file's time up to
 /// two seconds, so an object edited just before its mark can look newer than the mark.
 const COARSE: u64 = 2_000_000_000;

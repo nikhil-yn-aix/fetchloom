@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use super::place::local;
-use crate::cache::Cache;
+use crate::cache::{self, Cache};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::name;
@@ -170,7 +170,8 @@ impl Survey {
     /// knew them to hold their bytes, while their listing still shows them as placed. on windows a
     /// folder's listing keeps the old size and time of a hardlink changed through another name, so
     /// the mark is the only sign of an edit made through another project. the link may also name
-    /// an older copy of the object than the one that changed, so only hashing settles it.
+    /// an older copy of the object than the one that changed, so only hashing settles it. a mark
+    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down.
     pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
         let changed = cache.changed();
         if changed.is_empty() {
@@ -181,9 +182,9 @@ impl Survey {
             .iter()
             .filter(|(path, placed)| {
                 placed.method == Method::Hardlink
-                    && changed
-                        .get(&placed.sha256)
-                        .is_some_and(|found| *found > placed.look.modified.max(placed.checked))
+                    && changed.get(&placed.sha256).is_some_and(|found| {
+                        cache::may_follow(*found, placed.look.modified.max(placed.checked))
+                    })
                     && self.disk.get(*path) == Some(&placed.look)
                     && !self.edited.contains(*path)
             })
@@ -561,6 +562,42 @@ mod tests {
         assert!(error.message.contains("data/file"));
         assert_eq!(survey.vouched.len(), 0);
         assert_eq!(survey.elsewhere.len(), 0);
+    }
+
+    #[test]
+    fn a_mark_whose_time_a_coarse_clock_cut_down_still_doubts_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/file"), b"bytes").unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
+        placed.look.modified = 0;
+        placed.checked = 1_700_000_000_500_000_000;
+        survey.disk.insert("data/file".to_owned(), placed.look);
+        cache.mark_changed(&placed.sha256).unwrap();
+        let mark = project
+            .root
+            .join("cache")
+            .join("changed")
+            .join(placed.sha256.hex());
+        survey.state.files.insert("data/file".to_owned(), placed);
+        for (seconds, doubted) in [(1_700_000_000, true), (1_699_999_997, false)] {
+            fs::File::options()
+                .write(true)
+                .open(&mark)
+                .unwrap()
+                .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
+                .unwrap();
+            assert_eq!(
+                survey.doubted(&cache).len(),
+                usize::from(doubted),
+                "{seconds}"
+            );
+        }
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default
