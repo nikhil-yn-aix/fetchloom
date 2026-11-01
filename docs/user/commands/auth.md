@@ -22,19 +22,19 @@ fetchloom auth logout [options] <account>
 
 ## signing in
 
-`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; nothing you type shows. fetchloom asks the source whose key it is, then asks before saving it:
+`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its ends and length show so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it:
 
 ```text
     Sign in hugging face
          1. open https://huggingface.co/settings/tokens
          2. create a token of the read type, or a fine-grained one that can read the repositories you need
-        key
+        key hf_A...x9Qz · 37 characters
     Checked the key works for ada
 save it to /home/ada/.cache/huggingface/token, where the hf command and the hugging face python libraries read it? [Y/n] yes
   Signed in to hugging face as ada · saved to /home/ada/.cache/huggingface/token
 ```
 
-answering no keeps the key for that command only. a key the source refuses is never saved.
+answering no keeps the key for that command only. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
 
 | account | where the key goes | also read by |
 |---|---|---|

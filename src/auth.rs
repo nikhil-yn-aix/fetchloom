@@ -254,7 +254,10 @@ impl Account {
                 bearer(token),
                 false,
             ),
-            Account::Kaggle => return None,
+            Account::Kaggle => {
+                let (host, value) = crate::source::kaggle_pasted(token)?;
+                (host.to_owned(), "authorization", value, false)
+            }
             Account::Zenodo => (
                 "zenodo.org".to_owned(),
                 "authorization",
@@ -317,7 +320,10 @@ impl Account {
                 "https://urs.earthdata.nasa.gov/api/users/tokens".into(),
                 |_| None,
             ),
-            Account::Kaggle | Account::Login(_) => return None,
+            Account::Kaggle => ("https://api.kaggle.com/v1/hello".into(), |v| {
+                text(&v["userName"])
+            }),
+            Account::Login(_) => return None,
         };
         Some(Check {
             url: Url::parse(&url).ok()?,

@@ -27,6 +27,22 @@ pub(super) fn find(var: Var<'_>) -> Option<String> {
     ))
 }
 
+/// the `authorization` value for a key a person pasted: the text of a `kaggle.json`, or a token.
+pub(super) fn pasted(secret: &str) -> Option<String> {
+    let secret = clean(secret)?;
+    if let Ok(Key {
+        username: Some(username),
+        key: Some(key),
+    }) = serde_json::from_str::<Key>(&secret)
+    {
+        return Some(format!(
+            "Basic {}",
+            crate::source::base64(format!("{}:{}", username.trim(), key.trim()).as_bytes())
+        ));
+    }
+    Some(format!("Bearer {secret}"))
+}
+
 /// `KAGGLE_API_TOKEN`, which holds a token or names a file holding one, else `access_token` or
 /// `access_token.txt` in `~/.kaggle`.
 fn api_token(var: Var<'_>) -> Option<String> {
@@ -130,6 +146,16 @@ mod tests {
             found(home, &[("KAGGLE_API_TOKEN", OsStr::new("KGAT_env"))]).as_deref(),
             Some("Bearer KGAT_env")
         );
+    }
+
+    #[test]
+    fn a_pasted_token_or_kaggle_json_becomes_the_header_kaggle_takes() {
+        assert_eq!(pasted(" KGAT_abc \n").as_deref(), Some("Bearer KGAT_abc"));
+        assert_eq!(
+            pasted(r#"{"username":"user","key":"key"}"#).as_deref(),
+            Some("Basic dXNlcjprZXk=")
+        );
+        assert_eq!(pasted("  "), None);
     }
 
     #[test]

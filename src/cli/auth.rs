@@ -169,7 +169,7 @@ async fn sign_in(
         login.with_token,
     )?;
     let place = saved_to.as_ref().map_or_else(
-        || "for this command only".to_owned(),
+        || "not saved, so it ends with this command".to_owned(),
         |to| format!("saved to {to}"),
     );
     let who = user

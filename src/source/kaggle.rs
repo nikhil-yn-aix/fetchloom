@@ -145,6 +145,10 @@ pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
         .collect()
 }
 
+pub(super) fn pasted(secret: &str) -> Option<(&'static str, String)> {
+    token::pasted(secret).map(|value| (HOST, value))
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;

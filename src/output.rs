@@ -367,11 +367,13 @@ impl Output {
                     answer => break answer,
                 }
             };
-            let _ = terminal.clear_line();
-            if let Ok(Some(yes)) = &answer {
-                let selected = if *yes { "yes" } else { "no" };
-                let _ = terminal.write_line(&format!("{question} {selected}"));
-            }
+            // the question may have wrapped, so the answer goes after it rather than over it
+            let selected = match &answer {
+                Ok(Some(true)) => "yes",
+                Ok(Some(false)) => "no",
+                _ => "",
+            };
+            let _ = terminal.write_line(selected);
             answer
         };
         match &self.bars {
@@ -381,7 +383,8 @@ impl Output {
     }
 
     /// asks for a line of text, such as a username, or returns none when nobody can answer.
-    /// with `hidden`, nothing typed or pasted shows, as for a key or a password.
+    /// with `hidden`, nothing typed or pasted shows until enter, then a masked echo confirms it
+    /// arrived. a blank answer is asked again, twice at most.
     pub(crate) fn ask_text(&self, prompt: &str, hidden: bool) -> Result<Option<String>, Error> {
         if !self.can_ask() {
             return Ok(None);
@@ -389,19 +392,39 @@ impl Output {
         let ask = || {
             let terminal = console::Term::stderr();
             let tone = paint(self.style.color, accent().bold());
-            let _ = terminal.write_str(&format!("{tone}{prompt:>11}{tone:#} "));
-            let read = if hidden {
-                terminal.read_secure_line()
-            } else {
-                terminal.read_line()
-            };
-            match read {
-                Ok(text) => Ok(Some(text.trim().to_owned())),
-                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                    Err(Error::new(crate::error::Kind::Interrupted, "stopped"))
+            let label = format!("{tone}{prompt:>11}{tone:#} ");
+            for _ in 0..3 {
+                let _ = terminal.write_str(&label);
+                let read = if hidden {
+                    terminal.read_secure_line()
+                } else {
+                    terminal.read_line()
+                };
+                let text = match read {
+                    Ok(text) => text.trim().to_owned(),
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(Error::new(crate::error::Kind::Interrupted, "stopped"));
+                    }
+                    Err(err) => return Err(Error::io("could not read from the terminal", &err)),
+                };
+                if hidden && !text.is_empty() {
+                    let _ = terminal.clear_last_lines(1);
+                    let _ = terminal.write_line(&format!("{label}{}", masked(&text)));
                 }
-                Err(err) => Err(Error::io("could not read from the terminal", &err)),
+                if !text.is_empty() {
+                    return Ok(Some(text));
+                }
+                let paste = if cfg!(windows) {
+                    "ctrl+v or a right click"
+                } else {
+                    "ctrl+shift+v or cmd+v"
+                };
+                let _ = terminal.write_line(&format!(
+                    "{:>11} nothing arrived; paste with {paste}, then press enter",
+                    ""
+                ));
             }
+            Ok(Some(String::new()))
         };
         match &self.bars {
             Some(bars) => bars.suspend(ask),
@@ -792,6 +815,21 @@ fn confirmation_key(
     }
 }
 
+/// a pasted secret shown without giving it away: a long key keeps 4 characters at each end so a
+/// person can tell which one arrived, anything shorter shows only as stars.
+fn masked(secret: &str) -> String {
+    let chars: Vec<char> = secret.chars().collect();
+    let count = chars.len();
+    let shown = if count >= 24 {
+        let start: String = chars[..4].iter().collect();
+        let end: String = chars[count - 4..].iter().collect();
+        format!("{start}...{end}")
+    } else {
+        "*".repeat(count.min(12))
+    };
+    format!("{shown} \u{b7} {count} characters")
+}
+
 /// `text` with control characters written out as escapes, so text from a server cannot move the
 /// cursor or recolor the terminal.
 fn plain(text: &str) -> Cow<'_, str> {
@@ -813,7 +851,17 @@ fn plain(text: &str) -> Cow<'_, str> {
 mod tests {
     use anstyle::Style as Paint;
 
-    use super::{Level, Output, Style, accented, plain, subject};
+    use super::{Level, Output, Style, accented, masked, plain, subject};
+
+    #[test]
+    fn a_pasted_secret_shows_only_its_ends_and_length() {
+        assert_eq!(
+            masked("KGAT_0123456789abcdef0123456789abcd"),
+            "KGAT...abcd \u{b7} 35 characters"
+        );
+        assert_eq!(masked("hunter2"), "******* \u{b7} 7 characters");
+        assert_eq!(masked(&"p".repeat(20)), "************ \u{b7} 20 characters");
+    }
 
     #[test]
     fn final_lines_share_the_verb_column_without_status_symbols() {

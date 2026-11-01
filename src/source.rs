@@ -281,6 +281,11 @@ pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
     kaggle::credentials(var)
 }
 
+/// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
+pub(crate) fn kaggle_pasted(secret: &str) -> Option<(&'static str, String)> {
+    kaggle::pasted(secret)
+}
+
 /// standard base64 with padding, which basic authentication sends.
 pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
