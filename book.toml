@@ -14,7 +14,7 @@ use-default-preprocessors = false
 default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/nikhil-yn-aix/fetchloom"
-edit-url-template = "https://github.com/nikhil-yn-aix/fetchloom/edit/main/docs/{path}"
+edit-url-template = "https://github.com/nikhil-yn-aix/fetchloom/edit/main/{path}"
 site-url = "/fetchloom/"
 
 [output.html.search]
