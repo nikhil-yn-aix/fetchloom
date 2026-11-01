@@ -3,9 +3,11 @@
 use std::fs;
 use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text};
+use crate::support::{
+    Part, Result, Sandbox, Server, delete, edit, file, reply, text, wait_until,
+};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -305,17 +307,6 @@ fn ambiguous_aliases() -> Result {
 }
 
 /// waits until `server` has seen `count` requests.
-fn requested(server: &Server, count: usize) -> Result {
-    let started = Instant::now();
-    while server.requests().len() < count {
-        if started.elapsed() > Duration::from_secs(60) {
-            return Err("the request never came".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    Ok(())
-}
-
 /// sets when `path` was last written, leaving its read-only flag as it was.
 fn set_time(path: &Path, time: SystemTime) -> Result {
     let before = fs::metadata(path)?.permissions();
@@ -499,7 +490,8 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
         ],
         b"",
     );
-    slow.push(Part::Pause(Duration::from_secs(2)));
+    let (release, held) = std::sync::mpsc::channel();
+    slow.push(Part::Wait(held));
     slow.push(Part::Bytes(V2.to_vec()));
     let iris = Server::start(
         "/files/iris.csv",
@@ -527,11 +519,12 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
         .env("FETCHLOOM_CACHE", sandbox.folder("empty-cache")?)
         .stderr(Stdio::piped())
         .spawn()?;
-    requested(&iris, 3)?;
+    wait_until("the download request", || Ok(iris.requests().len() >= 3))?;
     let outdated = sandbox.work().join("data").join("iris").join("iris.csv");
     let unneeded = sandbox.work().join("data").join("cows").join("cows.csv");
     edit(&outdated, b"my notes on iris\n")?;
     edit(&unneeded, b"my notes on cows\n")?;
+    drop(release);
     let output = sync.wait_with_output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");

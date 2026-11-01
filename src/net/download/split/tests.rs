@@ -367,7 +367,7 @@ fn a_pinned_file_splits_without_validators() {
 #[test]
 fn a_whole_answer_to_a_range_stops_splitting() {
     for when in [Splitting::Always, Splitting::WhenSlow] {
-        let body = body(4 * MIB);
+        let body = body(2 * MIB);
         let server = serve(
             body.clone(),
             Serving {
@@ -465,7 +465,7 @@ fn streams_are_added_only_while_the_download_gets_faster() {
 
 #[test]
 fn a_stream_is_added_only_when_a_slot_is_free() {
-    let body = body(4 * MIB);
+    let body = body(2 * MIB);
     let server = serve(body.clone(), SERVING);
     let net = net(&server.url, 1);
     let (_folder, cache) = cache();
