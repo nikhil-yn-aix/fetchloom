@@ -59,7 +59,7 @@ the final `extract=` value is `true` or `false`. `copy`, `path` and `project.dat
 
 an unchanged spec keeps the existing lock entry unless an upgrade is requested. filter or extraction edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 
-`resolved` is not always immutable. plain URLs, drive links, dropbox links and OSF nodes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
+`resolved` is not always immutable. plain URLs, drive links, dropbox links, OSF nodes and bucket prefixes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
 
 ## what each source records
 
@@ -76,6 +76,8 @@ an unchanged spec keeps the existing lock entry unless an upgrade is requested. 
 | hugging face | `hf:<kind>/<repo>@<commit>` | the repository's `/resolve/<commit>/<path>` URL on `huggingface.co` |
 | kaggle | `kaggle:<owner>/<dataset>@<version>` | `https://api.kaggle.com/v1/datasets/download/<owner>/<dataset>/<file>?datasetVersionNumber=<version>&raw=true` |
 | kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
+| S3 bucket | `s3://<bucket>/<prefix>` | the object's HTTPS URL on the endpoint that listed it |
+| cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
 
 DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment. a competition file kaggle sent as a zip of itself is recorded at its path plus `.zip`, with `unpacks_to`.
 

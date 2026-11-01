@@ -58,3 +58,5 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | `NETRC` | the `.netrc` file to read and to save logins in |
 
 a key goes over https only, to its own host, and never after a redirect leaves that host. a `.netrc` login also answers on later hops to its own host, as curl sends it. no key appears in `data.toml`, `data.lock`, logs or `--json` output.
+
+AWS and google cloud credentials, such as `AWS_ACCESS_KEY_ID`, `~/.aws` and `GOOGLE_APPLICATION_CREDENTIALS`, are not read. [public buckets](../sources/buckets.md) are listed and downloaded anonymously.

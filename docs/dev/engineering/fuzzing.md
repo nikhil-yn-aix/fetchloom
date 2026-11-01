@@ -11,6 +11,7 @@ bolero exercises five parsers inside their modules without exposing a separate p
 | `project::manifest::tests::fuzz_manifest` | [project/manifest.rs](../../../src/project/manifest.rs) | accepted manifests keep their invariants through dataset edits |
 | `source::drive::folder::tests::fuzz_drive_pages` | [source/drive/folder.rs](../../../src/source/drive/folder.rs) | folder and download-page parsing remains safe for arbitrary text |
 | `net::headers::tests::fuzz_response_headers` | [net/headers.rs](../../../src/net/headers.rs) | response headers and suggested filenames remain valid when accepted |
+| `source::bucket::xml::tests::fuzz_object_listings` | [source/bucket/xml.rs](../../../src/source/bucket/xml.rs) | the S3 XML reader never panics, and accepted elements have valid names |
 
 all targets must avoid panics. where a writer exists, round trips must preserve the accepted value. the test body remains beside the parser so a minimized failing input can become a nearby regression case.
 

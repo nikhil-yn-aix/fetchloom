@@ -23,6 +23,8 @@ adapters own source-specific identifiers, versions, listing pages and access err
 | [drive.rs](../../../src/source/drive.rs), [drive/folder.rs](../../../src/source/drive/folder.rs), [drive/link.rs](../../../src/source/drive/link.rs) | shared files, recursive folders and ambiguous open links | `Item`, `resolve`, `list`, `opened` |
 | [drive/page.rs](../../../src/source/drive/page.rs), [drive/html.rs](../../../src/source/drive/html.rs) | confirmation forms and access-error pages | `divert`, `between`, `attribute`, `text`, `unescape` |
 | [dropbox.rs](../../../src/source/dropbox.rs) | shared links, including folders served as zip | `Link`, `listing`, `fetch_plan` |
+| [bucket.rs](../../../src/source/bucket.rs), [bucket/s3.rs](../../../src/source/bucket/s3.rs), [bucket/gcs.rs](../../../src/source/bucket/gcs.rs) | public S3 and cloud storage prefixes, listed anonymously | `Prefix`, `Store`, `resolve`, `list` |
+| [bucket/xml.rs](../../../src/source/bucket/xml.rs) | the small XML reader for S3 answers | `Element`, `parse`, `unescape` |
 
 ## how it works
 
@@ -45,6 +47,14 @@ DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's h
 listings accept at most 100,000 files per dataset before selection; OSF's walk also counts folders. pagination is handled in the adapter and each page is parsed once. this cap does not bound total project size or the number of members inside archives.
 
 `fetch_plan` adds download-page handlers for drive and dropbox and expired-storage-link recognition for OSF. stable source URLs stay in the lock; redirected storage URLs and credentials do not become pins. `may_wrap` names the links whose file may arrive as a zip of itself, kaggle competition files: `Remote::expected_size` then checks no listed size, and `cli::fetch::wrapped` renames a file whose bytes are a zip of only that file to `<path>.zip`, so draft and `get` unpack it through the archive path and the lock records it with `unpacks_to`.
+
+### public buckets
+
+`bucket::Prefix` holds a store, a bucket and a key prefix. `s3://` and `gs://` references parse directly; `Prefix::from_link` takes only HTTPS links without a query whose path ends in `/` or names the bucket alone, so a single object link stays `Reference::Url`.
+
+S3 listing uses ListObjectsV2 with `encoding-type=url`, so keys with control characters survive the XML. a dotted bucket name goes path-style on `s3.amazonaws.com`, since the wildcard certificate does not cover it. a 301 or 400 that names a region, through `Response.region` (the `x-amz-bucket-region` header) or the error body, moves the listing to that regional endpoint once. [bucket/xml.rs](../../../src/source/bucket/xml.rs) reads elements, text, the five named entities and character references; it refuses document types and CDATA, so nothing can expand, and stops at 32 levels of nesting. cloud storage uses the JSON API with `fields` trimmed to name, size, `md5Hash` and generation, and pins each object URL to its generation.
+
+no credential is read for either store and none is attached to these hosts; `no_credential_is_kept_for_a_storage_host` checks `source::credentials`. an S3 ETag becomes an MD5 only without a `-`. in debug builds, `FETCHLOOM_TEST_BUCKETS` sends every request for an `amazonaws.com` or `storage.googleapis.com` host, listings and object bytes alike, to `/<host><path>` on a local server, which [CLI bucket tests](../../../tests/cli/buckets.rs) serve with `Routes`.
 
 ### add an adapter
 
@@ -75,6 +85,7 @@ listings accept at most 100,000 files per dataset before selection; OSF's walk a
 | [DOI tests](../../../src/source/doi/tests.rs), [dataverse tests](../../../src/source/dataverse/tests.rs) | `cargo test --locked --lib source::doi::`; `cargo test --locked --lib source::dataverse::` |
 | [drive folder tests](../../../src/source/drive/folder_tests.rs), [OSF walk tests](../../../src/source/osf/walk_tests.rs) | `cargo test --locked --lib source::drive::`; `cargo test --locked --lib source::osf::` |
 | [get.rs](../../../tests/cli/get.rs), [project.rs](../../../tests/cli/project.rs), [secrets.rs](../../../tests/cli/secrets.rs) | `cargo test --locked --test cli get::`; `cargo test --locked --test cli project::`; `cargo test --locked --test cli secrets::` |
+| [bucket tests](../../../src/source/bucket/tests.rs), [CLI bucket tests](../../../tests/cli/buckets.rs) | `cargo test --locked --lib source::bucket::`; `cargo test --locked --test cli buckets::` |
 
 replace the adapter name in the module selector for figshare, hugging face, kaggle or dropbox. there is no shared adapter conformance suite.
 

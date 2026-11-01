@@ -8,6 +8,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
 | cloud copying and mirroring | use a transfer application such as rclone |
+| private and requester-pays buckets | use the provider's own tools; fetchloom reads [public buckets](sources/buckets.md) only |
 | search beyond hugging face, kaggle and zenodo | choose a reference from the source's own catalog |
 | plugins | source adapters live in the fetchloom crate |
 | accounts, hosting and telemetry | fetchloom is a local command |
@@ -19,7 +20,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 
 ## commands and integrations not implemented
 
-`cite`, archive-service fallbacks, object-storage protocols, lab administration and shell completions are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.
+`cite`, archive-service fallbacks, lab administration and shell completions are not implemented. public S3 and google cloud storage buckets are listed anonymously over HTTPS; signed requests, other S3-compatible hosts and azure blob storage are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.
 
 see the [developer roadmap](../dev/roadmap.md) for future work. current commands are listed in the [command guide](commands/README.md).
 

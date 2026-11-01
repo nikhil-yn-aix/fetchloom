@@ -29,6 +29,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [kaggle](sources/kaggle.md) | use dataset versions and competitions with existing kaggle credentials |
 | [google drive](sources/google-drive.md) | use shared files or folders and exclude google docs |
 | [dropbox](sources/dropbox.md) | download shared files or folder zips |
+| [public cloud buckets](sources/buckets.md) | list and pin public S3 and google cloud storage prefixes |
 | [data.toml](reference/data-toml.md) | edit datasets, paths and selection patterns |
 | [data.lock](reference/data-lock.md) | inspect pins, spec hashes and archive tree hashes |
 | [JSON output](reference/json-output.md) | parse result fields, warnings and work counters |
