@@ -90,6 +90,9 @@ impl Cache {
         }
         if cfg!(windows) {
             set("LOCALAPPDATA").map(|path| path.join("fetchloom"))
+        } else if cfg!(target_os = "macos") {
+            // where macos keeps caches, which time machine skips
+            set("HOME").map(|home| home.join("Library").join("Caches").join("fetchloom"))
         } else {
             set("XDG_CACHE_HOME")
                 .or_else(|| set("HOME").map(|home| home.join(".cache")))
@@ -841,5 +844,23 @@ pub(crate) mod tests {
         assert_eq!(Cache::locate(&var), Some(PathBuf::from("/x/cache")));
         let none = |_: &str| None;
         assert_eq!(Cache::locate(&none), None);
+        let home = |name: &str| {
+            [
+                ("HOME", "/home/ada"),
+                ("XDG_CACHE_HOME", "/xdg"),
+                ("LOCALAPPDATA", "/local"),
+            ]
+            .into_iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| OsString::from(value))
+        };
+        let expected = if cfg!(windows) {
+            Path::new("/local").join("fetchloom")
+        } else if cfg!(target_os = "macos") {
+            Path::new("/home/ada/Library/Caches/fetchloom").to_path_buf()
+        } else {
+            Path::new("/xdg/fetchloom").to_path_buf()
+        };
+        assert_eq!(Cache::locate(&home), Some(expected));
     }
 }

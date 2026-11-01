@@ -64,10 +64,37 @@ fn roots(var: &dyn Fn(&str) -> Option<OsString>) -> Vec<(PathBuf, &'static str)>
                 .map(|root| (root, "dropbox")),
         );
     }
-    if let Some(home) = &home
-        && cfg!(windows)
-    {
-        roots.push((home.join("iCloudDrive"), "icloud drive"));
+    if let Some(home) = &home {
+        if cfg!(windows) {
+            roots.push((home.join("iCloudDrive"), "icloud drive"));
+        }
+        if cfg!(target_os = "macos") {
+            roots.extend(mac_roots(home));
+        }
+    }
+    roots
+}
+
+/// the folders macos sync clients own under `home`: icloud drive's, and those that onedrive,
+/// dropbox and other file provider clients keep in `Library/CloudStorage`, one per account,
+/// such as `OneDrive-Personal` or `Dropbox (Lab)`.
+fn mac_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
+    let library = home.join("Library");
+    let mut roots = vec![(library.join("Mobile Documents"), "icloud drive")];
+    let Ok(entries) = fs::read_dir(library.join("CloudStorage")) else {
+        return roots;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let client = if name.starts_with("OneDrive") {
+            "onedrive"
+        } else if name.starts_with("Dropbox") {
+            "dropbox"
+        } else {
+            continue;
+        };
+        roots.push((entry.path(), client));
     }
     roots
 }
@@ -99,6 +126,11 @@ fn same(a: Component<'_>, b: Component<'_>) -> bool {
     if cfg!(windows) {
         a.as_os_str().to_string_lossy().to_lowercase()
             == b.as_os_str().to_string_lossy().to_lowercase()
+    } else if cfg!(target_os = "macos") {
+        // apfs and hfs+ ignore case by default, and see one name in composed and decomposed
+        // unicode, which hfs+ stores decomposed
+        crate::name::fold(&a.as_os_str().to_string_lossy())
+            == crate::name::fold(&b.as_os_str().to_string_lossy())
     } else {
         a == b
     }
@@ -154,6 +186,65 @@ mod tests {
         assert_eq!(client(&personal.join("x"), &var), Some("dropbox"));
         assert_eq!(client(&business, &var), Some("dropbox"));
         assert_eq!(client(&home.path().join("elsewhere"), &var), None);
+    }
+
+    #[test]
+    fn macos_clients_keep_their_folders_in_the_library() {
+        let home = tempfile::tempdir().unwrap();
+        let storage = home.path().join("Library").join("CloudStorage");
+        for name in [
+            "OneDrive-Personal",
+            "OneDrive-Contoso",
+            "Dropbox",
+            "Dropbox (Lab)",
+            "GoogleDrive-ada@example.org",
+        ] {
+            fs::create_dir_all(storage.join(name)).unwrap();
+        }
+        let mut roots = mac_roots(home.path());
+        roots.sort();
+        let library = home.path().join("Library");
+        assert_eq!(
+            roots,
+            [
+                (storage.join("Dropbox"), "dropbox"),
+                (storage.join("Dropbox (Lab)"), "dropbox"),
+                (storage.join("OneDrive-Contoso"), "onedrive"),
+                (storage.join("OneDrive-Personal"), "onedrive"),
+                (library.join("Mobile Documents"), "icloud drive"),
+            ]
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            mac_roots(empty.path()),
+            [(
+                empty.path().join("Library").join("Mobile Documents"),
+                "icloud drive"
+            )]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_finds_icloud_drive_and_cloud_storage_by_home() {
+        let home = tempfile::tempdir().unwrap();
+        let onedrive = home.path().join("Library/CloudStorage/OneDrive-Personal");
+        fs::create_dir_all(&onedrive).unwrap();
+        let var = env(&[("HOME", home.path())]);
+        assert_eq!(client(&onedrive.join("thesis"), &var), Some("onedrive"));
+        let icloud = home
+            .path()
+            .join("Library/Mobile Documents/com~apple~CloudDocs");
+        assert_eq!(client(&icloud, &var), Some("icloud drive"));
+        assert_eq!(client(&home.path().join("projects"), &var), None);
+        assert_eq!(
+            client(
+                &home.path().join("library/cloudstorage/onedrive-personal"),
+                &var
+            ),
+            Some("onedrive"),
+            "names compare without case, as apfs compares them"
+        );
     }
 
     #[test]

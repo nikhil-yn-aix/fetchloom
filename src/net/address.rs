@@ -134,7 +134,8 @@ impl fmt::Display for Unknown {
 impl std::error::Error for Unknown {}
 
 /// whether a failed lookup said the name does not exist, rather than that DNS could not answer
-/// for now. getaddrinfo reports that only through its message on unix, glibc and musl alike.
+/// for now. getaddrinfo reports that only through its message on unix: glibc, musl and macos
+/// each word it their own way.
 fn is_unknown(err: &std::io::Error) -> bool {
     if cfg!(windows) {
         // WSAHOST_NOT_FOUND and WSANO_DATA
@@ -146,6 +147,7 @@ fn is_unknown(err: &std::io::Error) -> bool {
         "No address associated with hostname",
         "Name does not resolve",
         "Name has no usable address",
+        "nodename nor servname provided, or not known",
     ]
     .iter()
     .any(|said| text.contains(said))
@@ -312,6 +314,9 @@ mod tests {
             };
             assert!(is_unknown(&said("Name or service not known")));
             assert!(is_unknown(&said("Name does not resolve")));
+            assert!(is_unknown(&said(
+                "nodename nor servname provided, or not known"
+            )));
             assert!(!is_unknown(&said("Temporary failure in name resolution")));
             assert!(!is_unknown(&said("Try again")));
         }
