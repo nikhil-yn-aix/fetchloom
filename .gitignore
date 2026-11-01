@@ -2,3 +2,4 @@
 __fuzz__/
 __pycache__/
 /.cargo/config.toml
+/site
