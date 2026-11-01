@@ -46,9 +46,10 @@ cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers
 | [project/manifest.rs](../../src/project/manifest.rs), [project/lock.rs](../../src/project/lock.rs), [project/state.rs](../../src/project/state.rs) | distinguish requested data, pinned bytes and observations about local files |
 | [cli/project.rs](../../src/cli/project.rs), then [cli/sync.rs](../../src/cli/sync.rs) | follow `sync` from its project lock through scanning, resolution and placement |
 | [cli/sync/disk.rs](../../src/cli/sync/disk.rs), [cli/sync/place.rs](../../src/cli/sync/place.rs) | understand why an existing file is kept, adopted or replaced before changing disk behavior |
-| [cli/search.rs](../../src/cli/search.rs), [source/search.rs](../../src/source/search.rs), [cli/list.rs](../../src/cli/list.rs) | separate catalog discovery, explicit selection and project inventory from downloads |
+| [cli/search.rs](../../src/cli/search.rs), [source/search.rs](../../src/source/search.rs), [output/picker.rs](../../src/output/picker.rs), [cli/list.rs](../../src/cli/list.rs) | separate catalog discovery, the arrow-key choice, explicit selection and project inventory from downloads |
 | [source.rs](../../src/source.rs), then one adapter | see how a reference becomes a listing without mixing source policy into the downloader |
-| [net/download.rs](../../src/net/download.rs), [cache/partial.rs](../../src/cache/partial.rs), [cache/partial/hashing.rs](../../src/cache/partial/hashing.rs) | trace response bytes through the writer, hash worker and cache publication |
+| [net/download.rs](../../src/net/download.rs), [cache/partial.rs](../../src/cache/partial.rs), [cache/partial/hashing.rs](../../src/cache/partial/hashing.rs), [cache/deferred.rs](../../src/cache/deferred.rs) | trace response bytes through the writer, hash worker and cache publication, including the one flush per batch on linux |
+| [output.rs](../../src/output.rs), [output/style.rs](../../src/output/style.rs) | see every line fetchloom prints, the color tones and how `FETCHLOOM_COLORS` changes them |
 | [archive.rs](../../src/archive.rs), [plan.rs](../../src/plan.rs), [place.rs](../../src/place.rs) | follow archive members into checked destinations and filesystem operations |
 | [tests/cli/support.rs](../../tests/cli/support.rs), then the matching scenario | learn how to reproduce behavior with local servers and isolated folders |
 
