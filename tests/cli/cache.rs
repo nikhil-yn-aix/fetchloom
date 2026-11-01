@@ -339,21 +339,27 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
 
     let sandbox = Sandbox::new()?;
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-    let object = sandbox
-        .cache()
-        .join("objects")
-        .join(&digest[..2])
-        .join(&digest[2..]);
-    fs::create_dir_all(object.parent().unwrap())?;
     // a sparse file keeps hashing busy without allocating its payload on disk. hfs+ has no
-    // sparse files and must find room for the whole length, so a smaller one stands in there.
-    let file = fs::File::create(&object)?;
-    if file.set_len(64 * 1024 * 1024 * 1024).is_err() {
-        file.set_len(2 * 1024 * 1024 * 1024)?;
-    }
-    drop(file);
+    // sparse files, so there the cache moves to the build's folder, which usually has them.
+    let build = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR"))?;
+    let mut cache = sandbox.cache();
+    let object = loop {
+        let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
+        fs::create_dir_all(object.parent().unwrap())?;
+        let file = fs::File::create(&object)?;
+        if file.set_len(64 * 1024 * 1024 * 1024).is_ok() {
+            break object;
+        }
+        drop(file);
+        fs::remove_file(&object)?;
+        if cache.starts_with(build.path()) {
+            return Ok(());
+        }
+        cache = build.path().join("cache");
+    };
     let mut child = sandbox
         .command(&["cache", "verify"])
+        .env("FETCHLOOM_CACHE", &cache)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -400,7 +406,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     assert_eq!(status.code(), Some(130), "{report}");
     assert!(report.contains("stopped"), "{report}");
     assert!(object.exists());
-    assert_eq!(fs::read_dir(sandbox.cache().join("changed"))?.count(), 0);
+    assert_eq!(fs::read_dir(cache.join("changed"))?.count(), 0);
     Ok(())
 }
 
