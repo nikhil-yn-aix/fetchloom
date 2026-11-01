@@ -659,6 +659,82 @@ fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>)
     }
 }
 
+/// a server on this machine that answers by request target, the path and query, as a service
+/// with many URLs does: the same answer to every request for one target, any number of times,
+/// and 404 for a target it does not know.
+pub(crate) struct Routes {
+    pub(crate) url: String,
+    requests: Arc<Mutex<Vec<String>>>,
+    _running: ServerTask,
+}
+
+impl Routes {
+    /// serves each `(target, response)` pair, where a response is what [`reply`] or [`file`]
+    /// builds.
+    pub(crate) fn start(routes: Vec<(String, Vec<Part>)>) -> Result<Routes> {
+        let mut answers = std::collections::HashMap::new();
+        for (target, parts) in routes {
+            let mut bytes = Vec::new();
+            for part in parts {
+                if let Part::Bytes(part) = part {
+                    bytes.extend(part);
+                }
+            }
+            answers.insert(target, bytes);
+        }
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        let running = ServerTask::start(listener, move |listener, stop| {
+            let missing = head("404 Not Found", &[("Content-Length", "0")]);
+            while let Some((mut stream, _connection)) = stop.accept(&listener) {
+                let asked = read_head(&mut stream);
+                let target = asked
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split(' ').nth(1))
+                    .unwrap_or_default()
+                    .to_owned();
+                if let Ok(mut seen) = seen.lock() {
+                    seen.push(asked.clone());
+                }
+                let answer = answers.get(&target).unwrap_or(&missing);
+                let _ = stream.write_all(answer);
+                let _ = stream.flush();
+            }
+        })?;
+        Ok(Routes {
+            url,
+            requests,
+            _running: running,
+        })
+    }
+
+    /// the head of every request so far, lowercased.
+    pub(crate) fn requests(&self) -> Vec<String> {
+        self.heads()
+            .iter()
+            .map(|head| head.to_ascii_lowercase())
+            .collect()
+    }
+
+    /// the target of every request so far, as sent.
+    pub(crate) fn targets(&self) -> Vec<String> {
+        self.heads()
+            .iter()
+            .filter_map(|head| head.lines().next()?.split(' ').nth(1).map(str::to_owned))
+            .collect()
+    }
+
+    fn heads(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .map(|requests| requests.clone())
+            .unwrap_or_default()
+    }
+}
+
 fn read_head(stream: &mut TcpStream) -> String {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];

@@ -3,6 +3,7 @@
 mod archives;
 mod auth;
 mod basics;
+mod buckets;
 mod cache;
 mod caps;
 mod concurrent;
