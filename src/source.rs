@@ -44,6 +44,7 @@ pub(crate) enum Reference {
     Osf(osf::Node),
     HuggingFace(hf::Repo),
     Kaggle(kaggle::Dataset),
+    KaggleCompetition(kaggle::Competition),
     Drive(drive::Item),
     Dropbox(dropbox::Link),
 }
@@ -124,7 +125,7 @@ impl Reference {
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
             "hf" => whole(Reference::HuggingFace(hf::Repo::parse(rest)?)),
-            "kaggle" => whole(Reference::Kaggle(kaggle::Dataset::parse(rest)?)),
+            "kaggle" => whole(kaggle::parse(rest)?),
             "drive" => whole(Reference::Drive(drive::Item::parse(rest)?)),
             _ => Err(unknown(text)),
         }
@@ -210,6 +211,7 @@ impl Reference {
             Reference::Osf(node) => node.resolve(api).await,
             Reference::HuggingFace(repo) => repo.resolve(api).await,
             Reference::Kaggle(dataset) => dataset.resolve(api).await,
+            Reference::KaggleCompetition(competition) => competition.resolve(api).await,
             Reference::Drive(item) => item.resolve(api).await,
             Reference::Dropbox(link) => Ok(link.listing()),
         }
@@ -227,6 +229,7 @@ impl fmt::Display for Reference {
             Reference::Osf(node) => write!(f, "{node}"),
             Reference::HuggingFace(repo) => write!(f, "{repo}"),
             Reference::Kaggle(dataset) => write!(f, "{dataset}"),
+            Reference::KaggleCompetition(competition) => write!(f, "{competition}"),
             Reference::Drive(item) => write!(f, "{item}"),
             Reference::Dropbox(link) => write!(f, "{link}"),
         }
@@ -327,16 +330,10 @@ fn link(text: &str) -> Result<Parsed, Error> {
         .or_else(|| {
             hf::Repo::from_link(&url).map(|(repo, file)| (Reference::HuggingFace(repo), file))
         })
-        .or_else(|| {
-            kaggle::Dataset::from_link(&url)
-                .map(|(dataset, file)| (Reference::Kaggle(dataset), file))
-        })
+        .or_else(|| kaggle::from_link(&url))
         .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
         .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)));
     let Some((reference, file)) = routed else {
-        if let Some(competition) = kaggle::competition_link(&url) {
-            return Err(competition);
-        }
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,
@@ -623,6 +620,11 @@ mod tests {
             (
                 "https://www.kaggle.com/datasets/uciml/iris/versions/2",
                 "kaggle:uciml/iris@2",
+            ),
+            ("kaggle:competitions/titanic", "kaggle:competitions/titanic"),
+            (
+                "https://www.kaggle.com/c/titanic/data",
+                "kaggle:competitions/titanic",
             ),
             (
                 "https://drive.google.com/file/d/1AbCdEfGhIjK/view?usp=sharing",

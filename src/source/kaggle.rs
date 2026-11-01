@@ -1,6 +1,7 @@
-//! kaggle: datasets by owner and name, listed at one version through kaggle's API and downloaded
-//! one file at a time.
+//! kaggle: datasets by owner and name, listed at one version through kaggle's API, and
+//! competitions by name, listed for a signed-in account. both download one file at a time.
 
+mod competition;
 mod listing;
 mod token;
 
@@ -8,12 +9,42 @@ use std::fmt;
 
 use url::Url;
 
-use super::{Var, malformed};
-use crate::error::{Error, Kind};
+pub(crate) use self::competition::Competition;
+use super::{Reference, Var, malformed};
+use crate::error::Error;
 use crate::net::Credential;
 
 /// the host of kaggle's API, and the only host kaggle's credentials go to.
 const HOST: &str = "api.kaggle.com";
+
+/// reads the part after `kaggle:`: a dataset such as `uciml/iris@2`, or a competition such as
+/// `competitions/titanic`.
+pub(super) fn parse(text: &str) -> Result<Reference, Error> {
+    match text.trim().split_once('/') {
+        Some((owner, slug)) if owner.eq_ignore_ascii_case("competitions") => {
+            Competition::parse(slug).map(Reference::KaggleCompetition)
+        }
+        _ => Dataset::parse(text).map(Reference::Kaggle),
+    }
+}
+
+/// a pasted kaggle.com link to a dataset or a competition, and the file in it when the link
+/// selects one.
+pub(super) fn from_link(url: &Url) -> Option<(Reference, Option<String>)> {
+    Dataset::from_link(url)
+        .map(|(dataset, file)| (Reference::Kaggle(dataset), file))
+        .or_else(|| {
+            Competition::from_link(url)
+                .map(|(competition, file)| (Reference::KaggleCompetition(competition), file))
+        })
+}
+
+/// the file a kaggle.com link selects with `?select=`, as its data pages do.
+fn selected(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(name, value)| name == "select" && !value.is_empty())
+        .map(|(_, value)| value.into_owned())
+}
 
 /// a kaggle dataset, at a version or at its newest one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,8 +55,8 @@ pub(crate) struct Dataset {
 }
 
 impl Dataset {
-    /// reads the part after `kaggle:`, such as `uciml/iris` or `uciml/iris@2`.
-    pub(super) fn parse(text: &str) -> Result<Dataset, Error> {
+    /// reads a dataset after `kaggle:`, such as `uciml/iris` or `uciml/iris@2`.
+    fn parse(text: &str) -> Result<Dataset, Error> {
         let bad = || {
             malformed(
                 &format!("kaggle:{text}"),
@@ -41,9 +72,6 @@ impl Dataset {
         if !is_part(owner) || !is_part(slug) {
             return Err(bad());
         }
-        if owner == "competitions" {
-            return Err(competition(slug));
-        }
         Ok(Dataset {
             owner: owner.to_owned(),
             slug: slug.to_owned(),
@@ -52,7 +80,7 @@ impl Dataset {
     }
 
     /// a pasted kaggle.com dataset link, and the file in it when the link selects one.
-    pub(super) fn from_link(url: &Url) -> Option<(Dataset, Option<String>)> {
+    fn from_link(url: &Url) -> Option<(Dataset, Option<String>)> {
         let parts = parts(url)?;
         let ["datasets", owner, slug, rest @ ..] = parts.as_slice() else {
             return None;
@@ -64,35 +92,13 @@ impl Dataset {
             ["versions", version, ..] => Some(version.parse().ok()?),
             _ => None,
         };
-        let file = url
-            .query_pairs()
-            .find(|(name, value)| name == "select" && !value.is_empty())
-            .map(|(_, value)| value.into_owned());
         let dataset = Dataset {
             owner: (*owner).to_owned(),
             slug: (*slug).to_owned(),
             version,
         };
-        Some((dataset, file))
+        Some((dataset, selected(url)))
     }
-}
-
-/// the refusal for a pasted link to a kaggle competition.
-pub(super) fn competition_link(url: &Url) -> Option<Error> {
-    match parts(url)?.as_slice() {
-        ["competitions" | "c", slug, ..] if is_part(slug) => Some(competition(slug)),
-        _ => None,
-    }
-}
-
-/// the refusal for a kaggle competition, whose data comes with rules each person accepts on
-/// kaggle.com.
-fn competition(slug: &str) -> Error {
-    Error::new(
-        Kind::ReferenceInvalid,
-        format!("{slug} is a kaggle competition, which fetchloom does not fetch"),
-    )
-    .help(format!("accept its rules at https://www.kaggle.com/competitions/{slug}/rules, then download it with the kaggle CLI: kaggle competitions download -c {slug}"))
 }
 
 /// the parts of a kaggle.com link's path.
@@ -143,6 +149,7 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+    use crate::error::Kind;
 
     fn link(text: &str) -> Option<(String, Option<String>)> {
         Dataset::from_link(&Url::parse(text).unwrap())
@@ -191,29 +198,53 @@ mod tests {
     }
 
     #[test]
-    fn competitions_are_refused_with_the_way_to_get_them() {
+    fn competitions_are_read_from_ids_and_links() {
+        let reference = |text: &str| match Reference::parse(text).unwrap() {
+            crate::source::Parsed {
+                reference: Reference::KaggleCompetition(competition),
+                file,
+            } => (competition.to_string(), file),
+            other => panic!("{text}: {other:?}"),
+        };
+        let titanic = || ("kaggle:competitions/titanic".to_owned(), None);
         for text in [
+            "kaggle:competitions/titanic",
+            "kaggle:Competitions/titanic",
             "https://www.kaggle.com/competitions/titanic",
+            "https://www.kaggle.com/competitions/titanic/data",
+            "https://kaggle.com/c/titanic",
             "https://www.kaggle.com/c/titanic/data",
         ] {
-            let err = competition_link(&Url::parse(text).unwrap()).unwrap();
-            assert_eq!(err.kind, Kind::ReferenceInvalid, "{text}");
-            assert!(
-                err.message.contains("titanic is a kaggle competition"),
-                "{text}"
-            );
-            let help = err.help.unwrap();
-            assert!(
-                help.contains("https://www.kaggle.com/competitions/titanic/rules")
-                    && help.contains("kaggle competitions download -c titanic"),
-                "{help}"
-            );
+            assert_eq!(reference(text), titanic(), "{text}");
         }
-        let typed = Dataset::parse("competitions/titanic").unwrap_err();
-        assert!(typed.message.contains("kaggle competition"));
+        assert_eq!(
+            reference("https://www.kaggle.com/competitions/titanic/data?select=train.csv"),
+            (
+                "kaggle:competitions/titanic".to_owned(),
+                Some("train.csv".to_owned())
+            )
+        );
+        for bad in [
+            "kaggle:competitions/titanic@2",
+            "kaggle:competitions/",
+            "kaggle:competitions/..",
+            "kaggle:competitions/titanic/data",
+        ] {
+            let err = Reference::parse(bad).unwrap_err();
+            assert_eq!(err.kind, Kind::ReferenceInvalid, "{bad}");
+        }
         assert!(
-            competition_link(&Url::parse("https://www.kaggle.com/datasets/uciml/iris").unwrap())
-                .is_none()
+            Reference::parse("kaggle:competitions/titanic@2")
+                .unwrap_err()
+                .help
+                .unwrap()
+                .contains("no versions")
+        );
+        assert!(
+            Reference::parse("https://www.kaggle.com/competitions")
+                .unwrap_err()
+                .message
+                .contains("kaggle link")
         );
     }
 
