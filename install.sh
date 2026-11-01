@@ -45,12 +45,17 @@ fi
 
 system=$(uname -s)
 machine=$(uname -m)
+# a shell under rosetta reports x86_64 on apple silicon, where the arm64 build runs natively
+if [ "$system/$machine" = Darwin/x86_64 ] && [ "$(sysctl -n sysctl.proc_translated 2> /dev/null)" = 1 ]; then
+    machine=arm64
+fi
 case "$system/$machine" in
-    Linux/x86_64 | Linux/amd64) arch=x86_64 ;;
-    Linux/aarch64 | Linux/arm64) arch=aarch64 ;;
-    *) fail "there is no fetchloom build for $system on $machine. supported linux machines: x86_64, amd64, aarch64, arm64. build it from source: $repository#install" ;;
+    Linux/x86_64 | Linux/amd64) target=x86_64-unknown-linux-musl ;;
+    Linux/aarch64 | Linux/arm64) target=aarch64-unknown-linux-musl ;;
+    Darwin/x86_64) target=x86_64-apple-darwin ;;
+    Darwin/arm64 | Darwin/aarch64) target=aarch64-apple-darwin ;;
+    *) fail "there is no fetchloom build for $system on $machine. supported machines: linux on x86_64, amd64, aarch64 or arm64, and macos on x86_64 or arm64. build it from source: $repository#install" ;;
 esac
-target=$arch-unknown-linux-musl
 
 version=${1:-${FETCHLOOM_VERSION:-}}
 version=${version#v}
@@ -118,10 +123,16 @@ case ":$PATH:" in
         # shellcheck disable=SC2016
         export_line='export PATH="$HOME/.local/bin:$PATH"'
         changed=''
+        # zsh, the default shell on macos, never reads ~/.profile, so macos gets a ~/.zshrc
+        always="$HOME/.profile"
+        if [ "$system" = Darwin ]; then
+            always="$always $HOME/.zshrc"
+        fi
         for profile in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
-            if [ "$profile" != "$HOME/.profile" ] && [ ! -f "$profile" ]; then
-                continue
-            fi
+            case " $always " in
+                *" $profile "*) ;;
+                *) [ -f "$profile" ] || continue ;;
+            esac
             if ! grep -qsxF "$export_line" "$profile"; then
                 printf '\n# added by the fetchloom installer\n%s\n' "$export_line" >> "$profile"
                 changed="$changed ~/${profile##*/}"

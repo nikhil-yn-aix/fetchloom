@@ -15,6 +15,10 @@ env:
   # visual c++ redistributable
   CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
   CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
+  # the oldest macos the binaries and wheels run on, the first that runs on apple silicon
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
+  # keeps macos tar from adding ._ files that carry extended attributes
+  COPYFILE_DISABLE: '1'
   # `fetchloom --version -v` names the commit a release was built from
   FETCHLOOM_COMMIT: ${{ github.sha }}
 
@@ -54,6 +58,18 @@ jobs:
             python: python3
             scripts: bin
             wheel-tags: --compatibility manylinux2014 musllinux_1_2
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            exe: ''
+            python: python3
+            scripts: bin
+            wheel-tags: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            exe: ''
+            python: python3
+            scripts: bin
+            wheel-tags: ''
     defaults:
       run:
         shell: bash
@@ -100,6 +116,25 @@ jobs:
               *) echo "::error::$name links shared libraries"; exit 1 ;;
             esac
           done
+      - name: check that the macos binary links only system libraries
+        if: runner.os == 'macOS'
+        run: |
+          for name in fetchloom; do
+            binary="target/${{ matrix.target }}/release/$name"
+            libraries=$(otool -L "$binary" | tail -n +2)
+            echo "otool -L $name:"
+            echo "$libraries"
+            if echo "$libraries" | grep -vqE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
+              echo "::error::$name links libraries macos does not ship"
+              exit 1
+            fi
+            minimum=$(otool -l "$binary" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "minos" { print $2; exit }')
+            echo "$name runs on macos $minimum and later"
+            if [ "$minimum" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+              echo "::error::$name needs macos $minimum, not $MACOSX_DEPLOYMENT_TARGET"
+              exit 1
+            fi
+          done
       - name: check that the windows binary carries its C runtime
         if: runner.os == 'Windows'
         shell: pwsh
@@ -133,6 +168,9 @@ jobs:
           cd .release
           if [ "$RUNNER_OS" = Windows ]; then
             7z a -tzip -bso0 "../dist/$name.zip" "$name"
+          elif [ "$RUNNER_OS" = macOS ]; then
+            # bsdtar names the owner with --uid and --gid rather than gnu tar's --owner
+            tar --uid 0 --gid 0 --numeric-owner --no-xattrs -czf "../dist/$name.tar.gz" "$name"
           else
             tar --owner=0 --group=0 --numeric-owner -czf "../dist/$name.tar.gz" "$name"
           fi
@@ -173,13 +211,15 @@ jobs:
       - name: build the wheel
         run: |
           "${{ matrix.python }}" -m venv .release/maturin
-          # the x86_64 and arm64 linux and windows wheels of maturin 1.16.0 on pypi
+          # the x86_64 and arm64 linux, windows and macos wheels of maturin 1.16.0 on pypi
           cat > .release/maturin.txt <<'EOF'
           maturin==1.16.0 \
             --hash=sha256:837db2f4d93d4899c3ac393fb3cc9eebf35b6002336e5d574f4a4fb6c49fe283 \
             --hash=sha256:9d43a2adf51a2794e907a8f7dbad06eb114d5edb0909c73c1fa9040f15e584e9 \
             --hash=sha256:e285ec9eb10243d45d10417178cb2eb76e0cbb184d0aa4378b503489fa12ee78 \
-            --hash=sha256:95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f
+            --hash=sha256:95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f \
+            --hash=sha256:131fcc17ddb3ccc48aa183d2172ebf994c322b858e1b9694fb8744d783df66f6 \
+            --hash=sha256:2216d731c9324869d3bff72c0c73009bb6e640b3fa7d340174ae70dc874d1d9f
           EOF
           .release/maturin/${{ matrix.scripts }}/python -m pip install --quiet --disable-pip-version-check \
             --require-hashes --only-binary :all: -r .release/maturin.txt

@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm]
+        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm, macos-latest]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,7 +54,7 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
       - run: python3 -m unittest discover -s python
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
       - run: python -m unittest discover -s python
         if: matrix.os == 'windows-latest'
       # the benchmark harness and its charts need only the standard library
@@ -113,3 +113,11 @@ jobs:
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then echo "tests failed on$failed"; exit 1; fi
+      # apfs keeps a name in the unicode composition it was given, while hfs+, on many older
+      # external drives, lists every name decomposed. both see the two compositions as one name
+      - name: cargo test on hfs+
+        if: matrix.os == 'macos-latest'
+        run: |
+          hdiutil create -quiet -size 4g -fs HFS+ -volname hfs "$RUNNER_TEMP/hfs.dmg"
+          hdiutil attach -quiet -nobrowse -mountpoint "$RUNNER_TEMP/hfs" "$RUNNER_TEMP/hfs.dmg"
+          TMPDIR="$RUNNER_TEMP/hfs" cargo test --locked --no-fail-fast -- --skip source:: --skip net:: --skip glob:: --skip name:: --skip output:: --skip units:: --skip digest:: --skip error:: --skip basics:: --skip hints:: --skip progress:: --skip proxy:: --skip secrets:: --skip split:: --skip search:: --skip caps::
