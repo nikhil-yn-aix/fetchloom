@@ -19,6 +19,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [get](commands/get.md) | fetch data once without project files |
 | [cache](commands/cache.md) | inspect, collect or verify cached bytes |
 | [auth](commands/auth.md) | sign in for private, restricted or gated data with one key |
+| [completions](commands/completions.md) | let your shell complete commands and options |
 | [sources](sources/README.md) | compare accepted references, pins, credentials and limits |
 | [URLs and DOIs](sources/urls-and-dois.md) | fetch a direct link or resolve a persistent handle |
 | [zenodo](sources/zenodo.md) | choose records or individual record files |
@@ -40,6 +41,7 @@ fetchloom manages research inputs through a manifest, a lock and one shared cach
 | [scripting](scripting.md) | use JSON recipes or the python helper |
 | [AI agents](ai-agents.md) | let a coding agent find and fetch data safely |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |
+| [macos](macos.md) | find the cache, use apfs clones and icloud drive, and handle unicode names |
 | [troubleshooting](troubleshooting.md) | match a symptom to its cause and fix |
 | [limits](limits.md) | check what fetchloom does not do |
 

@@ -28,7 +28,7 @@ cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers
 
 | folder | what lives there |
 |---|---|
-| [.github](https://github.com/nikhil-yn-aix/fetchloom/tree/main/.github) | CI and release workflows, including linux and windows on x86_64 and arm64 |
+| [.github](https://github.com/nikhil-yn-aix/fetchloom/tree/main/.github) | CI and release workflows, including linux, windows and macos on x86_64 and arm64 |
 | [bench](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md) | linux benchmark runner, native client adapters, public-service comparisons and result rendering |
 | [docs](../README.md) | [user documentation](../user/README.md) and this contributor guide |
 | [python](https://github.com/nikhil-yn-aix/fetchloom/tree/main/python) | a typed subprocess wrapper around `fetchloom --json` and its unittest cases; no rust bindings |

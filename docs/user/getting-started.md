@@ -11,7 +11,7 @@ cargo install --locked --git https://github.com/nikhil-yn-aix/fetchloom
 fetchloom --version
 ```
 
-fetchloom supports windows and linux on x86_64 and arm64. windows needs windows 10 or later; macos is not supported. [building and testing](../dev/engineering/building-and-testing.md) covers the pinned rust toolchain and platform setup.
+fetchloom supports windows, linux and macos on x86_64 and arm64. windows needs windows 10 or later and macos needs macos 11 or later; on macos, `xcode-select --install` provides the C toolchain. [building and testing](../dev/engineering/building-and-testing.md) covers the pinned rust toolchain and platform setup, and [macos](macos.md) covers the cache folder, clones and synced folders there.
 
 for the executable together with the [python helper](scripting.md#python-helper), install the python package from source instead. a [shell alias](windows.md#short-name) can give the executable a shorter name.
 

@@ -1,6 +1,6 @@
 # fetchloom
 
-fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `data.toml` is the shopping list, `data.lock` is the receipt pinning files by SHA-256 and size, and the shared cache is the pantry. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
+fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64. `data.toml` is the shopping list, `data.lock` is the receipt pinning files by SHA-256 and size, and the shared cache is the pantry. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
 
 ## using fetchloom
 
@@ -20,6 +20,7 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 - [get](docs/user/commands/get.md): one-off downloads and existing-folder rules
 - [cache](docs/user/commands/cache.md): inspection, garbage collection and verification
 - [auth](docs/user/commands/auth.md): signing in once, with keys shared with each source's own tools
+- [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish
 - [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each family
 - [public cloud buckets](docs/user/sources/buckets.md): anonymous `s3://` and `gs://` prefixes, listing, pins and the public-only rule
 - [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules and patterns
@@ -33,6 +34,7 @@ fetchloom is uv for research data on windows and linux, on x86_64 and arm64. `da
 - [AI agents](docs/user/ai-agents.md): the agent skill, JSON contract and why there is no MCP server
 - [agent skill](skills/fetchloom/SKILL.md): which command fits which task, safe flags and reading failures
 - [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders and long paths
+- [macos](docs/user/macos.md): cache location, apfs clones, icloud drive and cloud storage folders, unicode names
 - [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
 - [limits](docs/user/limits.md): excluded workflows and reproducibility boundaries
 

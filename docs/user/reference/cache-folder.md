@@ -13,6 +13,7 @@ fetchloom cache gc
 | platform | default root |
 |---|---|
 | linux | `$XDG_CACHE_HOME/fetchloom`, else `$HOME/.cache/fetchloom` |
+| macos | `$HOME/Library/Caches/fetchloom` |
 | windows | `%LOCALAPPDATA%\fetchloom` |
 
 nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`.

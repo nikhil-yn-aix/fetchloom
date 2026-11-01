@@ -1,6 +1,6 @@
 # fetchloom
 
-fetchloom is uv for research data on windows and linux, on x86_64 and arm64.
+fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64.
 
 `data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry. `fetchloom sync` fills `data/` from that receipt by reflink, hardlink or copy.
 
@@ -18,7 +18,7 @@ commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone run
 
 ## install
 
-on linux:
+on linux and macos:
 
 ```sh
 curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
@@ -38,7 +38,7 @@ with python 3.9 or later:
 pip install fetchloom
 ```
 
-[getting started](docs/user/getting-started.md#install) covers install locations, pinned installer versions and building from source. macos is not supported.
+[getting started](docs/user/getting-started.md#install) covers install locations, pinned installer versions, building from source and shell completions.
 
 ## quick start
 
@@ -78,6 +78,7 @@ sync preserves local edits and can exit 0 with conflicts left in place. use `sta
 | use a supported host | [sources](docs/user/sources/README.md) |
 | write scripts or notebooks | [scripting](docs/user/scripting.md) |
 | choose a windows drive or cache location | [windows](docs/user/windows.md) |
+| use icloud drive, apfs or the macos cache folder | [macos](docs/user/macos.md) |
 | fix a failed download or local conflict | [troubleshooting](docs/user/troubleshooting.md) |
 | work on the code | [developer guide](docs/dev/README.md) |
 | understand code organization | [architecture](docs/dev/architecture/README.md) |

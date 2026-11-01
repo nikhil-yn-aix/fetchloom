@@ -38,7 +38,7 @@ rate values accept surrounding whitespace and a decimal fraction with digits on 
 
 invalid jobs and rate values fail a named command with kind `usage` and exit 2, even when it does not download. welcome, bare-project status, help and version bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help and version bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
-synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, and the icloud drive folder on windows. system proxy settings and proxy environment variables are read by the HTTP stack.
+synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, the icloud drive folder on windows, and on macos `~/Library/Mobile Documents` and the onedrive and dropbox folders in `~/Library/CloudStorage`. the home folder is `HOME`, else `USERPROFILE`. system proxy settings and proxy environment variables are read by the HTTP stack.
 
 ## credentials
 

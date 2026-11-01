@@ -6,7 +6,7 @@ one rust crate builds the library and executable, with module tests and real-bin
 
 [rust-toolchain.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/rust-toolchain.toml) pins rust 1.99.1 with rustfmt and clippy. [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) uses edition 2024 and declares a minimum rust version of 1.99. native build tools are needed for compression dependencies and the crypto provider. keep `Cargo.lock` when building the application.
 
-install rust through [rustup](https://rustup.rs). on linux, provide a C compiler and linker through the distribution's build packages. on windows, both `x86_64-pc-windows-msvc` and `x86_64-pc-windows-gnu` build the crate. `x86_64-pc-windows-msvc` is the x86_64 release target and the closest match to CI: install Visual Studio Build Tools with the C++ workload and Windows SDK. a GNU toolchain needs a matching MinGW-w64 compiler and linker on PATH. do not mix MSVC and GNU native dependencies. arm64 windows releases use MSVC. the toolchain file pins the rust version and components, not the host triple; no repository `.cargo` configuration overrides the target. use `rustup show` to check your selected host.
+install rust through [rustup](https://rustup.rs). on linux, provide a C compiler and linker through the distribution's build packages. on windows, both `x86_64-pc-windows-msvc` and `x86_64-pc-windows-gnu` build the crate. `x86_64-pc-windows-msvc` is the x86_64 release target and the closest match to CI: install Visual Studio Build Tools with the C++ workload and Windows SDK. a GNU toolchain needs a matching MinGW-w64 compiler and linker on PATH. do not mix MSVC and GNU native dependencies. arm64 windows releases use MSVC. the toolchain file pins the rust version and components, not the host triple; no repository `.cargo` configuration overrides the target. use `rustup show` to check your selected host. on macos, `xcode-select --install` provides the C compiler, linker and SDK; both `x86_64-apple-darwin` and `aarch64-apple-darwin` build natively. checking a macos target from linux needs an apple C compiler as well, since ring's build script compiles C and assembly even for `cargo check`.
 
 ```sh
 git clone https://github.com/nikhil-yn-aix/fetchloom.git
@@ -37,7 +37,7 @@ snapshot filters normalize sandbox paths, ports, separators and durations and re
 
 ### test directories
 
-if you override `TMPDIR` on linux or `TMP` and `TEMP` on windows, choose an existing writable folder outside every git repository and fetchloom project. `Sandbox::new` uses `tempfile::tempdir`, and commands still inspect parent folders for project discovery and git integration. a test folder inside a checkout can therefore produce extra `.gitignore` files or different snapshots. do not accept those differences as intended output.
+if you override `TMPDIR` on linux or macos, or `TMP` and `TEMP` on windows, choose an existing writable folder outside every git repository and fetchloom project. `Sandbox::new` uses `tempfile::tempdir`, and commands still inspect parent folders for project discovery and git integration. a test folder inside a checkout can therefore produce extra `.gitignore` files or different snapshots. do not accept those differences as intended output.
 
 ### select narrowly
 

@@ -27,7 +27,7 @@ fl sync
 
 put the `Set-Alias` line in your powershell profile to keep it in later sessions. the installed executable remains `fetchloom`; the alias belongs to your shell.
 
-on a linux shell, use:
+on a linux or macos shell, use:
 
 ```sh
 alias fl=fetchloom
@@ -35,7 +35,7 @@ alias fl=fetchloom
 
 ## onedrive and synced folders
 
-recognized synced folders skip hardlinks. they may still use reflinks, or copy when the drive cannot clone files. fetchloom detects onedrive roots through `OneDrive`, `OneDriveConsumer` and `OneDriveCommercial`, dropbox through its `info.json`, and the windows icloud drive folder.
+recognized synced folders skip hardlinks. they may still use reflinks, or copy when the drive cannot clone files. fetchloom detects onedrive roots through `OneDrive`, `OneDriveConsumer` and `OneDriveCommercial`, dropbox through its `info.json`, and the windows icloud drive folder. [macos](macos.md) lists the folders recognized there.
 
 stderr warning from a copied download inside onedrive:
 

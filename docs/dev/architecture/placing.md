@@ -61,7 +61,7 @@ unwanted tracked files are removed only if unchanged. an edited unwanted file le
 
 ### choose a filesystem method
 
-new placements try reflink, hardlink, then copy. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks.
+new placements try reflink, hardlink, then copy. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks. on macos a reflink is an apfs clone made with `clonefile`; hfs+ and other disks without clones fall back to hardlinks or copies.
 
 `Placer` remembers refused methods. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`.
 
@@ -71,13 +71,15 @@ copy input opens through `read_unfollowed`. data is written to a hidden file who
 
 sync calls `Placer::flush_copies` after placement and before `Project::write_state`, even when some placements failed. a flush failure stops the state write: state must not vouch for copied payloads that have not reached disk.
 
-on linux 5.8 and later, `batches_copies` opens the destination root before the first copy so one `syncfs` flushes the filesystem and reports write-back failures. copies then skip their own flush. when batching is unavailable, including other platforms, each copy calls `sync_all` before publication. this ordering is explicit at the sync call site; callers using `Placer` directly must account for its batch flush.
+on linux 5.8 and later, `batches_copies` opens the destination root before the first copy so one `syncfs` flushes the filesystem and reports write-back failures. copies then skip their own flush. when batching is unavailable, including other platforms, each copy calls `sync_all` before publication. on macos, rust's `sync_all` asks the drive itself to flush with `F_FULLFSYNC`, not only the operating system. this ordering is explicit at the sync call site; callers using `Placer` directly must account for its batch flush.
 
 ### changed hardlinks and aliases
 
 a hardlink edit can damage the cached object. the survey audits changed links and writes cache marks; other projects hash affected links even when directory metadata still looks unchanged. windows directory listings can retain stale size and time after an edit through another name. `sync --force` reads each hardlink through its own name. linux commonly shows the edit through every name. `Reason::Shared` preserves a visibly changed hardlink because the survey cannot identify which project edited it; force is needed to restore it. an unchanged listing with a later change mark can instead establish an `elsewhere` repair after hashing.
 
 when a recorded spelling is absent, scans consider exactly one folded alias and verify the recorded path resolves to the same plain file. unix also compares device and inode. ambiguous aliases and distinct case-sensitive files remain separate. retargeting carries edits and hardlink doubts to the wanted spelling.
+
+apfs and hfs+ see `café` written with one character and with an `e` and a combining accent as one name. apfs lists a name in the composition that made it, while hfs+ lists every name decomposed, so a file the lock names composed can be listed decomposed. retargeting carries such a listed file to the wanted spelling even without a placement record, when the two spellings differ only in composition and resolve to the same file, so status never reports it both missing and extra. a name differing in case is joined only through a record. `get` compares the names in its output folder composed on macos for the same reason. see `same_composed` and `as_disk_sees` in [name.rs](../../../src/name.rs).
 
 ## invariants and traps
 

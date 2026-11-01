@@ -15,12 +15,11 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | controlled-data access approval | request access from the institution or owner |
 | 7z and rar extraction | keep the packed file and use another decoder |
 | recursive archive extraction | nested archives remain files |
-| macos | use a supported windows or linux machine |
 | cross-user cache administration | cache writers are trusted; no group-permission management is provided |
 
 ## commands and integrations not implemented
 
-`cite`, archive-service fallbacks, lab administration and shell completions are not implemented. public S3 and google cloud storage buckets are listed anonymously over HTTPS; signed requests, other S3-compatible hosts and azure blob storage are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.
+`cite`, archive-service fallbacks and lab administration are not implemented. public S3 and google cloud storage buckets are listed anonymously over HTTPS; signed requests, other S3-compatible hosts and azure blob storage are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.
 
 see the [developer roadmap](../dev/roadmap.md) for future work. current commands are listed in the [command guide](commands/README.md).
 
@@ -38,6 +37,6 @@ offline mode uses local placements, cache objects and unpack records. it cannot 
 
 ## access and platforms
 
-windows and linux are supported on x86_64 and arm64; [installation](getting-started.md#install) is currently from source. one executable is installed as `fetchloom`. an accepted source spelling does not guarantee that access or a download will succeed.
+windows, linux and macos are supported on x86_64 and arm64; macos needs version 11 or later. [installation](getting-started.md#install) is currently from source. one executable is installed as `fetchloom`. an accepted source spelling does not guarantee that access or a download will succeed.
 
 source restrictions and listing-size limits apply before most filtering. credentials cannot grant approvals that a source has not given. [source guides](sources/README.md) lists each family's rules.

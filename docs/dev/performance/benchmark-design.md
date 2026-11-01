@@ -123,7 +123,7 @@ each run writes `meta.json` and `runs.jsonl` under `/srv/fl-bench/results/` on t
 
 ## not measured
 
-- macos, which fetchloom does not support.
+- macos; the lab runs on linux.
 - services that need an account the lab cannot reproduce, beyond the live runs above.
 - private remotes such as S3 buckets behind credentials.
 
