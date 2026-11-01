@@ -8,7 +8,7 @@ use std::process::Command;
 
 use md5::Digest as _;
 
-use crate::support::{Part, Result, Routes, Sandbox, file, json, reply, text};
+use crate::support::{Part, Result, Routes, Sandbox, delete, file, json, reply, text};
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
 const SCAN: &[u8] = b"onset\tduration\n0\t1\n";
@@ -184,7 +184,9 @@ fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
         "{stdout}"
     );
 
-    fs::remove_dir_all(work.join("data"))?;
+    // placed files are read-only, which exfat and fat32 refuse to delete as they are
+    delete(&folder.join("participants.tsv"))?;
+    delete(&folder.join("sub-01").join("func events.tsv"))?;
     let synced = command(&sandbox, &routes, &["sync"]).output()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     assert_eq!(fs::read(folder.join("participants.tsv"))?, PARTICIPANTS);

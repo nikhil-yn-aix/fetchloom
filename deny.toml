@@ -3,7 +3,14 @@
 
 [advisories]
 # each advisory that has no fixed release in range, with why it is accepted.
-ignore = []
+ignore = [
+    # zvariant, zvariant_derive and zbus_names were folded into zbus 6. keyring's
+    # linux secret service store still uses zbus 5; these are notices that the crates moved, not
+    # flaws. drop them once keyring's store moves to zbus 6.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; used through keyring" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; used through keyring" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; used through keyring" },
+]
 
 [licenses]
 # exactly the licenses the dependency tree needs. a crate that offers a choice is taken under one
