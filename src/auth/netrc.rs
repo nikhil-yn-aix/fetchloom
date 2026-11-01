@@ -181,7 +181,11 @@ pub(crate) fn remove(path: &Path, host: &str) -> io::Result<bool> {
 }
 
 fn quoted(value: &str) -> String {
-    if value.is_empty() || value.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\') {
+    // an unquoted word starting with # reads back as a comment, which would shift the entry
+    if value.is_empty()
+        || value.starts_with('#')
+        || value.contains(|c: char| c.is_whitespace() || c == '"' || c == '\\')
+    {
         format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         value.to_owned()
@@ -208,6 +212,27 @@ mod tests {
         ]
         .map(|(h, l, p)| (h.to_owned(), l.to_owned(), p.to_owned()));
         assert_eq!(pairs, expected);
+    }
+
+    #[test]
+    fn a_saved_password_starting_with_a_hash_reads_back_for_its_own_host() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(".netrc");
+        fs::write(&path, "machine b.example login bob password pw\n").unwrap();
+        save(&path, "a.example", "ada", "#Secr3t").unwrap();
+        save(&path, "c.example", "cy", "pw2").unwrap();
+        let entries: Vec<_> = parse(&fs::read_to_string(&path).unwrap())
+            .into_iter()
+            .map(|e| (e.host, e.login, e.password))
+            .collect();
+        assert_eq!(
+            entries,
+            [
+                ("b.example".into(), "bob".into(), "pw".into()),
+                ("a.example".into(), "ada".into(), "#Secr3t".into()),
+                ("c.example".into(), "cy".into(), "pw2".into()),
+            ]
+        );
     }
 
     #[test]
