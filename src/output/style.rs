@@ -23,7 +23,7 @@ pub(crate) enum Tone {
 }
 
 /// the color of each tone. `FETCHLOOM_COLORS` changes any of them, as in
-/// `done=green:work=blue:accent=#d787ff`.
+/// `done=green:work=blue:accent=#d787ff`, or picks a whole theme with `theme=light`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Palette {
     done: Color,
@@ -33,15 +33,73 @@ pub(crate) struct Palette {
     accent: Color,
 }
 
+/// a set of colors that belong together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Theme {
+    /// the terminal's own sixteen colors, which follow whatever theme it has
+    Ansi,
+    /// clay, sage and amber, as the benchmark charts use them, for a dark background
+    Dark,
+    /// the same colors, deeper, for a light background
+    Light,
+}
+
+impl Theme {
+    fn palette(self) -> Palette {
+        let rgb = |r, g, b| Color::from(RgbColor(r, g, b));
+        match self {
+            Theme::Ansi => Palette {
+                done: AnsiColor::Green.into(),
+                work: AnsiColor::Cyan.into(),
+                warn: AnsiColor::Yellow.into(),
+                fail: AnsiColor::Red.into(),
+                accent: AnsiColor::Cyan.into(),
+            },
+            Theme::Dark => Palette {
+                done: rgb(0x8f, 0xc0, 0x86),
+                work: rgb(0xee, 0x7a, 0x4c),
+                warn: rgb(0xe8, 0xb6, 0x5a),
+                fail: rgb(0xf2, 0x5c, 0x6a),
+                accent: rgb(0xee, 0x7a, 0x4c),
+            },
+            Theme::Light => Palette {
+                done: rgb(0x3c, 0x7a, 0x37),
+                work: rgb(0xb4, 0x4f, 0x26),
+                warn: rgb(0x8f, 0x62, 0x00),
+                fail: rgb(0xbf, 0x21, 0x3a),
+                accent: rgb(0xb4, 0x4f, 0x26),
+            },
+        }
+    }
+
+    /// the theme a terminal suits: clay and sage where it draws any color and its background is
+    /// known or assumed dark, deeper shades on a light one, and its own colors elsewhere.
+    pub(crate) fn detect(var: &dyn Fn(&str) -> Option<OsString>) -> Theme {
+        if !full_color(var) {
+            return Theme::Ansi;
+        }
+        // COLORFGBG is "foreground;background" in the sixteen colors; 7 and 15 are white
+        let light = var("COLORFGBG")
+            .and_then(|value| value.into_string().ok())
+            .and_then(|value| value.rsplit(';').next().map(str::to_owned))
+            .is_some_and(|background| matches!(background.as_str(), "7" | "15"));
+        if light { Theme::Light } else { Theme::Dark }
+    }
+}
+
+/// terminals that draw any of sixteen million colors rather than a fixed sixteen.
+fn full_color(var: &dyn Fn(&str) -> Option<OsString>) -> bool {
+    let program = var("TERM_PROGRAM").unwrap_or_default();
+    var("COLORTERM").is_some_and(|value| value == "truecolor" || value == "24bit")
+        || var("WT_SESSION").is_some()
+        || ["vscode", "iTerm.app", "WezTerm", "ghostty"]
+            .iter()
+            .any(|name| program == *name)
+}
+
 impl Default for Palette {
     fn default() -> Palette {
-        Palette {
-            done: AnsiColor::Green.into(),
-            work: AnsiColor::Cyan.into(),
-            warn: AnsiColor::Yellow.into(),
-            fail: AnsiColor::Red.into(),
-            accent: AnsiColor::Cyan.into(),
-        }
+        Theme::Ansi.palette()
     }
 }
 
@@ -58,10 +116,35 @@ impl Palette {
 
     /// reads `tone=color` entries split by `:`. an entry it cannot read keeps the default and is
     /// returned, so one typo never costs the rest.
-    pub(crate) fn parse(text: &str) -> (Palette, Vec<String>) {
-        let mut palette = Palette::default();
+    pub(crate) fn parse(text: &str, theme: Theme) -> (Palette, Vec<String>) {
+        let entries: Vec<&str> = text
+            .split(':')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .collect();
         let mut unread = Vec::new();
-        for entry in text.split(':').map(str::trim).filter(|e| !e.is_empty()) {
+        // a theme entry sets the base the other entries change, wherever it is written
+        let mut theme = theme;
+        for entry in &entries {
+            if let Some((key, value)) = entry.split_once('=')
+                && key.trim().eq_ignore_ascii_case("theme")
+            {
+                match value.trim().to_ascii_lowercase().as_str() {
+                    "ansi" => theme = Theme::Ansi,
+                    "dark" => theme = Theme::Dark,
+                    "light" => theme = Theme::Light,
+                    _ => unread.push((*entry).to_owned()),
+                }
+            }
+        }
+        let mut palette = theme.palette();
+        for entry in entries {
+            if entry
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("theme"))
+            {
+                continue;
+            }
             let parsed = entry.split_once('=').and_then(|(tone, color)| {
                 let slot = match tone.trim().to_ascii_lowercase().as_str() {
                     "done" => &mut palette.done,
@@ -121,12 +204,18 @@ pub(crate) fn color(tone: Tone) -> Color {
     PALETTE.get().copied().unwrap_or_default().color(tone)
 }
 
-/// reads `FETCHLOOM_COLORS` for this run and returns the entries it could not read.
+/// picks this run's palette from the terminal and `FETCHLOOM_COLORS`, and returns the entries it
+/// could not read.
 pub(crate) fn load_palette() -> Vec<String> {
-    let Some(text) = std::env::var_os("FETCHLOOM_COLORS") else {
+    // unit tests compare escape codes, which must not follow the terminal that runs them;
+    // `Theme::detect` and `Palette::parse` have tests of their own
+    if cfg!(test) {
         return Vec::new();
-    };
-    let (palette, unread) = Palette::parse(&text.to_string_lossy());
+    }
+    let var = |name: &str| std::env::var_os(name);
+    let theme = Theme::detect(&var);
+    let text = var("FETCHLOOM_COLORS").unwrap_or_default();
+    let (palette, unread) = Palette::parse(&text.to_string_lossy(), theme);
     let _ = PALETTE.set(palette);
     unread
 }
@@ -343,7 +432,8 @@ mod tests {
 
     #[test]
     fn a_palette_changes_only_the_tones_it_names() {
-        let (palette, unread) = Palette::parse("done=blue : accent=#D787FF:warn=214::");
+        let (palette, unread) =
+            Palette::parse("done=blue : accent=#D787FF:warn=214::", Theme::Ansi);
         assert_eq!(unread, Vec::<String>::new());
         assert_eq!(palette.color(Tone::Done), AnsiColor::Blue.into());
         assert_eq!(
@@ -353,14 +443,40 @@ mod tests {
         assert_eq!(palette.color(Tone::Warn), Ansi256Color(214).into());
         assert_eq!(palette.color(Tone::Work), AnsiColor::Cyan.into());
         assert_eq!(palette.color(Tone::Fail), AnsiColor::Red.into());
-        let (palette, _) = Palette::parse("fail=bright-magenta");
+        let (palette, _) = Palette::parse("fail=bright-magenta", Theme::Ansi);
         assert_eq!(palette.color(Tone::Fail), AnsiColor::BrightMagenta.into());
     }
 
     #[test]
+    fn full_color_terminals_get_the_warm_theme_and_others_their_own() {
+        assert_eq!(Theme::detect(&env(&[])), Theme::Ansi);
+        assert_eq!(
+            Theme::detect(&env(&[("COLORTERM", "truecolor")])),
+            Theme::Dark
+        );
+        assert_eq!(Theme::detect(&env(&[("WT_SESSION", "x")])), Theme::Dark);
+        assert_eq!(
+            Theme::detect(&env(&[("TERM_PROGRAM", "vscode"), ("COLORFGBG", "0;15")])),
+            Theme::Light
+        );
+        let (palette, unread) = Palette::parse("theme=light:accent=cyan", Theme::Dark);
+        assert_eq!(unread, Vec::<String>::new());
+        assert_eq!(palette.color(Tone::Accent), AnsiColor::Cyan.into());
+        assert_eq!(
+            palette.color(Tone::Done),
+            Theme::Light.palette().color(Tone::Done)
+        );
+        let (palette, unread) = Palette::parse("theme=sepia", Theme::Dark);
+        assert_eq!(unread, ["theme=sepia"]);
+        assert_eq!(palette, Theme::Dark.palette());
+    }
+
+    #[test]
     fn a_palette_keeps_the_default_for_each_entry_it_cannot_read() {
-        let (palette, unread) =
-            Palette::parse("done=teal:shiny=red:work=#12345:accent=256:fail:warn=magenta");
+        let (palette, unread) = Palette::parse(
+            "done=teal:shiny=red:work=#12345:accent=256:fail:warn=magenta",
+            Theme::Ansi,
+        );
         assert_eq!(
             unread,
             [

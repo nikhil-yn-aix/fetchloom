@@ -265,7 +265,20 @@ fn leaks(name: &str) -> bool {
         || name.ends_with("_TOKEN")
         || matches!(
             name.as_str(),
-            "NO_COLOR" | "CLICOLOR_FORCE" | "XDG_CACHE_HOME" | "XDG_CONFIG_HOME" | "NETRC"
+            "NO_COLOR"
+                | "CLICOLOR_FORCE"
+                | "XDG_CACHE_HOME"
+                | "XDG_CONFIG_HOME"
+                | "NETRC"
+                | "COLORTERM"
+                | "COLORFGBG"
+                // what the terminal running the tests says about itself, so colors and symbols
+                // match what CI sees
+                | "WT_SESSION"
+                | "TERM_PROGRAM"
+                | "CONEMUANSI"
+                | "VTE_VERSION"
+                | "KONSOLE_VERSION"
         )
 }
 
