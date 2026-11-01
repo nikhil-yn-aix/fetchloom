@@ -1,6 +1,6 @@
 # releasing
 
-the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI, crates.io and the apt repository.
+the release workflow packages one executable for linux and windows on x86_64 and arm64, with checksums and provenance. publishing the draft it creates sends the same files to PyPI and crates.io and rebuilds the apt repository on github pages.
 
 no release has been published yet. use [source installation](../../user/getting-started.md#install) until the first release. the artifacts and installers below describe what a release will ship.
 
@@ -29,9 +29,14 @@ build jobs have a 60-minute timeout. attestation and release each have 15 minute
 |---|---|---|
 | `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS`, upload them |
 | `crates` | the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked` from the tag |
-| `apt` | the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase, and pages served by actions | download the `.deb` files, write a flat repository signed by that key, deploy it to `https://nikhil-yn-aix.github.io/fetchloom/apt` |
 
-the `github-pages` environment allows tags matching `v*.*.*`. losing the signing key means generating a new one, replacing the secret and asking apt users to fetch `fetchloom.gpg` again.
+## apt repository
+
+github pages serves one site per repository, and a deployment replaces the whole site. [pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml) is therefore the only workflow that deploys it: the documentation at the root and the apt repository under `/apt`. it runs when a release is published and when documentation changes on main, and each run rebuilds `/apt` from the latest published release.
+
+the apt part downloads that release's `.deb` files and `SHA256SUMS`, checks them, then writes a flat repository signed with the `APT_SIGNING_KEY` secret, an armored ed25519 key without passphrase. it serves `https://nikhil-yn-aix.github.io/fetchloom/apt` with `Packages`, `Release`, `Release.gpg`, `InRelease` and the public key `fetchloom.gpg`. when no release is published, the run logs a notice and deploys the documentation without `/apt`.
+
+the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and pages must deploy from github actions. losing the signing key means generating a new one, replacing the secret and asking apt users to fetch `fetchloom.gpg` again. [CI](ci.md#documentation-site) describes the documentation half.
 
 ## artifacts
 
@@ -63,7 +68,7 @@ for the current Cargo version, 0.1.0, the workflow will produce four archives, t
    gh attestation verify check/fetchloom-0.1.0-x86_64-unknown-linux-musl.tar.gz --repo nikhil-yn-aix/fetchloom
    ```
 
-5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` starts. watch it with `gh run watch`.
+5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
 6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. check `cargo install fetchloom` and the apt lines in [getting started](../../user/getting-started.md#install) on a clean machine or container.
 7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 

@@ -49,7 +49,7 @@ cargo test --locked
 | [running benchmarks](benchmarks.md) | linux lab setup, smoke runs, full comparisons and result records |
 | [profiling](profiling.md) | [reported-problem reproduction](profiling.md#reproduce-a-reported-problem), work counters, traces, CPU samples and memory |
 | [fuzzing](fuzzing.md) | parser targets and longer linux runs |
-| [CI](ci.md) | required platforms, filesystems, dependency policy and python tests |
+| [CI](ci.md) | required platforms, filesystems, dependency policy, python tests and the documentation site |
 | [releasing](releasing.md) | artifacts, installers, wheels and publication |
 
 [style](../style.md) covers prose and commits. [decisions](../decisions.md) records boundaries that a change should preserve. [performance](../performance/README.md) records evidence for changes that claim a speed or memory improvement.

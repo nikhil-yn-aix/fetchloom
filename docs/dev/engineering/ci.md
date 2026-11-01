@@ -49,6 +49,22 @@ cargo test --locked -- --ignored
 
 this exercises the ignored live source tests and the larger archive test. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
 
-default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in both workflows.
+default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in every workflow.
+
+## documentation site
+
+[pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml) publishes `docs/` as an [mdBook](https://rust-lang.github.io/mdBook/) site at `https://nikhil-yn-aix.github.io/fetchloom/`, so the site always matches the markdown on main. it runs on pushes to main that change `docs/**`, `book.toml`, `llms.txt`, `skills/**` or the workflow, when a release is published and through manual dispatch. it checks out the default branch even when a release tag starts it. the job has contents read, pages write and id-token write, a 15-minute timeout, the `github-pages` environment and the `pages` concurrency group, which lets a running deployment finish.
+
+the job downloads mdbook 0.5.4 from its github release, checks the archive's SHA-256 and runs `mdbook build`. [book.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/book.toml) reads `docs/` and writes `site/`. [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md) sets the sidebar order; a page missing from it is not published, and a listed page that does not exist fails the build. default preprocessors are off, so each `README.md` becomes `README.html` and links between pages keep working. links to files outside `docs/` use absolute github URLs because the site cannot serve them.
+
+| site path | source |
+|---|---|
+| `/` | the mdbook output, with `index.html` rendered from `docs/README.md` |
+| `/llms.txt` | `llms.txt` from the repository root, with links pointing at site pages or github and a line naming `llms-full.txt` |
+| `/llms-full.txt` | every user guide page in `SUMMARY.md` order, each preceded by its site URL |
+| `/skills/` | the `skills/` folder, unchanged |
+| `/apt/` | the signed apt repository from the latest published release; [releasing](releasing.md#apt-repository) describes it |
+
+preview the site from the repository root with mdbook 0.5.4 installed: `mdbook serve --open`. `mdbook build` writes the same files to `site/`, which git ignores.
 
 related: [engineering loop](README.md), [releasing](releasing.md), [performance](../performance/README.md), [placing](../architecture/placing.md).
