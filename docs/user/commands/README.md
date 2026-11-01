@@ -12,7 +12,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`status`](status.md) | list missing, edited and extra files | check local inputs without downloads |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
 | [`remove`](remove.md) | remove an entry and unchanged managed files | stop using a dataset |
-| [`get`](get.md) | fetch once without project files | inspect a source before adding it |
+| [`get`](get.md) | fetch once without project files, one link or a list | inspect a source before adding it, or download a list of links |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
 | [`cache verify`](cache.md#verify) | rehash cache objects and mark changed bytes | investigate suspected cache damage |
@@ -22,7 +22,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
 
 | option | effect |
 |---|---|

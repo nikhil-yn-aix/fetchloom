@@ -13,7 +13,7 @@ verbose output adds error kinds and work counters. use `--json` for [structured 
 
 | symptom on stderr | cause | fix |
 |---|---|---|
-| `error: <link> is missing` | `add` or `get` needs a reference | pass a dataset link; use `fetchloom get --help` for syntax |
+| `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
 | `error: offline, and 1 file the lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |
 | `error: iris/iris.csv is not the file that was locked` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here` | the download needs approval without an interactive terminal | check the size, then pass `--yes` if approved |

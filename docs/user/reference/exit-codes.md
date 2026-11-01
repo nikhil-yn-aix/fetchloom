@@ -45,4 +45,6 @@ the python helper also has a helper-only `conflict.kept` error with no process e
 
 batch download failures use the first failed file in job order for the overall kind and exit code. each failure remains in `errors[0].failures`. interruption or another whole-batch failure returns immediately.
 
+`get` with several links works the same way with links in place of files: the first failed link in command line and list order decides the kind and exit code, and each failed link remains in `errors[0].failures` and in `result.items`. a `--sha256` mismatch is `integrity.mismatch`, exit 30.
+
 [troubleshooting](../troubleshooting.md) pairs recorded error text with fixes.

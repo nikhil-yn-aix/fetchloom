@@ -15,14 +15,14 @@ fetchloom --json status
 | `schema` | integer `1` |
 | `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, or null |
 | `status` | `ok` or `error` |
-| `result` | command result on success; also retained for cache verification findings, gc removal failures and search candidates; null for other failures |
+| `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
 | `errors` | empty on success; one error object on failure |
 | `errors[].kind` | one of the names in [exit codes](exit-codes.md) |
 | `errors[].message` | summary string |
 | `errors[].details` | array of supporting strings |
 | `errors[].help` | string or null |
-| `errors[].failures` | present for file download failures: every failed file, in job order, with `file`, `kind`, `message`, `details` and `help` |
+| `errors[].failures` | present for file download failures and for `get` runs of several links: every failed file or link, in job or command line order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 
 batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
@@ -36,7 +36,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | command | result fields |
 |---|---|
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null |
-| `get` | `folder`: absolute path; `files`: file records below |
+| `get` | `folder`: absolute path, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, and project-relative `folder`; counts describe locked source files, not archive members |
 | `path` | absolute path string, for a dataset, file or subfolder |
@@ -50,6 +50,8 @@ project `datasets` names what was added or removed, or existing datasets whose r
 placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks whose edit is shared with the cache, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
+
+`get.items` has one record for each link, in the order given on the command line and then in the `--input-file` list. each has `reference`, the link as given with secret query values masked; `status`, `ok` or `error`; `folder`, the link's absolute folder or null; `files`, file records as above, empty on failure; and `error`, null on success or an object with `kind`, `message`, `details`, `help` and, for failed downloads, `failures`, in the form of `errors[]`. one link without `-i` keeps `folder` and `files` at the top as well, and fails as before, with a null `result`. several links, or any `-i` list, give a null top-level `folder` and empty `files`. when some of them fail, the run returns `error` with `result` still set: `errors[0].kind` and the exit code come from the first failed link in that order, and `errors[0].failures` names each failed link in `file`. an interruption, a refused question about the total size and a cache that cannot open return immediately with a null `result`.
 
 status arrays:
 

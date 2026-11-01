@@ -14,13 +14,13 @@ command handlers order effects across modules. `Context` reads settings once and
 | [cli.rs](../../../src/cli.rs) | startup, settings, runtime and dispatch | `Context`, `run`, `jobs`, `splits`, `open_cache` |
 | [args.rs](../../../src/cli/args.rs) | clap declarations | `Args`, `Global`, `Command`, `Filter`, `read` |
 | [project.rs](../../../src/cli/project.rs) | project-changing commands and ready-path lookup | `Report`, `add`, `remove`, `sync`, `lock`, `path`, `sync_all` |
-| [get.rs](../../../src/cli/get.rs), [get/folder.rs](../../../src/cli/get/folder.rs) | one-off retrieval and destination checks | `Report`, `run`, `Outcome`, `check`, `put_all` |
+| [get.rs](../../../src/cli/get.rs), [get/folder.rs](../../../src/cli/get/folder.rs) | one-off retrieval of one link or several, link lists and destination checks | `Report`, `run`, `one`, `many`, `Outcome`, `check`, `put_all` |
 | [search.rs](../../../src/cli/search.rs) | catalog search, candidate rows and explicit selection | `Report`, `run`, `pick`, `find` |
 | [picker.rs](../../../src/output/picker.rs) | terminal candidate selection and cancellation | `choose`, `selection_key`, `row` |
 | [list.rs](../../../src/cli/list.rs) | manifest and lock listing without placement | `Report`, `Listed`, `run`, `listed` |
 | [status.rs](../../../src/cli/status.rs) | local comparison and summaries | `Status`, `run`, `brief` |
 | [cache.rs](../../../src/cli/cache.rs) | cache command reports and retained-project discovery | `Info`, `info`, `gc`, `verify`, `needed` |
-| [fetch.rs](../../../src/cli/fetch.rs), [fetch/again.rs](../../../src/cli/fetch/again.rs) | bounded transfer scheduling and expired-link recovery | `Job`, `all`, `listed_job`, `Again`, `Listings`, `recover` |
+| [fetch.rs](../../../src/cli/fetch.rs), [fetch/again.rs](../../../src/cli/fetch/again.rs) | bounded transfer scheduling and expired-link recovery | `Job`, `all`, `apart`, `listed_job`, `Again`, `Listings`, `recover` |
 | [help.rs](../../../src/cli/help.rs), [usage.rs](../../../src/cli/usage.rs) | help and argument errors | `show`, `answer` |
 | [logs.rs](../../../src/cli/logs.rs) | debug events and trace-file lifetime | `Logs`, `start` |
 

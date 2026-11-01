@@ -66,6 +66,8 @@ fetchloom --json get zenodo:3608990 -o flowers
 
 `get` returns `result.folder` and `result.files`. file paths are relative to that folder, with sizes and complete SHA-256 hashes. extracted members replace archives in the list. `origin` describes where bytes came from; `method` is `reflink`, `hardlink`, `copy`, or null for an already present file.
 
+`fetchloom --json get -i links.txt` returns one record for each link in `result.items`, with its own `status`, `folder`, `files` and `error`. a run where some links failed still exits nonzero; read `result.items` to see which links arrived. [JSON output](reference/json-output.md#command-results) lists the fields.
+
 `get` writes no project manifest or lock and can accept changed upstream data on another run.
 
 ## finding paths
