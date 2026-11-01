@@ -1,0 +1,177 @@
+name: mac-e2e
+
+# a release build on macos, run against live zenodo and the search catalogs the way a person
+# would use it. the services change without notice, so this runs on demand, and everything the
+# commands printed is kept as an artifact.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: macos-latest
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # installs the version rust-toolchain.toml pins
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo build --locked --release
+      - name: run fetchloom end to end
+        run: |
+          set +e
+          {
+            fetchloom="$GITHUB_WORKSPACE/target/release/fetchloom"
+            work="$RUNNER_TEMP/e2e"
+            # the default cache, ~/Library/Caches/fetchloom, is part of what this checks
+            unset FETCHLOOM_CACHE
+            failed=""
+
+            # runs one check, keeping its output and exit code in the log and its failure for the end
+            check() {
+              title=$1
+              shift
+              echo "::group::$title"
+              echo "+ $*"
+              "$@"
+              code=$?
+              echo "exit code $code"
+              echo "::endgroup::"
+              if [ "$code" -ne 0 ]; then
+                echo "::error::$title failed with exit code $code"
+                failed="$failed
+            - $title"
+              fi
+              return "$code"
+            }
+
+            # runs the python in $1 on the JSON document on stdin, as `document`, with the other
+            # arguments in sys.argv
+            read_json() {
+              python3 -c "import json, sys; document = json.load(sys.stdin); $1" "${@:2}"
+            }
+
+            placed() {
+              [ -n "$(find "$1" -type f -print -quit)" ] && find "$1" -type f -exec ls -l {} +
+            }
+
+            nothing_differs() {
+              "$fetchloom" --json status | read_json '
+          differs = {key: value for key, value in document["result"].items() if isinstance(value, list) and value}
+          print(differs or "nothing differs")
+          sys.exit(1 if differs else 0)'
+            }
+
+            cache_is_in_the_library() {
+              "$fetchloom" --json cache | read_json '
+          path = document["result"]["path"]
+          print("cache:", path)
+          sys.exit(0 if path == sys.argv[1] else 1)' "$HOME/Library/Caches/fetchloom"
+            }
+
+            # sync in another project that pins the same files, which a clone or hardlink of the
+            # cached files fills without copying. $1 is copies or hardlinks, the count that must be 0
+            shares_the_cache() {
+              "$fetchloom" --json sync | read_json '
+          work = document["work"]
+          print({key: work[key] for key in ("reflinks", "hardlinks", "copies")})
+          linked = work["reflinks"] + work["hardlinks"]
+          sys.exit(0 if document["status"] == "ok" and work[sys.argv[1]] == 0 and (sys.argv[1] == "hardlinks" or linked > 0) else 1)' "$1"
+            }
+
+            got_files() {
+              "$fetchloom" --json get zenodo:3608990 -o "$work/got" | read_json '
+          files = document["result"]["files"]
+          for file in files:
+              print(file["path"], file["origin"], file["method"])
+          sys.exit(0 if document["status"] == "ok" and files else 1)'
+            }
+
+            found() {
+              "$fetchloom" search iris --json | read_json '
+          candidates = document["result"]["candidates"]
+          for candidate in candidates[:10]:
+              print(candidate["reference"], "|", candidate["title"])
+          sys.exit(0 if candidates else 1)'
+            }
+
+            same_files() {
+              diff -r "$1/data" "$2/data" && find "$1/data" "$2/data" -type f -exec stat -f '%i %l %N' {} +
+            }
+
+            completes() {
+              "$fetchloom" completions bash > "$work/fetchloom.bash" &&
+                bash -c ". '$work/fetchloom.bash' && complete -p fetchloom" &&
+                "$fetchloom" completions zsh > "$work/_fetchloom" &&
+                zsh -c "autoload -U compinit && compinit -u && . '$work/_fetchloom' && whence -w _fetchloom"
+            }
+
+            signs_in_offline() {
+              if ! "$fetchloom" auth --help > /dev/null 2>&1; then
+                echo "this build has no auth command, so there is nothing to check"
+                return 0
+              fi
+              "$fetchloom" auth --offline
+            }
+
+            sw_vers
+            uname -m
+            mkdir -p "$work/one" "$work/two" "$HOME/Library/CloudStorage/OneDrive-e2e/three"
+            check "fetchloom --version" "$fetchloom" --version -v
+
+            cd "$work/one" || exit 1
+            check "fetchloom add zenodo:3608990" "$fetchloom" add zenodo:3608990
+            check "add placed files in data/" placed data
+            check "fetchloom status" "$fetchloom" status
+            check "status finds nothing to do" nothing_differs
+            check "the cache is in ~/Library/Caches" cache_is_in_the_library
+            check "delete data/" rm -rf data
+            check "fetchloom status after deleting data/" "$fetchloom" status
+            check "fetchloom sync" "$fetchloom" sync
+            check "sync placed files in data/ again" placed data
+            check "status after sync finds nothing to do" nothing_differs
+
+            check "fetchloom get zenodo:3608990 -o" got_files
+            check "get filled its output folder" placed "$work/got"
+            check "fetchloom search iris --json" found
+
+            cd "$work/two" || exit 1
+            cp "$work/one/data.toml" "$work/one/data.lock" .
+            check "a second project clones or hardlinks the cached files" shares_the_cache copies
+            check "both projects hold the same files" same_files "$work/one" "$work/two"
+            check "status in the second project finds nothing to do" nothing_differs
+
+            # a folder onedrive's file provider owns, where hardlinks would be uploaded as copies
+            cd "$HOME/Library/CloudStorage/OneDrive-e2e/three" || exit 1
+            cp "$work/one/data.toml" "$work/one/data.lock" .
+            check "a project in ~/Library/CloudStorage never hardlinks" shares_the_cache hardlinks
+            check "fetchloom status in ~/Library/CloudStorage" "$fetchloom" status
+
+            cd "$work/one" || exit 1
+            check "fetchloom auth --offline" signs_in_offline
+            check "bash and zsh load the completion scripts" completes
+            check "fetchloom cache" "$fetchloom" cache
+
+            if [ -n "$failed" ]; then
+              echo "failed checks:$failed"
+              exit 1
+            fi
+            echo "every check passed"
+          } 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mac-e2e-log
+          path: ${{ runner.temp }}/e2e.log
+          if-no-files-found: error
