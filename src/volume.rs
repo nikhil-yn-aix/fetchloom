@@ -54,6 +54,17 @@ impl Volume {
         })
     }
 
+    /// whether a pretending volume already would have removed `path`.
+    pub(crate) fn pretends_removed(&self, path: &Path) -> bool {
+        self.pretended.as_ref().is_some_and(|paths| {
+            paths
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .any(|removed| removed == path)
+        })
+    }
+
     /// removes the empty folder at `path`.
     pub(crate) fn remove_folder(&self, path: &Path) -> io::Result<()> {
         if self.pretended.is_some() {

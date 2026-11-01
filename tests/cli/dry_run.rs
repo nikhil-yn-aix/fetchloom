@@ -408,3 +408,50 @@ fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+#[test]
+fn cache_gc_dry_run_lists_the_marks_a_real_gc_removes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    fs::remove_file(sandbox.work().join("data.toml"))?;
+    let objects = sandbox.cache().join("objects");
+    let object = tree(&objects)?
+        .into_iter()
+        .find_map(|(path, bytes)| bytes.map(|_| path))
+        .ok_or("no object")?;
+    let hex = format!(
+        "{}{}",
+        object
+            .parent()
+            .and_then(Path::file_name)
+            .ok_or("no fan")?
+            .to_string_lossy(),
+        object.file_name().ok_or("no name")?.to_string_lossy()
+    );
+    let mark = sandbox.cache().join("changed").join(hex);
+    fs::write(&mark, b"")?;
+    let before = tree(&sandbox.cache())?;
+    let document = json(&sandbox.run(&["--json", "cache", "gc", "--now", "--dry-run"])?)?;
+    let listed: Vec<PathBuf> = document["result"]["changes"]["remove"]
+        .as_array()
+        .ok_or("no paths")?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .collect();
+    assert!(listed.contains(&object), "{listed:?}");
+    assert!(listed.contains(&mark), "{listed:?}");
+    assert_eq!(tree(&sandbox.cache())?, before, "the cache is as it was");
+    let real = sandbox.run(&["cache", "gc", "--now"])?;
+    assert_eq!(real.status.code(), Some(0), "{}", text(&real.stderr)?);
+    let after = tree(&sandbox.cache())?;
+    let removed: Vec<&PathBuf> = before
+        .keys()
+        .filter(|path| !after.contains_key(*path))
+        .collect();
+    let mut expected: Vec<&PathBuf> = listed.iter().collect();
+    expected.sort();
+    assert_eq!(removed, expected, "the dry run lists what gc removes");
+    Ok(())
+}

@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{Cache, hash_object};
 use crate::digest::Sha256;
-use crate::place::{FolderUse, real_folder};
+use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::is_plain;
 
 /// an object in doubt that could not be hashed, sealed or marked for repair.
@@ -141,12 +141,15 @@ impl Cache {
             let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
                 continue;
             };
+            let object = self.object_path(&digest);
+            // a pretend sweep keeps the objects it would remove, so their marks go as well
+            let gone = self.volume.pretends_removed(&object)
+                || object.try_exists().is_ok_and(|exists| !exists);
             if !needed.contains(&digest)
-                && self
-                    .object_path(&digest)
-                    .try_exists()
-                    .is_ok_and(|exists| !exists)
-                && real_folder(&folder, FolderUse::Cache).is_ok()
+                && gone
+                && fs::symlink_metadata(&folder).is_ok_and(|metadata| {
+                    found_folder(&folder, &metadata, FolderUse::Cache).is_ok()
+                })
             {
                 super::upkeep::removed(
                     &entry.path(),
