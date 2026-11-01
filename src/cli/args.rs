@@ -677,7 +677,9 @@ mod tests {
                     example.starts_with(&format!("  fetchloom {name}")),
                     "{name}: {example}"
                 );
-                let words = words(example);
+                // a redirect or a pipe belongs to the shell, not to fetchloom
+                let command = example.split(['>', '|']).next().unwrap_or(example);
+                let words = words(command);
                 if let Err(err) = Args::try_parse_from(&words) {
                     panic!("{name}: `{example}` does not parse: {err}");
                 }

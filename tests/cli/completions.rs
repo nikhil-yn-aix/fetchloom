@@ -72,7 +72,7 @@ fn completions_refuse_json_and_unknown_shells() -> Result {
 
     let unknown = sandbox.run(&["completions", "tcsh"])?;
     assert_eq!(unknown.status.code(), Some(2));
-    assert!(unknown.stdout.is_empty());
+    assert_eq!(text(&unknown.stdout)?, "");
     let stderr = text(&unknown.stderr)?;
     for (shell, _) in SHELLS {
         assert!(stderr.contains(shell), "{shell}: {stderr}");

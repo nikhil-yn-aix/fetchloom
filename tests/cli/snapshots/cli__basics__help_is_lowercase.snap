@@ -21,18 +21,19 @@ learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 usage: fetchloom [options] <command>
 
 commands:
-  add     add a dataset, pin it and download it into the data folder
-  remove  remove a dataset and the unchanged files fetchloom placed for it
-  sync    place the files pinned in data.lock on this machine
-  lock    update data.lock from data.toml without placing files in the data folder
-  status  list files that are missing, changed locally or extra
-  list    list the project's datasets: where each comes from, its size and its folder
-  path    print where a dataset or a file in it is, syncing first if needed
-  cache   show the cache, free what no project needs, or check every file in it
-  get     fetch something once, without a project
-  search  find datasets on hugging face, kaggle and zenodo
-  auth    sign in to sources for private and gated data
-  help    explain the ideas behind fetchloom, or one command
+  add          add a dataset, pin it and download it into the data folder
+  remove       remove a dataset and the unchanged files fetchloom placed for it
+  sync         place the files pinned in data.lock on this machine
+  lock         update data.lock from data.toml without placing files in the data folder
+  status       list files that are missing, changed locally or extra
+  list         list the project's datasets: where each comes from, its size and its folder
+  path         print where a dataset or a file in it is, syncing first if needed
+  cache        show the cache, free what no project needs, or check every file in it
+  get          fetch something once, without a project
+  search       find datasets on hugging face, kaggle and zenodo
+  auth         sign in to sources for private and gated data
+  completions  print a script that lets a shell complete fetchloom's commands and options
+  help         explain the ideas behind fetchloom, or one command
 
 options:
   -q, --quiet         print only the answer and errors
