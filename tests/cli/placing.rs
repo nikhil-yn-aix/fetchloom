@@ -930,6 +930,56 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     Ok(())
 }
 
+/// a coarse clock, such as hfs+'s one second, can give the other project's state the same time
+/// as the link it recorded, so hashing finds the edit before the mark is read. the mark still
+/// says the edit came through another project's link, so sync puts the locked bytes back.
+#[test]
+fn a_marked_link_a_coarse_clock_left_racy_is_put_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let state = other.join(".fetchloom").join("state");
+    let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&state)?)?;
+    let modified = recorded["files"]["data/iris/iris.csv"]["look"]["modified"]
+        .as_u64()
+        .ok_or("a placed file has a time")?;
+    set_time(&state, UNIX_EPOCH + Duration::from_nanos(modified))?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+    let status = sandbox.command_in(&other, &["--json", "status"]).output()?;
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        status["result"]["edited_elsewhere"],
+        serde_json::json!(["data/iris/iris.csv"])
+    );
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1,
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("data/iris/iris.csv is a linked file whose contents changed"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_read_only_file_becomes_writable_when_the_dataset_asks_for_copies() -> Result {
     let sandbox = Sandbox::new()?;
