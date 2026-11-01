@@ -30,7 +30,7 @@ struct Listed {
 }
 
 pub(super) fn run(context: &Context) -> Result<Report, Error> {
-    let project = super::project::find()?;
+    let project = super::project::find(&context.output)?;
     let (_, manifest) = project.manifest()?;
     let lock = project.lock()?.unwrap_or_default();
     let report = listed(&manifest, &lock);

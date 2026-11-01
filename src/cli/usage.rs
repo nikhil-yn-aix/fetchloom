@@ -63,6 +63,15 @@ fn named_command(read: &ArgMatches) -> Option<String> {
     }
     (!names.is_empty()).then(|| names.join(" "))
 }
+/// `verify` for `cache verify`: the full command when `command` only exists one level down.
+fn nested(command: &str) -> Option<String> {
+    args::Args::command().get_subcommands().find_map(|parent| {
+        parent
+            .find_subcommand(command)
+            .map(|_| format!("{} {command}", parent.get_name()))
+    })
+}
+
 fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let named = |context| match err.get(context) {
         Some(ContextValue::String(value)) => Some(value.clone()),
@@ -123,6 +132,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
             Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
             None => format!("did you mean `fetchloom {command}`?"),
         }
+    } else if let Some(nested) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
+        .then(|| named(ContextKind::InvalidSubcommand))
+        .flatten()
+        .and_then(|command| nested(&command))
+    {
+        format!("did you mean `fetchloom {nested}`?")
     } else if let Some(arg) = named(ContextKind::SuggestedArg) {
         format!("did you mean `{arg}`?")
     } else if let Some(ContextValue::Strings(values)) = err.get(ContextKind::ValidValue) {

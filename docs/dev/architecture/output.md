@@ -43,7 +43,7 @@ errors use bold red `error:`, indented dim details and optional bold cyan `help:
 
 interactive progress shows filename, bytes, rate and estimated time left once the rate settles. narrow terminals drop counters, the bar and then the verb before shortening the filename in the middle. colored bars use `━` with a dim remainder; uncolored terminal bars use `#` and `-`. waits show elapsed time without a spinner. `MultiProgress` coordinates lines, bars and prompts so they do not overwrite each other.
 
-non-terminal stderr has no bars. long batches report progress after two seconds, then at ten-second intervals from the start. a watched successful command can give a `next:` suggestion; quiet, JSON and redirected stdout omit it.
+non-terminal stderr has no bars, and lists such as search rows stay on stdout. a command run below its project's folder prints a dim `using the project in ...` line for a person at a terminal. long batches report progress after two seconds, then at ten-second intervals from the start. a watched successful command can give a `next:` suggestion; quiet, JSON and redirected stdout omit it.
 
 ### terminal capabilities
 

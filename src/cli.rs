@@ -363,7 +363,7 @@ fn about(context: &Context, banner: &str, text: &str, started: Instant) -> ExitC
 
 /// `fetchloom` alone: a short status inside a project, and the welcome outside one.
 fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
-    if let Ok(project) = project::find() {
+    if let Ok(project) = project::find(&context.output) {
         let outcome = blocking(context, move |context| status::brief(context, &project));
         return finish(context, Some("status"), outcome, started);
     }

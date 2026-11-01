@@ -18,6 +18,7 @@ use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::Net;
+use crate::output::Output;
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
@@ -390,7 +391,7 @@ fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, E
 }
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
-    let project = find()?;
+    let project = find(&context.output)?;
     let _held = hold(context, &project, "remove").await?;
     let (text, manifest) = project.manifest()?;
     known(&manifest, &args.name, "remove")?;
@@ -419,7 +420,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
 }
 
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
-    let project = find()?;
+    let project = find(&context.output)?;
     let _held = hold(context, &project, "sync").await?;
     let (text, manifest) = project.manifest()?;
     if args.locked {
@@ -503,7 +504,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
-    let project = find()?;
+    let project = find(&context.output)?;
     // a check changes nothing, so it needs no hold. anything else reads what it changes only
     // once no other fetchloom can change it
     let _held = if args.check {
@@ -594,7 +595,7 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 }
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
-    let project = find()?;
+    let project = find(&context.output)?;
     let (_, mut manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
@@ -838,17 +839,23 @@ fn register(work: &Loop<'_>) {
     }
 }
 
-/// the project around the current folder.
-pub(super) fn find() -> Result<Project, Error> {
+/// the project around the current folder. a person working in a folder below it is told which
+/// data.toml the command uses.
+pub(super) fn find(output: &Output) -> Result<Project, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    Project::find(&here).ok_or_else(|| {
+    let project = Project::find(&here).ok_or_else(|| {
         Error::new(
             Kind::ProjectInvalid,
             "there is no data.toml in this folder or any folder above it",
         )
         .help("run `fetchloom add <link>` to start a project here")
-    })
+    })?;
+    tracing::debug!(root = %project.root.display(), "found data.toml");
+    if project.root != here {
+        output.aside(&format!("using the project in {}", project.root.display()));
+    }
+    Ok(project)
 }
 
 /// takes the project lock, waiting while another fetchloom changes the project.

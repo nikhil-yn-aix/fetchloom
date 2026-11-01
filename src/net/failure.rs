@@ -158,6 +158,15 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
         if current.is::<address::Offline>() {
             return Failure::Final(offline(url, mode, true));
         }
+        if let Some(unknown) = current.downcast_ref::<address::Unknown>() {
+            return Failure::Final(
+                Error::new(
+                    Kind::NetworkUnreachable,
+                    format!("could not find {}: {unknown}", Shown(url)),
+                )
+                .help("check the link for a typo, and that this machine is online"),
+            );
+        }
         cause = current.source();
     }
     if err.is_timeout() {

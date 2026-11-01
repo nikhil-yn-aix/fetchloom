@@ -48,7 +48,7 @@ pub(super) struct Status {
 }
 
 pub(super) fn run(context: &Context) -> Result<Status, Error> {
-    let status = check(&super::project::find()?, context.threads)?;
+    let status = check(&super::project::find(&context.output)?, context.threads)?;
     let output = &context.output;
     list(output, &status);
     if sum_up(output, &status) {

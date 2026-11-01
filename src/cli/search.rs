@@ -25,10 +25,13 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             units::count(report.candidates.len() as u64, "dataset", "datasets")
         ),
     );
-    let parts = parts(output, &report.candidates);
-    let pad = widest(&parts);
-    for (number, (reference, title, facts)) in parts.iter().enumerate() {
-        output.candidate(number + 1, reference, pad, title, facts);
+    // with stdout and stderr both captured, the references on stdout are the list
+    if output.watched_story() {
+        let parts = parts(output, &report.candidates);
+        let pad = widest(&parts);
+        for (number, (reference, title, facts)) in parts.iter().enumerate() {
+            output.candidate(number + 1, reference, pad, title, facts);
+        }
     }
     for candidate in &report.candidates {
         output.answer_untold(&candidate.reference.to_string());

@@ -20,7 +20,7 @@ words may be quoted or separate arguments. empty or whitespace-only words are a 
 
 fetchloom asks hugging face, kaggle and zenodo concurrently and keeps up to three matches from each. it interleaves the catalogs by rank: each catalog's first match, then each second match, then each third. this is catalog order, not a common relevance score.
 
-the story shows canonical references, titles and any known size, download count or access note. quiet or redirected stdout prints one reference per line. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields.
+at a terminal, the story shows canonical references, titles and any known size, download count or access note. quiet or redirected stdout prints one reference per line; when stderr is not a terminal either, the story keeps only the count, so captured output lists each match once. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields. figshare, osf, dataverse and the other sources have no keyword search; pass their links or ids to `add` and `get`.
 
 one failed catalog produces a warning while the others can still return matches. if every catalog fails, the first catalog error ends the command. no matches fails with `reference.unresolved` and an empty candidate list. search writes no project files.
 

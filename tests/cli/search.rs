@@ -150,8 +150,8 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
         } else {
             assert!(stderr.contains("Searching hugging face, kaggle and zenodo for \"iris\""));
             assert!(stderr.contains("Found"));
-            assert!(stderr.contains("Iris Species"));
-            assert!(stderr.contains("12k downloads"));
+            // nobody watches stderr here, so stdout alone carries the list
+            assert!(!stderr.contains("Iris Species"));
         }
     }
     Ok(())
@@ -281,13 +281,12 @@ fn server_titles_are_clipped_and_cannot_control_the_terminal() -> Result {
         "ref":"uciml/iris", "title": format!("iris\x1b[2J {}", "long ".repeat(40))
     }]))?;
     let catalogs = Catalogs::new(b"[]", &kaggle, br#"{"hits":{"hits":[]}}"#)?;
-    let output = catalogs.command(&sandbox, &["search", "iris"]).output()?;
-    assert!(output.status.success());
+    let output = catalogs.command(&sandbox, &["get", "iris"]).output()?;
+    assert_eq!(output.status.code(), Some(10));
     let stderr = text(&output.stderr)?;
     assert!(!stderr.contains('\x1b'));
-    assert!(stderr.contains("\\u{1b}[2J"));
+    assert!(stderr.contains("\\u{1b}[2J"), "{stderr}");
     assert!(!stderr.contains(&"long ".repeat(15)));
-    assert_eq!(text(&output.stdout)?, "kaggle:uciml/iris\n");
     Ok(())
 }
 

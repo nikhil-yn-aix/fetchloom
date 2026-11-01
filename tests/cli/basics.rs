@@ -403,6 +403,11 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
         document["errors"][0]["help"],
         "did you mean `fetchloom sync`?"
     );
+    let nested: Value = serde_json::from_slice(&sandbox.run(&["--json", "verify"])?.stdout)?;
+    assert_eq!(
+        nested["errors"][0]["help"],
+        "did you mean `fetchloom cache verify`?"
+    );
     let help = sandbox.run(&["--json", "--help"])?;
     assert_eq!(
         help.stdout,

@@ -121,6 +121,36 @@ impl fmt::Display for Offline {
 
 impl std::error::Error for Offline {}
 
+/// a host name no DNS server knows, which trying again will not change.
+#[derive(Debug)]
+pub(crate) struct Unknown(pub(crate) String);
+
+impl fmt::Display for Unknown {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} is not a known host", self.0)
+    }
+}
+
+impl std::error::Error for Unknown {}
+
+/// whether a failed lookup said the name does not exist, rather than that DNS could not answer
+/// for now. getaddrinfo reports that only through its message on unix, glibc and musl alike.
+fn is_unknown(err: &std::io::Error) -> bool {
+    if cfg!(windows) {
+        // WSAHOST_NOT_FOUND and WSANO_DATA
+        return matches!(err.raw_os_error(), Some(11001 | 11004));
+    }
+    let text = err.to_string();
+    [
+        "Name or service not known",
+        "No address associated with hostname",
+        "Name does not resolve",
+        "Name has no usable address",
+    ]
+    .iter()
+    .any(|said| text.contains(said))
+}
+
 /// the proxies this machine is set to use, chosen for each URL the way reqwest chooses them, and
 /// what looking up the hosts sent through them found.
 pub(crate) struct Proxies {
@@ -212,8 +242,15 @@ impl reqwest::dns::Resolve for Resolver {
             if offline {
                 return Err(Box::new(Offline) as Box<dyn std::error::Error + Send + Sync>);
             }
-            let found: Vec<SocketAddr> =
-                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let found: Vec<SocketAddr> = match tokio::net::lookup_host((host.as_str(), 0)).await {
+                Ok(found) => found.collect(),
+                Err(err) if is_unknown(&err) => {
+                    return Err(
+                        Box::new(Unknown(host.clone())) as Box<dyn std::error::Error + Send + Sync>
+                    );
+                }
+                Err(err) => return Err(Box::new(err)),
+            };
             let kept: Vec<SocketAddr> = found
                 .iter()
                 .copied()
@@ -262,6 +299,22 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_name_nobody_knows_is_told_apart_from_a_dns_hiccup() {
+        if cfg!(windows) {
+            assert!(is_unknown(&std::io::Error::from_raw_os_error(11001)));
+            assert!(!is_unknown(&std::io::Error::from_raw_os_error(11002)));
+        } else {
+            let said = |text: &str| {
+                std::io::Error::other(format!("failed to lookup address information: {text}"))
+            };
+            assert!(is_unknown(&said("Name or service not known")));
+            assert!(is_unknown(&said("Name does not resolve")));
+            assert!(!is_unknown(&said("Temporary failure in name resolution")));
+            assert!(!is_unknown(&said("Try again")));
+        }
     }
 
     #[test]

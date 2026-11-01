@@ -246,6 +246,20 @@ impl Output {
         }
     }
 
+    /// whether a person watches stderr, so a list there is read rather than logged twice.
+    pub(crate) fn watched_story(&self) -> bool {
+        self.style.interactive
+    }
+
+    /// a dim remark for a person at a terminal, never for a script, such as which project a
+    /// command found above the current folder.
+    pub(crate) fn aside(&self, text: &str) {
+        if self.shows_next() {
+            let dim = paint(self.style.color, Paint::new().dimmed());
+            self.line(&format!("  {dim}{}{dim:#}", plain(text)));
+        }
+    }
+
     /// an answer the story already showed, printed only when a script reads stdout or `-q`
     /// hid the story.
     pub(crate) fn answer_untold(&self, text: &str) {
