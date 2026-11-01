@@ -2,6 +2,7 @@
 //! stands in for both services.
 #![cfg(debug_assertions)]
 
+use std::fmt::Write as _;
 use std::fs;
 use std::process::Command;
 
@@ -20,7 +21,7 @@ fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> String {
         prefix.replace('/', "%2F")
     );
     if let Some(token) = token {
-        target.push_str(&format!("&continuation-token={token}"));
+        let _ = write!(target, "&continuation-token={token}");
     }
     target
 }
@@ -32,18 +33,22 @@ fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>b</Name><EncodingType>url</EncodingType>",
     );
     match next {
-        Some(next) => xml.push_str(&format!(
-            "<IsTruncated>true</IsTruncated><NextContinuationToken>{next}</NextContinuationToken>"
-        )),
+        Some(next) => {
+            let _ = write!(
+                xml,
+                "<IsTruncated>true</IsTruncated><NextContinuationToken>{next}</NextContinuationToken>"
+            );
+        }
         None => xml.push_str("<IsTruncated>false</IsTruncated>"),
     }
     for (key, body) in objects {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "<Contents><Key>{}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>&quot;{}&quot;</ETag><Size>{}</Size></Contents>",
             key.replace('/', "%2F").replace(' ', "+"),
             md5(body),
             body.len()
-        ));
+        );
     }
     xml.push_str("</ListBucketResult>");
     reply(
@@ -56,8 +61,10 @@ fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
 fn md5(body: &[u8]) -> String {
     md5::Md5::digest(body)
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
 }
 
 /// a command that sends every S3 and cloud storage request to `routes`, with AWS and google
@@ -84,7 +91,7 @@ fn assert_anonymous(routes: &Routes) {
 /// openneuro's bucket in two pages, its dotted name reached by path, and its objects.
 fn openneuro() -> Result<Routes> {
     let base = "/s3.amazonaws.com/openneuro.org/";
-    Ok(Routes::start(vec![
+    Routes::start(vec![
         (
             s3_listing(base, "ds000001/", None),
             s3_page(
@@ -117,7 +124,7 @@ fn openneuro() -> Result<Routes> {
             format!("{base}ds000001/sub-01/func%20events.tsv"),
             file(SCAN, &format!("\"{}\"", md5(SCAN))),
         ),
-    ])?)
+    ])
 }
 
 #[test]
@@ -158,7 +165,9 @@ fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
         "{lock}"
     );
     assert!(
-        lock.contains("url = \"https://s3.amazonaws.com/openneuro.org/ds000001/sub-01/func%20events.tsv\""),
+        lock.contains(
+            "url = \"https://s3.amazonaws.com/openneuro.org/ds000001/sub-01/func%20events.tsv\""
+        ),
         "{lock}"
     );
     let targets = routes.targets();
@@ -283,7 +292,9 @@ fn a_gcs_prefix_pins_each_object_generation() -> Result {
     let work = sandbox.work();
     let manifest = fs::read_to_string(work.join("data.toml"))?;
     assert!(
-        manifest.contains("[datasets.us-states]\nref = \"gs://cloud-samples-data/bigquery/us-states/\""),
+        manifest.contains(
+            "[datasets.us-states]\nref = \"gs://cloud-samples-data/bigquery/us-states/\""
+        ),
         "{manifest}"
     );
     let lock = fs::read_to_string(work.join("data.lock"))?;

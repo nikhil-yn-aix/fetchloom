@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -24,7 +25,7 @@ fn resolve(text: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(reference(text).resolve(recorded))
 }
 
-/// a one-page S3 listing of `keys`, each with a size of 1 and the ETag given.
+/// a one-page S3 listing of `(key, etag)` objects, each with a size of 1.
 fn page(escaped: bool, objects: &[(&str, &str)]) -> Vec<u8> {
     let mut xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>b</Name>",
@@ -34,9 +35,10 @@ fn page(escaped: bool, objects: &[(&str, &str)]) -> Vec<u8> {
     }
     xml.push_str("<IsTruncated>false</IsTruncated>");
     for (key, etag) in objects {
-        xml.push_str(&format!(
+        let _ = write!(
+            xml,
             "<Contents><Key>{key}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>{etag}</ETag><Size>1</Size></Contents>"
-        ));
+        );
     }
     xml.push_str("</ListBucketResult>");
     xml.into_bytes()
@@ -313,6 +315,20 @@ fn a_refused_listing_means_the_bucket_is_not_public() {
         error.details[0].contains("required: Anonymous caller"),
         "{:?}",
         error.details
+    );
+
+    let url = STATES
+        .replace("cloud-samples-data", "billed")
+        .replace("bigquery%2Fus-states%2F", "x%2F");
+    let billed = br#"{"error":{"code":400,"message":"Bucket is a requester pays bucket but no user project provided.","errors":[{"message":"Bucket is a requester pays bucket but no user project provided.","domain":"global","reason":"required"}]}}"#;
+    let recorded = Recorded::default().on(&url, 400, billed.to_vec());
+    let error = resolve("gs://billed/x/", &recorded).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(error.help.as_deref(), Some(PRIVATE));
+    assert!(
+        error.message.contains("bills the reader"),
+        "{}",
+        error.message
     );
 }
 

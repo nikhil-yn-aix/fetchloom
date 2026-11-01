@@ -1,4 +1,4 @@
-//! S3: ListObjectsV2 over anonymous HTTPS, following a bucket to the region it lives in.
+//! S3: `ListObjectsV2` over anonymous HTTPS, following a bucket to the region it lives in.
 
 use percent_encoding::percent_decode_str;
 use url::Url;
@@ -150,8 +150,8 @@ fn object(
     })
 }
 
-/// the MD5 an ETag holds. an object uploaded in parts has an ETag with a `-` and a part count,
-/// which is no MD5 of its bytes.
+/// the MD5 an `ETag` holds. an object uploaded in parts has an `ETag` with a `-` and a part
+/// count, which is no MD5 of its bytes.
 fn etag_md5(etag: &str) -> Option<Md5> {
     let etag = etag.trim().trim_matches('"');
     if etag.contains('-') {

@@ -113,15 +113,11 @@ impl Prefix {
             (Store::Gcs, bucket.to_owned(), key)
         } else if let Some(bucket) = host.strip_suffix(".storage.googleapis.com") {
             (Store::Gcs, bucket.to_owned(), &*path)
+        } else if let (Some(bucket), _) = s3_host(&host)? {
+            (Store::S3, bucket.to_owned(), &*path)
         } else {
-            let (bucket, _) = s3_host(&host)?;
-            match bucket {
-                Some(bucket) => (Store::S3, bucket.to_owned(), &*path),
-                None => {
-                    let (bucket, key) = path.split_once('/').unwrap_or((&path, ""));
-                    (Store::S3, bucket.to_owned(), key)
-                }
-            }
+            let (bucket, key) = path.split_once('/').unwrap_or((&path, ""));
+            (Store::S3, bucket.to_owned(), key)
         };
         if !(key.is_empty() || key.ends_with('/')) {
             return None;
@@ -210,6 +206,8 @@ impl Prefix {
             (Some(said), None) | (None, Some(said)) => Some(format!("{host} said {said}")),
             (None, None) => None,
         };
+        let requester_pays =
+            message.is_some_and(|message| message.to_ascii_lowercase().contains("requester pays"));
         let error = match response.status {
             401 | 403 => Error::new(
                 Kind::AuthRequired,
@@ -217,6 +215,11 @@ impl Prefix {
                     "{self} is not a public bucket: {} refused to list it",
                     self.store.service()
                 ),
+            )
+            .help(PRIVATE),
+            400 if requester_pays => Error::new(
+                Kind::AuthRequired,
+                format!("{self} bills the reader for each request, which needs an account"),
             )
             .help(PRIVATE),
             404 | 410 => Error::new(
@@ -252,7 +255,7 @@ fn is_bucket(store: Store, name: &str) -> bool {
         Store::Gcs => 222,
     };
     let bytes = name.as_bytes();
-    let ends = |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_alphanumeric());
+    let ends = |byte: Option<&u8>| byte.is_some_and(u8::is_ascii_alphanumeric);
     (3..=longest).contains(&name.len())
         && ends(bytes.first())
         && ends(bytes.last())

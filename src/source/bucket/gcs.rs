@@ -1,5 +1,7 @@
 //! google cloud storage: the JSON API's object list over anonymous HTTPS.
 
+use std::fmt::Write as _;
+
 use serde::Deserialize;
 use url::Url;
 
@@ -137,7 +139,12 @@ fn base64_md5(text: &str) -> Option<Md5> {
     if bits & ((1 << held) - 1) != 0 {
         return None;
     }
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    let hex = bytes
+        .iter()
+        .fold(String::with_capacity(32), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
     Md5::from_hex(&hex)
 }
 
