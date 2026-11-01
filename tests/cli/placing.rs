@@ -701,6 +701,20 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::p
     for project in [sandbox.work(), other.clone()] {
         link_iris(sandbox, &project)?;
     }
+    // hfs+ keeps whole seconds and fat two, so a state written in the link's own tick leaves it
+    // racy, and hashing would take the edit below for each project's own. states written later
+    // vouch for the links as on a finer clock
+    let modified =
+        fs::metadata(sandbox.work().join("data").join("iris").join("iris.csv"))?.modified()?;
+    if modified.duration_since(UNIX_EPOCH)?.subsec_nanos() == 0 {
+        while SystemTime::now() < modified + Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for project in [sandbox.work(), other.clone()] {
+            let state = project.join(".fetchloom").join("state");
+            fs::write(&state, fs::read(&state)?)?;
+        }
+    }
     let mut edited = V1.to_vec();
     edited[0] = b'S';
     edit(
@@ -927,6 +941,50 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     let path = sandbox.command_in(&other, &["path", "iris"]).output()?;
     assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
     assert!(!lock.exists(), "path synced again");
+    Ok(())
+}
+
+/// a coarse clock can give a project's state the same time as the link it records, and then an
+/// edit that keeps the size and time is racy: hashing finds it, but neither that nor a later
+/// change mark says which project made it. the edit stays with a warning until --force.
+#[test]
+fn a_racy_edit_of_a_marked_link_stays_until_forced() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    if shared_and_edited(&sandbox, &server)?.is_none() {
+        return Ok(());
+    }
+    keep_time(&sandbox.work())?;
+    let state = sandbox.work().join(".fetchloom").join("state");
+    let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&state)?)?;
+    let modified = recorded["files"]["data/iris/iris.csv"]["look"]["modified"]
+        .as_u64()
+        .ok_or("a placed file has a time")?;
+    set_time(&state, UNIX_EPOCH + Duration::from_nanos(modified))?;
+    let verified = sandbox.run(&["cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stderr)?
+    );
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+
+    let synced = sandbox.run(&["sync"])?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?[0], b'S', "{stderr}");
+    assert!(
+        stderr.contains("data/iris/iris.csv has changed in place through a hardlink"),
+        "{stderr}"
+    );
+    let forced = sandbox.run(&["sync", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(fs::read(&placed)?, V1);
     Ok(())
 }
 
