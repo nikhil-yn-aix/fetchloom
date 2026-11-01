@@ -55,7 +55,7 @@ class RenderTests(unittest.TestCase):
             for dark in ("", "-dark"):
                 path = root / "report" / "docs" / "assets" / "bench" / f"s1-lan-ext4{dark}.svg"
                 texts = ET.parse(path).findall(".//{http://www.w3.org/2000/svg}text")
-                self.assertEqual(texts[0].text, "ONE LARGE FILE")
+                self.assertEqual(texts[0].text, "one large file")
                 self.assertIn("failed", [item.text for item in texts])
                 self.assertIn("2.00 s", [item.text for item in texts])
             page = (root / "report" / "docs" / "dev" / "performance" / "benchmarks.md").read_text()

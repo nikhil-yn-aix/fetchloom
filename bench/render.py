@@ -79,8 +79,7 @@ PAD = 32
 NAMES = 116
 ROW = 32
 BAR = 12
-TIMES = 82
-VALUES = 210
+TIMES = 90
 
 
 def font_faces():
@@ -113,23 +112,17 @@ def ordered(summaries):
                                                        pair[1]["median"] or float("inf"), pair[0]))
 
 
-def headline(summaries):
-    """the finding, stated plainly, including when fetchloom is not the fastest."""
+def verdict(summaries):
+    """two or three words for a hero card: fetchloom against the fastest other tool."""
     own = summaries.get("fetchloom", {})
-    if own.get("failures") or own.get("median") is None:
-        return "fetchloom did not finish every run"
-    rivals = [(name, s["median"]) for name, s in summaries.items()
+    rivals = [s["median"] for name, s in summaries.items()
               if name != "fetchloom" and s["median"] is not None and not s["failures"]]
-    if not rivals:
-        return f"fetchloom takes {seconds(own['median'])}"
-    name, best = min(rivals, key=lambda pair: pair[1])
-    result = best / own["median"]
+    if own.get("failures") or own.get("median") is None or not rivals:
+        return None
+    result = min(rivals) / own["median"]
     if abs(result - 1) < .05:
-        return f"fetchloom and {name} are about even"
-    if result > 1:
-        return f"fetchloom is {times(result)} faster than the next tool, {name}"
-    return f"{name} is {times(1 / result)} faster than fetchloom here"
-
+        return "even"
+    return f"{times(result)} faster" if result > 1 else f"{times(1 / result)} slower"
 
 def story(scenario, count, file_size):
     files = f"{count:,} file" + ("" if count == 1 else "s")
@@ -142,34 +135,36 @@ def text(x, y, value, colors, role="text", size=13, weight=400, anchor="start", 
             f'font-weight="{weight}" text-anchor="{anchor}"{extra}>{html.escape(value)}</text>')
 
 
-def chart(path, label, title, subtitle, footer, summaries, dark=False, ratios=True):
-    """one card: what was measured, the finding, then one row per tool, fastest first."""
+def chart(path, title, subtitle, summaries, dark=False, label=None):
+    """a card of tools, fastest first. with a label it is a hero card: label, verdict, bars."""
     colors = PALETTES[dark]
     rows = ordered(summaries)
-    own = summaries.get("fetchloom", {})
-    base = None if own.get("failures") or not ratios else own.get("median")
     reach = max((s["high"] for _, s in rows if s["median"] is not None and not s["failures"]), default=1)
     left = PAD + NAMES
-    span = WIDTH - left - PAD - VALUES
-    top = 136
-    height = top + ROW * len(rows) + 58
-    middle_of = lambda index: top + ROW * index + ROW / 2
+    span = WIDTH - left - PAD - TIMES - 18
+    head = 104 if label else 92
+    top = head + 22
+    height = top + ROW * len(rows) + 24
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{height}" '
              f'viewBox="0 0 {WIDTH} {height}" role="img" aria-label="{html.escape(title, quote=True)}">',
              f"<style>{font_faces()}</style>",
              f'<rect x=".5" y=".5" width="{WIDTH - 1}" height="{height - 1}" rx="14" fill="{colors["card"]}" '
-             f'stroke="{colors["edge"]}"/>',
-             text(PAD, 42, label.upper(), colors, "accent", 11, 500, spacing=1.4),
-             text(PAD, 80, title, colors, size=29, family=SERIF),
-             text(PAD, 106, subtitle, colors, "muted", 12)]
+             f'stroke="{colors["edge"]}"/>']
+    if label:
+        parts += [text(PAD, 42, label.upper(), colors, "accent", 11, 500, spacing=1.4),
+                  text(PAD, 86, title, colors, size=40, family=SERIF)]
+    else:
+        parts += [text(PAD, 56, title, colors, size=30, family=SERIF),
+                  text(PAD, 80, subtitle, colors, "muted", 12)]
     for index, (name, result) in enumerate(rows):
-        middle = middle_of(index)
+        middle = top + ROW * index + ROW / 2
         mine = name == "fetchloom"
         parts.append(text(PAD, middle + 4, name, colors, "accent" if mine else "text", 13, 500 if mine else 400))
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{span}" height="{BAR}" '
                      f'rx="{BAR / 2}" fill="{colors["track"]}"/>')
+        right = WIDTH - PAD
         if result["median"] is None or result["failures"]:
-            parts.append(text(left + span + 18 + TIMES, middle + 4, "failed" if result["failures"] else "skipped",
+            parts.append(text(right, middle + 4, "failed" if result["failures"] else "skipped",
                               colors, "muted", 12.5, anchor="end"))
             continue
         width = max(span * result["median"] / reach, BAR)
@@ -180,13 +175,8 @@ def chart(path, label, title, subtitle, footer, summaries, dark=False, ratios=Tr
             high = left + span * result["high"] / reach
             parts.append(f'<line x1="{low:.1f}" x2="{high:.1f}" y1="{middle:.1f}" y2="{middle:.1f}" '
                          f'stroke="{colors["range"]}" stroke-opacity=".3" stroke-width="1.5" stroke-linecap="round"/>')
-        right = left + span + 18 + TIMES
         parts.append(text(right, middle + 4, seconds(result["median"]), colors, "text", 13, 500 if mine else 400,
                           anchor="end"))
-        if base and not mine:
-            parts.append(text(right + 16, middle + 4, compared(result["median"], base), colors, "muted", 12))
-    parts.append(f'<line x1="{PAD}" x2="{WIDTH - PAD}" y1="{height - 40}" y2="{height - 40}" stroke="{colors["edge"]}"/>')
-    parts.append(text(PAD, height - 18, footer, colors, "muted", 11))
     parts.append("</svg>")
     Path(path).write_text("\n".join(parts) + "\n")
 
@@ -234,7 +224,7 @@ def render(results, repo):
             rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
             lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
         lines.append("")
-    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted and a tool with any failed run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. the thin line on each bar spans the fastest and slowest run.\n")
+    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted and a tool with any failed run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
     warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in all_rows)
     if warmup_failures:
         lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
@@ -248,11 +238,9 @@ def render(results, repo):
         sample = next(iter(buckets[(scenario, profile, fs)].values()))[0]
         rounds = max(item["rounds"] for item in summaries.values())
         title = TITLES[scenario]
-        subtitle = story(scenario, sample["count"], sample["file_size"])
-        footer = (f"{profile} network \u00b7 {fs} \u00b7 median of {rounds} runs \u00b7 "
-                  "line: fastest to slowest run")
+        subtitle = f"{sample['count']:,} \u00d7 {size(sample['file_size'])} \u00b7 {profile} \u00b7 {fs}"
         name = f"{scenario}-{profile}-{fs}"
-        lines += [f"## {scenario}: {title} ({profile}, {fs})\n", subtitle + ".\n",
+        lines += [f"## {scenario}: {title} ({profile}, {fs})\n", story(scenario, sample["count"], sample["file_size"]) + f", median of {rounds} runs.\n",
                   "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
                   "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
         base_summary = summaries.get("fetchloom", {})
@@ -267,8 +255,10 @@ def render(results, repo):
                 lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
             lines.append("\nwall time is the second attempt. bytes cover both attempts; interruption is at 10 s, with a 5 s kill grace period.\n")
         for dark in (False, True):
-            chart(charts / f"{name}{'-dark' if dark else ''}.svg", title, headline(summaries), subtitle, footer,
-                  summaries, dark)
+            chart(charts / f"{name}{'-dark' if dark else ''}.svg", title, subtitle, summaries, dark)
+            if profile == "lan" and verdict(summaries):
+                chart(charts / f"hero-{scenario}-{fs}{'-dark' if dark else ''}.svg", verdict(summaries), "",
+                      summaries, dark, label=title)
         lines += ["", picture(name, title)]
     live_groups = defaultdict(lambda: defaultdict(list))
     for row in rows:
@@ -283,10 +273,8 @@ def render(results, repo):
             lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
         sample = next(iter(group.values()))[0]
         for dark in (False, True):
-            chart(charts / f"live-{service}{'-dark' if dark else ''}.svg", f"{service}, over the internet", "real downloads from a public service",
-                  f"{sample['count']:,} files, {size(sample['file_size'])} in all, from the public service",
-                  f"ext4 \u00b7 median of {max(x['rounds'] for x in summaries.values())} runs \u00b7 "
-                  "public networks vary, so no ratios", summaries, dark, ratios=False)
+            chart(charts / f"live-{service}{'-dark' if dark else ''}.svg", service,
+                  f"{sample['count']:,} files \u00b7 {size(sample['file_size'])} \u00b7 live", summaries, dark)
         lines += ["", picture(f"live-{service}", service)]
     for row in all_rows:
         if row.get("status") == "skipped":
