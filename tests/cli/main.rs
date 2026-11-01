@@ -6,6 +6,7 @@ mod basics;
 mod buckets;
 mod cache;
 mod caps;
+mod completions;
 mod concurrent;
 mod get;
 mod hints;

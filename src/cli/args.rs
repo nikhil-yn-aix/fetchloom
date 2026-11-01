@@ -126,11 +126,12 @@ on disk: removes the saved key. asks first when other tools read it too";
 on disk: nothing";
 
     pub(super) const COMPLETIONS: &str = "examples:
-  fetchloom completions bash
-  fetchloom completions zsh
-  fetchloom completions powershell
+  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
+  fetchloom completions zsh > ~/.zfunc/_fetchloom
+  fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
+  fetchloom completions powershell | Out-String | Invoke-Expression
 
-on disk: nothing. it prints the script on stdout for your shell's profile or completions folder";
+on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
 
 /// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
