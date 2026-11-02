@@ -5,9 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::support::{
-    Part, Result, Sandbox, Server, delete, edit, file, reply, text, wait_until,
-};
+use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text, wait_until};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
