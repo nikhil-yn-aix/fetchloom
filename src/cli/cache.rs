@@ -287,6 +287,10 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
         ));
     }
     if checked.changed.is_empty() {
+        if checked.unreadable.is_empty() && checked.objects == 0 {
+            output.done("Ok", "the cache has no data files");
+            return Ok(());
+        }
         if checked.unreadable.is_empty() {
             output.done("Verified", &format!("{what}, every one is intact"));
             return Ok(());
