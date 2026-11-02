@@ -77,8 +77,9 @@ for the current Cargo version, 0.1.0, the workflow will produce six archives, tw
    ```
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
-6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. check `cargo install fetchloom` and the apt lines in [getting started](../../user/getting-started.md#install) on a clean machine or container.
-7. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
+6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
+7. after the first release, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper).
+8. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 
 to exercise build jobs without a tag, temporarily add a branch trigger for `release-check` to a test branch of the workflow. `attest` and `release` remain tag-only. remove the test trigger and branch after the check.
 
