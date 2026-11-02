@@ -8,12 +8,12 @@ fetchloom --json --yes sync
 fetchloom --json status
 ```
 
-`--json` prints one document on stdout, including usage errors, welcome and version. `--help` and `fetchloom help` still print text; an unknown help topic is a usage error with a null command. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
+`--json` prints one document on stdout, including usage errors, welcome, version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. without `--json`, help is text. an unknown help topic is a usage error with a null command. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
 
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `auth`, `auth login`, `auth logout`, `help`, or null |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `auth status` reports `auth` and `cache check` reports `cache verify`. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
