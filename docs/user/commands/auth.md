@@ -22,7 +22,7 @@ fetchloom auth logout [options] <account>
 
 ## signing in
 
-`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its ends and length show so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it:
+`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it:
 
 ```text
     Sign in hugging face
