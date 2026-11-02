@@ -27,8 +27,6 @@ source metadata keeps its casing. the iris record supplies `license = "cc-by-4.0
 
 ## credentials and limits
 
-`ZENODO_TOKEN` supplies the source credential. tokens are kept out of the manifest, lock, logs and JSON output.
-
-restricted, embargoed and closed records are refused. selection filters do not bypass that check. request a public accessible copy from the owner when needed.
+public records need no account. for a restricted, embargoed or closed record, request access on its zenodo page, then sign in with `fetchloom auth login zenodo`, or set `ZENODO_TOKEN`. zenodo lists such a record's files only to an account allowed to read them, so fetchloom downloads them when the key can, and otherwise stops with `auth.required` and the record's page. selection filters do not bypass that check. keys are kept out of the manifest, lock, logs and JSON output.
 
 use [lock upgrades](../commands/lock.md#upgrading) deliberately. changing a pinned input requires a new lock and a sync, followed by committing the lock.
