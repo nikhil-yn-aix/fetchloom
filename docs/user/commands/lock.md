@@ -31,12 +31,6 @@ fetchloom lock [options]
 
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
-stdout excerpt from `fetchloom --help`:
-
-```text
-  lock    update data.lock from data.toml without placing files in the data folder
-```
-
 `lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents.
 
 ## upgrading
