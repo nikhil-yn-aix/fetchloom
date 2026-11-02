@@ -184,7 +184,7 @@ fn tell_placed(
     match (targets, outcomes) {
         (_, _) if changed == 0 => {
             let shown = match targets {
-                [only] => folder.join(&only.path).display().to_string(),
+                [only] => within(folder, &only.path).display().to_string(),
                 _ => folder.display().to_string(),
             };
             output.done("Ok", &format!("{shown} is already up to date"));
@@ -198,7 +198,7 @@ fn tell_placed(
             };
             output.step(
                 verb,
-                &format!("{} · {how}", folder.join(&only.path).display()),
+                &format!("{} · {how}", within(folder, &only.path).display()),
             );
         }
         _ => output.step(
@@ -254,6 +254,13 @@ fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, 
 
 fn local(path: &Path, err: &io::Error) -> Error {
     Error::io(format_args!("could not write {}", path.display()), err)
+}
+
+/// `path`, a dataset path with `/` between its parts, inside `folder` with the system's own
+/// separators, as people see paths on windows.
+fn within(folder: &Path, path: &str) -> std::path::PathBuf {
+    path.split('/')
+        .fold(folder.to_path_buf(), |inside, part| inside.join(part))
 }
 
 #[cfg(test)]

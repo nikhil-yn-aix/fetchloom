@@ -168,6 +168,16 @@ fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error
 /// the cache this machine uses, created on first use.
 fn open_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
+    if root.exists() && !root.is_dir() {
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "could not open the cache at {}: it is a file, not a folder",
+                root.display()
+            ),
+        )
+        .help("set FETCHLOOM_CACHE to a folder fetchloom may write to"));
+    }
     Cache::open(root.clone()).map_err(|err| {
         Error::io(
             format_args!("could not open the cache at {}", root.display()),
@@ -204,7 +214,11 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
     if err.kind() != std::io::ErrorKind::InvalidFilename {
         return Error::new(
             Kind::Usage,
-            format!("cannot work in {}: {err}", folder.display()),
+            format!(
+                "cannot work in {}: {}",
+                folder.display(),
+                crate::error::said(err)
+            ),
         )
         .help("give -C a folder that exists and that you may open");
     }

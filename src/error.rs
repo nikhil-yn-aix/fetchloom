@@ -118,7 +118,7 @@ impl Error {
     /// a failure of the disk or the system: what fetchloom was doing, the system's reason, and
     /// what to do when that reason is one a person can fix.
     pub(crate) fn io(doing: impl fmt::Display, err: &io::Error) -> Error {
-        let error = Error::new(Kind::LocalIo, format!("{doing}: {err}"));
+        let error = Error::new(Kind::LocalIo, format!("{doing}: {}", said(err)));
         match advice(err) {
             Some(help) => error.help(help),
             None => error,
@@ -170,6 +170,32 @@ impl Error {
 }
 
 /// what a person can do about an io error, when its cause is one they can change.
+/// what went wrong on the machine in plain words, without the system's own phrasing and its
+/// error number, which mean little to a person.
+pub(crate) fn said(err: &io::Error) -> String {
+    // an error fetchloom built carries its own words, such as the file it concerns
+    let bare = err.raw_os_error().is_some();
+    match err.kind() {
+        io::ErrorKind::NotFound if bare => "it does not exist".to_owned(),
+        io::ErrorKind::PermissionDenied if bare => "permission was denied".to_owned(),
+        io::ErrorKind::NotADirectory if bare => "it is a file, not a folder".to_owned(),
+        io::ErrorKind::IsADirectory if bare => "it is a folder, not a file".to_owned(),
+        io::ErrorKind::StorageFull if bare => "the disk is full".to_owned(),
+        _ => {
+            let text = err.to_string();
+            let text = match text.rfind(" (os error ") {
+                Some(at) if text.ends_with(')') => text[..at].to_owned(),
+                _ => text,
+            };
+            let text = text.trim_end_matches('.');
+            let mut chars = text.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_lowercase().chain(chars).collect()
+            })
+        }
+    }
+}
+
 pub(crate) fn advice(err: &io::Error) -> Option<&'static str> {
     // windows refuses a file another program opened without sharing it, with a sharing or a
     // lock violation

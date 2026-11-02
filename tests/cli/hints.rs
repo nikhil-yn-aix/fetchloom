@@ -25,7 +25,7 @@ fn a_file_another_program_holds_says_to_close_it() -> Result {
     drop(held);
     assert_eq!(output.status.code(), Some(50));
     let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("(os error 32)"), "{stderr}");
+    assert!(stderr.contains("being used by another process"), "{stderr}");
     assert!(
         stderr.ends_with(
             "help: close the program using the file, then run `fetchloom status` again\n"
@@ -40,7 +40,7 @@ fn a_file_another_program_holds_says_to_close_it() -> Result {
     drop(held);
     assert_eq!(output.status.code(), Some(50));
     let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("(os error 5)"), "{stderr}");
+    assert!(stderr.contains("permission was denied"), "{stderr}");
     assert!(
         stderr.ends_with("help: close any program that has it open and check its permissions, then run `fetchloom remove iris` again\n"),
         "{stderr}"

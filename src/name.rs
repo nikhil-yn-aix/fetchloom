@@ -357,7 +357,7 @@ fn shorten(name: &str) -> String {
     format!("{}{extension}", &name[..end])
 }
 
-fn is_reserved_on_windows(name: &str) -> bool {
+pub(crate) fn is_reserved_on_windows(name: &str) -> bool {
     let stem = name
         .split('.')
         .next()

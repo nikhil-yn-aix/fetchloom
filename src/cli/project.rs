@@ -1170,6 +1170,14 @@ async fn learn_name(
 /// refuses a name that is not a valid dataset name or that data.toml already has, as `--as`
 /// gives it.
 fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
+    // a dataset's name is its folder, and data.toml travels to windows machines too
+    if name::is_dataset_name(asked) && name::is_reserved_on_windows(asked) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("\"{asked}\" is a name windows keeps for devices, so it cannot be a folder"),
+        )
+        .help(format!("pick another name, such as --as {asked}-data")));
+    }
     if !name::is_dataset_name(asked) {
         let error = Error::new(
             Kind::Usage,
