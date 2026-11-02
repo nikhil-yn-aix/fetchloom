@@ -4,15 +4,15 @@ macos runs the same fetchloom commands as linux and windows, on intel and apple 
 
 ## install
 
-the installer in the [readme](../../README.md#install) picks the x86_64 or arm64 build. a terminal running under rosetta on apple silicon still gets the arm64 build. it installs into `~/.local/bin` and, when PATH lacks that folder, adds it to `~/.zshrc` as well as `~/.profile`, since zsh is the default shell and never reads `~/.profile`.
+no release has been published yet, so build from source: `xcode-select --install` provides the command line tools, then follow [getting started](getting-started.md#install).
 
-the executables are not signed by a developer account. `curl`, the installer and `pip` do not mark what they download, so macos runs it without asking. an archive saved from a browser is marked as quarantined; after unpacking it, clear the mark before the first run:
+after the first release, the installer in the [readme](../../README.md#install) picks the x86_64 or arm64 build. a terminal running under rosetta on apple silicon still gets the arm64 build. it installs into `~/.local/bin` and, when PATH lacks that folder, adds it to `~/.zshrc` as well as `~/.profile`, since zsh is the default shell and never reads `~/.profile`.
+
+the release executables are not signed by a developer account. `curl`, the installer and `pip` do not mark what they download, so macos runs it without asking. an archive saved from a browser is marked as quarantined; after unpacking it, clear the mark before the first run:
 
 ```sh
 xattr -d com.apple.quarantine fetchloom
 ```
-
-building from source needs the command line tools, which `xcode-select --install` provides, and then the steps in [getting started](getting-started.md#install).
 
 ## cache
 
