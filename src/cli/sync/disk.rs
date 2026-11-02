@@ -98,6 +98,11 @@ impl Survey {
             return;
         }
         let _span = tracing::debug_span!("hash_racy", files = racy.len()).entered();
+        // a time equal to the state's own cannot tell an edit in the same clock tick apart
+        tracing::debug!(
+            files = racy.len(),
+            "hashing files placed too recently to trust their time"
+        );
         let unchanged = place::run_all(&racy, self.threads, |(path, sha256)| {
             Sha256::of_file(&root.join(path)).is_ok_and(|digest| digest == **sha256)
         });
@@ -105,6 +110,7 @@ impl Survey {
             if unchanged {
                 self.needs_writing = true;
             } else {
+                tracing::debug!(%path, "hashing found an edit");
                 self.edited.insert(path.clone());
             }
         }
@@ -200,6 +206,10 @@ impl Survey {
             return Ok(());
         }
         let _span = tracing::debug_span!("hash_doubted", files = doubted.len()).entered();
+        tracing::debug!(
+            files = doubted.len(),
+            "hashing hardlinks whose cached object was marked changed"
+        );
         let files = &self.state.files;
         let intact = place::run_all(&doubted, self.threads, |path| {
             Sha256::of_file(&root.join(path)).map(|digest| digest == files[path].sha256)

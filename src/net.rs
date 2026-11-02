@@ -373,6 +373,8 @@ impl Net {
         if secure && let Some(host) = url.host_str() {
             for (owner, name, value, every_hop) in &self.credentials {
                 if (credentials || *every_hop) && host.eq_ignore_ascii_case(owner) {
+                    // the header name only; the value is the secret
+                    tracing::debug!(host, header = %name, "sending a stored credential");
                     request = request.header(name.clone(), value.clone());
                 }
             }

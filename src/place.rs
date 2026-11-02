@@ -108,6 +108,9 @@ impl Placer {
     pub(crate) fn new(root: &Path, scratch: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
+        if let Some(client) = synced {
+            tracing::debug!(root = %root.display(), client, "inside a synced folder, so no hardlinks");
+        }
         Placer {
             volume: Volume::new(scratch.to_path_buf()),
             ..Placer::starting_at(root, Method::Reflink, synced)
@@ -204,7 +207,15 @@ impl Placer {
             (*index, placed)
         };
         if let Some((first, rest)) = ready.split_first() {
-            results.push(put(first));
+            let placed = put(first);
+            if let (_, Ok((method, _))) = &placed {
+                tracing::debug!(
+                    ?method,
+                    files = ready.len(),
+                    "placed the first file, the rest try the same methods"
+                );
+            }
+            results.push(placed);
             results.extend(run_all(rest, self.threads, put));
         }
         results.sort_unstable_by_key(|(index, _)| *index);
@@ -377,6 +388,7 @@ impl Placer {
             return Err(error);
         }
         let links_nothing = || self.volume.can_hardlink() == Some(false);
+        tracing::debug!(?method, %error, "placing failed, trying the next method");
         match method {
             Method::Reflink if refuses_links(&error) || crosses_volumes(&error) => {
                 self.can_reflink.store(false, Ordering::Relaxed);

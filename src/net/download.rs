@@ -381,7 +381,17 @@ impl Net {
     }
 
     fn in_cache(&self, fetch: &Fetch, cache: &Cache) -> Option<Fetched> {
-        let fetched = fetch.cached(cache)?;
+        let Some(fetched) = fetch.cached(cache) else {
+            // false means the cache had nothing to look the file up by
+            let stated = fetch.expect.sha256.is_some() || fetch.expect.md5.is_some();
+            tracing::debug!(stated_hash = stated, "not in the cache");
+            return None;
+        };
+        tracing::debug!(
+            sha256 = fetched.digest.short(),
+            size = fetched.size,
+            "in the cache, no download"
+        );
         Work::add(&self.work.cache_hits, 1);
         Some(fetched)
     }
@@ -455,6 +465,13 @@ impl Net {
         let name = describe_response(&response, &fetch.url, on)?;
         let proven = pinned || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
+        tracing::debug!(
+            splits,
+            total,
+            status = status.as_u16(),
+            proven,
+            "split decision"
+        );
         let body = Body {
             offset,
             total,
