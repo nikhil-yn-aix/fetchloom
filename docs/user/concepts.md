@@ -119,7 +119,7 @@ approval is required above 1 GiB, not at exactly 1 GiB.
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
 
-`--yes` or `-y` approves downloads, never a [dataset search choice](commands/search.md#choosing-a-dataset). questions default to no and require interactive stdin and stderr. pipes, CI and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`.
+`--yes` or `-y` approves downloads, never a [dataset search choice](commands/search.md#choosing-a-dataset). questions default to no and require interactive stdin and stderr. pipes, CI, [coding agents](ai-agents.md) and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`.
 
 ## interruptions
 
