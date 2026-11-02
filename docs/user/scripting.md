@@ -19,10 +19,10 @@ stop when the lock check fails. after sync, inspect kept conflicts before using 
 | `status` | require `ok` for successful completion |
 | `result` | read the command-specific fields |
 | `warnings` | inspect warnings even in quiet mode |
-| `errors` | read `kind`, `message`, `details` and nullable `help`; download failures also include `failures` |
+| `errors` | read `kind`, `message`, `details`, nullable `help` and nullable `fix`, a command to run next; download failures also include `failures` |
 | `work` | inspect request, byte, retry, resume, cache and placement counters |
 
-JSON appears on stdout on success and failure, including usage errors. help remains text, and explicit debug logging can still write stderr. a killed process may leave no valid JSON; treat missing or invalid JSON as failure.
+JSON appears on stdout on success and failure, including usage errors and help: `fetchloom help --json` describes every command and option. explicit debug logging can still write stderr. a killed process may leave no valid JSON; treat missing or invalid JSON as failure.
 
 bare `fetchloom` in a project reports command `status`. [JSON output](reference/json-output.md) defines every result and counter. zero `bytes_down` does not prove there were no requests. a warm project can place cached files with zero `cache_hits`.
 
