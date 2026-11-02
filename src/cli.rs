@@ -203,7 +203,7 @@ fn peek_cache() -> Result<Cache, Error> {
 fn cache_root() -> Result<std::path::PathBuf, Error> {
     Cache::locate(&|name| std::env::var_os(name)).ok_or_else(|| {
         Error::new(Kind::LocalIo, "could not find a folder for the cache")
-            .help("set FETCHLOOM_CACHE to a folder fetchloom may use")
+            .help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
 }
 
@@ -324,6 +324,9 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),
     };
+    if outcome == ExitCode::SUCCESS && command.as_ref().is_some_and(tidies) {
+        cache::tidy(&context);
+    }
     // refused for want of an account, with a person at the terminal: offer to sign in, then run
     // the command once more with the new key
     let needed = context
@@ -342,6 +345,18 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     // status is read-only, so an interrupted scan need not delay process exit.
     runtime.shutdown_background();
     outcome
+}
+
+/// commands after which the cache may tidy itself: they change what projects need, and a dry run
+/// changes nothing at all.
+fn tidies(command: &args::Command) -> bool {
+    match command {
+        args::Command::Add(args) => !args.dry.dry_run,
+        args::Command::Remove(args) => !args.dry.dry_run,
+        args::Command::Sync(args) => !args.dry.dry_run,
+        args::Command::Get(_) => true,
+        _ => false,
+    }
 }
 
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {

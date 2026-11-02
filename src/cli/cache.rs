@@ -347,6 +347,60 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     )))
 }
 
+/// how often the cache tidies itself, and how long bytes no project needs stay before it does.
+const TIDY_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
+const TIDY_AFTER: std::time::Duration = std::time::Duration::from_hours(24 * 30);
+
+/// after a command that changed what projects need, at most once a week: frees bytes no project
+/// has needed for 30 days, and what interrupted runs left behind, as `cache gc` would. it never
+/// fails the command or says anything outside `-v`. `FETCHLOOM_AUTO_GC=0` turns it off.
+pub(super) fn tidy(context: &Context) {
+    if std::env::var_os("FETCHLOOM_AUTO_GC").is_some_and(|value| value == "0") {
+        return;
+    }
+    let Some(root) = Cache::locate(&|name| std::env::var_os(name)) else {
+        return;
+    };
+    if !root.join("objects").is_dir() {
+        return;
+    }
+    let marker = root.join("tidied");
+    let now = SystemTime::now();
+    match fs::metadata(&marker).and_then(|metadata| metadata.modified()) {
+        // the first run starts the clock rather than paying for a sweep right away
+        Err(_) => {
+            let _ = fs::write(&marker, b"");
+            return;
+        }
+        Ok(last)
+            if now
+                .duration_since(last)
+                .map_or(true, |age| age < TIDY_EVERY) =>
+        {
+            return;
+        }
+        Ok(_) => {}
+    }
+    // stamped before the sweep, so runs that finish together do not all sweep
+    if fs::write(&marker, b"").is_err() {
+        return;
+    }
+    let Ok(cache) = open_cache() else { return };
+    let Ok((needed, _)) = needed_with_stop(&cache, None, &context.stop) else {
+        return;
+    };
+    let Ok(freed) = cache.sweep_with_stop(&needed, now, TIDY_AFTER, &context.stop) else {
+        return;
+    };
+    if freed.objects > 0 {
+        context.output.detail(&format!(
+            "tidied the cache: freed {} in {} no project used for 30 days",
+            units::size(freed.bytes),
+            units::count(freed.objects, "file", "files")
+        ));
+    }
+}
+
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
 /// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is
 /// forgotten. unreadable registrations, manifests and locks stop gc rather than lose protection.

@@ -225,6 +225,7 @@ impl Cache {
         freed.leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
         stop.check()?;
         self.forget_changed_reporting(&needed.objects, stop, &mut freed.not_removed)?;
+        self.forget_url_records(stop, &mut freed.not_removed)?;
         for entry in scan_entries(&self.root.join("tmp"), &mut freed.not_removed, stop)? {
             stop.check()?;
             let stale = entry
@@ -244,6 +245,29 @@ impl Cache {
         freed.not_removed.sort();
         freed.not_removed.dedup();
         Ok(freed)
+    }
+
+    /// drops what the cache remembers about a link whose bytes it no longer holds, which would
+    /// only grow: the next download of that link writes a new record.
+    fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<PathBuf>) -> Result<(), Error> {
+        for entry in scan_entries(&self.root.join("urls"), not_removed, stop)? {
+            stop.check()?;
+            let path = entry.path();
+            let Some(record) = fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<super::UrlRecord>(&bytes).ok())
+            else {
+                continue;
+            };
+            let object = self.object_path(&record.sha256);
+            // a pretend sweep keeps the objects it would remove, so their records go as well
+            let gone = self.volume.pretends_removed(&object)
+                || object.try_exists().is_ok_and(|exists| !exists);
+            if gone {
+                removed(&path, self.volume.remove(&path), not_removed);
+            }
+        }
+        Ok(())
     }
 
     /// keeps empty lock files because a waiting download may have opened one already.
@@ -730,6 +754,32 @@ mod tests {
         };
         cache.sweep(&keep, SystemTime::now() + GRACE + Duration::from_secs(60));
         assert_eq!(cache.unpacked_archives(), [used]);
+    }
+
+    #[test]
+    fn a_sweep_forgets_links_whose_bytes_are_gone() {
+        let (_dir, cache) = cache();
+        let held = store(&cache, b"held");
+        let record = |url: &str, sha256| super::super::UrlRecord {
+            url: url.to_owned(),
+            sha256,
+            size: 4,
+            name: None,
+            validators: super::super::Validators::default(),
+        };
+        cache
+            .save_url_record(&record("https://example.org/held", held.digest))
+            .unwrap();
+        cache
+            .save_url_record(&record("https://example.org/gone", digest::sha256(b"gone")))
+            .unwrap();
+        let keep = Needed {
+            objects: HashSet::from([held.digest]),
+            ..Needed::default()
+        };
+        cache.sweep(&keep, SystemTime::now());
+        assert!(cache.url_record("https://example.org/held").is_some());
+        assert!(cache.url_record("https://example.org/gone").is_none());
     }
 
     #[test]

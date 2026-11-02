@@ -21,6 +21,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 ```text
 <cache>/
   CACHEDIR.TAG
+  tidied
   objects/<first 2 sha256 digits>/<remaining 62 digits>
   partial/<sha256 of URL>.part
   partial/<sha256 of URL>.json
@@ -35,7 +36,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   tmp/
 ```
 
-`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. the cache writes no `layout` marker. existing `layout` files are left untouched. opening, verifying and collecting the cache ignore unknown top-level files.
+`CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. `tidied` is empty; its modification time is when the [automatic tidy](../commands/cache.md#automatic-tidy) last ran. opening, verifying and collecting the cache ignore unknown top-level files.
 
 objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup.
 
@@ -49,7 +50,7 @@ random names use 16 hexadecimal digits. older loose `.new` files still use the a
 
 ## URL and partial records
 
-`urls/` records are JSON written for revalidated, unpinned URLs:
+`urls/` records are JSON written for revalidated, unpinned URLs. gc removes a record once its object is gone:
 
 | field | value |
 |---|---|

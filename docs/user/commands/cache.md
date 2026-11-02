@@ -28,8 +28,12 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 
 1. read registered project locks to find needed objects and unpacked members.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
-3. clean abandoned partial and temporary files, then report deleted counts and bytes.
+3. clean abandoned partial and temporary files, and forget the links whose bytes are gone, then report deleted counts and bytes.
 4. report unneeded objects kept because they are less than a day old.
+
+### automatic tidy
+
+you rarely need to run gc yourself. at most once a week, after a successful `add`, `sync`, `remove` or `get`, fetchloom runs gc quietly: it frees bytes no project has needed for 30 days and what interrupted runs left behind. it never fails the command and says what it freed only with `-v`. the first run only starts the weekly clock. set `FETCHLOOM_AUTO_GC=0` to turn it off, as on a shared cache you clean on your own schedule.
 
 ```sh
 fetchloom cache gc --now

@@ -13,6 +13,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | variable | effect |
 |---|---|
 | `FETCHLOOM_CACHE` | nonempty cache root override |
+| `FETCHLOOM_AUTO_GC` | `0` turns off the weekly [automatic tidy](../commands/cache.md#automatic-tidy) of the cache |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
 | `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |

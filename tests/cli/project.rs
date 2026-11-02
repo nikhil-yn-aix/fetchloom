@@ -733,6 +733,25 @@ fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
 }
 
 #[test]
+fn the_cache_starts_its_tidy_clock_and_can_be_told_not_to() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let off = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_AUTO_GC", "0")
+        .output()?;
+    assert_eq!(off.status.code(), Some(0), "{}", text(&off.stderr)?);
+    assert!(!sandbox.cache().join("tidied").exists());
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    // the first run only starts the weekly clock, so nothing is swept yet
+    assert!(sandbox.cache().join("tidied").exists());
+    let info = json(&sandbox.run(&["--json", "cache"])?)?;
+    assert_eq!(info["result"]["objects"], 1);
+    Ok(())
+}
+
+#[test]
 fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
