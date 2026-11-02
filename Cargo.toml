@@ -64,11 +64,11 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }
 
-# std keeps a windows file's link count unstable, and same-file already depends on this crate
 # musl's own allocator is slow under many threads; the static linux builds use mimalloc, as uv and ruff do
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
 mimalloc = { version = "0.1.52", default-features = false }
 
+# std keeps a windows file's link count unstable, and same-file already depends on this crate
 [target.'cfg(windows)'.dependencies]
 winapi-util = "0.1"
 

@@ -111,7 +111,7 @@ keep build output on the linux filesystem. the separate worktree lets windows an
 ext4 does not exercise reflinks. on linux with `xfsprogs` installed, a local image gives the placement tests an xfs destination. the mount commands need root; run cargo as your normal user. the example puts test files outside the checkout; confirm that your home folder is not itself a git repository or fetchloom project.
 
 ```sh
-scratch="$HOME/fetchloom-xfs-$"
+scratch="$HOME/fetchloom-xfs-$$"
 mkdir "$scratch"
 mkdir "$scratch/xfs"
 truncate -s 4G "$scratch/xfs.img"
