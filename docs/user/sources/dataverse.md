@@ -26,8 +26,15 @@ file URLs use `/api/access/datafile/` followed by the numeric id and `?format=or
 
 ## credentials and limits
 
-use public dataverse links. `DATAVERSE_TOKEN` is not read. access refusal requires a public copy from the dataset's owner.
+public files need no account. for restricted files you have access to, sign in for that installation:
 
-a dataset is refused if any listed file is restricted. a restricted file page is also refused. selection cannot bypass these checks or the listing-size limit.
+```sh
+fetchloom auth login dataverse
+fetchloom auth login dataverse --host demo.dataverse.org
+```
+
+the first line is for harvard's installation. `DATAVERSE_API_TOKEN` also works when `DATAVERSE_URL` names the same installation, as pyDataverse reads them. `DATAVERSE_TOKEN` is not read.
+
+without a key for its host, a dataset with any restricted file is refused, naming those files; exclude them with `--exclude`, or request access on the dataset's page. a key the installation does not allow for a file fails at that file's download. selection cannot bypass the listing-size limit.
 
 follow [offline preparation](../concepts.md#offline) before disconnecting.
