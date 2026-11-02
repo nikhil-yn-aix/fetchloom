@@ -43,7 +43,7 @@ flowchart LR
 
 members up to 1 MiB travel to writers in memory; larger ones spill to disk while the reader streams them. each archive uses up to eight writer threads, no more than the logical CPU count. queues are bounded; the retained member tree still grows with file count.
 
-on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with `syncfs` before any member publishes. other systems flush each member. a thread cap shares the budget between archive readers and writers; a reader with no writer budget stores and publishes its own members.
+on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with `syncfs` before any member publishes. on macos each member gets a plain `fsync` as it is sealed, which hands its bytes to the drive, and the batch then issues one `F_FULLFSYNC`, which empties the drive's cache for all of them, instead of a full flush per member. a drive that refuses `F_FULLFSYNC` keeps the per-member `fsync`. windows flushes each member. a thread cap shares the budget between archive readers and writers; a reader with no writer budget stores and publishes its own members.
 
 ### bounds and names
 
