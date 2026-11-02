@@ -57,8 +57,10 @@ fn auth_status_lists_every_account_like_plain_auth() -> Result {
     assert!(status.status.success(), "{}", text(&status.stderr)?);
     let story = text(&status.stderr)?;
     assert_eq!(story, text(&plain.stderr)?);
-    assert!(story.contains("hugging face: not signed in"), "{story}");
-    assert!(story.contains("zenodo: not signed in"), "{story}");
+    assert!(
+        story.contains("Signed out hugging face, kaggle, zenodo"),
+        "{story}"
+    );
     Ok(())
 }
 

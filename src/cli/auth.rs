@@ -60,6 +60,7 @@ pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Er
 async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     let output = &context.output;
     let mut accounts = Vec::new();
+    let mut missing = Vec::new();
     for account in auth::listed(&auth::env) {
         let found = account.find(&auth::env);
         let (user, valid) = match &found {
@@ -82,7 +83,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                     output.step("Signed in", &text);
                 }
             }
-            None => output.faint(&format!("{name}: not signed in")),
+            None => missing.push(name),
         }
         accounts.push(State {
             account: account.id(),
@@ -91,6 +92,9 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             user,
             valid,
         });
+    }
+    if !missing.is_empty() {
+        output.faint(&format!("{:>11} {}", "Signed out", missing.join(", ")));
     }
     if !accounts.iter().any(|state| state.signed_in) {
         output.hint("public data needs no account. to sign in, run `fetchloom auth login hf`, or another source");
