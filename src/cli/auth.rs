@@ -94,7 +94,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
         });
     }
     if !missing.is_empty() {
-        output.faint(&format!("{:>11} {}", "Signed out", missing.join(", ")));
+        output.faint_step("Signed out", &missing.join(", "));
     }
     if !accounts.iter().any(|state| state.signed_in) {
         output.hint("public data needs no account. to sign in, run `fetchloom auth login hf`, or another source");

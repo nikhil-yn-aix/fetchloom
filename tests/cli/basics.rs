@@ -510,16 +510,21 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     );
     for (args, commands) in [
         (&["--json", "--help"][..], None),
-        (&["add", "--help", "--json"], Some(1)),
+        (&["add", "--help", "--json"], Some("add")),
+        (&["-C", ".", "list", "--help", "--json"], Some("list")),
+        (
+            &["--color", "never", "cache", "gc", "--json", "--help"],
+            Some("cache gc"),
+        ),
     ] {
         let document: Value = serde_json::from_slice(&sandbox.run(args)?.stdout)?;
         assert_eq!(document["command"], "help", "{args:?}");
-        if let Some(count) = commands {
-            assert_eq!(
-                document["result"]["commands"].as_array().map(Vec::len),
-                Some(count),
-                "{args:?}"
-            );
+        if let Some(name) = commands {
+            let listed = document["result"]["commands"]
+                .as_array()
+                .ok_or("no commands")?;
+            assert_eq!(listed.len(), 1, "{args:?}");
+            assert_eq!(listed[0]["name"], name, "{args:?}");
         }
     }
     Ok(())

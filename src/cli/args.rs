@@ -218,7 +218,31 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
     }
     let mut topic = Vec::new();
     let mut current = command;
-    for word in words.iter().filter(|word| !word.starts_with('-')) {
+    // the value of an option such as -C or --color is no command name
+    let takes_value = |owner: &clap::Command, word: &str| {
+        owner.get_arguments().any(|arg| {
+            arg.get_action().takes_values()
+                && (word
+                    .strip_prefix("--")
+                    .is_some_and(|long| arg.get_long() == Some(long))
+                    || (word.len() == 2
+                        && word
+                            .strip_prefix('-')
+                            .and_then(|short| short.chars().next())
+                            == arg.get_short()
+                        && arg.get_short().is_some()))
+        })
+    };
+    let mut value_next = false;
+    for word in &words {
+        if std::mem::take(&mut value_next) {
+            continue;
+        }
+        if word.starts_with('-') {
+            value_next =
+                !word.contains('=') && (takes_value(command, word) || takes_value(current, word));
+            continue;
+        }
         match current.find_subcommand(word) {
             Some(sub) if sub.get_name() != "help" => {
                 topic.push(sub.get_name().to_owned());
