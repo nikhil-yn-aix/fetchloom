@@ -33,6 +33,8 @@ fetchloom add [options] <link>
 4. sync the whole project, using cached bytes or downloading missing files.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
+there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
+
 stderr excerpt for a single-file addition on a filesystem that supports links:
 
 ```text
