@@ -64,6 +64,7 @@ on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchl
     pub(super) const CACHE: &str = "examples:
   fetchloom cache
   fetchloom cache gc
+  fetchloom cache gc --now
   fetchloom cache verify
 
 on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache verify` marks changed files for replacement. neither changes data/";
@@ -329,7 +330,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
 
-    /// show the cache, free what no project needs, or check every file in it
+    /// show the cache, free what no project needs, or verify every file in it
     #[command(override_usage = "fetchloom cache [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::CACHE)]
     Cache(Cache),
 
@@ -388,7 +389,7 @@ impl Command {
     }
 }
 
-/// show the cache, free what no project needs, or check every file in it
+/// show the cache, free what no project needs, or verify every file in it
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Cache {
     #[command(subcommand)]
@@ -397,12 +398,12 @@ pub(crate) struct Cache {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum CacheAction {
-    /// free what no project needs, once it is a day old
+    /// free what no project needs once it is a day old, or at once with --now
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
     Gc(Gc),
 
     /// check cached files and mark changed files for replacement
-    #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
+    #[command(alias = "check", override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
 }
 
