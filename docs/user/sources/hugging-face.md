@@ -20,6 +20,6 @@ use the [credential precedence](../reference/environment.md#credentials) for `HF
 
 ## limits
 
-gated data requires approval from the repository owner before a token can download it. fetchloom cannot grant that approval.
+sign in with `fetchloom auth login hf`, or reuse a token the hf tools saved. gated data requires approval from the repository owner before a token can download it. fetchloom cannot grant that approval.
 
 follow [offline preparation](../concepts.md#offline) before disconnecting.
