@@ -497,17 +497,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_new_cache_marks_itself_for_backup_tools_without_a_layout_marker() {
+    fn a_new_cache_marks_itself_for_backup_tools() {
         let (_dir, cache) = cache();
         let tag = fs::read_to_string(cache.root.join("CACHEDIR.TAG")).unwrap();
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
-        assert!(!cache.root.join("layout").exists());
     }
 
     #[test]
-    fn old_layout_markers_and_unknown_files_do_not_affect_upkeep() {
+    fn unknown_files_in_the_cache_do_not_affect_upkeep() {
         let (_dir, cache) = cache();
-        for name in ["layout", "unknown"] {
+        for name in ["notes.txt", "unknown"] {
             fs::write(cache.root.join(name), b"leave this alone").unwrap();
         }
         let cache = Cache::open(cache.root.clone()).unwrap();
@@ -526,7 +525,7 @@ pub(crate) mod tests {
         assert_eq!(freed.objects, 1);
         assert_eq!(freed.bytes, 3);
         assert_eq!(freed.leftovers, 0);
-        for name in ["layout", "unknown"] {
+        for name in ["notes.txt", "unknown"] {
             assert_eq!(
                 fs::read(cache.root.join(name)).unwrap(),
                 b"leave this alone"

@@ -51,5 +51,6 @@ cargo test --locked
 | [fuzzing](fuzzing.md) | parser targets and longer linux runs |
 | [CI](ci.md) | required platforms, filesystems, dependency policy, python tests and the documentation site |
 | [releasing](releasing.md) | artifacts, installers, wheels and publication |
+| [versioning](versioning.md) | what a release may change and what stays stable |
 
 [style](../style.md) covers prose and commits. [decisions](../decisions.md) records boundaries that a change should preserve. [performance](../performance/README.md) records evidence for changes that claim a speed or memory improvement.

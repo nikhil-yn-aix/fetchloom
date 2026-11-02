@@ -46,17 +46,30 @@ pip install fetchloom
 
 ## quick start
 
-```sh
-fetchloom add zenodo:3608990    # put iris.csv in data/iris and pin it
-fetchloom path iris/iris.csv    # print where the file is
-fetchloom sync                  # in a cloned project, restore data/
-fetchloom search iris           # find datasets by name
-fetchloom get zenodo:3608990    # download once, without a project
+```text
+fetchloom 0.1.0
+
+fetchloom puts the exact research data a project needs into its data/ folder.
+
+  data.toml, the shopping list: which datasets you want
+  data.lock, the receipt: the exact files and their fingerprints
+  the cache, the pantry: shared by projects using it
+  sync, restocking: fill data/ from the receipt
+
+try it with zenodo:3608990, a 4.1 KiB iris.csv:
+
+  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
+  fetchloom sync                 restock data/ in a project you cloned
+  fetchloom get zenodo:3608990   fetch it once, without a project
+  fetchloom search iris          find datasets by name
+
+learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 ```
 
-run `fetchloom` with no arguments for a welcome, or for the project's status inside a project. `fetchloom help concepts` explains the ideas and `fetchloom <command> --help` each command.
+that is what `fetchloom` prints with no arguments outside a project; inside one it shows the project's status.
 
 files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the python helper.
+
 ## docs
 
 | need | read |
@@ -66,6 +79,7 @@ files in `data/` are read-only by default. `sync` keeps your local edits and rep
 | understand the shopping list, receipt and pantry | [concepts](docs/user/concepts.md) |
 | look up a command or option | [commands](docs/user/commands/README.md) |
 | use a supported host | [sources](docs/user/sources/README.md) |
+| check supported systems, terminals and versions | [compatibility](docs/user/reference/compatibility.md) |
 | write scripts or notebooks | [scripting](docs/user/scripting.md) |
 | let a coding agent fetch data | [AI agents](docs/user/ai-agents.md) |
 | choose a windows drive or cache location | [windows](docs/user/windows.md) |

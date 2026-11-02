@@ -35,6 +35,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [JSON output](reference/json-output.md) | parse result fields, warnings and work counters |
 | [exit codes](reference/exit-codes.md) | branch on failure kinds and choose a recovery step |
 | [environment](reference/environment.md) | set credentials, cache location, limits or terminal behavior |
+| [compatibility](reference/compatibility.md) | check which systems, terminals, sources and versions are supported |
 | [cache folder](reference/cache-folder.md) | inspect shared cache objects and indexes |
 | [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |

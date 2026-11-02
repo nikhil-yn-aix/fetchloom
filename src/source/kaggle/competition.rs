@@ -595,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "live: talks to api.kaggle.com with a kaggle account that accepted titanic's rules"]
+    #[ignore = "live: talks to api.kaggle.com with a kaggle account"]
     fn live_titanic_lists_its_files() {
         if super::super::token::find(&crate::auth::env).is_none() {
             eprintln!("skipped: no KAGGLE_API_TOKEN, access_token or kaggle.json on this machine");
