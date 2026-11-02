@@ -70,7 +70,18 @@ a gated hugging face dataset, a restricted zenodo record or a kaggle competition
 
 ## status
 
-`fetchloom auth` lists each account, whether a key was found, where it came from and, online, who the source says it belongs to. `fetchloom auth status` does the same. a key the source refuses is marked with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
+```sh
+fetchloom auth
+```
+
+`fetchloom auth status` does the same. it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
+
+```text
+  Signed in hugging face as ada · /home/ada/.cache/huggingface/token
+ Signed out kaggle, zenodo, figshare, osf, dataverse at dataverse.harvard.edu, nasa earthdata, physionet
+```
+
+a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
 
 ## signing out
 
