@@ -15,8 +15,9 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`get`](get.md) | fetch once without project files, one link or a list | inspect a source before adding it, or download a list of links |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
-| [`cache verify`](cache.md#verify) | rehash cache objects and mark changed bytes | investigate suspected cache damage |
+| [`cache verify`](cache.md#verify) | rehash cache objects and mark changed bytes; `cache check` is the same command | investigate suspected cache damage |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
+| [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
 | `help concepts` | explain the shopping list, receipt and pantry | learn the [project model](../concepts.md) |
 | `help <command>` | show a command's help | check syntax at the terminal |
 | bare `fetchloom` | show project status or the welcome | find your next command |
@@ -39,15 +40,16 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
-all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. help stays text with `--json`. [environment](../reference/environment.md) lists persistent shell settings and color precedence. fetchloom has no config file.
+all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists persistent shell settings and color precedence. fetchloom has no config file.
 
 ```sh
 fetchloom help concepts
 fetchloom help add
 fetchloom help cache gc
+fetchloom help --json
 ```
 
-`help <command>` matches `<command> --help`. a shell alias can provide a [shorter name](../windows.md#short-name).
+`help <command>` matches `<command> --help`. help is text for people. `fetchloom help --json` prints one JSON document describing every command, option and example instead; `<command> --help --json` describes only that command. a shell alias can provide a [shorter name](../windows.md#short-name).
 
 ## project discovery
 
