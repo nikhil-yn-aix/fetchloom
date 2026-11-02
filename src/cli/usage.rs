@@ -124,6 +124,13 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         });
     let help = if let Some(placement) = placement.or(quoted) {
         placement
+    } else if let Some(command) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
+        .then(|| named(ContextKind::InvalidSubcommand))
+        .flatten()
+        .filter(|command| matches!(command.as_str(), "init" | "new"))
+    {
+        let what = if command == "init" { "init" } else { "setup" };
+        format!("no {what} needed: `fetchloom add <link>` starts a project in this folder")
     } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
         match parent {
             Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
@@ -280,6 +287,19 @@ mod tests {
                 .unwrap()
                 .contains("`fetchloom add \"fashion mnist\"`")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn init_says_no_setup_is_needed() -> Result<(), Box<dyn std::error::Error>> {
+        let init = problem(&["fetchloom", "init"])?;
+        assert_eq!(init.message, "there is no command called \"init\"");
+        assert_eq!(
+            init.help.as_deref(),
+            Some("no init needed: `fetchloom add <link>` starts a project in this folder")
+        );
+        let new = problem(&["fetchloom", "new"])?;
+        assert!(new.help.unwrap().starts_with("no setup needed: "));
         Ok(())
     }
 
