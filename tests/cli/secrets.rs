@@ -117,3 +117,21 @@ fn get_json_never_shows_the_token() -> Result {
     assert!(stdout.contains("token=***"), "{stdout}");
     Ok(())
 }
+
+#[test]
+fn debug_logs_never_show_a_token_or_a_stored_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    let output = sandbox
+        .command(&["-vv", "get", &format!("{}?token=abc123", server.url)])
+        .env("HF_TOKEN", "hf_fakekey456")
+        .env("ZENODO_TOKEN", "fakezenodokey789")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("DEBUG"), "debug logs are on: {stderr}");
+    for secret in ["abc123", "hf_fakekey456", "fakezenodokey789"] {
+        assert!(!stderr.contains(secret), "{secret} leaked: {stderr}");
+    }
+    Ok(())
+}
