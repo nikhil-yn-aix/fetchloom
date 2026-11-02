@@ -81,12 +81,12 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
         tell_files("Would place", dataset, &planned.place);
     }
     for (dataset, planned) in &preview.by_dataset {
-        tell_files("Would replace", dataset, &planned.replace);
+        tell_files("Would renew", dataset, &planned.replace);
     }
     let placement = &preview.placement;
     if placement.removed > 0 {
         output.step(
-            "Would remove",
+            "Would drop",
             &units::count(
                 placement.removed,
                 "file no dataset needs",

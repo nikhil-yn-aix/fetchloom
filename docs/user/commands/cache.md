@@ -21,7 +21,7 @@ fetchloom cache verify [options]
 stdout excerpt from `fetchloom --help`:
 
 ```text
-  cache   show the cache, free what no project needs, or check every file in it
+  cache   show the cache, free what no project needs, or verify every file in it
 ```
 
 ## inspect
@@ -47,7 +47,7 @@ fetchloom cache gc --now
 
 `--now` ignores modification times for unneeded objects and unpack records, including future times that FAT timestamp rounding can produce. partial downloads and temporary files keep their one-day grace period even with `--now`. active partial-download locks are respected.
 
-the kept-file summary gives the retained bytes and file count and says they become eligible when a day old. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
+the kept-file hint gives the retained bytes, says they stay for a day in case you want them back, and names `fetchloom cache gc --now`. a dry run shows the same hint. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 

@@ -3,8 +3,8 @@ source: tests/cli/dry_run.rs
 expression: stderr
 ---
  Would lock iris · 1 file in data.lock
-Would download iris/iris.csv · size unknown
+Would fetch iris/iris.csv · size unknown
 Would place data/iris · 1 file
-Would ignore data/ in .gitignore, since its files come from data.lock
+  Would add data/ to .gitignore, since its files come from data.lock
   Would add iris to data.toml, its files in data/iris
          Ok dry run, nothing was changed

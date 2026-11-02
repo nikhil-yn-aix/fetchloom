@@ -100,7 +100,7 @@ fn sync_dry_run_lists_downloads_with_their_sizes_and_fetches_none() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would download iris/iris.csv · 32 B\nWould place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+        "Would fetch iris/iris.csv · 32 B\nWould place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
     );
     let document = json(
         &sandbox
@@ -147,7 +147,7 @@ fn sync_dry_run_tells_the_lock_a_new_dataset_would_get() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        " Would lock cows · 1 file in data.lock\nWould download cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n"
+        " Would lock cows · 1 file in data.lock\nWould fetch cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n"
     );
     let document = json(&sandbox.run(&["--json", "sync", "-n"])?)?;
     let result = &document["result"];
@@ -189,7 +189,7 @@ fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would replace data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+        "Would renew data/iris · 1 file\n         Ok dry run, nothing was changed\n"
     );
     let document = json(&sandbox.run(&["--json", "sync", "--force", "-n"])?)?;
     let result = &document["result"];

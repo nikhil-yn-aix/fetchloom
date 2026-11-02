@@ -214,7 +214,7 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
     }
     if freed.leftovers > 0 {
         output.step(
-            "Would remove",
+            "Would drop",
             &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
     }

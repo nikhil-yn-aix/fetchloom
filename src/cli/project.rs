@@ -254,9 +254,9 @@ async fn preview_add(
     let output = &work.context.output;
     if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
         output.step(
-            "Would ignore",
+            "Would add",
             &format!(
-                "{}/ in .gitignore, since its files come from data.lock",
+                "{}/ to .gitignore, since its files come from data.lock",
                 manifest.data_dir
             ),
         );
@@ -303,7 +303,7 @@ fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
         work.context.output.step(
             "Ignored",
             &format!(
-                "{}/ in .gitignore, since its files come from data.lock",
+                "{}/ to .gitignore, since its files come from data.lock",
                 manifest.data_dir
             ),
         );
@@ -496,7 +496,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     if dry_run {
         let preview = placing.preview_removal();
         context.output.step(
-            "Would remove",
+            "Would drop",
             &format!("{} from data.toml and data.lock", args.name),
         );
         place::tell_preview(&context.output, &new_manifest, &preview);
@@ -1005,17 +1005,17 @@ async fn preview_all(
     let changed = old != Some(&lock);
     let output = &work.context.output;
     if changed {
-        engine::tell_lock(output, old, &lock, ("Would lock", "Would remove"));
+        engine::tell_lock(output, old, &lock, ("Would lock", "Would drop"));
     }
     let preview = work.preview(manifest, &lock, force, survey, jobs)?;
     for download in &preview.changes.download {
         let size = download
             .size
             .map_or_else(|| "size unknown".to_owned(), units::size);
-        output.step("Would download", &format!("{} · {size}", download.path));
+        output.step("Would fetch", &format!("{} · {size}", download.path));
     }
     for archive in &preview.changes.unpack {
-        output.step("Would unpack", archive);
+        output.step("Would open", archive);
     }
     if !preview.changes.unpack.is_empty() {
         output.hint("an archive's files are known once it is unpacked, so they are not counted");

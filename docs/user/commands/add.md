@@ -54,14 +54,14 @@ if a new addition fails to sync, fetchloom attempts to restore both `data.toml` 
 
 ```text
  Would lock iris · 1 file in data.lock
-Would download iris/iris.csv · size unknown
+Would fetch iris/iris.csv · size unknown
 Would place data/iris · 1 file
-Would ignore data/ in .gitignore, since its files come from data.lock
+  Would add data/ to .gitignore, since its files come from data.lock
   Would add iris to data.toml, its files in data/iris
          Ok dry run, nothing was changed
 ```
 
-the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, and an archive not yet unpacked here is listed with `Would unpack`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, and an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 
