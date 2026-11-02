@@ -18,65 +18,56 @@ commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone run
 
 ## install
 
-on linux and macos:
+no release has been published yet. until then, build it from source with [rust](https://rustup.rs):
 
 ```sh
+cargo install --locked --git https://github.com/nikhil-yn-aix/fetchloom
+fetchloom --version
+```
+
+[getting started](docs/user/getting-started.md) walks through installing rust on windows, macos and linux, a first project and how to undo it.
+
+after the first release, these will install a prebuilt `fetchloom` for x86_64 or arm64 and check it against the release's `SHA256SUMS`:
+
+```sh
+# linux and macos
 curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
 ```
 
-on windows, in powershell:
-
 ```powershell
+# windows powershell
 powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
 ```
 
-the installers choose x86_64 or arm64 and verify the release's `SHA256SUMS`. each installs one executable, `fetchloom`.
-
-with python 3.9 or later:
-
 ```sh
+# python 3.9 or later
 pip install fetchloom
 ```
 
-[getting started](docs/user/getting-started.md#install) covers install locations, pinned installer versions, building from source and shell completions.
-
 ## quick start
 
-```text
-fetchloom 0.1.0
-
-fetchloom puts the exact research data a project needs into its data/ folder.
-
-  data.toml, the shopping list: which datasets you want
-  data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by projects using it
-  sync, restocking: fill data/ from the receipt
-
-try it with zenodo:3608990, a 4.1 KiB iris.csv:
-
-  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
-  fetchloom sync                 restock data/ in a project you cloned
-  fetchloom get zenodo:3608990   fetch it once, without a project
-  fetchloom search iris          find datasets by name
-
-learn more with `fetchloom help concepts` and `fetchloom <command> --help`
+```sh
+fetchloom add zenodo:3608990    # put iris.csv in data/iris and pin it
+fetchloom path iris/iris.csv    # print where the file is
+fetchloom sync                  # in a cloned project, restore data/
+fetchloom search iris           # find datasets by name
+fetchloom get zenodo:3608990    # download once, without a project
 ```
 
-run `fetchloom` without arguments outside a project to see that welcome. inside a project, it shows status.
+run `fetchloom` with no arguments for a welcome, or for the project's status inside a project. `fetchloom help concepts` explains the ideas and `fetchloom <command> --help` each command.
 
-`add` writes the manifest and lock, fills the data folder and adds it to `.gitignore` in a git repository. files are read-only by default. [getting started](docs/user/getting-started.md) walks through a first project and a fresh clone.
-
-sync preserves local edits and can exit 0 with conflicts left in place. use `status` before choosing `sync --force`, which can replace edited and untracked files at locked paths. [scripting](docs/user/scripting.md) shows conflict checks and the python helper.
-
+files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the python helper.
 ## docs
 
 | need | read |
 |---|---|
+| install and try it for the first time | [getting started](docs/user/getting-started.md) |
 | choose a user topic | [user guide](docs/user/README.md) |
 | understand the shopping list, receipt and pantry | [concepts](docs/user/concepts.md) |
 | look up a command or option | [commands](docs/user/commands/README.md) |
 | use a supported host | [sources](docs/user/sources/README.md) |
 | write scripts or notebooks | [scripting](docs/user/scripting.md) |
+| let a coding agent fetch data | [AI agents](docs/user/ai-agents.md) |
 | choose a windows drive or cache location | [windows](docs/user/windows.md) |
 | use icloud drive, apfs or the macos cache folder | [macos](docs/user/macos.md) |
 | fix a failed download or local conflict | [troubleshooting](docs/user/troubleshooting.md) |
