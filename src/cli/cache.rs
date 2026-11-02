@@ -69,7 +69,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
             "Ok",
             &format!("{} of it is needed by a project", units::size(kept)),
         );
-        output.hint("`fetchloom cache gc` frees the rest, once it is a day old");
+        output.hint("`fetchloom cache gc` frees the rest once it is a day old; `fetchloom cache gc --now` frees it now");
     }
     output.answer_untold(&cache.root().display().to_string());
     Ok(Info {
@@ -127,11 +127,11 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     let kept = kept(&freed);
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
         match &kept {
-            Some(kept) => output.done("Kept", kept),
-            None => output.done(
-                "Ok",
-                "no cached data files or download leftovers were removed",
-            ),
+            Some(kept) => {
+                output.done("Ok", "nothing to free yet");
+                output.hint(kept);
+            }
+            None => output.done("Ok", "nothing to free"),
         }
         return Ok(collected(freed));
     }
@@ -151,9 +151,6 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             &units::count(freed.leftovers, "leftover item", "leftover items"),
         );
     }
-    if let Some(kept) = &kept {
-        output.step("Kept", kept);
-    }
     if !freed.not_removed.is_empty() {
         let result = serde_json::to_value(&freed).map_err(|err| {
             Error::new(
@@ -172,6 +169,9 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             units::count(projects.len() as u64, "project", "projects")
         ),
     );
+    if let Some(kept) = &kept {
+        output.hint(kept);
+    }
     Ok(collected(freed))
 }
 
@@ -187,9 +187,8 @@ fn collected(freed: Freed) -> Collected {
 fn kept(freed: &Freed) -> Option<String> {
     (freed.kept_objects > 0).then(|| {
         format!(
-            "{} in {} no project needs, gc frees it once it is a day old, or now with --now",
-            units::size(freed.kept_bytes),
-            units::count(freed.kept_objects, "file", "files")
+            "{} no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now",
+            units::size(freed.kept_bytes)
         )
     })
 }
@@ -222,13 +221,15 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
     for path in &remove {
         output.detail(&path.display().to_string());
     }
+    let nothing = match (freed.objects == 0 && freed.leftovers == 0, freed.kept_objects > 0) {
+        (false, _) => None,
+        (true, false) => Some("nothing to free"),
+        (true, true) => Some("nothing to free yet"),
+    };
+    super::project::dry_run_done(output, nothing);
     if let Some(kept) = kept(&freed) {
-        output.step("Would keep", &kept);
+        output.hint(&kept);
     }
-    super::project::dry_run_done(
-        output,
-        (freed.objects == 0 && freed.leftovers == 0).then_some("nothing to free"),
-    );
     Collected {
         freed,
         dry_run: true,

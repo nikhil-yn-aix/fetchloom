@@ -726,7 +726,7 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let gc = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&gc.stderr)?,
-        "         Ok no cached data files or download leftovers were removed\n"
+        "         Ok nothing to free\n"
     );
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(0));
@@ -744,7 +744,7 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&young.stderr)?,
-        "       Kept 32 B in 1 file no project needs, gc frees it once it is a day old, or now with --now\n"
+        "         Ok nothing to free yet\n  hint: 32 B no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now\n"
     );
     let document = json(&sandbox.run(&["--json", "cache", "gc"])?)?;
     assert_eq!(document["result"]["kept_objects"], 1);

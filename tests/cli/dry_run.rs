@@ -257,7 +257,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     let young = text(&sandbox.run(&["cache", "gc", "-n"])?.stderr)?;
     assert_eq!(
         young,
-        " Would keep 32 B in 1 file no project needs, gc frees it once it is a day old, or now with --now\n         Ok nothing to free; dry run, nothing was changed\n"
+        "         Ok nothing to free yet; dry run, nothing was changed\n  hint: 32 B no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now\n"
     );
     let document = json(&sandbox.run(&["--json", "cache", "gc", "--now", "-n"])?)?;
     let result = &document["result"];
