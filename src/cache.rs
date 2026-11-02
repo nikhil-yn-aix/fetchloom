@@ -27,7 +27,7 @@ pub(crate) use object::{NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter, read_unfollowed};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
-pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
+pub(crate) use upkeep::{Age, Checked, Freed, GRACE, Needed};
 
 use crate::digest::{self, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};

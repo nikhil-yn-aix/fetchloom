@@ -20,6 +20,17 @@ use crate::stop::Stop;
 /// `get` from this morning, survives a gc.
 pub(crate) const GRACE: Duration = Duration::from_hours(24);
 
+/// how a sweep decides that bytes no project needs have waited long enough.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Age {
+    /// `cache gc`, which a person runs on purpose: this long since the bytes were written, with
+    /// zero for `--now`.
+    Written(Duration),
+    /// the automatic tidy: this long since a sweep first found nobody needed the bytes. download
+    /// time would free a dataset downloaded months ago in the very command that removed it.
+    Unneeded(Duration),
+}
+
 pub(crate) struct Object {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
@@ -164,21 +175,17 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes unneeded objects older than `grace` and abandoned downloads older than a day,
-    /// recording each refused removal. downloads keep the full day whatever `grace` is, so a
-    /// download running elsewhere keeps its partial file.
+    /// removes the objects no project needs once `age` says they waited long enough, and
+    /// abandoned downloads older than a day, recording each refused removal. downloads keep the
+    /// full day whatever `age` is, so a download running elsewhere keeps its partial file.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
         now: SystemTime,
-        grace: Duration,
+        age: Age,
         stop: &Stop,
     ) -> Result<Freed, Error> {
         let old = |modified: SystemTime| now.duration_since(modified).is_ok_and(|age| age > GRACE);
-        let unused = |modified: SystemTime| {
-            // FAT rounds a new file's time up, into the future, so no age is asked of `--now`
-            grace.is_zero() || now.duration_since(modified).is_ok_and(|age| age >= grace)
-        };
         let scan = self.scan_objects(stop)?;
         if let Some(path) = scan.unreadable.first() {
             return Err(Error::new(
@@ -193,10 +200,15 @@ impl Cache {
         let mut freed = Freed::default();
         for object in scan.objects {
             stop.check()?;
+            let stamp = self.unneeded_stamp(&object.digest);
             if needed.objects.contains(&object.digest) {
+                if matches!(age, Age::Unneeded(_)) {
+                    let _ = fs::remove_file(&stamp);
+                }
                 continue;
             }
-            if !unused(object.modified) {
+            let due = self.waited(age, object.modified, &stamp, now);
+            if !due {
                 freed.kept_objects += 1;
                 freed.kept_bytes += object.size;
             } else if removed(
@@ -206,6 +218,9 @@ impl Cache {
             ) {
                 freed.objects += 1;
                 freed.bytes += object.size;
+                if stamp.exists() {
+                    let _ = self.volume.remove(&stamp);
+                }
             }
         }
         for entry in scan_entries(&self.root.join("unpacked"), &mut freed.not_removed, stop)? {
@@ -213,13 +228,33 @@ impl Cache {
             let Some(archive) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
                 continue;
             };
+            if needed.unpacked.contains(&archive) {
+                continue;
+            }
             let path = entry.path();
-            let stale = fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .is_ok_and(unused);
-            if !needed.unpacked.contains(&archive) && stale {
+            let stale = match age {
+                Age::Written(grace) => fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .is_ok_and(|modified| {
+                        grace.is_zero()
+                            || now
+                                .duration_since(modified)
+                                .is_ok_and(|waited| waited >= grace)
+                    }),
+                // the record is what lets a link skip unpacking again, so it goes only once none
+                // of the files it lists is left
+                Age::Unneeded(_) => self.unpacked(&archive, None).is_none_or(|members| {
+                    members
+                        .iter()
+                        .all(|member| self.find(&member.sha256, Some(member.size)).is_none())
+                }),
+            };
+            if stale {
                 removed(&path, self.volume.remove(&path), &mut freed.not_removed);
             }
+        }
+        if matches!(age, Age::Unneeded(_)) {
+            self.forget_stamps_of_gone_objects(stop, &mut freed.not_removed)?;
         }
         self.sweep_partials(&old, stop, &mut freed)?;
         freed.leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
@@ -260,11 +295,73 @@ impl Cache {
                 continue;
             };
             let object = self.object_path(&record.sha256);
-            // a pretend sweep keeps the objects it would remove, so their records go as well
-            let gone = self.volume.pretends_removed(&object)
-                || object.try_exists().is_ok_and(|exists| !exists);
-            if gone {
+            let unpacked = self.unpacked_path(&record.sha256);
+            // a pretend sweep keeps what it would remove, so their records go as well. an
+            // archive's own bytes are dropped once unpacked, and its record still serves the link
+            let missing = |path: &Path| {
+                self.volume.pretends_removed(path) || path.try_exists().is_ok_and(|exists| !exists)
+            };
+            if missing(&object) && missing(&unpacked) {
                 removed(&path, self.volume.remove(&path), not_removed);
+            }
+        }
+        Ok(())
+    }
+
+    /// whether an object no project needs has waited long enough under `age`. under
+    /// [`Age::Unneeded`], the first sweep that finds it unneeded only stamps it.
+    fn waited(&self, age: Age, modified: SystemTime, stamp: &Path, now: SystemTime) -> bool {
+        match age {
+            // FAT rounds a new file's time up, into the future, so no age is asked of `--now`
+            Age::Written(grace) => {
+                grace.is_zero()
+                    || now
+                        .duration_since(modified)
+                        .is_ok_and(|waited| waited >= grace)
+            }
+            Age::Unneeded(after) => {
+                if let Ok(since) = fs::metadata(stamp).and_then(|meta| meta.modified()) {
+                    now.duration_since(since)
+                        .is_ok_and(|waited| waited >= after)
+                } else {
+                    let _ = self.stamp_unneeded(stamp);
+                    false
+                }
+            }
+        }
+    }
+
+    fn unneeded_stamp(&self, digest: &Sha256) -> PathBuf {
+        self.root.join("unneeded").join(digest.hex())
+    }
+
+    /// notes, by an empty file's time, when a sweep first found nobody needed an object.
+    fn stamp_unneeded(&self, stamp: &Path) -> io::Result<()> {
+        crate::place::real_folder(&self.root.join("unneeded"), crate::place::FolderUse::Cache)?;
+        fs::write(stamp, b"")
+    }
+
+    /// drops the stamps of objects that are gone, however they went.
+    fn forget_stamps_of_gone_objects(
+        &self,
+        stop: &Stop,
+        not_removed: &mut Vec<PathBuf>,
+    ) -> Result<(), Error> {
+        for entry in scan_entries(&self.root.join("unneeded"), not_removed, stop)? {
+            stop.check()?;
+            let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+                continue;
+            };
+            if self
+                .object_path(&digest)
+                .try_exists()
+                .is_ok_and(|exists| !exists)
+            {
+                removed(
+                    &entry.path(),
+                    self.volume.remove(&entry.path()),
+                    not_removed,
+                );
             }
         }
         Ok(())
@@ -460,7 +557,7 @@ mod tests {
         }
 
         pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
-            self.sweep_with_stop(needed, now, GRACE, &Stop::default())
+            self.sweep_with_stop(needed, now, Age::Written(GRACE), &Stop::default())
                 .unwrap()
         }
 
@@ -486,7 +583,7 @@ mod tests {
             .sweep_with_stop(
                 &Needed::default(),
                 SystemTime::now() + GRACE + Duration::from_secs(60),
-                GRACE,
+                Age::Written(GRACE),
                 &stop,
             )
             .unwrap_err();
@@ -565,7 +662,7 @@ mod tests {
             .sweep_with_stop(
                 &Needed::default(),
                 SystemTime::now(),
-                GRACE,
+                Age::Written(GRACE),
                 &Stop::default(),
             )
             .unwrap();
@@ -574,7 +671,7 @@ mod tests {
             .sweep_with_stop(
                 &Needed::default(),
                 SystemTime::now(),
-                Duration::ZERO,
+                Age::Written(Duration::ZERO),
                 &Stop::default(),
             )
             .unwrap();
@@ -780,6 +877,86 @@ mod tests {
         cache.sweep(&keep, SystemTime::now());
         assert!(cache.url_record("https://example.org/held").is_some());
         assert!(cache.url_record("https://example.org/gone").is_none());
+    }
+
+    const MONTH: Duration = Duration::from_hours(24 * 30);
+
+    fn tidy(cache: &Cache, needed: &Needed, now: SystemTime) -> Freed {
+        cache
+            .sweep_with_stop(needed, now, Age::Unneeded(MONTH), &Stop::default())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_tidy_waits_a_month_from_when_bytes_stopped_being_needed() {
+        let (_dir, cache) = cache();
+        let old = store(&cache, b"downloaded long ago");
+        // the bytes are old by their own time, which must not count
+        let first = tidy(&cache, &Needed::default(), SystemTime::now() + 4 * MONTH);
+        assert_eq!((first.objects, first.kept_objects), (0, 1));
+        assert!(cache.object_path(&old.digest).exists());
+        let stamp = cache.unneeded_stamp(&old.digest);
+        assert!(stamp.exists());
+        let later = SystemTime::now() + MONTH + Duration::from_secs(60);
+        let freed = tidy(&cache, &Needed::default(), later);
+        assert_eq!(freed.objects, 1);
+        assert!(!cache.object_path(&old.digest).exists());
+        assert!(!stamp.exists(), "a freed object leaves no stamp");
+    }
+
+    #[test]
+    fn bytes_needed_again_lose_their_stamp() {
+        let (_dir, cache) = cache();
+        let object = store(&cache, b"needed again");
+        tidy(&cache, &Needed::default(), SystemTime::now());
+        let stamp = cache.unneeded_stamp(&object.digest);
+        assert!(stamp.exists());
+        let keep = Needed {
+            objects: HashSet::from([object.digest]),
+            ..Needed::default()
+        };
+        tidy(&cache, &keep, SystemTime::now() + 2 * MONTH);
+        assert!(!stamp.exists());
+        // unneeded once more, the month starts again
+        let freed = tidy(&cache, &Needed::default(), SystemTime::now() + 2 * MONTH);
+        assert_eq!(freed.objects, 0);
+        assert!(cache.object_path(&object.digest).exists());
+    }
+
+    #[test]
+    fn the_tidy_keeps_an_unpack_record_while_its_files_are_cached() {
+        let (_dir, cache) = cache();
+        let member = store(&cache, b"member");
+        let archive = digest::sha256(b"archive dropped after unpacking");
+        cache
+            .record_unpacked(
+                &archive,
+                &[super::super::Member {
+                    path: "a.csv".to_owned(),
+                    sha256: member.digest,
+                    size: member.size,
+                }],
+            )
+            .unwrap();
+        cache
+            .save_url_record(&super::super::UrlRecord {
+                url: "https://example.org/data.zip".to_owned(),
+                sha256: archive,
+                size: 99,
+                name: None,
+                validators: super::super::Validators::default(),
+            })
+            .unwrap();
+        let keep = Needed {
+            objects: HashSet::from([member.digest]),
+            ..Needed::default()
+        };
+        tidy(&cache, &keep, SystemTime::now() + 2 * MONTH);
+        assert_eq!(cache.unpacked_archives(), [archive]);
+        assert!(
+            cache.url_record("https://example.org/data.zip").is_some(),
+            "the link's record serves its unpacked files"
+        );
     }
 
     #[test]

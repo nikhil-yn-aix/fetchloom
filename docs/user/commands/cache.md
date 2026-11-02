@@ -33,7 +33,9 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 
 ### automatic tidy
 
-you rarely need to run gc yourself. at most once a week, after a successful `add`, `sync`, `remove` or `get`, fetchloom runs gc quietly: it frees bytes no project has needed for 30 days and what interrupted runs left behind. it never fails the command and says what it freed only with `-v`. the first run only starts the weekly clock. set `FETCHLOOM_AUTO_GC=0` to turn it off, as on a shared cache you clean on your own schedule.
+you rarely need to run gc yourself. at most once a week, after a successful `add`, `sync`, `remove` or `get`, fetchloom tidies the cache quietly. it frees bytes no project has needed for 30 days, counted from the first tidy that found them unneeded, not from when they were downloaded, so removing a dataset never frees its bytes at once. it also clears what interrupted runs left behind. it never fails the command and says what it freed only with `-v`.
+
+the tidy is careful where `cache gc` trusts you: it skips the week when any project the cache knows is out of reach, such as one on a drive that is not plugged in, and it never runs with `--offline`. the first run only starts the weekly clock. set `FETCHLOOM_AUTO_GC=0` to turn it off, as on a cache a team shares.
 
 ```sh
 fetchloom cache gc --now

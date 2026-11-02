@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Cache, Checked, Freed, Needed};
+use crate::cache::{Age, Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
@@ -116,7 +116,12 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     } else {
         crate::cache::GRACE
     };
-    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), grace, &context.stop)?;
+    let freed = cache.sweep_with_stop(
+        &needed,
+        SystemTime::now(),
+        Age::Written(grace),
+        &context.stop,
+    )?;
     if dry_run {
         return Ok(tell_dry_gc(context, freed, cache.pretended()));
     }
@@ -352,10 +357,14 @@ const TIDY_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
 const TIDY_AFTER: std::time::Duration = std::time::Duration::from_hours(24 * 30);
 
 /// after a command that changed what projects need, at most once a week: frees bytes no project
-/// has needed for 30 days, and what interrupted runs left behind, as `cache gc` would. it never
-/// fails the command or says anything outside `-v`. `FETCHLOOM_AUTO_GC=0` turns it off.
+/// has needed for 30 days, counted from the first tidy that found them unneeded, and what
+/// interrupted runs left behind. it never forgets a project, never fails the command and says
+/// nothing outside `-v`. `FETCHLOOM_AUTO_GC=0` turns it off.
 pub(super) fn tidy(context: &Context) {
-    if std::env::var_os("FETCHLOOM_AUTO_GC").is_some_and(|value| value == "0") {
+    // offline, bytes freed now could not come back before the network does
+    if context.offline.enabled()
+        || std::env::var_os("FETCHLOOM_AUTO_GC").is_some_and(|value| value == "0")
+    {
         return;
     }
     let Some(root) = Cache::locate(&|name| std::env::var_os(name)) else {
@@ -386,10 +395,19 @@ pub(super) fn tidy(context: &Context) {
         return;
     }
     let Ok(cache) = open_cache() else { return };
+    // a project on a drive that is not plugged in, or on another machine sharing this cache,
+    // still needs its bytes. only a person running `cache gc` decides it is gone
+    let Ok(roots) = cache.registered_projects(&context.stop) else {
+        return;
+    };
+    if roots.iter().any(|root| !root.is_dir()) {
+        return;
+    }
     let Ok((needed, _)) = needed_with_stop(&cache, None, &context.stop) else {
         return;
     };
-    let Ok(freed) = cache.sweep_with_stop(&needed, now, TIDY_AFTER, &context.stop) else {
+    let Ok(freed) = cache.sweep_with_stop(&needed, now, Age::Unneeded(TIDY_AFTER), &context.stop)
+    else {
         return;
     };
     if freed.objects > 0 {
