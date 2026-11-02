@@ -16,21 +16,11 @@ fetchloom cache gc [options]
 fetchloom cache verify [options]
 ```
 
-`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](README.md#global-options) apply to all three forms.
-
-stdout excerpt from `fetchloom --help`:
-
-```text
-  cache   show the cache, free what no project needs, or verify every file in it
-```
+`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. `cache check` is another name for `cache verify`. [global options](README.md#global-options) apply to all three forms.
 
 ## inspect
 
-1. open the configured cache and inspect objects and registered project locks.
-2. report the cache path, payload sizes and registered projects in the story.
-3. print the bare cache path on stdout only when stdout is not a terminal or quiet mode hides the story.
-
-at a terminal, the story's cache line already shows the path. JSON returns it in `result.path`.
+`fetchloom cache` reports the cache path, the bytes it holds and the projects using it. it prints the bare path on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`.
 
 byte totals exclude indexes and partial downloads. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 
@@ -47,7 +37,13 @@ fetchloom cache gc --now
 
 `--now` ignores modification times for unneeded objects and unpack records, including future times that FAT timestamp rounding can produce. partial downloads and temporary files keep their one-day grace period even with `--now`. active partial-download locks are respected.
 
-the kept-file hint gives the retained bytes, says they stay for a day in case you want them back, and names `fetchloom cache gc --now`. a dry run shows the same hint. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
+the kept-file hint names the retained bytes:
+
+```text
+  hint: 4.1 KiB no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now
+```
+
+a dry run shows the same hint. plain `fetchloom cache` ends with a similar hint when some cached bytes are unneeded. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
