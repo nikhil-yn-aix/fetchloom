@@ -187,7 +187,12 @@ fn help_json_teaches_every_command_in_one_call() -> Result {
 fn json_errors_carry_the_command_that_fixes_them() -> Result {
     let sandbox = Sandbox::new()?;
     let document: Value = serde_json::from_slice(&sandbox.run(&["--json", "sycn"])?.stdout)?;
-    assert_eq!(document["errors"][0]["fix"], "fetchloom sync");
+    // a guess is said in help, never handed to a script to run
+    assert_eq!(
+        document["errors"][0]["help"],
+        "did you mean `fetchloom sync`?"
+    );
+    assert_eq!(document["errors"][0]["fix"], Value::Null);
     // an agent reads stdout as JSON whatever the terminal says, so no escape code may reach it
     for args in [
         &["--json", "--color", "always", "sycn"][..],
@@ -475,12 +480,20 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
         nested["errors"][0]["help"],
         "did you mean `fetchloom cache verify`?"
     );
-    let help = sandbox.run(&["--json", "--help"])?;
-    assert_eq!(
-        help.stdout,
-        sandbox.run(&["--help"])?.stdout,
-        "help stays text"
-    );
+    for (args, commands) in [
+        (&["--json", "--help"][..], None),
+        (&["add", "--help", "--json"], Some(1)),
+    ] {
+        let document: Value = serde_json::from_slice(&sandbox.run(args)?.stdout)?;
+        assert_eq!(document["command"], "help", "{args:?}");
+        if let Some(count) = commands {
+            assert_eq!(
+                document["result"]["commands"].as_array().map(Vec::len),
+                Some(count),
+                "{args:?}"
+            );
+        }
+    }
     Ok(())
 }
 

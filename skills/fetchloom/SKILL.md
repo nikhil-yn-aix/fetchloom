@@ -39,13 +39,14 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed`, `outdated` | ask before `--yes`; for `outdated`, data.toml changed, so run `fetchloom lock` |
+| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; for `lock.outdated`, data.toml changed, so run `fetchloom lock` |
 | 2 | `usage` | fix the command line as `fix` or `help` says |
-| 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose a candidate |
+| 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose a candidate from `result.candidates` |
 | 20 | `network.*`, `offline.missing` | retry later, or drop `--offline` |
-| 30 | `integrity.mismatch` | the source changed its bytes; tell the user, do not force |
-| 40 | `auth.required` | the user signs in with the command in `fix`, or accepts terms at the page in `help` |
+| 30 | `integrity.mismatch` | from `add`, `sync` or `get`: the source changed its bytes; tell the user, do not force. from `cache verify`: a file in the cache was edited, often through a project's `data/`; `fetchloom sync --force` puts the pinned bytes back, so ask the user first |
+| 40 | `auth.required` | ask the user to sign in in their own terminal with the command in `help`, or to accept terms at the page in `help` |
 | 50 | `local.*`, `project.invalid` | a disk, permission or file conflict, or a broken data.toml; report the message |
+| 130 | `interrupted` | the run was stopped; run it again |
 
 `fetchloom help --json` lists every command and option, for anything this page leaves out.
 

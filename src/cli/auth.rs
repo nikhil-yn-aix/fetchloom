@@ -118,7 +118,8 @@ async fn sign_in(
                 ),
             )
             .help(format!(
-                "pipe the key in instead: `{} --with-token`",
+                "in your own terminal, run `{}`. a script can pipe the key in, as in `{} --with-token`",
+                account.command(),
                 account.command()
             )));
         }

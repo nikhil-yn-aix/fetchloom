@@ -111,7 +111,7 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         _ => None,
     };
     let placement = (err.kind() == ErrorKind::UnknownArgument)
-        .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg)))
+        .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg, parent)))
         .flatten();
     // `fetchloom add fashion mnist` meant one search, not a link and a stray word
     let quoted = (err.kind() == ErrorKind::UnknownArgument && parent == Some("add"))
@@ -158,28 +158,31 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     .help(help)
 }
 
-fn misplaced_option(argument: &str) -> Option<String> {
+fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
     let long = argument.strip_prefix("--")?.split('=').next()?;
     let command = args::Args::command();
-    let owners: Vec<_> = command
-        .get_subcommands()
-        .filter_map(|command| {
+    let nested = command.get_subcommands().flat_map(|outer| {
+        std::iter::once((outer, outer.get_name().to_owned())).chain(
+            outer
+                .get_subcommands()
+                .map(move |inner| (inner, format!("{} {}", outer.get_name(), inner.get_name()))),
+        )
+    });
+    let owners: Vec<_> = nested
+        .filter_map(|(command, name)| {
             let option = command
                 .get_arguments()
                 .find(|arg| arg.get_long() == Some(long))?;
-            Some((command, option))
+            Some((command, name, option))
         })
         .collect();
-    let (first, option) = *owners.first()?;
-    let names: Vec<_> = owners
-        .iter()
-        .map(|(command, _)| command.get_name())
-        .collect();
+    let (first, first_name, option) = owners.first()?;
+    let names: Vec<_> = owners.iter().map(|(_, name, _)| name.as_str()).collect();
     let commands = match names.split_last()? {
         (last, []) => (*last).to_owned(),
         (last, rest) => format!("{} and {last}", rest.join(", ")),
     };
-    let mut example = format!("fetchloom {}", first.get_name());
+    let mut example = format!("fetchloom {first_name}");
     for arg in first.get_positionals().filter(|arg| arg.is_required_set()) {
         let name = arg
             .get_value_names()
@@ -198,6 +201,12 @@ fn misplaced_option(argument: &str) -> Option<String> {
         } else {
             let _ = write!(example, " <{value}>");
         }
+    }
+    // after a command that lacks it, the place was right and the command was not
+    if let Some(parent) = parent.filter(|parent| !names.contains(parent)) {
+        return Some(format!(
+            "{parent} has no --{long}; it is an option of {commands}, as in {example}"
+        ));
     }
     Some(format!(
         "--{long} is an option of {commands}, so it goes after the command, as in {example}"

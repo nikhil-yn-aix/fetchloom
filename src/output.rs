@@ -72,12 +72,34 @@ struct Problem<'a> {
     failures: Option<&'a [crate::error::FileFailure]>,
 }
 
-/// the first `fetchloom` command quoted in `help`, without its backticks.
+/// the first `fetchloom` command quoted in `help`, without its backticks. an example ("as in"),
+/// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
+/// running it would act on a dataset nobody named or ask the same question again.
 fn fix(help: &str) -> Option<&str> {
-    help.split('`')
-        .skip(1)
-        .step_by(2)
-        .find(|quoted| quoted.starts_with("fetchloom ") && !quoted.contains(['<', '>']))
+    const NOT_A_FIX: [&str; 6] = [
+        "as in",
+        "such as",
+        "for example",
+        "e.g.",
+        "did you mean",
+        "own terminal, run",
+    ];
+    let mut before = String::new();
+    for (at, part) in help.split('`').enumerate() {
+        if at % 2 == 0 {
+            before.push_str(part);
+            continue;
+        }
+        let lead = before
+            .trim_end_matches([' ', ':', ','])
+            .to_ascii_lowercase();
+        let example = NOT_A_FIX.iter().any(|marker| lead.ends_with(marker));
+        if !example && part.starts_with("fetchloom ") && !part.contains(['<', '>']) {
+            return Some(part);
+        }
+        before.push_str(part);
+    }
+    None
 }
 
 #[derive(Serialize)]
@@ -916,6 +938,17 @@ mod tests {
         );
         assert_eq!(super::fix("add --yes to approve this download"), None);
         assert_eq!(super::fix("quote it, as in `\"fashion mnist\"`"), None);
+        assert_eq!(
+            super::fix("use a link or an id, as in `fetchloom add zenodo:3608990`"),
+            None
+        );
+        assert_eq!(super::fix("did you mean `fetchloom remove iris`?"), None);
+        assert_eq!(
+            super::fix(
+                "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`"
+            ),
+            None
+        );
     }
 
     #[test]

@@ -188,8 +188,43 @@ pub(crate) struct Args {
 
 pub(super) fn read() -> Result<Args, clap::Error> {
     let mut command = command();
-    let mut matches = command.try_get_matches_from_mut(std::env::args_os())?;
+    let mut line: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if let Some(topic) = json_help(&command, &line) {
+        line = std::iter::once("fetchloom".into())
+            .chain(std::iter::once("help".into()))
+            .chain(topic.into_iter().map(Into::into))
+            .chain(std::iter::once("--json".into()))
+            .collect();
+    }
+    let mut matches = command.try_get_matches_from_mut(line)?;
     Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
+}
+
+/// `--help` beside `--json` asks for the help document, which stdout promises under `--json`.
+/// returns the command it asks about, as `help` takes it.
+fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
+    let words: Vec<&str> = line
+        .iter()
+        .skip(1)
+        .map_while(|word| word.to_str())
+        .take_while(|word| *word != "--")
+        .collect();
+    let has = |flags: &[&str]| words.iter().any(|word| flags.contains(word));
+    if !has(&["--json"]) || !has(&["--help", "-h"]) {
+        return None;
+    }
+    let mut topic = Vec::new();
+    let mut current = command;
+    for word in words.iter().filter(|word| !word.starts_with('-')) {
+        match current.find_subcommand(word) {
+            Some(sub) if sub.get_name() != "help" => {
+                topic.push(sub.get_name().to_owned());
+                current = sub;
+            }
+            _ => break,
+        }
+    }
+    Some(topic)
 }
 
 pub(super) fn command() -> clap::Command {
