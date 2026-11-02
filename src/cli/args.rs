@@ -307,7 +307,7 @@ pub(crate) enum Command {
     Add(Add),
 
     /// remove a dataset and the unchanged files fetchloom placed for it
-    #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, after_help = examples::REMOVE)]
+    #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
     Remove(Remove),
 
     /// place the files pinned in data.lock on this machine
@@ -399,7 +399,7 @@ pub(crate) struct Cache {
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum CacheAction {
     /// free what no project needs once it is a day old, or at once with --now
-    #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, after_help = examples::GC)]
+    #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::GC)]
     Gc(Gc),
 
     /// check cached files and mark changed files for replacement
@@ -489,6 +489,9 @@ pub(crate) struct Filter {
     #[arg(long, value_name = "glob", help_heading = "options")]
     pub(crate) exclude: Vec<String>,
 }
+
+/// `--dry-run` help for commands that never ask a source anything.
+const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it";
 
 /// `--dry-run`, for the commands that change files.
 #[derive(Clone, Copy, Debug, clap::Args)]
