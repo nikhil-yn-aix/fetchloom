@@ -72,13 +72,19 @@ fn nested(command: &str) -> Option<String> {
     })
 }
 
-fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
-    let named = |context| match err.get(context) {
+/// the first value clap recorded for `kind`, if any.
+fn context_value(err: &clap::Error, kind: ContextKind) -> Option<String> {
+    match err.get(kind) {
         Some(ContextValue::String(value)) => Some(value.clone()),
         Some(ContextValue::Strings(values)) => values.first().cloned(),
         _ => None,
-    };
-    let message = match (
+    }
+}
+
+/// the error line, in fetchloom's words where clap's are stiff.
+fn message(err: &clap::Error) -> String {
+    let named = |kind| context_value(err, kind);
+    match (
         err.kind(),
         named(ContextKind::InvalidSubcommand),
         named(ContextKind::InvalidArg),
@@ -103,7 +109,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
             None => first_line(err),
         },
         _ => first_line(err),
-    };
+    }
+}
+
+fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
+    let named = |kind| context_value(err, kind);
+    let message = message(err);
     // a missing or wrong value is easiest to fix next to the usage line
     let usage = match err.get(ContextKind::Usage) {
         Some(ContextValue::StyledStr(text))

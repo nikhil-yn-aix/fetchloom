@@ -43,7 +43,9 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     let document = json(&sandbox.run(&["add", &third.url, "--dry-run", "--json"])?)?;
     assert_eq!(
         document["warnings"],
-        serde_json::json!(["iris was taken, so this one is iris-3; choose a name with --as <name>"])
+        serde_json::json!([
+            "iris was taken, so this one is iris-3; choose a name with --as <name>"
+        ])
     );
     Ok(())
 }
@@ -724,10 +726,7 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
         sandbox.work().display().to_string()
     );
     let gc = sandbox.run(&["cache", "gc"])?;
-    assert_eq!(
-        text(&gc.stderr)?,
-        "         Ok nothing to free\n"
-    );
+    assert_eq!(text(&gc.stderr)?, "         Ok nothing to free\n");
     let verify = sandbox.run(&["cache", "verify"])?;
     assert_eq!(verify.status.code(), Some(0));
     assert_eq!(

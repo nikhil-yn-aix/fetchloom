@@ -970,7 +970,8 @@ fn a_racy_edit_of_a_marked_link_stays_until_forced() -> Result {
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert_eq!(fs::read(&placed)?[0], b'S', "{stderr}");
     assert!(
-        stderr.contains("data/iris/iris.csv was edited, and the file is shared with other projects"),
+        stderr
+            .contains("data/iris/iris.csv was edited, and the file is shared with other projects"),
         "{stderr}"
     );
     let forced = sandbox.run(&["sync", "--force"])?;

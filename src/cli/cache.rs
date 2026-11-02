@@ -221,7 +221,10 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
     for path in &remove {
         output.detail(&path.display().to_string());
     }
-    let nothing = match (freed.objects == 0 && freed.leftovers == 0, freed.kept_objects > 0) {
+    let nothing = match (
+        freed.objects == 0 && freed.leftovers == 0,
+        freed.kept_objects > 0,
+    ) {
         (false, _) => None,
         (true, false) => Some("nothing to free"),
         (true, true) => Some("nothing to free yet"),
