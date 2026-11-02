@@ -303,7 +303,7 @@ fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
         work.context.output.step(
             "Ignored",
             &format!(
-                "{}/ to .gitignore, since its files come from data.lock",
+                "{}/ in .gitignore, since its files come from data.lock",
                 manifest.data_dir
             ),
         );
