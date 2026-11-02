@@ -71,14 +71,29 @@ impl Dataset {
         crate::source::json(self, &response).map_err(|err| {
             if err.kind == Kind::AuthRequired {
                 // kaggle answers 403 alike for a private dataset and for one that does not exist
-                err.help(format!(
-                    "check the name at {}. a private dataset needs KAGGLE_API_TOKEN set to a token from https://www.kaggle.com/settings/api",
-                    self.page()
-                ))
+                let signed_in = super::token::find(&|name| std::env::var_os(name)).is_some();
+                self.hidden(err, signed_in)
             } else {
                 err
             }
         })
+    }
+
+    /// kaggle's refusal to show a dataset, which may not exist at all. signing in can only help
+    /// when no key was sent.
+    fn hidden(&self, mut err: Error, signed_in: bool) -> Error {
+        let name = format!("{}/{}", self.owner, self.slug);
+        if signed_in {
+            err.message = format!("kaggle has no dataset {name}, or this account cannot see it");
+            err.need = None;
+            err.help(format!("check the name at {}", self.page()))
+        } else {
+            err.message = format!("kaggle has no dataset {name}, or it is private");
+            err.help(format!(
+                "check the name at {}. a private dataset needs an account that can read it: sign in with `fetchloom auth login kaggle`",
+                self.page()
+            ))
+        }
     }
 
     /// every file at `version`, following the pages kaggle sends.
@@ -396,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dataset_kaggle_will_not_show_names_the_token_to_set() {
+    fn a_dataset_kaggle_will_not_show_names_its_page() {
         // kaggle answers 403 alike for a private dataset and for one that does not exist
         let recorded = Recorded::default().on(
             &view("uciml/no-such-dataset"),
@@ -405,14 +420,45 @@ mod tests {
         );
         let err = block_on(dataset("uciml/no-such-dataset").resolve(&recorded)).unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
+        assert!(
+            err.message
+                .starts_with("kaggle has no dataset uciml/no-such-dataset, or "),
+            "{}",
+            err.message
+        );
         let help = err.help.unwrap();
         assert!(
-            help.contains("https://www.kaggle.com/datasets/uciml/no-such-dataset")
-                && help.contains("KAGGLE_API_TOKEN")
-                && help.contains("https://www.kaggle.com/settings/api"),
+            help.contains("https://www.kaggle.com/datasets/uciml/no-such-dataset"),
             "{help}"
         );
         assert_eq!(recorded.asked().len(), 1);
+    }
+
+    #[test]
+    fn a_hidden_dataset_suggests_signing_in_only_without_a_key() {
+        let refused = || crate::source::refused("www.kaggle.com", "kaggle:uciml/nope");
+        let without = dataset("uciml/nope").hidden(refused(), false);
+        assert_eq!(
+            without.message,
+            "kaggle has no dataset uciml/nope, or it is private"
+        );
+        assert!(
+            without
+                .help
+                .unwrap()
+                .contains("sign in with `fetchloom auth login kaggle`")
+        );
+        assert!(without.need.is_some());
+        let with = dataset("uciml/nope").hidden(refused(), true);
+        assert_eq!(
+            with.message,
+            "kaggle has no dataset uciml/nope, or this account cannot see it"
+        );
+        assert_eq!(
+            with.help.as_deref(),
+            Some("check the name at https://www.kaggle.com/datasets/uciml/nope")
+        );
+        assert!(with.need.is_none());
     }
 
     #[test]
