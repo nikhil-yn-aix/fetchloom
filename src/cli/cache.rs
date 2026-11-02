@@ -48,10 +48,10 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     output.step(
         "Cache",
         &format!(
-            "{} · {} in {}",
+            "{} · {} · {}",
             cache.root().display(),
-            units::size(bytes),
-            units::count(objects.len() as u64, "file", "files")
+            units::count(objects.len() as u64, "file", "files"),
+            units::size(bytes)
         ),
     );
     for project in &projects {
@@ -140,8 +140,8 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             "Removed",
             &format!(
                 "{} · {} from the cache",
-                units::size(freed.bytes),
-                units::count(freed.objects, "file", "files")
+                units::count(freed.objects, "file", "files"),
+                units::size(freed.bytes)
             ),
         );
     }
@@ -207,8 +207,8 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
             "Would free",
             &format!(
                 "{} · {} from the cache",
-                units::size(freed.bytes),
-                units::count(freed.objects, "file", "files")
+                units::count(freed.objects, "file", "files"),
+                units::size(freed.bytes)
             ),
         );
     }

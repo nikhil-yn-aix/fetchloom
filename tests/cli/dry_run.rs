@@ -252,7 +252,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        " Would free 32 B · 1 file from the cache\n         Ok dry run, nothing was changed\n"
+        " Would free 1 file · 32 B from the cache\n         Ok dry run, nothing was changed\n"
     );
     let young = text(&sandbox.run(&["cache", "gc", "-n"])?.stderr)?;
     assert_eq!(
