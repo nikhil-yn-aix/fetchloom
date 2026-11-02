@@ -28,12 +28,6 @@ fetchloom remove [options] <name>
 
 nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged.
 
-stdout excerpt from `fetchloom --help`:
-
-```text
-  remove  remove a dataset and the unchanged files fetchloom placed for it
-```
-
 removing a table also removes its attached comments and strips leading blank lines. other manifest entries remain. commit the manifest and lock after removal.
 
 if deleting files fails after metadata was written, fix the reported error and run `fetchloom sync` to finish removal. removing a project entry does not immediately clear its bytes from the shared cache; [cache gc](cache.md#gc) handles unneeded objects.
