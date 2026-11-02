@@ -60,6 +60,15 @@ impl Cache {
         Ok(Some(Batch(File::open(self.root.join("tmp"))?)))
     }
 
+    /// on macos fsync only hands a file to the drive, and only F_FULLFSYNC empties the drive's
+    /// cache, for every file at once. each object gets the cheap fsync as it is sealed, and the
+    /// batch one F_FULLFSYNC, as git's batch mode does, instead of a full flush per object.
+    #[cfg(target_os = "macos")]
+    #[expect(clippy::unnecessary_wraps, reason = "linux may fail to open the batch")]
+    pub(crate) fn batch(&self) -> io::Result<Option<Batch>> {
+        Ok(Some(Batch(self.root.join("tmp"))))
+    }
+
     #[cfg(test)]
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
         self.new_object_in(&self.root.join("tmp"), None)
@@ -106,6 +115,24 @@ impl Batch {
     }
 }
 
+/// new objects sealed with a plain fsync since the batch began, made durable together.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub(crate) struct Batch(PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Batch {
+    pub(crate) fn flush(self) -> io::Result<()> {
+        let file = tempfile::tempfile_in(&self.0)?;
+        match rustix::fs::fcntl_fullfsync(&file) {
+            // a drive that takes no F_FULLFSYNC, as some external and network ones, has had
+            // each object's fsync, which is all it offers
+            Err(rustix::io::Errno::NOTSUP | rustix::io::Errno::INVAL) => Ok(()),
+            result => result.map_err(Into::into),
+        }
+    }
+}
+
 /// whether a linux kernel of `release`, as `uname -r` gives it, reports write-back errors to
 /// syncfs, which it does from 5.8.
 #[cfg(any(target_os = "linux", test))]
@@ -148,6 +175,12 @@ impl NewObject {
         } = self;
         if flush {
             file.sync_all()?;
+        }
+        // a batched object still needs its plain fsync on macos for the batch's F_FULLFSYNC to
+        // make it durable
+        #[cfg(target_os = "macos")]
+        if !flush {
+            rustix::fs::fsync(&file)?;
         }
         drop(file);
         let (digest, _) = hasher.finish();

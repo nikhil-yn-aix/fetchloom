@@ -83,13 +83,13 @@ pub(super) fn store_all(
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
     let threads = cap.map_or(threads, |cap| threads.min(cap));
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let batch = cache
         .batch()
         .map_err(|err| Error::io("could not open the cache to flush what is unpacked", &err))?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let flush_each = batch.is_none();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let flush_each = true;
     let (jobs, queue) = sync_channel::<Job>(threads * 2);
     let queue = Mutex::new(queue);
@@ -133,7 +133,7 @@ pub(super) fn store_all(
         return Err(failure);
     }
     // nothing is published until every member is on disk
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(batch) = batch {
         batch
             .flush()
