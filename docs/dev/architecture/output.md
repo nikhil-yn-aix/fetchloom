@@ -51,12 +51,12 @@ stdout and stderr detect color separately. explicit `--color always` or `--color
 
 1. nonempty `NO_COLOR` disables color.
 2. nonempty `CLICOLOR_FORCE` other than `0` enables it.
-3. `CLICOLOR=0`, `TERM=dumb` or nonempty `CI` disables it.
+3. `CLICOLOR=0`, `TERM=dumb`, nonempty `CI` or a coding agent's variable, below, disables it.
 4. otherwise, color is enabled.
 
 only `--color always` forces ANSI into a pipe or file. labels retain their meaning without color. forcing color does not enable interactivity.
 
-bars and questions need terminal stderr outside CI and outside `TERM=dumb`. questions also require terminal stdin. JSON, quiet mode and stderr debug logs suppress bars; quiet does not waive a question. the dataset picker follows [selection rules](../../user/commands/search.md#choosing-a-dataset), including refusal to let `--yes` choose.
+bars and questions need terminal stderr outside CI, outside `TERM=dumb` and outside a coding agent. `by_agent` in [output/style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) checks `AGENT_VARIABLES`, such as `AI_AGENT`, `VSCODE_AGENT` and `CLAUDECODE`; any value other than empty, `0` or `false` marks an agent, which also turns off automatic color. add a variable there only if agents set it and people's own terminals do not. questions also require terminal stdin. JSON, quiet mode and stderr debug logs suppress bars; quiet does not waive a question. the dataset picker follows [selection rules](../../user/commands/search.md#choosing-a-dataset), including refusal to let `--yes` choose.
 
 `TERM=dumb` disables unicode choices. a windows terminal enables them only when `WT_SESSION`, `TERM_PROGRAM` or `ConEmuANSI` is present. other destinations keep unicode by default. fallbacks include `...` for clipping and `>` with worded key hints in the picker. this is not an ASCII-only output mode: text from filenames and sources remains intact.
 
