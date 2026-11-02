@@ -25,7 +25,7 @@ an explicitly versioned reference keeps naming that version under `lock --upgrad
 
 ## credentials and limits
 
-`FIGSHARE_TOKEN` supplies the source credential. tokens are not written to project files, logs or JSON.
+`fetchloom auth login figshare` or `FIGSHARE_TOKEN` supplies the source credential. tokens are not written to project files, logs or JSON.
 
 embargoed and download-disabled articles are refused. obtain an accessible publication from the owner instead of trying to filter around the restriction.
 
