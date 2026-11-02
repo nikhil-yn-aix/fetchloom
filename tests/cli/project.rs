@@ -32,11 +32,19 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     let output = sandbox.run(&["add", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let warning = "iris was taken, so this one is iris-2; choose a name with --as <name>";
+    assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
     assert!(
         fs::read_to_string(sandbox.work().join("data.toml"))?.contains("[datasets.iris-2]"),
         "{stderr}"
     );
     assert!(sandbox.work().join("data/iris-2/iris.csv").is_file());
+    let third = Server::start(PATH, vec![file(IRIS, "\"v2\""), file(IRIS, "\"v2\"")])?;
+    let document = json(&sandbox.run(&["add", &third.url, "--dry-run", "--json"])?)?;
+    assert_eq!(
+        document["warnings"],
+        serde_json::json!(["iris was taken, so this one is iris-3; choose a name with --as <name>"])
+    );
     Ok(())
 }
 

@@ -113,7 +113,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     }
     let name = match args.name.take() {
         Some(asked) => asked,
-        None => choose_name(&addition.listing, &parsed, manifest)?,
+        None => choose_name(&context.output, &addition.listing, &parsed, manifest)?,
     };
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
@@ -1186,7 +1186,12 @@ fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
 }
 
 /// the name a new dataset gets without `--as`: one made from its file or its title.
-fn choose_name(listing: &Listing, parsed: &Parsed, manifest: &Manifest) -> Result<String, Error> {
+fn choose_name(
+    output: &Output,
+    listing: &Listing,
+    parsed: &Parsed,
+    manifest: &Manifest,
+) -> Result<String, Error> {
     let single = match (listing.files.as_slice(), &parsed.file) {
         ([only], _) => Some(
             only.path
@@ -1207,10 +1212,17 @@ fn choose_name(listing: &Listing, parsed: &Parsed, manifest: &Manifest) -> Resul
     if !manifest.datasets.contains_key(&name) {
         return Ok(name);
     }
-    (2..100)
+    let numbered = (2..100)
         .map(|number| format!("{name}-{number}"))
-        .find(|numbered| !manifest.datasets.contains_key(numbered))
-        .map_or_else(|| unused(&name, manifest).map(|()| name), Ok)
+        .find(|numbered| !manifest.datasets.contains_key(numbered));
+    let Some(numbered) = numbered else {
+        unused(&name, manifest)?;
+        return Ok(name);
+    };
+    output.warn(&format!(
+        "{name} was taken, so this one is {numbered}; choose a name with --as <name>"
+    ));
+    Ok(numbered)
 }
 
 /// refuses a name data.toml already has.
