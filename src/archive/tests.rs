@@ -238,38 +238,6 @@ fn names_that_collide_refuse_the_whole_archive() {
     }
 }
 
-/// times unpacking 20,000 files of 4 KiB, where creating files costs more than inflating them:
-/// `cargo test --release --lib archive::tests::many_small_files -- --ignored --nocapture`
-#[test]
-#[ignore = "writes 20,000 files"]
-fn many_small_files() {
-    let row = b"0.125,3.5,17,2026-10-28,ok\n".repeat(152);
-    let names: Vec<String> = (0..20_000)
-        .map(|index| format!("corpus/{:03}/{index:06}.csv", index % 100))
-        .collect();
-    let files: Vec<(&str, &[u8])> = names.iter().map(|name| (name.as_str(), &row[..])).collect();
-    let zip = zip_of(&files);
-    for round in 0..3 {
-        let scratch = Scratch::new();
-        let path = scratch.file("small.zip", &zip);
-        let started = std::time::Instant::now();
-        let unpacked = unpack(
-            &path,
-            Format::Zip,
-            &Limits::default(),
-            &scratch.cache,
-            &|_| false,
-            None,
-        )
-        .unwrap();
-        println!(
-            "round {round}: {} files in {} ms",
-            unpacked.members.len(),
-            started.elapsed().as_millis()
-        );
-    }
-}
-
 #[test]
 fn only_names_decide_what_may_unpack() {
     for archive in [
