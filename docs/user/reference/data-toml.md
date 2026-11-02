@@ -42,7 +42,13 @@ without `--as`, fetchloom chooses a name in this order:
 | a title | up to four words and 32 characters, dropping trailing words such as `and`, `of` and `the`; if no first word fits, the 40-character free-text rule applies |
 | a reference | its last part if that contains a letter, otherwise the reference without its version; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
 
-if the generated name is taken, fetchloom tries `-2` through `-99` and warns which name it chose, then fails if all are taken. an explicitly supplied `--as` name that is taken is refused.
+if the generated name is taken, fetchloom tries `-2` through `-99`, then fails if all are taken. it warns which name it chose:
+
+```text
+warning: iris was taken, so this one is iris-2; choose a name with --as <name>
+```
+
+an explicitly supplied `--as` name that is taken is refused.
 
 ## destination paths
 
