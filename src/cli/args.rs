@@ -147,7 +147,7 @@ pub(crate) const INTRO: &str =
   the cache, the pantry: shared by projects using it
   sync, restocking: fill data/ from the receipt
 
-try it with zenodo:3608990, a 4 KB iris.csv:
+try it with zenodo:3608990, a 4.1 KiB iris.csv:
 
   fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
   fetchloom sync                 restock data/ in a project you cloned
