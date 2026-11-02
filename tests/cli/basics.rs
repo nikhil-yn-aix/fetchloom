@@ -388,6 +388,34 @@ fn a_missing_link_shows_the_usage() -> Result {
 }
 
 #[test]
+fn usage_errors_name_options_as_typed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first_two = |args: &[&str]| -> Result<String> {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = text(&output.stderr)?;
+        Ok(stderr
+            .lines()
+            .filter(|line| !line.starts_with("  usage:"))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    };
+    assert_eq!(
+        first_two(&["add", "--as"])?,
+        "error: --as needs a value\n  help: `fetchloom add --help` says what it takes"
+    );
+    assert_eq!(
+        first_two(&["completions", "nope"])?,
+        "error: <shell> cannot be \"nope\"\n  help: use one of bash, elvish, fish, powershell or zsh"
+    );
+    assert_eq!(
+        first_two(&["status", "-v", "-q"])?,
+        "error: --verbose and --quiet cannot be used together\n  help: `fetchloom status --help` says what it takes"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_usage_error_follows_verbose_and_color() -> Result {
     let sandbox = Sandbox::new()?;
     let verbose = sandbox.run(&["-v", "sycn"])?;

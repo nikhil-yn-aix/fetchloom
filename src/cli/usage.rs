@@ -90,6 +90,18 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
             format!("unexpected argument \"{arg}\"")
         }
         (ErrorKind::MissingRequiredArgument, _, Some(arg)) => format!("{arg} is missing"),
+        (ErrorKind::InvalidValue, _, Some(arg)) => match named(ContextKind::InvalidValue) {
+            Some(value) if !value.is_empty() => format!("{} cannot be \"{value}\"", bare(&arg)),
+            _ => format!("{} needs a value", bare(&arg)),
+        },
+        (ErrorKind::ArgumentConflict, _, Some(arg)) => match named(ContextKind::PriorArg) {
+            Some(prior) => format!(
+                "{} and {} cannot be used together",
+                bare(&arg),
+                bare(&prior)
+            ),
+            None => first_line(err),
+        },
         _ => first_line(err),
     };
     // a missing or wrong value is easiest to fix next to the usage line
@@ -144,8 +156,15 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         format!("did you mean `fetchloom {nested}`?")
     } else if let Some(arg) = named(ContextKind::SuggestedArg) {
         format!("did you mean `{arg}`?")
-    } else if let Some(ContextValue::Strings(values)) = err.get(ContextKind::ValidValue) {
-        format!("use one of: {}", values.join(", "))
+    } else if let Some(ContextValue::Strings(values)) = err
+        .get(ContextKind::ValidValue)
+        .filter(|values| !matches!(values, ContextValue::Strings(values) if values.is_empty()))
+    {
+        match values.split_last() {
+            Some((last, [])) => format!("use {last}"),
+            Some((last, rest)) => format!("use one of {} or {last}", rest.join(", ")),
+            None => String::new(),
+        }
     } else if let Some(usage) = &usage {
         let command: Vec<&str> = usage
             .split_whitespace()
@@ -163,6 +182,11 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         None => error,
     }
     .help(help)
+}
+
+/// an argument as a person types it: `--as <name>` is `--as`, and `--verbose...` is `--verbose`.
+fn bare(arg: &str) -> &str {
+    arg.split(' ').next().unwrap_or(arg).trim_end_matches("...")
 }
 
 fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
