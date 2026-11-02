@@ -16,16 +16,47 @@ fetchloom completions [options] <shell>
 
 ## loading the script
 
-save the script where your shell looks for completions, or have your shell profile run fetchloom on each start. a saved script describes the version that wrote it, so write it again after upgrading fetchloom.
+the steps below make completions permanent: each saves the script where the shell looks, or adds one line to the shell's startup file. a saved script describes the version that wrote it, so write it again after upgrading fetchloom.
 
-| shell | setup |
-|---|---|
-| bash with bash-completion 2 | `mkdir -p ~/.local/share/bash-completion/completions`, then `fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom`. it loads the first time you complete fetchloom |
-| bash without bash-completion, such as the bash 3.2 macos ships | add `eval "$(fetchloom completions bash)"` to `~/.bashrc`, or to `~/.bash_profile` on macos |
-| zsh | `mkdir -p ~/.zfunc`, then `fetchloom completions zsh > ~/.zfunc/_fetchloom`. in `~/.zshrc`, `fpath=(~/.zfunc $fpath)` must come before `autoload -U compinit && compinit` |
-| fish | `fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish`. fish loads it on demand |
-| powershell | add `fetchloom completions powershell \| Out-String \| Invoke-Expression` to the file `$PROFILE` names. `New-Item -Force $PROFILE` creates it when it is missing |
-| elvish | add `eval (fetchloom completions elvish \| slurp)` to `~/.config/elvish/rc.elv` |
+powershell, in the file `$PROFILE` names. the first line creates the file only when it is missing:
+
+```powershell
+if (-not (Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+Add-Content -Path $PROFILE -Value 'fetchloom completions powershell | Out-String | Invoke-Expression'
+```
+
+if scripts are blocked, `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` lets the profile run.
+
+bash with bash-completion 2, which loads the file the first time you complete fetchloom:
+
+```sh
+mkdir -p ~/.local/share/bash-completion/completions
+fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
+```
+
+bash without bash-completion, such as the bash 3.2 macos ships. use `~/.bash_profile` instead of `~/.bashrc` on macos:
+
+```sh
+echo 'eval "$(fetchloom completions bash)"' >> ~/.bashrc
+```
+
+zsh:
+
+```sh
+mkdir -p ~/.zfunc
+fetchloom completions zsh > ~/.zfunc/_fetchloom
+```
+
+then in `~/.zshrc`, `fpath=(~/.zfunc $fpath)` must come before `autoload -Uz compinit && compinit`. add both lines if they are not there yet.
+
+fish, which loads the file on demand:
+
+```sh
+mkdir -p ~/.config/fish/completions
+fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
+```
+
+elvish: add `eval (fetchloom completions elvish | slurp)` to `~/.config/elvish/rc.elv`.
 
 open a new terminal afterwards. typing `fetchloom ca` and pressing tab then completes `cache`, and `fetchloom cache ` offers `gc` and `verify`.
 
