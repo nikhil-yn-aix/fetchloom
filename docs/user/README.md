@@ -1,11 +1,10 @@
 # user guide
 
-fetchloom manages research inputs through a manifest, a lock and one shared cache.
+new to fetchloom? start with [getting started](getting-started.md).
 
 | page | when to read it |
 |---|---|
-| [user guide](README.md) | choose a task or reference |
-| [getting started](getting-started.md) | install fetchloom, add a first dataset or restore a shared project |
+| [getting started](getting-started.md) | install fetchloom, add a first dataset, restore it and undo it |
 | [concepts](concepts.md) | understand pins, placement, archives and offline work |
 | [commands](commands/README.md) | choose a command and check global options |
 | [add](commands/add.md) | put a dataset in a project and download it |
