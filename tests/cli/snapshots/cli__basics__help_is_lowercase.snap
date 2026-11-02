@@ -45,3 +45,5 @@ options:
   -C <dir>            run as if fetchloom started in <dir>
   -h, --help          print help
   -V, --version       print the version
+
+docs: https://nikhil-yn-aix.github.io/fetchloom  ·  report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues

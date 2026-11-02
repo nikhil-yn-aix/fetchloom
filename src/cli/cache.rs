@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Age, Cache, Checked, Freed, Needed};
+use crate::cache::{Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
@@ -116,12 +116,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     } else {
         crate::cache::GRACE
     };
-    let freed = cache.sweep_with_stop(
-        &needed,
-        SystemTime::now(),
-        Age::Written(grace),
-        &context.stop,
-    )?;
+    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), grace, &context.stop)?;
     if dry_run {
         return Ok(tell_dry_gc(context, freed, cache.pretended()));
     }
@@ -352,19 +347,16 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     )))
 }
 
-/// how often the cache tidies itself, and how long bytes no project needs stay before it does.
-const TIDY_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
-const TIDY_AFTER: std::time::Duration = std::time::Duration::from_hours(24 * 30);
+/// how often the cache may remind a person of what it holds that no project needs, and how much
+/// that has to be before it does.
+const REMIND_EVERY: std::time::Duration = std::time::Duration::from_hours(24 * 7);
+const REMIND_FROM: u64 = 1 << 30;
 
-/// after a command that changed what projects need, at most once a week: frees bytes no project
-/// has needed for 30 days, counted from the first tidy that found them unneeded, and what
-/// interrupted runs left behind. it never forgets a project, never fails the command and says
-/// nothing outside `-v`. `FETCHLOOM_AUTO_GC=0` turns it off.
-pub(super) fn tidy(context: &Context) {
-    // offline, bytes freed now could not come back before the network does
-    if context.offline.enabled()
-        || std::env::var_os("FETCHLOOM_AUTO_GC").is_some_and(|value| value == "0")
-    {
+/// after a command that changed what projects need, at most once a week and only for a person at
+/// a terminal: one hint when the cache holds a GiB or more no project needs. it deletes nothing;
+/// freeing bytes stays `cache gc`'s, which a person runs on purpose. its errors are its own.
+pub(super) fn remind(context: &Context) {
+    if !context.output.can_ask() {
         return;
     }
     let Some(root) = Cache::locate(&|name| std::env::var_os(name)) else {
@@ -373,52 +365,42 @@ pub(super) fn tidy(context: &Context) {
     if !root.join("objects").is_dir() {
         return;
     }
-    let marker = root.join("tidied");
+    let marker = root.join("reminded");
     let now = SystemTime::now();
-    match fs::metadata(&marker).and_then(|metadata| metadata.modified()) {
-        // the first run starts the clock rather than paying for a sweep right away
-        Err(_) => {
-            let _ = fs::write(&marker, b"");
-            return;
-        }
-        Ok(last)
-            if now
-                .duration_since(last)
-                .map_or(true, |age| age < TIDY_EVERY) =>
-        {
-            return;
-        }
-        Ok(_) => {}
-    }
-    // stamped before the sweep, so runs that finish together do not all sweep
-    if fs::write(&marker, b"").is_err() {
+    // a marker dated in the future, after a clock was wrong, counts as long ago
+    let Ok(last) = fs::metadata(&marker).and_then(|metadata| metadata.modified()) else {
+        // the first run starts the clock rather than reading the cache right away
+        let _ = fs::write(&marker, b"");
+        return;
+    };
+    // a marker dated in the future, after a clock was wrong, counts as long ago
+    let due = now
+        .duration_since(last)
+        .ok()
+        .is_none_or(|age| age >= REMIND_EVERY);
+    if !due || fs::write(&marker, b"").is_err() {
         return;
     }
     let Ok(cache) = open_cache() else { return };
-    // a project on a drive that is not plugged in, or on another machine sharing this cache,
-    // still needs its bytes. only a person running `cache gc` decides it is gone
-    let Ok(roots) = cache.registered_projects(&context.stop) else {
+    let Ok((needed, _)) = needed_with(&cache, None, &context.stop, false) else {
         return;
     };
-    if roots.iter().any(|root| !root.is_dir()) {
-        return;
-    }
-    let Ok((needed, _)) = needed_with_stop(&cache, None, &context.stop) else {
+    let Ok(scan) = cache.scan_objects(&context.stop) else {
         return;
     };
-    let Ok(freed) = cache.sweep_with_stop(&needed, now, Age::Unneeded(TIDY_AFTER), &context.stop)
-    else {
-        return;
-    };
-    if freed.objects > 0 {
-        context.output.detail(&format!(
-            "tidied the cache: freed {} in {} no project used for 30 days",
-            units::size(freed.bytes),
-            units::count(freed.objects, "file", "files")
+    let unneeded: u64 = scan
+        .objects
+        .iter()
+        .filter(|object| !needed.objects.contains(&object.digest))
+        .map(|object| object.size)
+        .sum();
+    if unneeded >= REMIND_FROM {
+        context.output.hint(&format!(
+            "the cache holds {} no project needs; `fetchloom cache gc` frees it",
+            units::size(unneeded)
         ));
     }
 }
-
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
 /// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is
 /// forgotten. unreadable registrations, manifests and locks stop gc rather than lose protection.
@@ -434,6 +416,17 @@ fn needed_with_stop(
     current: Option<&Lock>,
     stop: &Stop,
 ) -> Result<(Needed, Vec<PathBuf>), Error> {
+    needed_with(cache, current, stop, true)
+}
+
+/// as [`needed`]; with `forget` false, a project whose data.toml is gone stays registered, as
+/// when its drive is only unplugged.
+fn needed_with(
+    cache: &Cache,
+    current: Option<&Lock>,
+    stop: &Stop,
+    forget: bool,
+) -> Result<(Needed, Vec<PathBuf>), Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
     for root in cache.registered_projects(stop)? {
@@ -443,7 +436,9 @@ fn needed_with_stop(
         match fs::read(&manifest) {
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                cache.forget(&project.root);
+                if forget {
+                    cache.forget(&project.root);
+                }
                 continue;
             }
             Err(err) => {

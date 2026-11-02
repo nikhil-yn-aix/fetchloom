@@ -28,14 +28,8 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 
 1. read registered project locks to find needed objects and unpacked members.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
-3. clean abandoned partial and temporary files, and forget the links whose bytes are gone, then report deleted counts and bytes.
+3. clean abandoned partial and temporary files, and forget links whose bytes are gone, then report deleted counts and bytes.
 4. report unneeded objects kept because they are less than a day old.
-
-### automatic tidy
-
-you rarely need to run gc yourself. at most once a week, after a successful `add`, `sync`, `remove` or `get`, fetchloom tidies the cache quietly. it frees bytes no project has needed for 30 days, counted from the first tidy that found them unneeded, not from when they were downloaded, so removing a dataset never frees its bytes at once. it also clears what interrupted runs left behind. it never fails the command and says what it freed only with `-v`.
-
-the tidy is careful where `cache gc` trusts you: it skips the week when any project the cache knows is out of reach, such as one on a drive that is not plugged in, and it never runs with `--offline`. the first run only starts the weekly clock. set `FETCHLOOM_AUTO_GC=0` to turn it off, as on a cache a team shares.
 
 ```sh
 fetchloom cache gc --now
@@ -58,6 +52,16 @@ a missing manifest removes a registration. an unreadable registration, manifest 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 
 gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failed paths in `result.not_removed`, alongside the error. close programs holding those paths or fix permissions, then retry. already absent paths do not count as failed removals.
+
+### reminder
+
+fetchloom never deletes from the cache on its own: freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when it is 1 GiB or more, says so once:
+
+```text
+  hint: the cache holds 3.2 GiB no project needs; `fetchloom cache gc` frees it
+```
+
+scripts, CI and coding agents never see it, since it only runs when a person can read it. the first run only starts the weekly clock.
 
 ### dry run
 

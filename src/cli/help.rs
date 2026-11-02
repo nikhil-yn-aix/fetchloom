@@ -40,10 +40,69 @@ conflicting files. `fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a quick look.";
 
+/// `fetchloom help environment`: every variable fetchloom reads, at terminal size. the docs page
+/// has the details; a test keeps the two naming the same variables.
+const ENVIRONMENT: &str = "fetchloom environment
+
+  FETCHLOOM_CACHE     the cache folder, instead of the system's cache folder
+  FETCHLOOM_OFFLINE   1 works offline, as --offline does
+  FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default
+  FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
+  FETCHLOOM_THREADS   a cap on local worker threads, 1 to 256
+  FETCHLOOM_SPLIT     0 never splits a slow download into parallel parts, 1 always does
+  FETCHLOOM_LOG       a log filter such as fetchloom=debug, as -vv uses
+  FETCHLOOM_TRACE     a file to write a timeline of the run to, for profiling
+  FETCHLOOM_COLORS    other colors, as done=blue:accent=#d787ff
+  FETCHLOOM_KEYRING   0 keeps keys out of the system's credential store
+
+  NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
+  CI, AI_AGENT and coding agents' own variables   no questions, color or animation
+
+keys are read where each source's own tools keep them: HF_TOKEN and the hugging face token
+file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN, OSF_TOKEN,
+DATAVERSE_API_TOKEN with DATAVERSE_URL, and .netrc or the file NETRC names.
+
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
+
+/// `fetchloom help exit-codes`: what each exit code means, for a script deciding what to do.
+const EXIT_CODES: &str = "fetchloom exit codes
+
+    0  success, even when sync kept edited files; check status or --json for them
+    1  unconfirmed or lock.outdated: approve with --yes, or run fetchloom lock
+    2  usage: a mistake on the command line
+   10  reference.*, source.invalid: the link or id is wrong, or names nothing
+   20  network.*, offline.missing: retry later, or go online
+   30  integrity.mismatch: the bytes are not the ones data.lock pins
+   40  auth.required: sign in, or accept the source's terms
+   50  local.*, project.invalid: the disk, permissions, or a broken data.toml or data.lock
+  130  interrupted
+
+with --json, errors[0].kind names the exact cause and errors[0].fix, when present, the command
+to run next.
+
+more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes.html";
+
+/// help topics that are not commands, each with its text.
+const TOPICS: [(&str, &str); 3] = [
+    ("concepts", CONCEPTS),
+    ("environment", ENVIRONMENT),
+    ("exit-codes", EXIT_CODES),
+];
+
+fn topic_text(topic: &[String]) -> Option<&'static str> {
+    match topic {
+        [only] => TOPICS
+            .iter()
+            .find(|(name, _)| name == only)
+            .map(|(_, text)| *text),
+        _ => None,
+    }
+}
+
 /// prints the topic, or the help of the command `topic` names. an unknown topic is a usage error
 /// that names no command, since help is never one.
 pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> ExitCode {
-    if context.output.json() && topic.iter().all(|word| word != "concepts") {
+    if context.output.json() && topic_text(topic).is_none() {
         let asked = topic.join(" ");
         let commands: Vec<Described> = described(&args::Args::command(), "")
             .into_iter()
@@ -60,10 +119,8 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
             started,
         );
     }
-    if let [only] = topic
-        && only == "concepts"
-    {
-        crate::output::help(CONCEPTS, args::color());
+    if let Some(text) = topic_text(topic) {
+        crate::output::help(text, args::color());
         return ExitCode::SUCCESS;
     }
     let line = std::iter::once("fetchloom")
@@ -187,7 +244,7 @@ fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
 /// the error for a topic that is neither `concepts` nor a command, suggesting the closest one.
 fn unknown(topic: &[String]) -> Error {
     let asked = topic.join(" ");
-    let mut topics = vec!["concepts".to_owned()];
+    let mut topics: Vec<String> = TOPICS.iter().map(|(name, _)| (*name).to_owned()).collect();
     for command in args::Args::command().get_subcommands() {
         topics.push(command.get_name().to_owned());
         for inner in command.get_subcommands() {
@@ -200,6 +257,53 @@ fn unknown(topic: &[String]) -> Error {
     );
     match name::closest(&asked, topics.iter().map(String::as_str)) {
         Some(best) => error.help(format!("did you mean `fetchloom help {best}`?")),
-        None => error.help("`fetchloom help concepts` explains the ideas, and `fetchloom --help` lists the commands"),
+        None => error.help("`fetchloom help concepts` explains the ideas, `fetchloom help environment` and `fetchloom help exit-codes` list settings and codes, and `fetchloom --help` lists the commands"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ENVIRONMENT, EXIT_CODES, TOPICS};
+
+    /// the words in `text` shaped like fetchloom's own variables.
+    fn variables(text: &str) -> std::collections::BTreeSet<&str> {
+        text.split(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+            .filter(|word| word.starts_with("FETCHLOOM_") && word.len() > "FETCHLOOM_".len())
+            .collect()
+    }
+
+    #[test]
+    fn the_environment_topic_names_every_variable_the_docs_do() {
+        let docs = include_str!("../../docs/user/reference/environment.md");
+        assert_eq!(variables(ENVIRONMENT), variables(docs));
+    }
+
+    #[test]
+    fn the_exit_codes_topic_lists_every_documented_code() {
+        let docs = include_str!("../../docs/user/reference/exit-codes.md");
+        for line in docs.lines().filter(|line| line.starts_with("| ")) {
+            let Some(code) = line[2..]
+                .split(' ')
+                .next()
+                .filter(|code| code.parse::<u8>().is_ok())
+            else {
+                continue;
+            };
+            assert!(
+                EXIT_CODES
+                    .lines()
+                    .any(|topic| topic.trim_start().starts_with(&format!("{code} "))),
+                "exit {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn topics_fit_a_terminal() {
+        for (name, text) in TOPICS {
+            for line in text.lines() {
+                assert!(line.chars().count() <= 100, "{name}: {line}");
+            }
+        }
     }
 }

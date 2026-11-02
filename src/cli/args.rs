@@ -125,6 +125,7 @@ on disk: removes the saved key. asks first when other tools read it too";
 
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
+  fetchloom help exit-codes
   fetchloom help add
   fetchloom help cache gc
 
@@ -255,11 +256,65 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
 }
 
 pub(super) fn command() -> clap::Command {
-    Args::command().color(if Style::stdout_color(color()) {
+    linked(Args::command()).color(if Style::stdout_color(color()) {
         clap::ColorChoice::Always
     } else {
         clap::ColorChoice::Never
     })
+}
+
+const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";
+
+/// every command's help ends with its page on the docs site, and the top one with where to
+/// report a bug.
+fn linked(root: clap::Command) -> clap::Command {
+    let page = |name: &str| match name {
+        "help" => format!("{SITE}/user/commands/"),
+        "cache gc" => format!("{SITE}/user/commands/cache.html#gc"),
+        "cache verify" => format!("{SITE}/user/commands/cache.html#verify"),
+        "auth login" | "auth logout" => format!("{SITE}/user/commands/auth.html"),
+        _ => format!("{SITE}/user/commands/{name}.html"),
+    };
+    let append = |command: clap::Command, line: String| {
+        let before = command
+            .get_after_help()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let text = if before.is_empty() {
+            line
+        } else {
+            format!("{before}\n\n{line}")
+        };
+        command.after_help(text)
+    };
+    let names: Vec<(String, Vec<String>)> = root
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+        .map(|command| {
+            let inner = command
+                .get_subcommands()
+                .filter(|inner| !inner.is_hide_set())
+                .map(|inner| inner.get_name().to_owned())
+                .collect();
+            (command.get_name().to_owned(), inner)
+        })
+        .collect();
+    let mut root = append(
+        root,
+        format!(
+            "docs: {SITE}  \u{b7}  report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues"
+        ),
+    );
+    for (name, inner) in names {
+        root = root.mut_subcommand(&name, |mut command| {
+            for sub in &inner {
+                let docs = format!("docs: {}", page(&format!("{name} {sub}")));
+                command = command.mut_subcommand(sub, |sub| append(sub, docs));
+            }
+            append(command, format!("docs: {}", page(&name)))
+        });
+    }
+    root
 }
 
 /// help can arrive before clap parses --color, including flags after --help.
@@ -667,7 +722,7 @@ pub(crate) struct Completions {
 /// explain the ideas behind fetchloom, or one command
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Help {
-    /// concepts, or a command such as add or cache gc
+    /// concepts, environment, exit-codes, or a command such as add or cache gc
     #[arg(value_name = "topic", help_heading = "arguments")]
     pub(crate) topic: Vec<String>,
 }

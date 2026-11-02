@@ -19,6 +19,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
 | `help concepts` | explain the shopping list, receipt and pantry | learn the [project model](../concepts.md) |
+| `help environment`, `help exit-codes` | list every setting, or what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |
 | `help <command>` | show a command's help | check syntax at the terminal |
 | bare `fetchloom` | show project status or the welcome | find your next command |
 

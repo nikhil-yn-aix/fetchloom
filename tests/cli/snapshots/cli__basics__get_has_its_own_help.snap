@@ -1,6 +1,6 @@
 ---
 source: tests/cli/basics.rs
-assertion_line: 152
+assertion_line: 219
 expression: text(&output.stdout)?
 ---
 fetch something once, without a project
@@ -33,3 +33,5 @@ examples:
   fetchloom get -i links.txt
 
 on disk: writes one output folder for each link through the cache. does not create project files
+
+docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/get.html

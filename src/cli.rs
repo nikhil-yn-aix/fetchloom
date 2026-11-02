@@ -324,8 +324,8 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),
     };
-    if outcome == ExitCode::SUCCESS && command.as_ref().is_some_and(tidies) {
-        cache::tidy(&context);
+    if outcome == ExitCode::SUCCESS && command.as_ref().is_some_and(reminds) {
+        cache::remind(&context);
     }
     // refused for want of an account, with a person at the terminal: offer to sign in, then run
     // the command once more with the new key
@@ -347,9 +347,9 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     outcome
 }
 
-/// commands after which the cache may tidy itself: they change what projects need, and a dry run
-/// changes nothing at all.
-fn tidies(command: &args::Command) -> bool {
+/// commands after which the cache may remind a person what no project needs: they change what
+/// projects need, and a dry run changes nothing at all.
+fn reminds(command: &args::Command) -> bool {
     match command {
         args::Command::Add(args) => !args.dry.dry_run,
         args::Command::Remove(args) => !args.dry.dry_run,

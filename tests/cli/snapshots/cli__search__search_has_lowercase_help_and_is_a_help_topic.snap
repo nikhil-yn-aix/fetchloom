@@ -28,3 +28,5 @@ examples:
   fetchloom search iris --json
 
 on disk: nothing. prints canonical references without downloading a dataset
+
+docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/search.html
