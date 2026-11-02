@@ -3,10 +3,10 @@
 `add` puts a dataset in your manifest, pins its files and syncs the whole project.
 
 ```sh
-fetchloom add iris
-fetchloom add zenodo:3608990
+fetchloom add https://zenodo.org/records/3608990
 fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 fetchloom add zenodo:3608990 --select "*.csv" --dry-run
+fetchloom add iris    # at a terminal, pick one from a list
 ```
 
 ## usage

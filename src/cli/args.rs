@@ -13,10 +13,10 @@ const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 /// disk.
 mod examples {
     pub(super) const ADD: &str = "examples:
-  fetchloom add iris
-  fetchloom add zenodo:3608990
+  fetchloom add https://zenodo.org/records/3608990
   fetchloom add doi:10.5281/zenodo.3608990 --as flowers
   fetchloom add zenodo:3608990 --select \"*.csv\" --dry-run
+  fetchloom add iris    # at a terminal, pick one from a list
 
 on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. --dry-run writes nothing";
 
