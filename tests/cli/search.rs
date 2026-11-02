@@ -140,10 +140,24 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
             "stderr: {}",
             text(&output.stderr)?
         );
-        assert!(
-            stdout
-                .starts_with("hf:datasets/scikit-learn/iris\nkaggle:uciml/iris\nzenodo:23233774\n")
+        let first: Vec<&str> = stdout
+            .lines()
+            .filter_map(|line| line.split('\t').next())
+            .take(3)
+            .collect();
+        assert_eq!(
+            first,
+            [
+                "hf:datasets/scikit-learn/iris",
+                "kaggle:uciml/iris",
+                "zenodo:23233774"
+            ]
         );
+        assert!(
+            stdout.contains("kaggle:uciml/iris\tIris Species\t3.6 KiB\n"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("hf:datasets/scikit-learn/iris\tscikit-learn/iris\n"));
         let stderr = text(&output.stderr)?;
         if quiet {
             assert_eq!(stderr, "");
@@ -154,6 +168,29 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
             assert!(!stderr.contains("Iris Species"));
         }
     }
+    Ok(())
+}
+
+#[test]
+fn source_and_limit_narrow_the_search() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let output = catalogs
+        .command(
+            &sandbox,
+            &["search", "iris", "--source", "kaggle", "--limit", "2", "--json"],
+        )
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let candidates = document["result"]["candidates"].as_array().cloned();
+    assert_eq!(candidates.as_ref().map(Vec::len), Some(2), "{document}");
+    assert_eq!(catalogs.hf.requests().len(), 0);
+    assert_eq!(catalogs.zenodo.requests().len(), 0);
+    let output = catalogs
+        .command(&sandbox, &["search", "iris", "--source", "figshare"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
     Ok(())
 }
 

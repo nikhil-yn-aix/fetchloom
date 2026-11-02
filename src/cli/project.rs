@@ -1099,7 +1099,7 @@ async fn hold(context: &Context, project: &Project, command: &str) -> Result<Hel
 
 /// refuses a dataset name data.toml does not have, suggesting the closest one as the `command`
 /// that names it, such as `path` in `fetchloom path iris`.
-fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
+pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Ok(());
     }

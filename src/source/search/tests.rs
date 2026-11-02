@@ -46,7 +46,7 @@ fn words_search_but_links_ids_dois_and_punctuation_do_not() {
 
 #[test]
 fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
-    let result = block_on(search(&recorded(), "iris")).unwrap();
+    let result = block_on(search(&recorded(), "iris", &[], LIMIT)).unwrap();
     let references: Vec<_> = result
         .candidates
         .iter()
@@ -96,7 +96,7 @@ fn private_repositories_are_skipped_and_gated_ones_marked() {
     hf[1]["gated"] = true.into();
     hf[2]["gated"] = "manual".into();
     let api = recorded().on(HF, 200, serde_json::to_vec(&hf).unwrap());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     let hf: Vec<_> = result
         .candidates
         .iter()
@@ -116,7 +116,7 @@ fn private_repositories_are_skipped_and_gated_ones_marked() {
 #[test]
 fn a_failed_source_warns_without_discarding_the_others() {
     let api = recorded().on(KAGGLE, 403, b"denied".to_vec());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert_eq!(result.candidates.len(), 6);
     assert_eq!(result.candidates[1].source, "zenodo");
     assert_eq!(result.warnings.len(), 1);
@@ -129,7 +129,7 @@ fn all_failed_sources_return_the_first_error() {
         .on(HF, 403, Vec::new())
         .on(KAGGLE, 400, Vec::new())
         .on(ZENODO, 404, Vec::new());
-    let error = block_on(search(&api, "iris")).unwrap_err();
+    let error = block_on(search(&api, "iris", &[], LIMIT)).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert!(error.message.contains("huggingface.co"));
 }
@@ -140,7 +140,7 @@ fn empty_success_is_not_an_all_sources_failure() {
         .on(HF, 200, b"[]".to_vec())
         .on(KAGGLE, 403, Vec::new())
         .on(ZENODO, 403, Vec::new());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings.len(), 2);
 }
@@ -148,7 +148,7 @@ fn empty_success_is_not_an_all_sources_failure() {
 #[test]
 fn invalid_json_warns_instead_of_hiding_successful_catalogs() {
     let api = recorded().on(HF, 200, b"not json".to_vec());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert_eq!(result.candidates.len(), 6);
     assert!(result.warnings[0].starts_with("hugging face search failed: "));
 }
@@ -159,7 +159,7 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://huggingface.co/api/datasets?search=fashion+%28mnist%29%3A*%26&limit=3&sort=downloads&direction=-1", 200, b"[]".to_vec())
         .on("https://api.kaggle.com/v1/datasets/list?search=fashion+%28mnist%29%3A*%26&page=1", 200, b"[]".to_vec())
         .on("https://zenodo.org/api/records?q=title%3A%28fashion+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
-    let result = block_on(search(&api, "fashion (mnist):*&")).unwrap();
+    let result = block_on(search(&api, "fashion (mnist):*&", &[], LIMIT)).unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
     assert_eq!(api.asked().len(), 3);
@@ -172,7 +172,7 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     let extra = kaggle[0].clone();
     kaggle.as_array_mut().unwrap().push(extra);
     let api = recorded().on(KAGGLE, 200, serde_json::to_vec(&kaggle).unwrap());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert_eq!(result.candidates.len(), 9);
 }
 
@@ -193,7 +193,7 @@ fn sources_are_asked_concurrently() {
         barrier: tokio::sync::Barrier::new(3),
     };
     let result = block_on(async {
-        tokio::time::timeout(std::time::Duration::from_secs(2), search(&api, "iris")).await
+        tokio::time::timeout(std::time::Duration::from_secs(2), search(&api, "iris", &[], LIMIT)).await
     })
     .unwrap()
     .unwrap();
@@ -202,7 +202,7 @@ fn sources_are_asked_concurrently() {
 
 #[test]
 fn json_keeps_the_reference_as_text_and_unknown_fields_as_null() {
-    let result = block_on(search(&recorded(), "iris")).unwrap();
+    let result = block_on(search(&recorded(), "iris", &[], LIMIT)).unwrap();
     let value = serde_json::to_value(&result.candidates[0]).unwrap();
     assert_eq!(
         value,
@@ -221,7 +221,7 @@ fn missing_metadata_and_overflowing_sizes_stay_unknown() {
         {"id":3,"metadata":{"title":"unknown file"},"files":[{"size":1},{}]}
     ]}}"#;
     let api = recorded().on(ZENODO, 200, body.to_vec());
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     let zenodo: Vec<_> = result
         .candidates
         .iter()
@@ -242,7 +242,72 @@ fn invalid_catalog_ids_never_become_candidates() {
         200,
         br#"[{"ref":"not a reference","title":"bad"}]"#.to_vec(),
     );
-    let result = block_on(search(&api, "iris")).unwrap();
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert_eq!(result.candidates.len(), 6);
     assert!(result.warnings[0].contains("invalid dataset id"));
+}
+
+#[test]
+fn chosen_catalogs_alone_are_asked() {
+    let api = recorded();
+    let result = block_on(search(&api, "iris", &[Catalog::Kaggle, Catalog::Zenodo], LIMIT)).unwrap();
+    assert_eq!(api.asked().len(), 2);
+    assert!(result.candidates.iter().all(|item| item.source != "hugging face"));
+    assert_eq!(result.candidates.len(), 6);
+}
+
+#[test]
+fn a_limit_asks_each_catalog_for_that_many() {
+    let api = Recorded::default()
+        .on(
+            "https://huggingface.co/api/datasets?search=iris&limit=1&sort=downloads&direction=-1",
+            200,
+            fixture_bytes("search/hf.json"),
+        )
+        .on(KAGGLE, 200, fixture_bytes("search/kaggle.json"))
+        .on(
+            "https://zenodo.org/api/records?q=title%3A%28iris%29&type=dataset&sort=mostviewed&size=1",
+            200,
+            fixture_bytes("search/zenodo.json"),
+        );
+    let result = block_on(search(&api, "iris", &[], 1)).unwrap();
+    assert_eq!(result.candidates.len(), 3);
+}
+
+#[test]
+fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
+    let mut kaggle: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("search/kaggle.json")).unwrap();
+    kaggle[0]["ref"] = "someone/Iris_Dataset".into();
+    let api = Recorded::default()
+        .on(
+            "https://huggingface.co/api/datasets?search=iris+dataset&limit=3&sort=downloads&direction=-1",
+            200,
+            fixture_bytes("search/hf.json"),
+        )
+        .on(
+            "https://api.kaggle.com/v1/datasets/list?search=iris+dataset&page=1",
+            200,
+            serde_json::to_vec(&kaggle).unwrap(),
+        )
+        .on(
+            "https://zenodo.org/api/records?q=title%3A%28iris+dataset%29&type=dataset&sort=mostviewed&size=3",
+            200,
+            fixture_bytes("search/zenodo.json"),
+        );
+    let result = block_on(search(&api, "iris dataset", &[], LIMIT)).unwrap();
+    let references: Vec<_> = result
+        .candidates
+        .iter()
+        .map(|item| item.reference.to_string())
+        .collect();
+    assert_eq!(
+        &references[..4],
+        [
+            "kaggle:someone/Iris_Dataset",
+            "kaggle:himanshunakrani/iris-dataset",
+            "hf:datasets/scikit-learn/iris",
+            "zenodo:23233774",
+        ]
+    );
 }

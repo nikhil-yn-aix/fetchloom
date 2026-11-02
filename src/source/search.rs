@@ -30,20 +30,70 @@ pub(crate) struct Search {
     pub(crate) warnings: Vec<String>,
 }
 
-/// asks all catalogs together, keeping rank order while giving each catalog a turn.
-pub(crate) async fn search(api: &impl Api, words: &str) -> Result<Search, Error> {
+/// a catalog that answers keyword searches, named as references name it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum Catalog {
+    Hf,
+    Kaggle,
+    Zenodo,
+}
+
+impl Catalog {
+    pub(crate) const ALL: [Catalog; 3] = [Catalog::Hf, Catalog::Kaggle, Catalog::Zenodo];
+
+    /// the catalog's name in the story and in `source`.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Catalog::Hf => "hugging face",
+            Catalog::Kaggle => "kaggle",
+            Catalog::Zenodo => "zenodo",
+        }
+    }
+}
+
+/// the matches each catalog keeps when nobody asks for another number.
+pub(crate) const LIMIT: usize = 3;
+
+/// asks the `catalogs` together, keeping rank order while giving each catalog a turn, then moves
+/// matches named exactly as the words to the front, in that same order.
+pub(crate) async fn search(
+    api: &impl Api,
+    words: &str,
+    catalogs: &[Catalog],
+    limit: usize,
+) -> Result<Search, Error> {
+    let asked = |catalog: Catalog| catalogs.is_empty() || catalogs.contains(&catalog);
     let (hf, kaggle, zenodo) = tokio::join!(
-        hugging_face(api, words),
-        kaggle(api, words),
-        zenodo(api, words)
+        async {
+            if asked(Catalog::Hf) {
+                Some(hugging_face(api, words, limit).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if asked(Catalog::Kaggle) {
+                Some(kaggle(api, words, limit).await)
+            } else {
+                None
+            }
+        },
+        async {
+            if asked(Catalog::Zenodo) {
+                Some(zenodo(api, words, limit).await)
+            } else {
+                None
+            }
+        }
     );
     let mut result = Search::default();
     let mut first_error = None;
     let mut lists = Vec::new();
     for (source, answer) in [("hugging face", hf), ("kaggle", kaggle), ("zenodo", zenodo)] {
         match answer {
-            Ok(candidates) => lists.push(candidates.into_iter()),
-            Err(error) => {
+            None => {}
+            Some(Ok(candidates)) => lists.push(candidates.into_iter()),
+            Some(Err(error)) => {
                 result
                     .warnings
                     .push(format!("{source} search failed: {error}"));
@@ -56,12 +106,32 @@ pub(crate) async fn search(api: &impl Api, words: &str) -> Result<Search, Error>
     {
         return Err(error);
     }
-    for _ in 0..3 {
+    for _ in 0..limit {
         for list in &mut lists {
             result.candidates.extend(list.next());
         }
     }
+    let wanted = folded(words);
+    result
+        .candidates
+        .sort_by_key(|candidate| !exact(candidate, &wanted));
     Ok(result)
+}
+
+/// text compared without case and with spaces, `-` and `_` alike.
+fn folded(text: &str) -> String {
+    text.to_lowercase()
+        .split(|c: char| c.is_whitespace() || c == '-' || c == '_')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// whether a match's title or the last part of its id is the search words.
+fn exact(candidate: &Candidate, wanted: &str) -> bool {
+    let id = candidate.reference.to_string();
+    let last = id.rsplit(['/', ':']).next().unwrap_or_default();
+    folded(&candidate.title) == wanted || folded(last) == wanted
 }
 
 /// words without a reference prefix are a search; bare DOIs still belong to the DOI resolver.
@@ -103,12 +173,13 @@ struct HubMatch {
     gated: serde_json::Value,
 }
 
-async fn hugging_face(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
+async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let most = limit.to_string();
     let url = query(
         "https://huggingface.co/api/datasets",
         &[
             ("search", words),
-            ("limit", "3"),
+            ("limit", &most),
             ("sort", "downloads"),
             ("direction", "-1"),
         ],
@@ -118,7 +189,7 @@ async fn hugging_face(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Err
     matches
         .into_iter()
         .filter(|item| !item.private)
-        .take(3)
+        .take(limit)
         .map(|item| {
             let gated = match item.gated {
                 serde_json::Value::Bool(gated) => gated,
@@ -147,7 +218,7 @@ struct KaggleMatch {
     download_count: Option<u64>,
 }
 
-async fn kaggle(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
+async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
     let url = query(
         "https://api.kaggle.com/v1/datasets/list",
         &[("search", words), ("page", "1")],
@@ -156,7 +227,7 @@ async fn kaggle(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
     let matches: Vec<KaggleMatch> = super::json(&url, &response)?;
     matches
         .into_iter()
-        .take(3)
+        .take(limit)
         .map(|item| {
             Ok(Candidate {
                 reference: reference(&format!("kaggle:{}", item.reference))?,
@@ -203,7 +274,7 @@ struct Stats {
     unique_downloads: Option<u64>,
 }
 
-async fn zenodo(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
+async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
     let words: String = words
         .chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
@@ -214,7 +285,7 @@ async fn zenodo(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
             ("q", &format!("title:({words})")),
             ("type", "dataset"),
             ("sort", "mostviewed"),
-            ("size", "3"),
+            ("size", &limit.to_string()),
         ],
     )?;
     let response = api.get(&url).await?;
@@ -223,7 +294,7 @@ async fn zenodo(api: &impl Api, words: &str) -> Result<Vec<Candidate>, Error> {
         .hits
         .hits
         .into_iter()
-        .take(3)
+        .take(limit)
         .map(|item| {
             Ok(Candidate {
                 reference: reference(&format!("zenodo:{}", item.id))?,

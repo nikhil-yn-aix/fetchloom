@@ -39,7 +39,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `get` | `folder`: absolute path, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
-| `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, and project-relative `folder`; counts describe locked source files, not archive members |
+| `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, and nullable `locked_files`, an array of `path` and `size` records; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |

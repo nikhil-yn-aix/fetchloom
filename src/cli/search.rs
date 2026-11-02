@@ -6,7 +6,7 @@ use super::{Context, args};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::output::Output;
-use crate::source::search::{self, Candidate};
+use crate::source::search::{self, Candidate, Catalog};
 use crate::units;
 
 #[derive(Serialize)]
@@ -16,7 +16,8 @@ pub(super) struct Report {
 
 pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report, Error> {
     let words = args.words.join(" ");
-    let report = find(context, &context.net(), &words).await?;
+    let limit = usize::from(args.limit);
+    let report = find(context, &context.net(), &words, &args.source, limit).await?;
     let output = &context.output;
     output.done(
         "Found",
@@ -34,7 +35,7 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         }
     }
     for candidate in &report.candidates {
-        output.answer_untold(&candidate.reference.to_string());
+        output.answer_untold(&line(candidate));
     }
     Ok(report)
 }
@@ -45,7 +46,7 @@ pub(super) async fn pick(
     words: &str,
     command: &str,
 ) -> Result<String, Error> {
-    let report = find(context, api, words).await?;
+    let report = find(context, api, words, &[], search::LIMIT).await?;
     let rows = rows(&context.output, &report.candidates);
     if let Some(index) = context.output.choose("which one?", &rows)? {
         let reference = report.candidates[index].reference.to_string();
@@ -62,7 +63,13 @@ pub(super) async fn pick(
     }
 }
 
-async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, Error> {
+async fn find(
+    context: &Context,
+    api: &impl Api,
+    words: &str,
+    catalogs: &[Catalog],
+    limit: usize,
+) -> Result<Report, Error> {
     if words.trim().is_empty() {
         return Err(Error::new(Kind::Usage, "there are no words to search for")
             .help("name what you are looking for, as in `fetchloom search iris`"));
@@ -74,11 +81,19 @@ async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, 
         )
         .help("search again online. offline, `fetchloom sync --offline` places what a project already pinned"));
     }
-    context.output.step(
-        "Searching",
-        &format!("hugging face, kaggle and zenodo for \"{words}\""),
-    );
-    let result = search::search(api, words).await?;
+    let asked: Vec<&str> = Catalog::ALL
+        .into_iter()
+        .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
+        .map(Catalog::label)
+        .collect();
+    let named = match asked.as_slice() {
+        [first @ .., last] if !first.is_empty() => format!("{} and {last}", first.join(", ")),
+        _ => asked.join(""),
+    };
+    context
+        .output
+        .step("Searching", &format!("{named} for \"{words}\""));
+    let result = search::search(api, words, catalogs, limit).await?;
     for warning in result.warnings {
         context.output.warn(&warning);
     }
@@ -93,6 +108,23 @@ async fn find(context: &Context, api: &impl Api, words: &str) -> Result<Report, 
     Ok(Report {
         candidates: result.candidates,
     })
+}
+
+/// one candidate for a script reading stdout: its reference first, then its title and, when
+/// known, its size, separated by tabs so the first column stays the reference.
+fn line(candidate: &Candidate) -> String {
+    let shown: String = candidate
+        .title
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let title = units::clip(&shown, usize::MAX, "");
+    let mut line = format!("{}\t{title}", candidate.reference);
+    if let Some(size) = candidate.size {
+        line.push('\t');
+        line.push_str(&units::size(size));
+    }
+    line
 }
 
 /// each candidate as what to type, its title, and its facts. hugging face titles are the
@@ -151,6 +183,19 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style};
     use crate::source::Reference;
+
+    #[test]
+    fn script_lines_keep_the_reference_first() {
+        let candidate = Candidate {
+            reference: Reference::parse("kaggle:uciml/iris").unwrap().reference,
+            title: "Iris\tSpecies\n\u{1b}x".to_owned(),
+            source: "kaggle",
+            size: Some(3687),
+            downloads: None,
+            note: None,
+        };
+        assert_eq!(line(&candidate), "kaggle:uciml/iris\tIris Species x\t3.6 KiB");
+    }
 
     #[test]
     fn rows_align_references_and_omit_unknown_metadata() {

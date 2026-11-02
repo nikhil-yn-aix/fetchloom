@@ -50,6 +50,7 @@ on disk: nothing. it reads data.toml, data.lock and data/";
 
     pub(super) const LIST: &str = "examples:
   fetchloom list
+  fetchloom list iris
   fetchloom list --json
 
 on disk: nothing. it reads data.toml and data.lock";
@@ -94,6 +95,7 @@ on disk: writes one output folder for each link through the cache. does not crea
     pub(super) const SEARCH: &str = "examples:
   fetchloom search iris
   fetchloom search fashion mnist
+  fetchloom search iris --source kaggle,zenodo --limit 5
   fetchloom search iris --json
 
 on disk: nothing. prints canonical references without downloading a dataset";
@@ -323,8 +325,8 @@ pub(crate) enum Command {
     Status,
 
     /// list the project's datasets: where each comes from, its size and its folder
-    #[command(override_usage = "fetchloom list [options]", help_template = TEMPLATE, after_help = examples::LIST)]
-    List,
+    #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
+    List(List),
 
     /// print where a dataset or a file in it is, syncing first if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
@@ -363,7 +365,7 @@ impl Command {
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Status => "status",
-            Command::List => "list",
+            Command::List(_) => "list",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
@@ -476,6 +478,14 @@ pub(crate) struct Search {
     /// dataset names or keywords, with or without quotes
     #[arg(value_name = "words", required = true, num_args = 1.., help_heading = "arguments")]
     pub(crate) words: Vec<String>,
+
+    /// ask only this catalog: hf, kaggle or zenodo. repeat it or use commas for more
+    #[arg(long, value_name = "source", value_delimiter = ',', help_heading = "options")]
+    pub(crate) source: Vec<crate::source::search::Catalog>,
+
+    /// keep up to this many matches from each catalog, 1 to 20
+    #[arg(long, value_name = "n", default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=20), help_heading = "options")]
+    pub(crate) limit: u8,
 }
 
 /// which files of a dataset to keep, for `add` and `get`.
@@ -560,6 +570,14 @@ pub(crate) struct Lock {
     /// change nothing, and fail when data.lock is out of date, for CI
     #[arg(long, conflicts_with = "upgrade", help_heading = "options")]
     pub(crate) check: bool,
+}
+
+/// list the project's datasets, or the files of one
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct List {
+    /// a dataset's name, to list its locked files
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) name: Option<String>,
 }
 
 /// print where a dataset or a file in it is

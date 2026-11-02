@@ -5,6 +5,7 @@
 ```sh
 fetchloom search iris
 fetchloom search fashion mnist
+fetchloom search iris --source kaggle,zenodo --limit 5
 fetchloom search iris --json
 ```
 
@@ -14,13 +15,20 @@ fetchloom search iris --json
 fetchloom search [options] <words>...
 ```
 
-words may be quoted or separate arguments. empty or whitespace-only words are a usage error, exit 2, before any catalog request. there are no command-specific options; [global options](README.md#global-options) apply.
+words may be quoted or separate arguments. empty or whitespace-only words are a usage error, exit 2, before any catalog request.
+
+| option | meaning |
+|---|---|
+| `--source <source>` | ask only this catalog: `hf`, `kaggle` or `zenodo`. repeat it or separate names with commas. any other name is a usage error |
+| `--limit <n>` | keep up to n matches from each catalog, 1 to 20. the default is 3 |
+
+[global options](README.md#global-options) apply.
 
 ## results
 
-fetchloom asks hugging face, kaggle and zenodo concurrently and keeps up to three matches from each. it interleaves the catalogs by rank: each catalog's first match, then each second match, then each third. this is catalog order, not a common relevance score.
+fetchloom asks hugging face, kaggle and zenodo concurrently, or only the `--source` catalogs, and keeps up to `--limit` matches from each, three by default. it interleaves the catalogs by rank: each catalog's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that same order. this is catalog order, not a common relevance score.
 
-at a terminal, the story shows canonical references, titles and any known size, download count or access note. quiet or redirected stdout prints one reference per line; when stderr is not a terminal either, the story keeps only the count, so captured output lists each match once. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields. figshare, osf, dataverse and the other sources have no keyword search; pass their links or ids to `add` and `get`.
+at a terminal, the story shows canonical references, titles and any known size, download count or access note. quiet or redirected stdout prints one match per line: its reference, a tab, its title and, when the catalog gives a size, a tab and the size. the reference stays the first column, so `cut -f1` or `awk '{print $1}'` still reads it. hugging face search gives no sizes, so its lines have none; when stderr is not a terminal either, the story keeps only the count, so captured output lists each match once. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields. figshare, osf, dataverse and the other sources have no keyword search; pass their links or ids to `add` and `get`.
 
 one failed catalog produces a warning while the others can still return matches. if every catalog fails, the first catalog error ends the command. no matches fails with `reference.unresolved` and an empty candidate list. search writes no project files.
 

@@ -361,8 +361,8 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = cache::info(context);
             finish(context, name, outcome, started)
         }
-        args::Command::List => {
-            let outcome = list::run(context);
+        args::Command::List(args) => {
+            let outcome = list::run(context, args.name.as_deref());
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

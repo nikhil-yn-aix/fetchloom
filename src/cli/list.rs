@@ -27,15 +27,35 @@ struct Listed {
     files: Option<u64>,
     bytes: Option<u64>,
     folder: String,
+    title: Option<String>,
+    license: Option<String>,
+    doi: Option<String>,
+    /// each source file data.lock pins. `files` was already the count, so the list has its own
+    /// name.
+    locked_files: Option<Vec<ListedFile>>,
 }
 
-pub(super) fn run(context: &Context) -> Result<Report, Error> {
+#[derive(Serialize)]
+struct ListedFile {
+    path: String,
+    size: u64,
+}
+
+pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error> {
     let project = super::project::find(&context.output)?;
     let (_, manifest) = project.manifest()?;
+    if let Some(name) = name {
+        super::project::known(&manifest, name, "list")?;
+    }
     let lock = project.lock()?.unwrap_or_default();
-    let report = listed(&manifest, &lock);
+    let mut report = listed(&manifest, &lock);
     let output = &context.output;
-    if report.datasets.is_empty() {
+    if let Some(name) = name {
+        report.datasets.retain(|dataset| dataset.name == name);
+        if let Some(dataset) = report.datasets.first() {
+            one(output, dataset);
+        }
+    } else if report.datasets.is_empty() {
         output.done("Ok", "data.toml has no datasets yet");
         output.hint(
             "add one with `fetchloom add <link>`, or find one with `fetchloom search <words>`",
@@ -44,6 +64,45 @@ pub(super) fn run(context: &Context) -> Result<Report, Error> {
         output.answer(&table(&report.datasets, output.answer_width()));
     }
     Ok(report)
+}
+
+/// one dataset's files on stdout, a path and a size per line. its title, license and DOI are an
+/// aside for a person, since data.lock and `--json` keep them.
+fn one(output: &crate::output::Output, dataset: &Listed) {
+    let Some(files) = &dataset.locked_files else {
+        output.done("Ok", &format!("{} is not locked yet", dataset.name));
+        output.hint("run `fetchloom sync` to lock it and fetch its files");
+        return;
+    };
+    let about: Vec<&str> = [&dataset.title, &dataset.license, &dataset.doi]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    if !about.is_empty() {
+        output.aside(&about.join(" \u{b7} "));
+    }
+    if files.is_empty() {
+        output.done("Ok", &format!("{} has no files", dataset.name));
+    } else {
+        output.answer(&file_lines(files));
+    }
+}
+
+fn file_lines(files: &[ListedFile]) -> String {
+    let width = files
+        .iter()
+        .map(|file| file.path.chars().count())
+        .max()
+        .unwrap_or_default();
+    files
+        .iter()
+        .map(|file| {
+            let pad = width - file.path.chars().count();
+            format!("{}{:pad$}  {}", file.path, "", units::size(file.size))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn listed(manifest: &Manifest, lock: &Lock) -> Report {
@@ -59,6 +118,19 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
                 files: locked.map(|locked| locked.files.len() as u64),
                 bytes: locked.map(|locked| locked.files.iter().map(|file| file.size).sum()),
                 folder: plan::folder(manifest, name),
+                title: locked.and_then(|locked| locked.title.clone()),
+                license: locked.and_then(|locked| locked.license.clone()),
+                doi: locked.and_then(|locked| locked.doi.clone()),
+                locked_files: locked.map(|locked| {
+                    locked
+                        .files
+                        .iter()
+                        .map(|file| ListedFile {
+                            path: file.path.clone(),
+                            size: file.size,
+                        })
+                        .collect()
+                }),
             }
         })
         .collect();
@@ -127,6 +199,24 @@ fn columns(datasets: &[Listed], with_source: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_dataset_lists_a_path_and_a_size_per_line() {
+        let files = [
+            ListedFile {
+                path: "iris.csv".to_owned(),
+                size: 4551,
+            },
+            ListedFile {
+                path: "docs/readme.txt".to_owned(),
+                size: 12,
+            },
+        ];
+        assert_eq!(
+            file_lines(&files),
+            "iris.csv         4.4 KiB\ndocs/readme.txt  12 B"
+        );
+    }
 
     #[test]
     fn locked_and_unlocked_datasets_line_up() {

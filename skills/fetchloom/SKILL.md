@@ -18,9 +18,9 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | a script needs a dataset's path | `fetchloom path <name>`; stdout is the path, and it syncs first if needed |
 | download once, no project files | `fetchloom get <ref> -o <dir> --json` |
 | several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json` |
-| words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates` |
+| words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates`. `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
 | check data/ against the lock | `fetchloom status --json` |
-| what the project uses | `fetchloom list --json` |
+| what the project uses | `fetchloom list --json`; `fetchloom list <name> --json` for one dataset, with `locked_files` paths and sizes |
 
 `<ref>` is a link, a DOI or an id: `hf:datasets/org/name`, `kaggle:owner/name`, `kaggle:competitions/slug`, `zenodo:3608990`, `figshare:34744689`, `osf:3eunr`, `dataverse:host/doi:10.7910/DVN/X`, `s3://bucket/prefix/`, `gs://bucket/prefix/`, `doi:10.5281/zenodo.3608990` or an https URL. `--select "**/*.csv"` and `--exclude` keep only some files.
 
