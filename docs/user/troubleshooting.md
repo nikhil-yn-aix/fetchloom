@@ -26,6 +26,8 @@ logs never include a token or password: a credential is named by its host and he
 
 | symptom on stderr | cause | fix |
 |---|---|---|
+| `fetchloom: command not found`, or `fetchloom is not recognized` on windows | the terminal started before rust added its folder to PATH | open a new terminal; if that fails, check `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on windows) holds fetchloom |
+| `error: there is no command called "init"` | no setup command is needed | run `fetchloom add <link>` in the project folder |
 | `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
 | `error: offline, and 1 file the lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |
 | `error: iris/iris.csv is not the file that was locked` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
@@ -48,6 +50,8 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | symptom | cause | fix |
 |---|---|---|
 | sync succeeds but a file is still edited | conflicts are preserved by default | inspect `status` and JSON `placement.kept`; save edits before choosing `--force` |
+| `warning: <path> was edited, and the file is shared with other projects, so they see the edit too` | the file is a hardlink to the cache, so an edit reaches every project using it | save the edit, then run `fetchloom sync --force` in each project; use `copy = true` for files you edit |
+| `warning: iris was taken, so this one is iris-2` | the project already has a dataset with that name | keep it, or run `fetchloom remove iris-2` and add again with `--as <name>` |
 | status exits 0 with differences | differences are a successful result | inspect all nine status arrays |
 | an input is read-only | default placement protects shared bytes | set `copy = true` on the dataset and sync |
 | a glob matches no files | it differs from listed paths or targets archive members | quote the glob and check [pattern rules](reference/data-toml.md#patterns) |
