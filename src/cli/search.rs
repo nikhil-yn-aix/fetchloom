@@ -194,7 +194,10 @@ mod tests {
             downloads: None,
             note: None,
         };
-        assert_eq!(line(&candidate), "kaggle:uciml/iris\tIris Species x\t3.6 KiB");
+        assert_eq!(
+            line(&candidate),
+            "kaggle:uciml/iris\tIris Species x\t3.6 KiB"
+        );
     }
 
     #[test]

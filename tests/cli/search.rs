@@ -178,7 +178,9 @@ fn source_and_limit_narrow_the_search() -> Result {
     let output = catalogs
         .command(
             &sandbox,
-            &["search", "iris", "--source", "kaggle", "--limit", "2", "--json"],
+            &[
+                "search", "iris", "--source", "kaggle", "--limit", "2", "--json",
+            ],
         )
         .output()?;
     assert!(output.status.success(), "{}", text(&output.stderr)?);

@@ -193,7 +193,11 @@ fn sources_are_asked_concurrently() {
         barrier: tokio::sync::Barrier::new(3),
     };
     let result = block_on(async {
-        tokio::time::timeout(std::time::Duration::from_secs(2), search(&api, "iris", &[], LIMIT)).await
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            search(&api, "iris", &[], LIMIT),
+        )
+        .await
     })
     .unwrap()
     .unwrap();
@@ -250,9 +254,20 @@ fn invalid_catalog_ids_never_become_candidates() {
 #[test]
 fn chosen_catalogs_alone_are_asked() {
     let api = recorded();
-    let result = block_on(search(&api, "iris", &[Catalog::Kaggle, Catalog::Zenodo], LIMIT)).unwrap();
+    let result = block_on(search(
+        &api,
+        "iris",
+        &[Catalog::Kaggle, Catalog::Zenodo],
+        LIMIT,
+    ))
+    .unwrap();
     assert_eq!(api.asked().len(), 2);
-    assert!(result.candidates.iter().all(|item| item.source != "hugging face"));
+    assert!(
+        result
+            .candidates
+            .iter()
+            .all(|item| item.source != "hugging face")
+    );
     assert_eq!(result.candidates.len(), 6);
 }
 

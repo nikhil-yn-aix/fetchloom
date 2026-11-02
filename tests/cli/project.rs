@@ -74,7 +74,10 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     assert_eq!(one.status.code(), Some(0), "{}", text(&one.stderr)?);
     assert_eq!(text(&one.stdout)?, "iris.csv  32 B\n");
     let document = json(&sandbox.run(&["--json", "list", "iris"])?)?;
-    assert_eq!(document["result"]["datasets"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        document["result"]["datasets"].as_array().map(Vec::len),
+        Some(1)
+    );
     assert_eq!(document["result"]["datasets"][0]["name"], "iris");
     let unknown = sandbox.run(&["list", "irs"])?;
     assert_eq!(unknown.status.code(), Some(2));

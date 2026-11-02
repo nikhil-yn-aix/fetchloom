@@ -10,18 +10,21 @@ arguments:
   <words>...  dataset names or keywords, with or without quotes
 
 options:
-  -q, --quiet         print only the answer and errors
-  -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
-      --json          print one JSON document on stdout instead of the story
-      --offline       use only what is already on this machine
-  -y, --yes           approve confirmations, but never choose a dataset for you
-      --color <when>  when to use color [default: auto] [possible values: auto, always, never]
-  -C <dir>            run as if fetchloom started in <dir>
-  -h, --help          print help
+      --source <source>  ask only this catalog: hf, kaggle or zenodo. repeat it or use commas for more [possible values: hf, kaggle, zenodo]
+      --limit <n>        keep up to this many matches from each catalog, 1 to 20 [default: 3]
+  -q, --quiet            print only the answer and errors
+  -v, --verbose...       say more: -v adds detail and counters, -vv adds debug logs
+      --json             print one JSON document on stdout instead of the story
+      --offline          use only what is already on this machine
+  -y, --yes              approve confirmations, but never choose a dataset for you
+      --color <when>     when to use color [default: auto] [possible values: auto, always, never]
+  -C <dir>               run as if fetchloom started in <dir>
+  -h, --help             print help
 
 examples:
   fetchloom search iris
   fetchloom search fashion mnist
+  fetchloom search iris --source kaggle,zenodo --limit 5
   fetchloom search iris --json
 
 on disk: nothing. prints canonical references without downloading a dataset

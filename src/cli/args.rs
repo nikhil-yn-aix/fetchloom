@@ -480,7 +480,12 @@ pub(crate) struct Search {
     pub(crate) words: Vec<String>,
 
     /// ask only this catalog: hf, kaggle or zenodo. repeat it or use commas for more
-    #[arg(long, value_name = "source", value_delimiter = ',', help_heading = "options")]
+    #[arg(
+        long,
+        value_name = "source",
+        value_delimiter = ',',
+        help_heading = "options"
+    )]
     pub(crate) source: Vec<crate::source::search::Catalog>,
 
     /// keep up to this many matches from each catalog, 1 to 20
