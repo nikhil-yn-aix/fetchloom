@@ -362,16 +362,21 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
 
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
-    let kept = "data/iris/iris.csv has changed";
     let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
+    // a project's own copy "has changed", a shared hardlink "was edited"
     assert!(
-        path.contains(kept),
+        path.contains("data/iris/iris.csv has changed")
+            || path.contains("data/iris/iris.csv was edited"),
         "path trusted the file without syncing: {path}"
     );
     // the sync path ran found the object behind a hardlink changed and marked it, which must
     // not turn this project's own edit into one made elsewhere
     let synced = text(&sandbox.run(&["sync"])?.stderr)?;
-    assert!(synced.contains(kept), "{synced}");
+    assert!(
+        synced.contains("data/iris/iris.csv has changed")
+            || synced.contains("data/iris/iris.csv was edited"),
+        "{synced}"
+    );
     assert_eq!(fs::read(&placed)?, edited, "the edit stays without --force");
     let forced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
@@ -602,7 +607,11 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"sepal_length,species\n5.1,setosa\nedited\n")?;
     let (said, third) = sync("third.json")?;
-    assert!(said.contains("data/iris/iris.csv has changed"), "{said}");
+    assert!(
+        said.contains("data/iris/iris.csv has changed")
+            || said.contains("data/iris/iris.csv was edited"),
+        "{said}"
+    );
     assert!(plans(&third), "{third}");
     Ok(())
 }

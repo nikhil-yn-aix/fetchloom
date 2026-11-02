@@ -700,9 +700,15 @@ mod tests {
     fn every_help() -> Vec<(String, String)> {
         let root = Args::command();
         let mut names: Vec<Vec<String>> = Vec::new();
-        for command in root.get_subcommands() {
+        for command in root
+            .get_subcommands()
+            .filter(|command| !command.is_hide_set())
+        {
             names.push(vec![command.get_name().to_owned()]);
-            for inner in command.get_subcommands() {
+            for inner in command
+                .get_subcommands()
+                .filter(|inner| !inner.is_hide_set())
+            {
                 names.push(vec![
                     command.get_name().to_owned(),
                     inner.get_name().to_owned(),
@@ -745,8 +751,8 @@ mod tests {
                     example.starts_with(&format!("  fetchloom {name}")),
                     "{name}: {example}"
                 );
-                // a redirect or a pipe belongs to the shell, not to fetchloom
-                let command = example.split(['>', '|']).next().unwrap_or(example);
+                // a redirect, a pipe or a comment belongs to the shell, not to fetchloom
+                let command = example.split(['>', '|', '#']).next().unwrap_or(example);
                 let words = words(command);
                 if let Err(err) = Args::try_parse_from(&words) {
                     panic!("{name}: `{example}` does not parse: {err}");
