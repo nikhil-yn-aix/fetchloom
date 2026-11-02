@@ -259,6 +259,10 @@ mod tests {
         let err =
             block_on(repo("datasets/stanfordnlp/no-such-dataset").resolve(&recorded)).unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
+        assert_eq!(
+            err.message,
+            "huggingface.co has no dataset stanfordnlp/no-such-dataset, or it is private"
+        );
         let help = err.help.unwrap();
         assert!(
             help.contains("https://huggingface.co/datasets/stanfordnlp/no-such-dataset")

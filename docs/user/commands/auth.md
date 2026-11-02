@@ -61,8 +61,8 @@ echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --wi
 at a terminal, a command refused for want of an account offers to sign in, then runs once more:
 
 ```text
-error: huggingface.co refused access to hf:datasets/org/private (401)
-  help: if it needs an account, sign in with `fetchloom auth login hf`, then run the same command again
+error: huggingface.co has no dataset org/private, or it is private
+  help: check the name at https://huggingface.co/datasets/org/private. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
 sign in to hugging face now? [Y/n]
 ```
 

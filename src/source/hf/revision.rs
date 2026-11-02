@@ -38,9 +38,18 @@ impl Repo {
             query.append_pair("expand", "tags");
         }
         let response = api.get(&url).await?;
-        let info: Info = crate::source::json(self, &response).map_err(|err| {
+        let info: Info = crate::source::json(self, &response).map_err(|mut err| {
             if err.kind == Kind::AuthRequired {
                 // the hub answers 401 alike for a private repository and for one that does not exist
+                let kind = match self.kind {
+                    RepoKind::Dataset => "dataset",
+                    RepoKind::Model => "model",
+                    RepoKind::Space => "space",
+                };
+                err.message = format!(
+                    "huggingface.co has no {kind} {}, or it is private",
+                    self.id
+                );
                 err.help(format!(
                     "check the name at {}. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`",
                     self.page()
