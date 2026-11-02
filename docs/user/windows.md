@@ -47,6 +47,10 @@ use a project folder outside synced storage if you want fetchloom to try hardlin
 
 do not make a managed hardlink writable to edit it. set `copy = true` on the dataset and sync. windows may not expose another project's hardlink edit until that project syncs, cache verification runs, or `sync --force` reads each hardlink by name.
 
+## red text in windows powershell
+
+fetchloom writes its progress and results to stderr. windows powershell 5.1 shows stderr as red `NativeCommandError` text when you redirect it with `2>&1`, even when the command worked. the text is harmless; the exit code still tells you whether the command worked. powershell 7, or running without `2>&1`, shows the lines as they are.
+
 ## paths and open files
 
 use `/` inside `data.toml` paths and `fetchloom path iris/iris.csv` on windows too. returned absolute paths use the platform's filesystem representation.
