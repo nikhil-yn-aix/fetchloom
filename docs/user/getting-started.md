@@ -1,21 +1,61 @@
 # getting started
 
-fetchloom puts the research data your project needs in `data/` and records how to restore it.
+you will install fetchloom, download a small dataset into a project folder, find the file, restore it on another machine and undo it all.
+
+## open a terminal
+
+a terminal is a window where you type a command and press enter to run it.
+
+- windows: open the start menu, type `powershell` and open windows powershell.
+- macos: press cmd and space, type `terminal` and press enter.
+- linux: press ctrl, alt and t, or open terminal from your applications.
+
+type each command below on its own line and press enter after it.
 
 ## install
 
-no release or PyPI package has been published yet. install from source with [rust](https://rustup.rs) and a C toolchain:
+no release has been published yet, so the one-line installers and `pip install fetchloom` do not work. until the first release, build fetchloom from its source code. you do this once and it takes a few minutes.
+
+### 1. install rust
+
+rust is the language fetchloom is written in. its installer, rustup, also gives you `cargo`, the command that builds fetchloom.
+
+windows: download `rustup-init.exe` from [rustup.rs](https://rustup.rs) and run it. when it offers to install visual studio's C++ build tools, accept; fetchloom needs them. then press enter to take the default rust install.
+
+macos: install apple's command line tools, then rust:
+
+```sh
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+linux: install a C compiler, then rust. on debian or ubuntu:
+
+```sh
+sudo apt install build-essential curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+on fedora, use `sudo dnf install gcc curl` for the first line.
+
+close the terminal and open a new one, so it finds `cargo`.
+
+### 2. build and install fetchloom
 
 ```sh
 cargo install --locked --git https://github.com/nikhil-yn-aix/fetchloom
 fetchloom --version
 ```
 
-fetchloom supports windows, linux and macos on x86_64 and arm64. windows needs windows 10 or later and macos needs macos 11 or later; on macos, `xcode-select --install` provides the C toolchain. [building and testing](../dev/engineering/building-and-testing.md) covers the pinned rust toolchain and platform setup, and [macos](macos.md) covers the cache folder, clones and synced folders there.
+the second line prints `fetchloom` and its version. if `cargo install` says your rust is too old, run `rustup update` and try again.
 
-for the executable together with the [python helper](scripting.md#python-helper), install the python package from source instead. a [shell alias](windows.md#short-name) can give the executable a shorter name.
+fetchloom runs on windows 10 or later, macos 11 or later and linux, on x86_64 and arm64 machines. for the [python helper](scripting.md#python-helper) as well, install the python package instead. to finish the setup, see [shell completions](commands/completions.md).
+
+after the first release, the [README](https://github.com/nikhil-yn-aix/fetchloom#install) lists one-line installers that need no rust.
 
 ## first project
+
+a project is a folder with your work in it. make one and download the iris dataset, a 4.1 KiB table of flower measurements:
 
 ```sh
 mkdir iris-study
@@ -23,9 +63,7 @@ cd iris-study
 fetchloom add zenodo:3608990
 ```
 
-`add` downloads iris, writes its entry in `data.toml`, pins the files in `data.lock` and places them in `data/iris`. in a git repository it adds the data folder to `.gitignore`.
-
-stderr excerpt when the filesystem supports links:
+`zenodo:3608990` is the dataset's id: record 3608990 on zenodo. the last lines it prints:
 
 ```text
      Locked iris · 1 file in data.lock
@@ -34,58 +72,76 @@ stderr excerpt when the filesystem supports links:
   hint: scripts can find it with `fetchloom path iris`
 ```
 
-find the file without assuming where the data folder lives:
+the folder now holds:
+
+| path | what it is |
+|---|---|
+| `data.toml` | the datasets this project wants, one entry named `iris` |
+| `data.lock` | the exact files, with their sizes and SHA-256 fingerprints |
+| `data/iris/iris.csv` | the data itself, read-only so you cannot change it by accident |
+| `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
+
+the downloaded bytes also live once in a shared cache, so another project that needs iris gets it without a second download. [concepts](concepts.md) explains the cache and how files are placed.
+
+## find your files
+
+open the folder in your file manager:
+
+- windows: `explorer data\iris`
+- macos: `open data/iris`
+- linux: `xdg-open data/iris`
+
+or print the full path of one file, for code that reads it:
 
 ```sh
 fetchloom path iris/iris.csv
 ```
 
-## sharing a project
+`fetchloom list` shows every dataset in the project with its size and folder.
 
-send `data.toml` and `data.lock` with your project. git is optional. to start tracking the project with git after the example above, initialize it and repeat `add`; the existing dataset is reused and `.gitignore` is updated.
+## restore it somewhere else
 
-| path | keep in git? | reason |
-|---|---|---|
-| `data.toml` | yes | it records which datasets the project needs |
-| `data.lock` | yes | it pins each selected file by hash and size |
-| `data/` | no | sync restores downloaded inputs |
-| `.fetchloom/` | no | it holds machine-local state and ignores itself |
-| `.gitignore` | yes | it keeps downloaded files out of commits |
-
-```sh
-git init
-fetchloom add zenodo:3608990
-git add data.toml data.lock .gitignore
-git commit -m "pin iris inputs"
-```
-
-## restoring a project
-
-enter a project folder containing `data.toml` and `data.lock`, whether you received the files directly or cloned them with git, then run:
+copy `data.toml` and `data.lock` to another machine, or commit them to git. leave `data/` and `.fetchloom/` out. there, in the project folder, run:
 
 ```sh
 fetchloom sync
 ```
 
-sync fills `data/` from the pins. cached bytes need no download. if the manifest changed, sync updates the lock first while preserving unchanged entries. use `fetchloom sync --locked` when a job must require an up-to-date lock.
+`sync` downloads what is missing and checks every file against `data.lock`, so you get the same bytes.
 
-## working offline
-
-follow [offline preparation](concepts.md#offline), then restore without requests:
+with git, `add` already put `data/` in `.gitignore` when the folder was a git repository. if you start git later, run `git init` and then `fetchloom add zenodo:3608990` again; it reuses the dataset and writes `.gitignore`. then:
 
 ```sh
-fetchloom sync --offline
+git add data.toml data.lock .gitignore
+git commit -m "pin iris"
 ```
 
-## next commands
+## undo
 
-| need | command or guide |
+remove the dataset from the project:
+
+```sh
+fetchloom remove iris
+```
+
+this deletes its entry in `data.toml` and `data.lock` and its files in `data/iris`. a file you edited stays. add `--dry-run` first to see what it would delete.
+
+the shared cache still holds the bytes. `fetchloom cache gc` frees bytes no project needs once they are a day old, in case you want them back. to free them now:
+
+```sh
+fetchloom cache gc --now
+```
+
+to remove the whole project, delete its folder. to uninstall fetchloom, run `cargo uninstall fetchloom`, then delete the cache folder listed in [cache folder](reference/cache-folder.md#location).
+
+## next
+
+| to | read |
 |---|---|
-| find a dataset by name | [`fetchloom search`](commands/search.md) |
-| see the datasets in a project | [`fetchloom list`](commands/list.md) |
-| inspect missing, edited or extra files | [`fetchloom status`](commands/status.md) |
-| try data without creating project files | [`fetchloom get`](commands/get.md) |
-| use a different host | [sources](sources/README.md) |
-| understand hashes, cache and placement | [concepts](concepts.md) |
-| use writable inputs | [`copy = true`](concepts.md#placement) |
-| handle an error | [troubleshooting](troubleshooting.md) |
+| find a dataset by name | [`search`](commands/search.md) |
+| try data without a project | [`get`](commands/get.md) |
+| see missing or edited files | [`status`](commands/status.md) |
+| use another site, such as kaggle or hugging face | [sources](sources/README.md) |
+| work without internet | [offline](concepts.md#offline) |
+| change files in `data/` | [writable copies](concepts.md#placement) |
+| fix an error | [troubleshooting](troubleshooting.md) |
