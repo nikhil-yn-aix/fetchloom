@@ -50,6 +50,19 @@ fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
 }
 
 #[test]
+fn auth_status_lists_every_account_like_plain_auth() -> Result {
+    let sandbox = Sandbox::new()?;
+    let plain = sandbox.run(&["auth", "--offline"])?;
+    let status = sandbox.run(&["auth", "status", "--offline"])?;
+    assert!(status.status.success(), "{}", text(&status.stderr)?);
+    let story = text(&status.stderr)?;
+    assert_eq!(story, text(&plain.stderr)?);
+    assert!(story.contains("hugging face: not signed in"), "{story}");
+    assert!(story.contains("zenodo: not signed in"), "{story}");
+    Ok(())
+}
+
+#[test]
 fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     let sandbox = Sandbox::new()?;
     let login = with_stdin(

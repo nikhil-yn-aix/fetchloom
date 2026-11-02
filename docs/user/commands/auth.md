@@ -70,7 +70,7 @@ a gated hugging face dataset, a restricted zenodo record or a kaggle competition
 
 ## status
 
-`fetchloom auth` lists each account, whether a key was found, where it came from and, online, who the source says it belongs to. a key the source refuses is marked with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
+`fetchloom auth` lists each account, whether a key was found, where it came from and, online, who the source says it belongs to. `fetchloom auth status` does the same. a key the source refuses is marked with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
 
 ## signing out
 

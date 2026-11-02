@@ -150,9 +150,20 @@ impl Output {
     /// detail for `-v`: where things are, which method was used, full hashes.
     pub(crate) fn detail(&self, text: &str) {
         if self.tells(Level::Verbose) {
-            let dim = paint(self.style.color, Paint::new().dimmed());
-            self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(text)));
+            self.dim_line(text);
         }
+    }
+
+    /// a dim line under the steps that needs nothing done, such as an account nobody signed in to.
+    pub(crate) fn faint(&self, text: &str) {
+        if self.tells(Level::Normal) {
+            self.dim_line(text);
+        }
+    }
+
+    fn dim_line(&self, text: &str) {
+        let dim = paint(self.style.color, Paint::new().dimmed());
+        self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(text)));
     }
 
     pub(crate) fn warn(&self, text: &str) {

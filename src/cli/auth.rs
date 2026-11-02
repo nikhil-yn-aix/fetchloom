@@ -48,7 +48,7 @@ pub(super) struct Outcome {
 
 pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Error> {
     match args.action {
-        None => status(context).await,
+        None | Some(AuthAction::Status) => status(context).await,
         Some(AuthAction::Login(login)) => {
             let account = Account::parse(&login.account, login.host.as_deref())?;
             sign_in(context, &account, &login).await.map(Report::Login)
@@ -82,7 +82,7 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                     output.step("Signed in", &text);
                 }
             }
-            None => output.detail(&format!("{name}: not signed in")),
+            None => output.faint(&format!("{name}: not signed in")),
         }
         accounts.push(State {
             account: account.id(),

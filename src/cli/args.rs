@@ -373,7 +373,9 @@ impl Command {
             }) => "cache verify",
             Command::Get(_) => "get",
             Command::Search(_) => "search",
-            Command::Auth(Auth { action: None }) => "auth",
+            Command::Auth(Auth {
+                action: None | Some(AuthAction::Status),
+            }) => "auth",
             Command::Auth(Auth {
                 action: Some(AuthAction::Login(_)),
             }) => "auth login",
@@ -432,6 +434,10 @@ pub(crate) enum AuthAction {
     /// remove a key fetchloom or the source's tools saved
     #[command(override_usage = "fetchloom auth logout [options] <account>", help_template = TEMPLATE, after_help = examples::LOGOUT)]
     Logout(Logout),
+
+    /// list each account, as plain `fetchloom auth` does
+    #[command(hide = true, override_usage = "fetchloom auth [options]", help_template = TEMPLATE)]
+    Status,
 }
 
 /// options of `auth login`.
