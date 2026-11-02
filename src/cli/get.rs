@@ -1016,7 +1016,7 @@ fn tell_fetched(
                 "Checked",
                 &format!("{path} · unchanged on {}", net::host(&remote.url)),
             ),
-            Origin::Cache => output.step("Found", &format!("{path} · in the cache")),
+            Origin::Cache => output.step("Found", &format!("{path} in the cache")),
         }
         output.detail(&format!("sha256 {}", fetched.digest));
         return;
