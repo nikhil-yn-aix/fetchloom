@@ -6,7 +6,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 
 - [front page](README.md): install and quick start
 - [user guide](docs/user/README.md): every user page and when to read it
-- [getting started](docs/user/getting-started.md): source installation, first project and files to share
+- [getting started](docs/user/getting-started.md): install from source until the first release, first project, restoring and undoing it
 - [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives and offline preparation
 - [commands](docs/user/commands/README.md): command table, global options and terminal output
 - [add](docs/user/commands/add.md): add and pin a dataset
