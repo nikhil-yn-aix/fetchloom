@@ -19,6 +19,7 @@
     - [get](user/commands/get.md)
     - [cache](user/commands/cache.md)
     - [auth](user/commands/auth.md)
+    - [completions](user/commands/completions.md)
   - [sources](user/sources/README.md)
     - [URLs and DOIs](user/sources/urls-and-dois.md)
     - [zenodo](user/sources/zenodo.md)
@@ -40,6 +41,7 @@
   - [scripting](user/scripting.md)
   - [AI agents](user/ai-agents.md)
   - [windows](user/windows.md)
+  - [macos](user/macos.md)
   - [troubleshooting](user/troubleshooting.md)
   - [limits](user/limits.md)
 
