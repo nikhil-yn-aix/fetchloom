@@ -61,7 +61,7 @@ resume accepts only writable plain files; on unix they must belong to the curren
 
 ### retention and cleanup
 
-successful sync registers the project root. gc follows registered manifests and locks, including needed archive members. unreadable registrations or project inputs stop gc; only a missing manifest makes a project stale. unneeded objects and unpack records become eligible after 24 hours by modification time, or immediately with `cache gc --now`. the CLI passes zero object grace to `sweep_with_stop`; abandoned downloads keep the full day and active partial locks are respected. removing their cache names does not remove placed hardlinks, reflinks or copies.
+successful sync registers the project root. gc follows registered manifests and locks, including needed archive members. unreadable registrations or project inputs stop gc; only a missing manifest makes a project stale. unneeded objects and unpack records become eligible after 24 hours by modification time, or immediately with `cache gc --now`. the CLI passes zero object grace to `sweep_with_stop` only for `--now`, otherwise `GRACE`; abandoned downloads keep the full day and active partial locks are respected. removing their cache names does not remove placed hardlinks, reflinks or copies.
 
 archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation.
 

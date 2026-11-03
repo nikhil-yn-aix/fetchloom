@@ -24,7 +24,7 @@ every breaking change is listed first in the release notes, with what to change.
 
 | part | why it may change, and what keeps it safe |
 |---|---|
-| the cache's folders and records | objects are named by SHA-256 and checked by it before use. a change must read the old layout or move to new folder names; deleting the cache only costs downloads |
+| the cache's folders and records | objects are named by SHA-256. reuse trusts an object whose size and time are unchanged and hashes a doubtful one again; `cache verify` hashes them all. a change must read the old layout or move to new folder names; deleting the cache only costs downloads |
 | `.fetchloom/state` | a state of another version is dropped and rebuilt by checking the files |
 | human-readable output | wording, colors and alignment improve between releases. scripts read `--json` |
 | the rust crate's API | fetchloom is a command, not a library |

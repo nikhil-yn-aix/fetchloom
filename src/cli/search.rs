@@ -39,7 +39,7 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     }
     if limit < 20 && more(&report.candidates, limit) {
         output.hint(&format!(
-            "each catalog shows up to {limit} matches; `--limit 20` shows more"
+            "that is {limit} from each catalog; `--limit 20` shows up to 20 from each"
         ));
     }
     Ok(report)

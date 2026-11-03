@@ -38,7 +38,7 @@ DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's h
 
 ### catalog search
 
-`is_search` recognizes alphanumeric input without a colon, excluding bare DOIs. `search` uses `tokio::join!` for hugging face, kaggle and zenodo, takes up to three matches each and interleaves their rank order: hugging face, kaggle, zenodo, then the next result from each. hugging face is requested with `sort=downloads` and descending direction, zenodo with `sort=mostviewed`, and kaggle with its default catalog ordering. fetchloom preserves each catalog's order; it computes no global score. `Candidate` carries a canonical reference and optional catalog facts. one failing catalog contributes a warning; all failing returns the first error. CLI selection is separate from source resolution.
+`is_search` recognizes alphanumeric input without a colon, excluding bare DOIs. `search` uses `tokio::join!` for hugging face, kaggle and zenodo, asks the `--source` catalogs, or all three, for up to `--limit` matches each, three by default, and interleaves their rank order: hugging face, kaggle, zenodo, then the next result from each. exact title or last-id matches then move to the front, keeping that order. hugging face is requested with `sort=downloads` and descending direction, zenodo with `sort=mostviewed`, and kaggle with its default catalog ordering. it computes no global score. `Candidate` carries a canonical reference and optional catalog facts. one failing catalog contributes a warning; all failing returns the first error. CLI selection is separate from source resolution.
 
 ### keep listing and transfer separate
 

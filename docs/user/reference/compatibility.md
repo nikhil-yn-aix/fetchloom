@@ -68,11 +68,4 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 
 ## keys shared with other tools
 
-fetchloom reads and writes keys where each source's own tools keep them, so one sign-in serves both:
-
-| source | read from | also used by |
-|---|---|---|
-| hugging face | `HF_TOKEN`, `HF_TOKEN_PATH`, `$HF_HOME/token`, `~/.cache/huggingface/token`, the older `~/.huggingface/token` | `hf`, `huggingface_hub`, `datasets`, `transformers` |
-| kaggle | `KAGGLE_API_TOKEN`, `~/.kaggle/access_token`, the older `kaggle.json` and `KAGGLE_USERNAME`/`KAGGLE_KEY` | the `kaggle` command, `kagglehub` |
-| earthdata, physionet, any host | `.netrc`, or `_netrc` on windows, or the file `NETRC` names | curl, wget, python requests |
-| zenodo, figshare, osf, dataverse | the system's credential store, or the variables in [environment](environment.md) | pyDataverse reads the dataverse variables too |
+fetchloom reads and saves keys where each source's own tools keep them, so one sign-in serves both. [environment](environment.md#credentials) lists where it looks and in which order, and [auth](../commands/auth.md) where a sign-in saves.

@@ -38,6 +38,8 @@ pub(crate) struct Output {
     json: bool,
     bars: Option<MultiProgress>,
     warnings: Mutex<Vec<String>>,
+    /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
+    hints: bool,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -127,6 +129,7 @@ impl Output {
             json,
             bars,
             warnings: Mutex::new(Vec::new()),
+            hints: true,
         };
         if !unread.is_empty() {
             output.warn(&format!(
@@ -194,8 +197,13 @@ impl Output {
         }
     }
 
+    pub(crate) fn without_hints(mut self, off: bool) -> Self {
+        self.hints = !off;
+        self
+    }
+
     pub(crate) fn hint(&self, text: &str) {
-        if self.tells(Level::Normal) {
+        if self.hints && self.tells(Level::Normal) {
             self.line(&hint_line(text, self.style.color));
         }
     }
@@ -214,7 +222,7 @@ impl Output {
     /// whether [`Output::next`] prints: only to a person at a terminal, never with `-q` or
     /// `--json`, or when stdout goes to a pipe or a file.
     fn shows_next(&self) -> bool {
-        self.style.watched && self.tells(Level::Normal)
+        self.hints && self.style.watched && self.tells(Level::Normal)
     }
 
     /// free text from a source, such as a title, cut to fit one line of the story.
@@ -1252,17 +1260,22 @@ mod tests {
 
     #[test]
     fn the_next_step_is_only_for_a_person_at_a_terminal() {
-        let shows = |watched, level, json| {
-            let style = Style {
-                color: false,
-                unicode: true,
-                interactive: false,
-                watched,
-                links: false,
-            };
-            Output::new(style, level, json, false).shows_next()
+        let style = |watched| Style {
+            color: false,
+            unicode: true,
+            interactive: false,
+            watched,
+            links: false,
         };
+        let shows =
+            |watched, level, json| Output::new(style(watched), level, json, false).shows_next();
         assert!(shows(true, Level::Normal, false));
+        assert!(
+            !Output::new(style(true), Level::Normal, false, false)
+                .without_hints(true)
+                .shows_next(),
+            "FETCHLOOM_NO_HINTS=1"
+        );
         assert!(shows(true, Level::Verbose, false));
         assert!(!shows(true, Level::Quiet, false), "-q");
         assert!(!shows(true, Level::Normal, true), "--json");

@@ -377,7 +377,7 @@ impl Account {
                 }),
             Account::Kaggle => set("KAGGLE_API_TOKEN")
                 .or_else(|| {
-                    let folder = kaggle_folder(var)?;
+                    let folder = crate::source::home(var)?.join(".kaggle");
                     file(folder.join("access_token"))
                         .or_else(|| file(folder.join("access_token.txt")))
                 })
@@ -430,13 +430,13 @@ impl Account {
     pub(crate) fn home(&self, var: Var<'_>, secret: &str) -> Home {
         match self {
             Account::HuggingFace => hf_file(var).map_or(Home::Store, Home::File),
-            Account::Kaggle => match kaggle_folder(var) {
-                Some(folder) if secret.trim_start().starts_with('{') => {
-                    Home::File(folder.join("kaggle.json"))
-                }
-                Some(folder) => Home::File(folder.join("access_token")),
-                None => Home::Store,
-            },
+            // the kaggle CLI reads kaggle.json from KAGGLE_CONFIG_DIR, but kagglesdk reads
+            // access_token only from ~/.kaggle
+            Account::Kaggle if secret.trim_start().starts_with('{') => kaggle_folder(var)
+                .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json"))),
+            Account::Kaggle => crate::source::home(var).map_or(Home::Store, |home| {
+                Home::File(home.join(".kaggle").join("access_token"))
+            }),
             Account::Login(_) => netrc::path(var).map_or(Home::Store, Home::Netrc),
             _ => Home::Store,
         }

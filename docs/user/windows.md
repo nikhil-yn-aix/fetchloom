@@ -53,7 +53,7 @@ fetchloom writes its progress and results to stderr. windows powershell 5.1 show
 
 ## paths and open files
 
-use `/` inside `data.toml` paths and `fetchloom path iris/iris.csv` on windows too. returned absolute paths use the platform's filesystem representation.
+use `/` inside `data.toml` paths and `fetchloom path iris/Iris.csv` on windows too. returned absolute paths use the platform's filesystem representation.
 
 fetchloom uses the windows long-path form for project metadata renames. a working directory can still be too long for `-C`; that error reports the path length and suggests moving the project to a shorter path before rerunning. other programs opening your data may still impose their own path limits. keep the project root and cache path short when working with deeply nested datasets. a short `path` in the manifest can shorten the dataset folder too.
 

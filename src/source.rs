@@ -382,7 +382,7 @@ fn link(text: &str) -> Result<Parsed, Error> {
                     net::Shown(&url)
                 ),
             )
-            .help("paste the link of the dataset's own page, or its id, as in `fetchloom add zenodo:3608990`"));
+            .help("paste the link of the dataset's own page, as in `fetchloom add https://zenodo.org/records/3608990`, or a name to search for"));
         }
         return Ok(Parsed {
             reference: Reference::Url(raw_link(&url).unwrap_or(url)),
@@ -526,7 +526,7 @@ pub(crate) fn refused(host: &str, reference: &str) -> Error {
 fn unknown(text: &str) -> Error {
     let text = net::mask_query(text);
     Error::new(Kind::ReferenceInvalid, format!("fetchloom cannot read \"{text}\" as a dataset"))
-        .help("use a link, a DOI, or an id such as hf:datasets/org/name or kaggle:owner/name, as in `fetchloom add zenodo:3608990`")
+        .help("use a name to search for, the link of the dataset's page, a DOI, or an id such as kaggle:uciml/iris, as in `fetchloom add https://huggingface.co/datasets/scikit-learn/iris`")
 }
 
 /// the error for a malformed id after a known prefix, such as `zenodo:abc`.

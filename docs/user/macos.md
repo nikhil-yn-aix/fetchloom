@@ -6,7 +6,7 @@ macos runs the same fetchloom commands as linux and windows, on intel and apple 
 
 no release has been published yet, so build from source: `xcode-select --install` provides the command line tools, then follow [getting started](getting-started.md#install).
 
-after the first release, the installer in the [readme](../../README.md#install) picks the x86_64 or arm64 build. a terminal running under rosetta on apple silicon still gets the arm64 build. it installs into `~/.local/bin` and, when PATH lacks that folder, adds it to `~/.zshrc` as well as `~/.profile`, since zsh is the default shell and never reads `~/.profile`.
+after the first release, the installer in the [readme](https://github.com/nikhil-yn-aix/fetchloom#install) picks the x86_64 or arm64 build. a terminal running under rosetta on apple silicon still gets the arm64 build. it installs into `~/.local/bin` and, when PATH lacks that folder, adds it to `~/.zshrc` as well as `~/.profile`, since zsh is the default shell and never reads `~/.profile`.
 
 the release executables are not signed by a developer account. `curl`, the installer and `pip` do not mark what they download, so macos runs it without asking. an archive saved from a browser is marked as quarantined; after unpacking it, clear the mark before the first run:
 

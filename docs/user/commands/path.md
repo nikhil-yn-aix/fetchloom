@@ -4,8 +4,8 @@
 
 ```sh
 fetchloom path iris
-fetchloom path iris/iris.csv
-fetchloom --offline path iris/iris.csv
+fetchloom path iris/Iris.csv
+fetchloom --offline path iris/Iris.csv
 ```
 
 ## usage

@@ -152,6 +152,16 @@ fn signing_in_saves_where_the_sources_own_tools_read() {
         Home::Netrc(root.join(".netrc"))
     );
     assert_eq!(Account::Zenodo.home(&var, "z"), Home::Store);
+    // the kaggle CLI reads kaggle.json from KAGGLE_CONFIG_DIR, kagglesdk the token from ~/.kaggle
+    let var = machine(root, &[("KAGGLE_CONFIG_DIR", "/elsewhere/kaggle")]);
+    assert_eq!(
+        Account::Kaggle.home(&var, "KGAT_x"),
+        Home::File(root.join(".kaggle/access_token"))
+    );
+    assert_eq!(
+        Account::Kaggle.home(&var, "{\"username\":\"a\",\"key\":\"b\"}"),
+        Home::File(PathBuf::from("/elsewhere/kaggle/kaggle.json"))
+    );
     let var = machine(root, &[("HF_HOME", "/elsewhere/hf")]);
     assert_eq!(
         Account::HuggingFace.home(&var, "hf_x"),

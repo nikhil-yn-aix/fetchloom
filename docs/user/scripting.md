@@ -73,7 +73,7 @@ fetchloom --json get zenodo:3608990 -o flowers
 ## finding paths
 
 ```sh
-fetchloom --json path iris/iris.csv
+fetchloom --json path iris/Iris.csv
 fetchloom -q path iris
 ```
 
@@ -131,7 +131,7 @@ on python 3.9 or later:
 import fetchloom
 
 project = fetchloom.sync(project=".", yes=True, strict=True)
-iris = fetchloom.path("iris/iris.csv", project=".", offline=True)
+iris = fetchloom.path("iris/Iris.csv", project=".", offline=True)
 ```
 
 | function | return |

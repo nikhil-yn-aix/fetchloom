@@ -55,7 +55,7 @@ gc warns about paths it could not remove or inspect for cleanup. JSON retains su
 
 ### reminder
 
-fetchloom never deletes from the cache on its own: freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when it is 1 GiB or more, says so once:
+fetchloom deletes nothing from the cache on its own, apart from a packed archive no project needs once its files are unpacked. freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when files gc would free total 1 GiB or more, says so once:
 
 ```text
   hint: the cache holds 3.2 GiB no project needs; `fetchloom cache gc` frees it

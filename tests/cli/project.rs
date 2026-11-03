@@ -133,6 +133,21 @@ fn add_pins_downloads_and_places_a_link() -> Result {
     Ok(())
 }
 
+#[test]
+fn no_hints_keeps_the_story_and_drops_the_hints() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_NO_HINTS", "1")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Added iris"), "{stderr}");
+    assert!(!stderr.contains("hint:"), "{stderr}");
+    Ok(())
+}
+
 /// after a change, a person at a terminal is told the usual next step. a pipe, `-q` and `--json`
 /// never are, so what scripts read stays the same.
 #[test]

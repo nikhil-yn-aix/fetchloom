@@ -199,7 +199,7 @@ impl Version {
                 format!("{dataset} restricts access to {}", restricted.join(", ")),
             )
             .help(format!(
-                "if you have access, sign in with `{command}` and run the same command again; otherwise request access on the dataset's page, or exclude those files with --exclude"
+                "if you have access, sign in with `{command}` and run the same command again; otherwise request access on the dataset's page"
             ))
             .needs(account, None));
         }

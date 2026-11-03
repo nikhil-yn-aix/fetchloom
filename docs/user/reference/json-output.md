@@ -101,7 +101,7 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 {"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
 
-for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes` and `leftovers` count what gc would delete and keep, and `not_removed` lists paths it could not inspect. `changes.remove` lists the absolute path of each object, unpack record, leftover and project registration gc would delete. a gc dry run returns `ok` even when `not_removed` is not empty.
+for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes` and `leftovers` count what gc would delete and keep, and `not_removed` lists paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 
 the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks` and `copies` stay 0.
 

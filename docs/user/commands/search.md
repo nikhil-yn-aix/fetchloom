@@ -41,7 +41,7 @@ fetchloom add iris
 fetchloom get "fashion mnist"
 ```
 
-`add` and `get` take one reference argument, so quote a multi-word search. extra bare words produce a usage error with a quote hint.
+a search must be the only argument, so quote a multi-word search. `get` takes several links, ids or DOIs, but no search words among them; extra bare words produce a usage error with a quote hint.
 
 with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns, and its last line says how to see more matches. up/down or j/k moves; enter selects the current row; 1-9 selects a numbered row. q or esc cancels with exit 2 and `usage`; ctrl-c exits 130. `--yes` approves downloads but never selects a dataset.
 

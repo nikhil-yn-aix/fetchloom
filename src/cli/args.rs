@@ -58,7 +58,7 @@ on disk: nothing. it reads data.toml and data.lock";
 
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
-  fetchloom path iris/iris.csv
+  fetchloom path iris/Iris.csv
   fetchloom path iris -q
 
 on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchloom sync` does";

@@ -253,7 +253,9 @@ pub(crate) fn run() -> ExitCode {
     let var = |name: &str| std::env::var_os(name);
     let style = Style::detect(global.color);
     let logs = logs::start(level, style.color, &var);
-    let mut context = Context::new(Output::new(style, level, global.json, logs.on_stderr()));
+    let output = Output::new(style, level, global.json, logs.on_stderr())
+        .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"));
+    let mut context = Context::new(output);
     if let Some(refused) = &logs.refused {
         context.output.warn(refused);
     }

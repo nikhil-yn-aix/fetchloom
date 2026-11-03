@@ -24,6 +24,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color even into a pipe or file, unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
 | `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. an entry it cannot read keeps its default and prints one warning |
+| `FETCHLOOM_NO_HINTS` | exactly `1` drops the `hint:` and `next:` lines that suggest a next step. warnings, errors and their `help:` stay |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
 | `AI_AGENT`, `VSCODE_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `ANTIGRAVITY_AGENT` | a value other than `0` or `false` marks a coding agent's command: no questions, automatic color or animated progress, as under `CI` |
@@ -47,8 +48,8 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 
 | account | where fetchloom looks, in order |
 |---|---|
-| hugging face | `HF_TOKEN`; the file `HF_TOKEN_PATH` names; `token` in `HF_HOME`; `huggingface/token` in `XDG_CACHE_HOME`; `~/.cache/huggingface/token`; the older `~/.huggingface/token` |
-| kaggle | `KAGGLE_API_TOKEN`, a key or a file holding one; `access_token` in `KAGGLE_CONFIG_DIR` or `~/.kaggle`; `KAGGLE_USERNAME` and `KAGGLE_KEY`; `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle` |
+| hugging face | `HF_TOKEN`; then one token file, as `huggingface_hub` picks it: the file `HF_TOKEN_PATH` names, else `token` in `HF_HOME`, else `huggingface/token` in `XDG_CACHE_HOME`, else `~/.cache/huggingface/token`; then the older `~/.huggingface/token` |
+| kaggle | `KAGGLE_API_TOKEN`, a key or a file holding one; `access_token` or `access_token.txt` in `~/.kaggle`, as kagglesdk reads it; `KAGGLE_USERNAME` and `KAGGLE_KEY`; `kaggle.json` in `KAGGLE_CONFIG_DIR` or `~/.kaggle` |
 | zenodo, figshare, osf | `ZENODO_TOKEN`, `FIGSHARE_TOKEN`, `OSF_TOKEN`; then a key saved by `fetchloom auth login` |
 | dataverse | `DATAVERSE_API_TOKEN` for the installation `DATAVERSE_URL` names, as pyDataverse reads them; then a key saved for that host |
 | a host's login | the `machine` entry for that host in `.netrc`, or the file `NETRC` names; on windows `_netrc` when `.netrc` does not exist. `default` entries are ignored |
