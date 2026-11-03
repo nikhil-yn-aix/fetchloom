@@ -286,6 +286,11 @@ pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
     kaggle::credentials(var)
 }
 
+/// where the kaggle CLI keeps `kaggle.json`.
+pub(crate) fn kaggle_folder(var: Var<'_>) -> Option<PathBuf> {
+    kaggle::config_folder(var)
+}
+
 /// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
 pub(crate) fn kaggle_pasted(secret: &str) -> Option<(&'static str, String)> {
     kaggle::pasted(secret)

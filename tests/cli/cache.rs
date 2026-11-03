@@ -478,6 +478,10 @@ fn gc_forgets_a_project_only_when_its_manifest_is_missing() -> Result {
     let registrations = sandbox.cache().join("projects");
     assert_eq!(fs::read_dir(&registrations)?.count(), 1);
     fs::remove_file(sandbox.work().join("data.toml"))?;
+    // a report changes nothing, since the manifest may only be on an unplugged drive
+    let output = sandbox.run(&["--json", "cache"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(fs::read_dir(&registrations)?.count(), 1);
     let output = sandbox.run(&["--json", "cache", "gc"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(fs::read_dir(registrations)?.count(), 0);

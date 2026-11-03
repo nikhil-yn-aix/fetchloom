@@ -145,6 +145,10 @@ pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
         .collect()
 }
 
+pub(super) fn config_folder(var: Var<'_>) -> Option<std::path::PathBuf> {
+    token::config_folder(var)
+}
+
 pub(super) fn pasted(secret: &str) -> Option<(&'static str, String)> {
     token::pasted(secret).map(|value| (HOST, value))
 }

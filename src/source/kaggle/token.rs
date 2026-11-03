@@ -75,7 +75,7 @@ fn legacy_key(var: Var<'_>) -> Option<(String, String)> {
 
 /// where the kaggle CLI keeps `kaggle.json`: `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux
 /// the kaggle folder of `XDG_CONFIG_HOME` when `~/.kaggle` does not exist.
-fn config_folder(var: Var<'_>) -> Option<PathBuf> {
+pub(super) fn config_folder(var: Var<'_>) -> Option<PathBuf> {
     if let Some(folder) = var("KAGGLE_CONFIG_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(folder));
     }

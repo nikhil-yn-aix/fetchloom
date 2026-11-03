@@ -316,13 +316,25 @@ impl Cache {
     }
 
     /// hashes every object on the requested threads, stopping between reads when asked.
+    #[cfg(test)]
     pub(crate) fn verify_with_stop(
         &self,
         threads: usize,
         progress: &(dyn Fn(u64) + Sync),
         stop: &Stop,
     ) -> Result<Checked, Error> {
-        let scan = self.scan_objects(stop)?;
+        self.verify_scanned(self.scan_objects(stop)?, threads, progress, stop)
+    }
+
+    /// hashes every object `scan` found, so a caller that sized a progress bar from the scan
+    /// does not walk the cache twice.
+    pub(crate) fn verify_scanned(
+        &self,
+        scan: Scan,
+        threads: usize,
+        progress: &(dyn Fn(u64) + Sync),
+        stop: &Stop,
+    ) -> Result<Checked, Error> {
         let objects = scan.objects;
         let next = AtomicUsize::new(0);
         let checked = Mutex::new(Checked {

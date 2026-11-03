@@ -205,6 +205,45 @@ fn kaggle_keys_are_found_in_the_kaggle_tools_order() {
     );
     let var = machine(root, &[("KAGGLE_API_TOKEN", "KGAT_env")]);
     assert_eq!(Account::Kaggle.find(&var).unwrap().secret, "KGAT_env");
+    let named = root.join("secrets/kaggle");
+    write(&named, "KGAT_named\n");
+    let named = named.to_str().unwrap();
+    let pairs = [("KAGGLE_API_TOKEN", named)];
+    let var = machine(root, &pairs);
+    assert_eq!(
+        Account::Kaggle.find(&var).unwrap().secret,
+        "KGAT_named",
+        "a variable naming a file is read as downloads read it"
+    );
+}
+
+#[test]
+fn auth_checks_a_kaggle_key_with_the_header_downloads_send() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    write(
+        &root.join(".kaggle/kaggle.json"),
+        r#"{"username":"ada","key":"legacy"}"#,
+    );
+    let var = machine(root, &[]);
+    let account = Account::Kaggle;
+    let checked = account.credential(&account.find(&var).unwrap()).unwrap();
+    let sent = crate::source::kaggle_credentials(&var);
+    assert_eq!(checked.value, sent[0].value);
+    assert!(checked.value.starts_with("Basic "));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auth_finds_kaggle_json_in_xdg_config_as_downloads_do() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path();
+    write(
+        &root.join(".config/kaggle/kaggle.json"),
+        r#"{"username":"ada","key":"legacy"}"#,
+    );
+    let found = Account::Kaggle.find(&machine(root, &[])).unwrap();
+    assert_eq!(found.secret, "legacy");
 }
 
 #[test]

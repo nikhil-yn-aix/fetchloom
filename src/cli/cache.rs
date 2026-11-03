@@ -29,7 +29,7 @@ pub(super) struct Info {
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
+    let (needed, projects) = needed_with(&cache, None, &context.stop, false)?;
     let scan = cache.scan_objects(&context.stop)?;
     if let Some(path) = scan.unreadable.first() {
         return Err(
@@ -110,7 +110,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     } else {
         open_cache()?
     };
-    let (needed, projects) = needed_with_stop(&cache, None, &context.stop)?;
+    let (needed, projects) = needed_with(&cache, None, &context.stop, true)?;
     let grace = if now {
         std::time::Duration::ZERO
     } else {
@@ -122,7 +122,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     }
     let output = &context.output;
     for path in &freed.not_removed {
-        output.warn(&format!("could not remove {}; close programs using it or check its permissions, then run the command again", path.display()));
+        output.warn(&format!("could not read or remove {}; close programs using it or check its permissions, then run the command again", path.display()));
     }
     let kept = kept(&freed);
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
@@ -158,7 +158,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
                 format!("cannot format the cache result: {err}"),
             )
         })?;
-        return Err(Error::new(Kind::LocalIo, format!("{} could not be removed from the cache", units::count(freed.not_removed.len() as u64, "item", "items")))
+        return Err(Error::new(Kind::LocalIo, format!("{} in the cache could not be read or removed", units::count(freed.not_removed.len() as u64, "item", "items")))
             .help("close programs using these paths or check their permissions, then run the command again")
             .with_result(result));
     }
@@ -242,12 +242,8 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
 
 pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let cache = open_cache()?;
-    let total: u64 = cache
-        .scan_objects(&context.stop)?
-        .objects
-        .iter()
-        .map(|object| object.size)
-        .sum();
+    let scan = cache.scan_objects(&context.stop)?;
+    let total: u64 = scan.objects.iter().map(|object| object.size).sum();
     let what = "cached data files";
     let bar = context.output.bar("Checking", what.to_owned());
     bar.start(Some(total), 0);
@@ -255,7 +251,8 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         .output
         .ticker("Checking", what.to_owned(), [Some(total)]);
     let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-    let checked = cache.verify_with_stop(
+    let checked = cache.verify_scanned(
+        scan,
         context.threads.limit(threads),
         &|bytes| {
             bar.advance(bytes);
@@ -424,26 +421,18 @@ pub(super) fn remind(context: &Context) {
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
     fs::File::create(marker)?.set_modified(now)
 }
-/// every object a registered project's data.lock, or `current`, needs, following each archive to
-/// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is
-/// forgotten. unreadable registrations, manifests and locks stop gc rather than lose protection.
+/// as [`needed_with`], keeping every registration: only `cache gc`, run on purpose, forgets.
 pub(super) fn needed(
     cache: &Cache,
     current: Option<&Lock>,
 ) -> Result<(Needed, Vec<PathBuf>), Error> {
-    needed_with_stop(cache, current, &Stop::default())
+    needed_with(cache, current, &Stop::default(), false)
 }
 
-fn needed_with_stop(
-    cache: &Cache,
-    current: Option<&Lock>,
-    stop: &Stop,
-) -> Result<(Needed, Vec<PathBuf>), Error> {
-    needed_with(cache, current, stop, true)
-}
-
-/// as [`needed`]; with `forget` false, a project whose data.toml is gone stays registered, as
-/// when its drive is only unplugged.
+/// every object a registered project's data.lock, or `current`, needs, following each archive to
+/// the files it unpacked to, and the projects still on disk. unreadable registrations, manifests
+/// and locks stop gc rather than lose protection. with `forget`, a project whose data.toml is
+/// gone is forgotten; otherwise it stays registered, as when its drive is only unplugged.
 fn needed_with(
     cache: &Cache,
     current: Option<&Lock>,

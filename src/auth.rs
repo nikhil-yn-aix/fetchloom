@@ -256,6 +256,11 @@ impl Account {
             ),
             Account::Kaggle => {
                 let (host, value) = crate::source::kaggle_pasted(token)?;
+                // a legacy key goes with its username, as downloads send it
+                let value = found
+                    .login
+                    .as_deref()
+                    .map_or(value, |login| basic(login, token));
                 (host.to_owned(), "authorization", value, false)
             }
             Account::Zenodo => (
@@ -376,6 +381,15 @@ impl Account {
                         .and_then(file)
                 }),
             Account::Kaggle => set("KAGGLE_API_TOKEN")
+                .and_then(|found| {
+                    // the variable may name a file holding the token, as kagglesdk reads it
+                    let path = PathBuf::from(&found.secret);
+                    if path.is_file() {
+                        file(path)
+                    } else {
+                        Some(found)
+                    }
+                })
                 .or_else(|| {
                     let folder = crate::source::home(var)?.join(".kaggle");
                     file(folder.join("access_token"))
@@ -389,7 +403,7 @@ impl Account {
                     })
                 })
                 .or_else(|| {
-                    let path = kaggle_folder(var)?.join("kaggle.json");
+                    let path = crate::source::kaggle_folder(var)?.join("kaggle.json");
                     let json: serde_json::Value =
                         serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
                     Some(Found {
@@ -432,8 +446,10 @@ impl Account {
             Account::HuggingFace => hf_file(var).map_or(Home::Store, Home::File),
             // the kaggle CLI reads kaggle.json from KAGGLE_CONFIG_DIR, but kagglesdk reads
             // access_token only from ~/.kaggle
-            Account::Kaggle if secret.trim_start().starts_with('{') => kaggle_folder(var)
-                .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json"))),
+            Account::Kaggle if secret.trim_start().starts_with('{') => {
+                crate::source::kaggle_folder(var)
+                    .map_or(Home::Store, |folder| Home::File(folder.join("kaggle.json")))
+            }
             Account::Kaggle => crate::source::home(var).map_or(Home::Store, |home| {
                 Home::File(home.join(".kaggle").join("access_token"))
             }),
@@ -532,14 +548,6 @@ pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
             crate::source::home(var)
                 .map(|home| home.join(".cache").join("huggingface").join("token"))
         })
-}
-
-/// where the kaggle tools keep their files: `KAGGLE_CONFIG_DIR`, else `~/.kaggle`.
-pub(crate) fn kaggle_folder(var: Var<'_>) -> Option<PathBuf> {
-    var("KAGGLE_CONFIG_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| crate::source::home(var).map(|home| home.join(".kaggle")))
 }
 
 fn clean_host(host: &str) -> String {
