@@ -378,18 +378,8 @@ pub(super) fn remind(context: &Context) {
         return;
     }
     let Ok(cache) = open_cache() else { return };
-    // a project out of reach, as on a drive not plugged in, still needs its bytes, and gc would
-    // forget it, so the number would mislead
-    let Ok(roots) = cache.registered_projects(&context.stop) else {
-        return;
-    };
-    if roots
-        .iter()
-        .any(|root| !Project { root: root.clone() }.manifest_path().is_file())
-    {
-        return;
-    }
-    let Ok((needed, _)) = needed_with(&cache, None, &context.stop, false) else {
+    // gc would forget a project out of reach, so the number would mislead
+    let Ok(Some(needed)) = needed_by_all(&cache, None, &context.stop) else {
         return;
     };
     let Ok(scan) = cache.scan_objects(&context.stop) else {
@@ -421,12 +411,22 @@ pub(super) fn remind(context: &Context) {
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
     fs::File::create(marker)?.set_modified(now)
 }
-/// as [`needed_with`], keeping every registration: only `cache gc`, run on purpose, forgets.
-pub(super) fn needed(
+/// as [`needed_with`], or none when a registered project is out of reach, as on a drive not
+/// plugged in: its lock cannot be read, so nothing it may need can be told apart. only
+/// `cache gc`, run on purpose, forgets such a project.
+pub(super) fn needed_by_all(
     cache: &Cache,
     current: Option<&Lock>,
-) -> Result<(Needed, Vec<PathBuf>), Error> {
-    needed_with(cache, current, &Stop::default(), false)
+    stop: &Stop,
+) -> Result<Option<Needed>, Error> {
+    let roots = cache.registered_projects(stop)?;
+    if roots
+        .into_iter()
+        .any(|root| !Project { root }.manifest_path().is_file())
+    {
+        return Ok(None);
+    }
+    Ok(Some(needed_with(cache, current, stop, false)?.0))
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to

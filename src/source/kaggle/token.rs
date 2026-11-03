@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::auth::{Found, Origin};
 use crate::source::Var;
 
 /// the legacy key in `kaggle.json`.
@@ -17,16 +18,18 @@ struct Key {
 /// the `authorization` value the kaggle CLI would send: an API token as a bearer token, else a
 /// legacy username and key as basic authentication.
 pub(super) fn find(var: Var<'_>) -> Option<String> {
-    if let Some(token) = api_token(var) {
-        return Some(format!("Bearer {token}"));
-    }
-    let (username, key) = legacy_key(var)?;
-    Some(format!(
-        "Basic {}",
-        crate::source::base64(format!("{username}:{key}").as_bytes())
-    ))
+    let found = locate(var)?;
+    Some(match &found.login {
+        Some(username) => crate::auth::basic(username, &found.secret),
+        None => format!("Bearer {}", found.secret),
+    })
 }
 
+/// the key the kaggle tools would use and where it is, so `fetchloom auth` shows and checks the
+/// key downloads send.
+pub(super) fn locate(var: Var<'_>) -> Option<Found> {
+    api_token(var).or_else(|| legacy_key(var))
+}
 /// the `authorization` value for a key a person pasted: the text of a `kaggle.json`, or a token.
 pub(super) fn pasted(secret: &str) -> Option<String> {
     let secret = clean(secret)?;
@@ -44,35 +47,60 @@ pub(super) fn pasted(secret: &str) -> Option<String> {
 }
 
 /// `KAGGLE_API_TOKEN`, which holds a token or names a file holding one, else `access_token` or
-/// `access_token.txt` in `~/.kaggle`.
-fn api_token(var: Var<'_>) -> Option<String> {
+/// `access_token.txt` in `~/.kaggle`, as kagglesdk reads them. a variable that is set but holds
+/// nothing usable leaves only the legacy key, as in kagglesdk.
+fn api_token(var: Var<'_>) -> Option<Found> {
     if let Some(value) = var("KAGGLE_API_TOKEN").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(&value);
         if path.is_file() {
-            return read(&path);
+            return read(&path).map(|secret| token(Origin::File(path), secret));
         }
-        return value.to_str().and_then(clean);
+        return value
+            .to_str()
+            .and_then(clean)
+            .map(|secret| token(Origin::Variable("KAGGLE_API_TOKEN"), secret));
     }
     let folder = crate::source::home(var)?.join(".kaggle");
-    read(&folder.join("access_token")).or_else(|| read(&folder.join("access_token.txt")))
+    ["access_token", "access_token.txt"]
+        .into_iter()
+        .find_map(|name| {
+            let path = folder.join(name);
+            read(&path).map(|secret| token(Origin::File(path), secret))
+        })
 }
 
-/// `KAGGLE_USERNAME` and `KAGGLE_KEY`, each over the same field of `kaggle.json`.
-fn legacy_key(var: Var<'_>) -> Option<(String, String)> {
+fn token(origin: Origin, secret: String) -> Found {
+    Found {
+        origin,
+        secret,
+        login: None,
+    }
+}
+
+/// `KAGGLE_USERNAME` and `KAGGLE_KEY`, each over the same field of `kaggle.json`. both are needed.
+fn legacy_key(var: Var<'_>) -> Option<Found> {
     let set = |name: &str| {
         var(name)
             .and_then(|value| value.into_string().ok())
             .and_then(|value| clean(&value))
     };
-    let file: Key = config_folder(var)
-        .and_then(|folder| fs::read_to_string(folder.join("kaggle.json")).ok())
+    let path = config_folder(var).map(|folder| folder.join("kaggle.json"));
+    let file: Key = path
+        .as_ref()
+        .and_then(|path| fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default();
     let username = set("KAGGLE_USERNAME").or_else(|| file.username.as_deref().and_then(clean))?;
-    let key = set("KAGGLE_KEY").or_else(|| file.key.as_deref().and_then(clean))?;
-    Some((username, key))
+    let (secret, origin) = match set("KAGGLE_KEY") {
+        Some(key) => (key, Origin::Variable("KAGGLE_KEY")),
+        None => (file.key.as_deref().and_then(clean)?, Origin::File(path?)),
+    };
+    Some(Found {
+        origin,
+        secret,
+        login: Some(username),
+    })
 }
-
 /// where the kaggle CLI keeps `kaggle.json`: `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux
 /// the kaggle folder of `XDG_CONFIG_HOME` when `~/.kaggle` does not exist.
 pub(super) fn config_folder(var: Var<'_>) -> Option<PathBuf> {

@@ -286,6 +286,11 @@ pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
     kaggle::credentials(var)
 }
 
+/// the kaggle key downloads send, and where it was found.
+pub(crate) fn kaggle_key(var: Var<'_>) -> Option<crate::auth::Found> {
+    kaggle::locate(var)
+}
+
 /// where the kaggle CLI keeps `kaggle.json`.
 pub(crate) fn kaggle_folder(var: Var<'_>) -> Option<PathBuf> {
     kaggle::config_folder(var)

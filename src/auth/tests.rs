@@ -231,12 +231,45 @@ fn auth_checks_a_kaggle_key_with_the_header_downloads_send() {
         &root.join(".kaggle/kaggle.json"),
         r#"{"username":"ada","key":"legacy"}"#,
     );
-    let var = machine(root, &[]);
-    let account = Account::Kaggle;
-    let checked = account.credential(&account.find(&var).unwrap()).unwrap();
-    let sent = crate::source::kaggle_credentials(&var);
-    assert_eq!(checked.value, sent[0].value);
-    assert!(checked.value.starts_with("Basic "));
+    let checked = |pairs: &[(&str, &str)]| {
+        let var = machine(root, pairs);
+        let account = Account::Kaggle;
+        let checked = account
+            .find(&var)
+            .and_then(|found| account.credential(&found))
+            .map(|credential| credential.value);
+        let sent = crate::source::kaggle_credentials(&var)
+            .into_iter()
+            .next()
+            .map(|credential| credential.value);
+        assert_eq!(checked, sent, "{pairs:?}");
+        checked
+    };
+    assert_eq!(checked(&[]), Some(basic("ada", "legacy")));
+    // one field from the environment, the other from kaggle.json, as the kaggle CLI merges them
+    assert_eq!(
+        checked(&[("KAGGLE_KEY", "override")]),
+        Some(basic("ada", "override"))
+    );
+    assert_eq!(
+        checked(&[("KAGGLE_USERNAME", "grace")]),
+        Some(basic("grace", "legacy"))
+    );
+    let empty = root.join("empty-token");
+    write(&empty, "  \n");
+    write(&root.join(".kaggle/access_token"), "KGAT_home");
+    // a variable naming an empty file leaves only the legacy key, never the home token
+    assert_eq!(
+        checked(&[("KAGGLE_API_TOKEN", empty.to_str().unwrap())]),
+        Some(basic("ada", "legacy"))
+    );
+    let nowhere = tempfile::tempdir().unwrap();
+    let var = machine(nowhere.path(), &[("KAGGLE_KEY", "alone")]);
+    assert!(
+        Account::Kaggle.find(&var).is_none(),
+        "a key needs its username"
+    );
+    assert!(crate::source::kaggle_credentials(&var).is_empty());
 }
 
 #[cfg(target_os = "linux")]

@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
 
 use super::super::Context;
-use super::super::cache::needed;
+use super::super::cache::needed_by_all;
 use super::draft::Draft;
 use super::{Loop, job};
 use crate::archive::{self, Unpacked};
@@ -119,13 +119,18 @@ pub(in crate::cli) async fn unpack_all(
 }
 
 /// drops each archive's own bytes from the cache, now that its files are in, unless a project on
-/// this machine, or `current`, still needs them. when a lock cannot be read, nothing is dropped.
+/// this machine, or `current`, still needs them. when a project is out of reach or a lock cannot
+/// be read, nothing is dropped.
 pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current: Option<&Lock>) {
     if archives.is_empty() {
         return;
     }
-    let needed = match needed(cache, current) {
-        Ok((needed, _)) => needed,
+    let needed = match needed_by_all(cache, current, &crate::stop::Stop::default()) {
+        Ok(Some(needed)) => needed,
+        Ok(None) => {
+            tracing::debug!("kept unpacked archives, since a registered project is out of reach");
+            return;
+        }
         Err(err) => {
             tracing::debug!(err = %err.message, "kept unpacked archives, since a lock could not be read");
             return;
@@ -481,5 +486,20 @@ mod tests {
             std::fs::read(cache.object_path(&archive.digest)).unwrap(),
             b"keep me until the lock can be read"
         );
+    }
+
+    #[test]
+    fn a_project_out_of_reach_keeps_all_unpacked_archives_and_its_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        // registered, but its data.toml is gone, as on a drive not plugged in
+        let root = dir.path().join("unplugged");
+        std::fs::create_dir(&root).unwrap();
+        cache.register(&root).unwrap();
+        let archive = store(&cache, b"the unplugged project may need me");
+        drop_archives(&cache, &[archive.digest], None);
+        assert!(cache.find(&archive.digest, None).is_some());
+        let registered = cache.registered_projects(&crate::stop::Stop::default());
+        assert_eq!(registered.unwrap().len(), 1);
     }
 }

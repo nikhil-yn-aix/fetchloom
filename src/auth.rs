@@ -380,38 +380,7 @@ impl Account {
                         .map(|home| home.join(".huggingface").join("token"))
                         .and_then(file)
                 }),
-            Account::Kaggle => set("KAGGLE_API_TOKEN")
-                .and_then(|found| {
-                    // the variable may name a file holding the token, as kagglesdk reads it
-                    let path = PathBuf::from(&found.secret);
-                    if path.is_file() {
-                        file(path)
-                    } else {
-                        Some(found)
-                    }
-                })
-                .or_else(|| {
-                    let folder = crate::source::home(var)?.join(".kaggle");
-                    file(folder.join("access_token"))
-                        .or_else(|| file(folder.join("access_token.txt")))
-                })
-                .or_else(|| {
-                    let key = set("KAGGLE_KEY")?;
-                    Some(Found {
-                        login: set("KAGGLE_USERNAME").map(|found| found.secret),
-                        ..key
-                    })
-                })
-                .or_else(|| {
-                    let path = crate::source::kaggle_folder(var)?.join("kaggle.json");
-                    let json: serde_json::Value =
-                        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
-                    Some(Found {
-                        origin: Origin::File(path),
-                        secret: text(&json["key"])?,
-                        login: text(&json["username"]),
-                    })
-                }),
+            Account::Kaggle => crate::source::kaggle_key(var),
             Account::Zenodo => set("ZENODO_TOKEN").or_else(|| stored(&self.id())),
             Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
             Account::Osf => set("OSF_TOKEN").or_else(|| stored(&self.id())),

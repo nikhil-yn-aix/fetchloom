@@ -149,6 +149,10 @@ pub(super) fn config_folder(var: Var<'_>) -> Option<std::path::PathBuf> {
     token::config_folder(var)
 }
 
+pub(super) fn locate(var: Var<'_>) -> Option<crate::auth::Found> {
+    token::locate(var)
+}
+
 pub(super) fn pasted(secret: &str) -> Option<(&'static str, String)> {
     token::pasted(secret).map(|value| (HOST, value))
 }
