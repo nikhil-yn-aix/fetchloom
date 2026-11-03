@@ -501,6 +501,22 @@ mod tests {
         assert!(Project::find(&tempfile::tempdir().unwrap().path().join("x")).is_none());
     }
 
+    /// `hold_at`, waiting out `Busy`: a test spawning a process at that moment shares the open
+    /// lock file until its child runs its program, and a unix file lock lasts as long as any
+    /// process holds that file. fetchloom spawns nothing while it holds a project, so only the
+    /// tests wait it out.
+    fn waiting(project: &Project, command: &str, now: SystemTime) -> Hold {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match project.hold_at(command, now).unwrap() {
+                Hold::Busy if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                hold => return hold,
+            }
+        }
+    }
+
     #[test]
     fn one_command_changes_the_project_at_a_time() {
         let (_dir, project) = project(&[("data.toml", "")]);
@@ -509,20 +525,10 @@ mod tests {
         };
         assert!(matches!(project.hold("sync").unwrap(), Hold::Busy));
         drop(held);
-        // a test spawning a process at this moment shares the open lock file until its child
-        // runs its program, and a unix file lock lasts as long as any process holds that file.
-        // fetchloom spawns nothing while it holds a project, so only the tests wait it out
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let freed = loop {
-            match project.hold("sync").unwrap() {
-                Hold::Held(_) => break true,
-                Hold::Busy if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                _ => break false,
-            }
-        };
-        assert!(freed, "the lock is free once its holder is dropped");
+        assert!(
+            matches!(waiting(&project, "sync", SystemTime::now()), Hold::Held(_)),
+            "the lock is free once its holder is dropped"
+        );
         assert_eq!(
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
@@ -618,7 +624,7 @@ mod tests {
         fs::write(&path, &record).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let now = modified + Duration::from_hours(24);
-        let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
+        let Hold::Owner(message) = waiting(&project, "remove", now) else {
             panic!("another os owns the project")
         };
         assert_eq!(
@@ -639,7 +645,7 @@ mod tests {
         let path = project.own_folder().join("owner");
         fs::write(&path, owner_record(std::env::consts::OS)).unwrap();
         let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234);
-        let Hold::Held(held) = project.hold_at("remove", now).unwrap() else {
+        let Hold::Held(held) = waiting(&project, "remove", now) else {
             panic!("the os lock proves this owner is stale")
         };
         assert!(held.lock.is_some());
@@ -674,7 +680,7 @@ mod tests {
         let path = project.own_folder().join("owner");
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let now = modified + std::time::Duration::from_secs(11);
-        let Hold::Held(_held) = project.hold_at("sync", now).unwrap() else {
+        let Hold::Held(_held) = waiting(&project, "sync", now) else {
             panic!("an old empty owner is stale")
         };
         let owner: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
@@ -691,10 +697,7 @@ mod tests {
             modified,
             modified + std::time::Duration::from_secs(10),
         ] {
-            assert!(matches!(
-                project.hold_at("sync", now).unwrap(),
-                Hold::Owner(_)
-            ));
+            assert!(matches!(waiting(&project, "sync", now), Hold::Owner(_)));
             assert_eq!(fs::read(&path).unwrap(), b"");
         }
     }
@@ -705,7 +708,7 @@ mod tests {
         let path = project.own_folder().join("owner");
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let now = modified + std::time::Duration::from_secs(60);
-        let Hold::Owner(message) = project.hold_at("sync", now).unwrap() else {
+        let Hold::Owner(message) = waiting(&project, "sync", now) else {
             panic!("an invalid nonempty owner needs manual recovery")
         };
         assert!(message.contains(&path.display().to_string()));
