@@ -45,7 +45,7 @@ stderr for a single-file addition, matching a test snapshot:
 
 commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rules](../reference/data-toml.md). a zenodo file-page link selects that file unless you supply `--select`.
 
-adding an existing reference with identical filters and extraction settings syncs it without another entry. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
+adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. if restoration fails, the error supplies recovery steps and the previous contents as JSON strings to decode into the named files. cached downloads and files already placed are not rolled back.
 

@@ -661,6 +661,25 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
 }
 
 #[test]
+fn adding_again_after_git_init_ignores_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    assert!(sandbox.run(&["add", &server.url])?.status.success());
+    assert!(!sandbox.work().join(".gitignore").exists());
+    fs::create_dir(sandbox.work().join(".git"))?;
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("Ignored data/ in .gitignore"), "{stderr}");
+    assert!(stderr.contains("iris is already in data.toml"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        "/data/\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_pattern_that_matches_nothing_explains_why_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

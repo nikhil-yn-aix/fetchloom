@@ -69,7 +69,7 @@ fetchloom searches hugging face, kaggle and zenodo for iris and shows a list. mo
 fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 ```
 
-either way, it prints:
+either way, it ends with:
 
 ```text
    Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
@@ -84,7 +84,7 @@ the folder now holds:
 |---|---|
 | `data.toml` | the datasets this project wants, one entry named `iris` |
 | `data.lock` | the exact files, with their sizes and SHA-256 fingerprints |
-| `data/iris/Iris.csv` | the data itself, with the dataset's readme, read-only so you cannot change it by accident |
+| `data/iris/Iris.csv` | the table, next to the other files the dataset ships, all read-only so you cannot change them by accident |
 | `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
 
 the downloaded bytes also live once in a shared cache, so another project that needs iris gets it without a second download. [concepts](concepts.md) explains the cache and how files are placed.

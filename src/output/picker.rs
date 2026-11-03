@@ -16,51 +16,89 @@ pub(super) fn choose(
         return Err(cancelled());
     }
     let terminal = Term::stderr();
-    let width = usize::from(terminal.size().1);
+    let escapes = escapes();
     let _ = terminal.hide_cursor();
     let mut cursor = 0;
     let mut shown = 0;
-    show(
-        &terminal,
-        &frame(question, options, footer, cursor, style, width),
-        &mut shown,
-    );
+    let draw = |cursor: usize, shown: &mut usize| {
+        let width = usize::from(terminal.size().1);
+        let lines = frame(question, options, footer, cursor, style, width);
+        show(&terminal, &lines, shown, width, escapes);
+    };
+    draw(cursor, &mut shown);
     let answer = loop {
         let previous = cursor;
         match selection_key(terminal.read_key_raw(), &mut cursor, options.len()) {
             Ok(None) => {
                 if previous != cursor {
-                    let lines = frame(question, options, footer, cursor, style, width);
-                    show(&terminal, &lines, &mut shown);
+                    draw(cursor, &mut shown);
                 }
             }
             answer => break answer,
         }
     };
-    // up to the first line, then clear to the end of the screen, in one write
-    let _ = terminal.write_str(&format!("\x1b[{shown}A\r\x1b[0J"));
+    wipe(&terminal, shown, escapes);
     let _ = terminal.show_cursor();
     answer
 }
 
-/// writes `lines` over the `shown` lines drawn before, as one write that replaces each line in
-/// place. clearing every line and then drawing again is what makes a picker flicker.
-fn show(terminal: &Term, lines: &[String], shown: &mut usize) {
-    let mut text = if *shown > 0 {
-        format!("\x1b[{shown}A")
-    } else {
-        String::new()
-    };
-    for line in lines {
-        text.push_str("\r\x1b[2K");
-        text.push_str(line);
-        text.push('\n');
+/// whether stderr reads cursor escape codes. a windows console reads them only once asked to;
+/// when that fails, console's own cursor calls still work.
+fn escapes() -> bool {
+    #[cfg(windows)]
+    {
+        anstyle_query::windows::enable_ansi_colors() == Some(true)
     }
-    let _ = terminal.write_str(&text);
-    let _ = terminal.flush();
-    *shown = lines.len();
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }
 
+/// draws `lines` over the `shown` rows drawn before, in one write: clearing and drawing in
+/// separate writes is what makes a picker flicker.
+fn show(terminal: &Term, lines: &[String], shown: &mut usize, width: usize, escapes: bool) {
+    if escapes {
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        let _ = terminal.write_str(&(back(*shown) + &text));
+        let _ = terminal.flush();
+    } else {
+        wipe(terminal, *shown, false);
+        for line in lines {
+            let _ = terminal.write_line(line);
+        }
+    }
+    *shown = lines.iter().map(|line| rows(line, width)).sum();
+}
+
+/// moves up to the first of `shown` rows and clears from there to the end of the screen.
+fn wipe(terminal: &Term, shown: usize, escapes: bool) {
+    if escapes {
+        let _ = terminal.write_str(&back(shown));
+        let _ = terminal.flush();
+    } else {
+        let _ = terminal.clear_last_lines(shown);
+    }
+}
+
+fn back(shown: usize) -> String {
+    if shown == 0 {
+        String::new()
+    } else {
+        format!("\x1b[{shown}A\r\x1b[0J")
+    }
+}
+
+/// the screen rows a line takes, since a line wider than the terminal wraps.
+fn rows(line: &str, width: usize) -> usize {
+    console::measure_text_width(line)
+        .div_ceil(width.max(1))
+        .max(1)
+}
 /// the picker's lines: the question with its keys, a row for each option, then the footer.
 fn frame(
     question: &str,
@@ -268,6 +306,17 @@ mod tests {
                 Kind::Interrupted
             );
         }
+    }
+
+    #[test]
+    fn a_line_wider_than_the_terminal_counts_every_row_it_wraps_onto() {
+        assert_eq!(rows("", 80), 1);
+        assert_eq!(rows(&"x".repeat(80), 80), 1);
+        assert_eq!(rows(&"x".repeat(81), 80), 2);
+        assert_eq!(rows("\x1b[1mbold\x1b[0m", 4), 1);
+        assert_eq!(rows("abc", 0), 3);
+        assert_eq!(back(0), "");
+        assert_eq!(back(3), "\x1b[3A\r\x1b[0J");
     }
 
     #[test]

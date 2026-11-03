@@ -252,15 +252,7 @@ async fn preview_add(
     let given = Some((name.clone(), listing));
     let (lock_changed, preview) = preview_all(work, manifest, old, false, given, None).await?;
     let output = &work.context.output;
-    if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
-        output.step(
-            "Would add",
-            &format!(
-                "{}/ to .gitignore, since its files come from data.lock",
-                manifest.data_dir
-            ),
-        );
-    }
+    preview_ignore(work, manifest)?;
     output.step(
         "Would add",
         &format!(
@@ -299,6 +291,24 @@ async fn sync_add(
 }
 
 fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+    ignore_data(work, manifest)?;
+    tell_added(work, manifest, name)
+}
+
+fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
+    if work.project.ignored_in_git(&manifest.data_dir)?.is_some() {
+        work.context.output.step(
+            "Would add",
+            &format!(
+                "{}/ to .gitignore, since its files come from data.lock",
+                manifest.data_dir
+            ),
+        );
+    }
+    Ok(())
+}
+
+fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
     if work.project.ignore_in_git(&manifest.data_dir)? {
         work.context.output.step(
             "Ignored",
@@ -308,7 +318,7 @@ fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
             ),
         );
     }
-    tell_added(work, manifest, name)
+    Ok(())
 }
 
 /// restores both project files after a failed add, including their original absence.
@@ -413,6 +423,7 @@ async fn again(
     }
     if dry_run {
         let (lock_changed, preview) = preview_all(work, manifest, old, false, None, None).await?;
+        preview_ignore(work, manifest)?;
         dry_run_done(
             &work.context.output,
             Some(&format!("{name} is already in data.toml")),
@@ -426,6 +437,8 @@ async fn again(
     }
     let (lock_changed, placement) =
         sync_all(work, manifest, old, &Upgrade::Nothing, false, None, None).await?;
+    // a project that became a git repository after its first add gets its ignore rule now
+    ignore_data(work, manifest)?;
     let contents = if has_files(work, manifest, name)? {
         format!("its files are in {}", plan::folder(manifest, name))
     } else {
