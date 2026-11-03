@@ -125,6 +125,18 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
         );
     }
     if let Some(text) = topic_text(topic) {
+        // under --json, stdout is one document, so a text topic arrives as one too
+        if context.output.json() {
+            return finish(
+                context,
+                Some("help"),
+                Ok(Topic {
+                    topic: topic.join(" "),
+                    text,
+                }),
+                started,
+            );
+        }
         crate::output::help(text, args::color());
         return ExitCode::SUCCESS;
     }
@@ -138,6 +150,13 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
         }
         _ => finish::<()>(context, None, Err(unknown(topic)), started),
     }
+}
+
+/// what `fetchloom help <topic> --json` returns for a topic that is text, such as concepts.
+#[derive(Serialize)]
+struct Topic {
+    topic: String,
+    text: &'static str,
 }
 
 /// what `fetchloom help --json` returns.

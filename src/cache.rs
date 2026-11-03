@@ -108,12 +108,16 @@ impl Cache {
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
         let _span = tracing::debug_span!("open_cache").entered();
         #[cfg(unix)]
-        {
+        if !root.exists() {
             use std::os::unix::fs::DirBuilderExt;
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&root)?;
+            if let Some(parent) = root.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            // only the cache's own folder: parents, as a team's shared folder, keep the umask
+            match fs::DirBuilder::new().mode(0o700).create(&root) {
+                Err(err) if err.kind() != io::ErrorKind::AlreadyExists => return Err(err),
+                _ => {}
+            }
         }
         #[cfg(not(unix))]
         fs::create_dir_all(&root)?;

@@ -118,8 +118,8 @@ case ":$PATH:" in
         ;;
     *)
         if [ "${FETCHLOOM_NO_MODIFY_PATH:-}" = 1 ]; then
-            echo " is not on PATH, and FETCHLOOM_NO_MODIFY_PATH=1 left your shell profiles alone"
-            echo "next: add  to PATH, then run fetchloom to see the first steps"
+            echo "$bin_dir is not on PATH, and FETCHLOOM_NO_MODIFY_PATH=1 left your shell profiles alone"
+            echo "next: add $bin_dir to PATH, then run fetchloom to see the first steps"
             exit 0
         fi
         # shellcheck disable=SC2016

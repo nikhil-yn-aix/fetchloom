@@ -45,7 +45,7 @@ warning: iris is inside onedrive, which breaks links, so the file was copied. a 
 
 use a project folder outside synced storage if you want fetchloom to try hardlinks. a copied file still has the same pinned bytes. [placement](concepts.md#placement) explains the order and writable-copy setting.
 
-do not make a managed hardlink writable to edit it. set `copy = true` on the dataset and sync. windows may not expose another project's hardlink edit until that project syncs, cache verification runs, or `sync --force` reads each hardlink by name.
+do not make a managed hardlink writable to edit it. set `copy = true` on the dataset and sync. an edit made through another project's hardlink shows at once: `status` and `sync` open each hardlinked file to read it as it is, since a windows folder listing can keep the old size and time.
 
 ## red text in windows powershell
 

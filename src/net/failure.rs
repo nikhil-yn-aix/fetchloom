@@ -191,16 +191,22 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
                 .help("check the link for a typo, and that this machine is online"),
             );
         }
-        // a certificate the system does not trust fails the same way on every try
-        if current
-            .to_string()
-            .to_ascii_lowercase()
-            .contains("certificate")
-        {
+        // a certificate the system does not trust fails the same way on every try. matched by
+        // type: the text of the outer error holds the link, which may well say "certificate"
+        let untrusted = current
+            .downcast_ref::<rustls::Error>()
+            .or_else(|| {
+                current
+                    .downcast_ref::<std::io::Error>()
+                    .and_then(|io| io.get_ref())
+                    .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+            })
+            .filter(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)));
+        if let Some(tls) = untrusted {
             return Failure::Final(
                 Error::new(
                     Kind::NetworkUnreachable,
-                    format!("{} sent a certificate this machine does not trust: {current}", host(url)),
+                    format!("{} sent a certificate this machine does not trust: {tls}", host(url)),
                 )
                 .help("check the link and this machine's clock. behind a company proxy that inspects https, its certificate belongs in the system's certificate store"),
             );

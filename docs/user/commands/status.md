@@ -59,6 +59,6 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 | symptom | cause | fix |
 |---|---|---|
 | exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON |
-| a shared edit is not yet visible on windows | another project's hardlink change has not been detected | sync that project or run `cache verify`; use writable copies for edits |
+| a file shows as edited that you did not touch | another project edited the hardlink you share | `sync --force` puts the original back; use `copy = true` on datasets you edit |
 | fewer paths appear in the terminal | human categories are limited to 20 paths | use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |

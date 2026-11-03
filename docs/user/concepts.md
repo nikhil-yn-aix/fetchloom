@@ -30,7 +30,7 @@ source checksum support covers MD5 and SHA-256. a known SHA-256 and size can all
 
 the cache is local and content-addressed: objects are named by SHA-256. projects reuse the same bytes rather than downloading a separate copy for each project.
 
-one user's processes can share it. on shared machines, give each user their own cache. a group-writable cache is suitable only among trusted users, with permissions managed through umask or ACLs; fetchloom has no cross-user administration or group-permission layer. use `copy = true` for students or jobs that edit inputs.
+one user's processes can share it. on shared machines, give each user their own cache. a cache folder fetchloom creates itself on linux and macos is readable by you only. a group-writable cache is suitable only among trusted users: create its folder first with the group permissions you want, or set them with ACLs, and fetchloom keeps them. fetchloom has no cross-user administration or group-permission layer. use `copy = true` for students or jobs that edit inputs.
 
 successful project sync registers its root for garbage collection. `get` and standalone `lock` do not. [cache commands](commands/cache.md) covers retention, verification and cleanup; [cache folder](reference/cache-folder.md) covers locations and records.
 

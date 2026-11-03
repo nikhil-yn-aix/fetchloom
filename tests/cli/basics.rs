@@ -100,7 +100,6 @@ fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
         (&[][..], false),
         (&["help", "concepts", "--color", "always"][..], true),
         (&["help", "concepts", "--color", "never"][..], false),
-        (&["help", "concepts", "--json"][..], false),
     ] {
         let output = sandbox
             .command(arguments)
@@ -339,11 +338,18 @@ fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
     for line in ANALOGY {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
-    assert_eq!(
-        sandbox.run(&["--json", "help", "concepts"])?.stdout,
-        output.stdout,
-        "help stays text"
-    );
+    // under --json a text topic is one document like every other answer, with no ANSI even when
+    // color is forced
+    for topic in ["concepts", "environment", "exit-codes"] {
+        let json = sandbox
+            .command(&["--json", "help", topic])
+            .env("CLICOLOR_FORCE", "1")
+            .output()?;
+        let document: Value = serde_json::from_slice(&json.stdout)?;
+        assert_eq!(document["command"], "help", "{topic}");
+        assert_eq!(document["result"]["topic"], topic);
+        assert!(!json.stdout.contains(&0x1b), "{topic}");
+    }
     insta::assert_snapshot!(stdout);
     Ok(())
 }

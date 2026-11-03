@@ -12,11 +12,11 @@ fetchloom cache gc
 
 | platform | default root |
 |---|---|
-| linux | `$XDG_CACHE_HOME/fetchloom`, else `$HOME/.cache/fetchloom` |
+| linux | `$XDG_CACHE_HOME/fetchloom` when that is an absolute path, else `$HOME/.cache/fetchloom` |
 | macos | `$HOME/Library/Caches/fetchloom` |
 | windows | `%LOCALAPPDATA%\fetchloom` |
 
-nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`.
+nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working directory after `-C`. on linux and macos, a cache folder fetchloom creates is readable by you only; one that already exists keeps its permissions.
 
 ```text
 <cache>/
@@ -50,7 +50,7 @@ random names use 16 hexadecimal digits. older loose `.new` files still use the a
 
 ## URL and partial records
 
-`urls/` records are JSON written for revalidated, unpinned URLs. gc removes a record once its object is gone:
+`urls/` records are JSON written for revalidated, unpinned URLs. gc removes a record once neither its object nor the record of what it unpacked to is left:
 
 | field | value |
 |---|---|

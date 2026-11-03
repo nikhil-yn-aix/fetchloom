@@ -635,16 +635,18 @@ pub(crate) fn wrap_help(text: &str, width: usize) -> String {
         }
         // a row: the description starts after the last run of two or more spaces in its first
         // part, as in `  -o, --output <dir>       put the download in <dir>`
+        // byte offsets for slicing, character counts for columns, since a name may not be ascii
         let indent = line.len() - line.trim_start().len();
-        let column = line[indent..]
+        let split = line[indent..]
             .find("  ")
             .map(|gap| {
                 let after = &line[indent + gap..];
                 indent + gap + (after.len() - after.trim_start().len())
             })
-            .filter(|column| *column < width / 2)
+            .filter(|split| line[..*split].chars().count() < width / 2)
             .unwrap_or(indent);
-        let (head, body) = line.split_at(column);
+        let (head, body) = line.split_at(split);
+        let column = head.chars().count();
         let mut current = head.to_owned();
         let fresh = column;
         for word in body.split(' ').filter(|word| !word.is_empty()) {
@@ -952,6 +954,28 @@ mod tests {
         assert_eq!(
             wrapped,
             "options:\n  -o, --output <dir>  put the download in <dir> instead of a\n                      new folder named after it\n\nexamples:\n  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom"
+        );
+        // prose wraps flush, one-letter words keep their spaces, and nothing is lost
+        let prose = "a b c d e f g h i j k l m n o p q r s t u v w x y z a b c d e f g h";
+        let wrapped = super::wrap_help(prose, 20);
+        assert!(
+            wrapped.lines().all(|line| line.chars().count() <= 20),
+            "{wrapped}"
+        );
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>().join(" "),
+            prose
+        );
+        // a name that is not ascii still lines its description up by characters
+        let row = "  --données  une description assez longue pour passer à la ligne suivante";
+        let wrapped = super::wrap_help(row, 40);
+        let column = wrapped.lines().next().unwrap().find("une").unwrap();
+        let first = &wrapped.lines().next().unwrap()[..column];
+        assert!(
+            wrapped.lines().skip(1).all(|line| {
+                line.chars().take_while(|c| *c == ' ').count() == first.chars().count()
+            }),
+            "{wrapped}"
         );
     }
 
