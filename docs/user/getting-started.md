@@ -132,7 +132,22 @@ the shared cache still holds the bytes. `fetchloom cache gc` frees bytes no proj
 fetchloom cache gc --now
 ```
 
-to remove the whole project, delete its folder. to uninstall fetchloom, run `cargo uninstall fetchloom`, then delete the cache folder listed in [cache folder](reference/cache-folder.md#location).
+to remove the whole project, delete its folder.
+
+## uninstall
+
+1. sign out of anything you signed in to with fetchloom, if you want those keys gone too: `fetchloom auth` lists them, and `fetchloom auth logout <account>` removes one. keys you saved with a source's own tools, such as `~/.kaggle` or the hugging face token, are shared with those tools.
+2. delete the cache folder: `%LOCALAPPDATA%\fetchloom` on windows, `~/Library/Caches/fetchloom` on macos, `~/.cache/fetchloom` on linux, or wherever `FETCHLOOM_CACHE` points.
+3. remove the program, the way you installed it:
+
+| installed with | remove with |
+|---|---|
+| `cargo install` | `cargo uninstall fetchloom` |
+| `pip install fetchloom` | `pip uninstall fetchloom` |
+| `install.sh` | `rm ~/.local/bin/fetchloom`, and the line marked `# added by the fetchloom installer` in your shell profiles |
+| `install.ps1` | delete `%LOCALAPPDATA%\Programs\fetchloom`, and that folder's `bin` from your user PATH in the environment variables settings |
+
+projects keep their `data.toml`, `data.lock` and `data/`; delete them with the project.
 
 ## next
 

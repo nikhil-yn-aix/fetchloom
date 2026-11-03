@@ -6,6 +6,7 @@
 #   curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh -s -- 0.1.0
 #
 # the version is the first argument, else FETCHLOOM_VERSION, else the latest release.
+# FETCHLOOM_NO_MODIFY_PATH=1 leaves your shell profiles alone.
 # FETCHLOOM_DOWNLOAD_URL names a folder that holds a release's files, for testing.
 
 set -eu
@@ -106,12 +107,8 @@ fi
 
 tar -xzf "$work/$asset" -C "$work"
 folder=$work/${asset%.tar.gz}
-for name in fetchloom; do
-    [ -f "$folder/$name" ] || fail "$asset holds no $name. nothing was installed"
-done
-for name in fetchloom; do
-    mv -f "$folder/$name" "$bin_dir/$name"
-done
+[ -f "$folder/fetchloom" ] || fail "$asset holds no fetchloom. nothing was installed"
+mv -f "$folder/fetchloom" "$bin_dir/fetchloom"
 installed=$("$bin_dir/fetchloom" --version)
 echo "installed $installed in $bin_dir"
 
@@ -120,6 +117,11 @@ case ":$PATH:" in
         echo "next: run fetchloom to see the first steps"
         ;;
     *)
+        if [ "${FETCHLOOM_NO_MODIFY_PATH:-}" = 1 ]; then
+            echo " is not on PATH, and FETCHLOOM_NO_MODIFY_PATH=1 left your shell profiles alone"
+            echo "next: add  to PATH, then run fetchloom to see the first steps"
+            exit 0
+        fi
         # shellcheck disable=SC2016
         export_line='export PATH="$HOME/.local/bin:$PATH"'
         changed=''

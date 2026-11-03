@@ -37,6 +37,25 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     for candidate in &report.candidates {
         output.answer_untold(&line(candidate));
     }
+    // a catalog that filled its share may hold more matches than were shown
+    let full = |source: &str| {
+        report
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.source == source)
+            .count()
+            >= limit
+    };
+    if limit < 20
+        && report
+            .candidates
+            .iter()
+            .any(|candidate| full(candidate.source))
+    {
+        output.hint(&format!(
+            "each catalog shows up to {limit} matches; `--limit 20` shows more"
+        ));
+    }
     Ok(report)
 }
 

@@ -1,5 +1,5 @@
 # installs fetchloom from a github release into %LOCALAPPDATA%\Programs\fetchloom\bin, and
-# adds that folder to your user PATH when it lacks it.
+# adds that folder to your user PATH when it lacks it, unless FETCHLOOM_NO_MODIFY_PATH=1.
 #
 #   powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
 #
@@ -114,7 +114,9 @@ function Install-Fetchloom([string]$Version) {
     $installed = & (Join-Path $bin 'fetchloom.exe') --version
     Write-Host "installed $installed in $bin"
     if (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $bin) { $env:Path = "$env:Path;$bin" }
-    if (Add-UserPath $bin) {
+    if ($env:FETCHLOOM_NO_MODIFY_PATH -eq '1') {
+        Write-Host "FETCHLOOM_NO_MODIFY_PATH=1 left your user PATH alone; add $bin to it to run fetchloom from anywhere"
+    } elseif (Add-UserPath $bin) {
         Write-Host "added $bin to your user PATH. open a new terminal to use it"
     }
     Write-Host 'next: run fetchloom to see the first steps'

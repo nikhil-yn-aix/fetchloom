@@ -94,7 +94,11 @@ fn fix(help: &str) -> Option<&str> {
             .trim_end_matches([' ', ':', ','])
             .to_ascii_lowercase();
         let example = NOT_A_FIX.iter().any(|marker| lead.ends_with(marker));
-        if !example && part.starts_with("fetchloom ") && !part.contains(['<', '>']) {
+        if !example
+            && part.starts_with("fetchloom ")
+            && !part.contains(['<', '>'])
+            && crate::cli::runs(part)
+        {
             return Some(part);
         }
         before.push_str(part);
@@ -173,7 +177,8 @@ impl Output {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(text.to_owned());
-        if self.tells(Level::Normal) {
+        // a warning is about the data, as a kept edit is, so -q keeps it as it keeps errors
+        if self.tells(Level::Quiet) {
             let yellow = toned(self.style.color, Tone::Warn);
             self.line(&format!(
                 "{yellow}warning:{yellow:#} {}",
@@ -603,10 +608,60 @@ pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
 }
 
 pub(crate) fn help(text: &str, choice: ColorChoice) {
-    let shown = help_text(text.trim_end_matches('\n'), Style::stdout_color(choice));
+    let width = if std::io::stdout().is_terminal() {
+        console::Term::stdout()
+            .size_checked()
+            .map_or(80, |(_, columns)| usize::from(columns))
+    } else {
+        80
+    };
+    let wrapped = wrap_help(text.trim_end_matches('\n'), width.clamp(40, 100));
+    let shown = help_text(&wrapped, Style::stdout_color(choice));
     let _ = writeln!(std::io::stdout().lock(), "{shown}");
 }
 
+/// help as wide as `width`: a row of a table wraps under its own description column, prose
+/// wraps flush, and the command lines under `examples:` never wrap, so each can be copied whole.
+pub(crate) fn wrap_help(text: &str, width: usize) -> String {
+    let mut out = Vec::new();
+    let mut examples = false;
+    for line in text.split('\n') {
+        if !line.starts_with(' ') {
+            examples = line == "examples:";
+        }
+        if line.chars().count() <= width || (examples && line.starts_with("  ")) {
+            out.push(line.to_owned());
+            continue;
+        }
+        // a row: the description starts after the last run of two or more spaces in its first
+        // part, as in `  -o, --output <dir>       put the download in <dir>`
+        let indent = line.len() - line.trim_start().len();
+        let column = line[indent..]
+            .find("  ")
+            .map(|gap| {
+                let after = &line[indent + gap..];
+                indent + gap + (after.len() - after.trim_start().len())
+            })
+            .filter(|column| *column < width / 2)
+            .unwrap_or(indent);
+        let (head, body) = line.split_at(column);
+        let mut current = head.to_owned();
+        let fresh = column;
+        for word in body.split(' ').filter(|word| !word.is_empty()) {
+            let room = current.chars().count() + 1 + word.chars().count();
+            if current.chars().count() > fresh && room > width {
+                out.push(current);
+                current = " ".repeat(column);
+            }
+            if current.chars().count() > fresh {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        out.push(current);
+    }
+    out.join("\n")
+}
 /// the name drawn large, 98 columns wide, for the welcome on a wide terminal.
 const WORDMARK: &str = r"
  ________ _______  _________  ________  ___  ___  ___       ________  ________  _____ ______
@@ -891,6 +946,16 @@ mod tests {
     use super::{Level, Output, Style, accented, masked, plain, subject};
 
     #[test]
+    fn help_wraps_rows_under_their_column_and_keeps_examples_whole() {
+        let text = "options:\n  -o, --output <dir>  put the download in <dir> instead of a new folder named after it\n\nexamples:\n  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom";
+        let wrapped = super::wrap_help(text, 60);
+        assert_eq!(
+            wrapped,
+            "options:\n  -o, --output <dir>  put the download in <dir> instead of a\n                      new folder named after it\n\nexamples:\n  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom"
+        );
+    }
+
+    #[test]
     fn a_pasted_secret_shows_only_its_ends_and_length() {
         assert_eq!(
             masked("KGAT_0123456789abcdef0123456789abcd"),
@@ -956,6 +1021,13 @@ mod tests {
             None
         );
         assert_eq!(super::fix("did you mean `fetchloom remove iris`?"), None);
+        // a command named without what it needs is no fix a script could run
+        assert_eq!(
+            super::fix(
+                "ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"
+            ),
+            None
+        );
         assert_eq!(
             super::fix(
                 "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`"

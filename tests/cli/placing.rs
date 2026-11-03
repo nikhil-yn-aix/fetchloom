@@ -755,6 +755,29 @@ fn link_iris(sandbox: &Sandbox, project: &Path) -> Result {
     Ok(())
 }
 
+/// an edit through one project's hardlink shows in the other project's status, though on
+/// windows the other folder's listing still holds the old size and time.
+#[test]
+fn an_edit_through_one_link_shows_in_the_other_projects_status() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    let status = sandbox.command_in(&other, &["--json", "status"]).output()?;
+    let document: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert!(
+        document["result"]
+            .to_string()
+            .contains("data/iris/iris.csv"),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// an edit through one project's hardlink that changes the size leaves the cached object at the
 /// wrong size, so a new project downloads the file. the fresh bytes take the object's place.
 #[test]
@@ -837,11 +860,11 @@ fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
 }
 
 /// on windows a folder's listing keeps the old size and time of a hardlink edited through another
-/// name, so nothing in the other project's folder shows the edit. once the cache has found the
-/// object changed, that project's next sync puts its copy back without --force.
+/// name, so fetchloom opens each hardlink to see it as it is. the other project then finds the
+/// edit at once, as on linux, and keeps it as an edit that `--force` puts back.
 #[cfg(windows)]
 #[test]
-fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Result {
+fn another_projects_edit_through_a_link_is_seen_at_once_on_windows() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(
         "/files/iris.csv",
@@ -850,24 +873,18 @@ fn the_first_sync_after_verify_puts_back_a_link_another_project_edited() -> Resu
     let Some(other) = shared_and_edited(&sandbox, &server)? else {
         return Ok(());
     };
-    let verified = sandbox.run(&["cache", "verify"])?;
-    assert_eq!(
-        verified.status.code(),
-        Some(30),
-        "{}",
-        text(&verified.stderr)?
-    );
     let synced = sandbox.command_in(&other, &["sync"]).output()?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
-    assert_eq!(
-        fs::read(other.join("data").join("iris").join("iris.csv"))?,
-        V1,
+    assert!(
+        stderr.contains("data/iris/iris.csv was edited, and the file is shared"),
         "{stderr}"
     );
-    assert!(
-        stderr.contains("data/iris/iris.csv is a linked file whose contents changed"),
-        "{stderr}"
+    let forced = sandbox.command_in(&other, &["sync", "--force"]).output()?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(
+        fs::read(other.join("data").join("iris").join("iris.csv"))?,
+        V1
     );
     let edited = fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?;
     assert_eq!(edited[0], b'S', "the project that made the edit keeps it");

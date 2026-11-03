@@ -87,7 +87,7 @@ to exercise build jobs without a tag, temporarily add a branch trigger for `rele
 
 the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and macos and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. on macos it also writes `~/.zshrc`, since zsh, the default shell there, never reads `~/.profile`, and a shell running under rosetta on apple silicon gets the arm64 build. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
-both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
+both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_NO_MODIFY_PATH=1` leaves shell profiles and the user PATH alone. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
 ## local fake-release test
 

@@ -58,9 +58,32 @@ impl Survey {
             edited: HashSet::new(),
             needs_writing: false,
         };
+        survey.look_through_links(&project.root);
         survey.hash_racy(&project.root, written);
         survey
     }
+
+    /// on windows, a folder's listing keeps a hardlinked file's size and time as they were when
+    /// this link last opened it, so an edit made through another project's link does not show.
+    /// opening the file reads them as they are, for the files placed as hardlinks only.
+    #[cfg(windows)]
+    fn look_through_links(&mut self, root: &Path) {
+        for (path, placed) in &self.state.files {
+            if placed.method == Method::Hardlink
+                && let Some(seen) = self.disk.get_mut(path)
+                && let Ok(metadata) = fs::metadata(root.join(path))
+            {
+                *seen = Look::of(&metadata);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[expect(
+        clippy::unused_self,
+        reason = "unix listings report a hardlinked file's size and time as they are"
+    )]
+    fn look_through_links(&mut self, _root: &Path) {}
 
     /// reconciles missing recorded names, then hashes files whose recorded time is not older than the
     /// state's own, `written`. a coarse clock, such as FAT's two seconds, gives a file edited in

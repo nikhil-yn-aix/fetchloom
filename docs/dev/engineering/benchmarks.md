@@ -26,4 +26,4 @@ use a new output directory for each invocation. `--only-tools fetchloom,curl` na
 
 `meta.json` records versions, exact commands, machine details, seed and randomized orders. `runs.jsonl` records timing, resource use, exit codes and checker findings; logs preserve command failures. wrong bytes, a timeout or a failed command cannot count as a fast result. inaccessible live services retain skip reasons.
 
-[benchmark design](../performance/benchmark-design.md) owns the comparison rules and timing boundaries. `bench/render.py` generates the [results, once published](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/dev/performance/benchmarks.md) and charts only after real runs. never publish smoke data as a comparison.
+[benchmark design](../performance/benchmark-design.md) owns the comparison rules and timing boundaries. `bench/render.py` generates the results page, once published, and charts only after real runs. never publish smoke data as a comparison.

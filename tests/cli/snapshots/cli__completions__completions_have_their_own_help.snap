@@ -2,20 +2,21 @@
 source: tests/cli/completions.rs
 expression: help
 ---
-print a script that lets a shell complete fetchloom's commands and options
+print a script that completes fetchloom's commands in a shell
 
 usage: fetchloom completions [options] <shell>
 
 arguments:
-  <shell>  the shell that loads the script [possible values: bash, elvish, fish, powershell, zsh]
+  <shell>  the shell that loads the script [possible values: bash, elvish, fish,
+           powershell, zsh]
 
 options:
-  -q, --quiet         print only the answer and errors
+  -q, --quiet         print only the answer, warnings and errors
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
       --json          print one JSON document on stdout instead of the story
       --offline       use only what is already on this machine
   -y, --yes           approve confirmations, but never choose a dataset for you
-      --color <when>  when to use color [default: auto] [possible values: auto, always, never]
+      --color <when>  when to use color: auto, the default, always or never
   -C <dir>            run as if fetchloom started in <dir>
   -h, --help          print help
 

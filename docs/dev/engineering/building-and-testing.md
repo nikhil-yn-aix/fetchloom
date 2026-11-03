@@ -124,7 +124,7 @@ rm "$scratch/xfs.img"
 rmdir "$scratch/xfs" "$scratch"
 ```
 
-unmount even if tests fail. do not delete an image while it is mounted. [CI](ci.md) runs every test on xfs and btrfs, and on ReFS, exFAT and FAT32 on windows.
+unmount even if tests fail. do not delete an image while it is mounted. [CI](ci.md) reruns the tests that touch the disk on xfs and btrfs, on ReFS, exFAT and FAT32 on windows, and on hfs+ on macos; the full suite runs once on each default filesystem.
 
 ## adding coverage
 

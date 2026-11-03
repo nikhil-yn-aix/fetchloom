@@ -21,7 +21,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter; events include uptime timestamps |
 | `FETCHLOOM_TRACE` | nonempty path for a chrome trace, including one `download` span per file; relative to the starting directory, before `-C`; open it in [perfetto](../../dev/engineering/profiling.md#timeline) |
 | `NO_COLOR` | nonempty value disables automatic color |
-| `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color on a terminal unless `NO_COLOR` wins |
+| `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color even into a pipe or file, unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
 | `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. an entry it cannot read keeps its default and prints one warning |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |

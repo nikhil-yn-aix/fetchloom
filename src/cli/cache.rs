@@ -367,10 +367,9 @@ pub(super) fn remind(context: &Context) {
     }
     let marker = root.join("reminded");
     let now = SystemTime::now();
-    // a marker dated in the future, after a clock was wrong, counts as long ago
     let Ok(last) = fs::metadata(&marker).and_then(|metadata| metadata.modified()) else {
         // the first run starts the clock rather than reading the cache right away
-        let _ = fs::write(&marker, b"");
+        let _ = stamp(&marker, now);
         return;
     };
     // a marker dated in the future, after a clock was wrong, counts as long ago
@@ -378,28 +377,52 @@ pub(super) fn remind(context: &Context) {
         .duration_since(last)
         .ok()
         .is_none_or(|age| age >= REMIND_EVERY);
-    if !due || fs::write(&marker, b"").is_err() {
+    if !due || stamp(&marker, now).is_err() {
         return;
     }
     let Ok(cache) = open_cache() else { return };
+    // a project out of reach, as on a drive not plugged in, still needs its bytes, and gc would
+    // forget it, so the number would mislead
+    let Ok(roots) = cache.registered_projects(&context.stop) else {
+        return;
+    };
+    if roots
+        .iter()
+        .any(|root| !Project { root: root.clone() }.manifest_path().is_file())
+    {
+        return;
+    }
     let Ok((needed, _)) = needed_with(&cache, None, &context.stop, false) else {
         return;
     };
     let Ok(scan) = cache.scan_objects(&context.stop) else {
         return;
     };
-    let unneeded: u64 = scan
+    // only what gc would free and what frees disk space: past its day, and not also a file a
+    // folder made by `get` still links to
+    let freeable: u64 = scan
         .objects
         .iter()
-        .filter(|object| !needed.objects.contains(&object.digest))
+        .filter(|object| {
+            !needed.objects.contains(&object.digest)
+                && now
+                    .duration_since(object.modified)
+                    .is_ok_and(|age| age >= crate::cache::GRACE)
+                && !crate::place::has_other_names(&object.path)
+        })
         .map(|object| object.size)
         .sum();
-    if unneeded >= REMIND_FROM {
+    if freeable >= REMIND_FROM {
         context.output.hint(&format!(
             "the cache holds {} no project needs; `fetchloom cache gc` frees it",
-            units::size(unneeded)
+            units::size(freeable)
         ));
     }
+}
+
+/// sets `marker`'s time to `now`. writing an empty file again leaves its time alone on windows.
+fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
+    fs::File::create(marker)?.set_modified(now)
 }
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
 /// the files it unpacked to, and the projects still on disk. a project whose data.toml is gone is

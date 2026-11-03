@@ -16,29 +16,33 @@ use crate::name;
 /// `fetchloom help concepts`: what a beginner needs to know, in the same kitchen as the first run.
 const CONCEPTS: &str = "fetchloom concepts
 
-fetchloom keeps the data a project reads exact, and the same on every machine. it works like a
-kitchen:
+fetchloom keeps the data a project reads exact, and the same on every machine.
+it works like a kitchen:
 
   data.toml, the shopping list: which datasets you want
   data.lock, the receipt: the exact files and their fingerprints
   the cache, the pantry: shared by projects using it
   sync, restocking: fill data/ from the receipt
 
-a dataset is one entry in data.toml: a name, such as iris, and a reference to where it is
-published, such as zenodo:3608990, a DOI or a link. --select and --exclude choose which of its
-files to keep.
+a dataset is one entry in data.toml: a name, such as iris, and a reference to
+where it is published, such as zenodo:3608990, a DOI or a link. --select and
+--exclude choose which of its files to keep.
 
-a fingerprint is a file's SHA-256 hash. data.lock records one for every file, so every machine
-gets the same bytes. when a source changes a file, sync stops and says so instead of using it.
+a fingerprint is a file's SHA-256 hash. data.lock records one for every file,
+so every machine gets the same bytes. when a source changes a file, sync stops
+and says so instead of using it.
 
-the cache keeps each file once, under its fingerprint. data/ links to it where the disk allows,
-so projects that use the same file store it once. files in data/ are read-only by default.
+the cache keeps each file once, under its fingerprint. data/ links to it where
+the disk allows, so projects that use the same file store it once. files in
+data/ are read-only by default.
 
-commit data.toml and data.lock with your code, and leave data/ out. anyone who clones the
-project runs `fetchloom sync` to place the pinned files. sync warns when it keeps edited or
-conflicting files. `fetchloom status` shows what differs.
+commit data.toml and data.lock with your code, and leave data/ out. anyone who
+clones the project runs `fetchloom sync` to place the pinned files. sync warns
+when it keeps edited or conflicting files. `fetchloom status` shows what
+differs.
 
-`fetchloom get` fetches a dataset once, with no list and no receipt, for a quick look.";
+`fetchloom get` fetches a dataset once, with no list and no receipt, for a
+quick look.";
 
 /// `fetchloom help environment`: every variable fetchloom reads, at terminal size. the docs page
 /// has the details; a test keeps the two naming the same variables.
@@ -49,36 +53,37 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default
   FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
   FETCHLOOM_THREADS   a cap on local worker threads, 1 to 256
-  FETCHLOOM_SPLIT     0 never splits a slow download into parallel parts, 1 always does
+  FETCHLOOM_SPLIT     0 never splits a slow download into parts, 1 always does
   FETCHLOOM_LOG       a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE     a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS    other colors, as done=blue:accent=#d787ff
   FETCHLOOM_KEYRING   0 keeps keys out of the system's credential store
 
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
-  CI, AI_AGENT and coding agents' own variables   no questions, color or animation
+  CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
-keys are read where each source's own tools keep them: HF_TOKEN and the hugging face token
-file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN, OSF_TOKEN,
-DATAVERSE_API_TOKEN with DATAVERSE_URL, and .netrc or the file NETRC names.
+keys are read where each source's own tools keep them: HF_TOKEN and the hugging
+face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,
+OSF_TOKEN, DATAVERSE_API_TOKEN with DATAVERSE_URL, and .netrc or the file NETRC
+names.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
 
 /// `fetchloom help exit-codes`: what each exit code means, for a script deciding what to do.
 const EXIT_CODES: &str = "fetchloom exit codes
 
-    0  success, even when sync kept edited files; check status or --json for them
+    0  success, even when sync kept edited files; status shows them
     1  unconfirmed or lock.outdated: approve with --yes, or run fetchloom lock
     2  usage: a mistake on the command line
    10  reference.*, source.invalid: the link or id is wrong, or names nothing
    20  network.*, offline.missing: retry later, or go online
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
-   50  local.*, project.invalid: the disk, permissions, or a broken data.toml or data.lock
+   50  local.*, project.invalid: disk, permissions, or a broken project file
   130  interrupted
 
-with --json, errors[0].kind names the exact cause and errors[0].fix, when present, the command
-to run next.
+with --json, errors[0].kind names the exact cause and errors[0].fix, when
+present, the command to run next.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes.html";
 
@@ -302,7 +307,7 @@ mod tests {
     fn topics_fit_a_terminal() {
         for (name, text) in TOPICS {
             for line in text.lines() {
-                assert!(line.chars().count() <= 100, "{name}: {line}");
+                assert!(line.chars().count() <= 80, "{name}: {line}");
             }
         }
     }

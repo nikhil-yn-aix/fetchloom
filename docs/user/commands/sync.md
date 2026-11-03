@@ -57,7 +57,7 @@ the kept-shared warning uses this wording, with `<path>` replaced by the affecte
 <path> was edited, and the file is shared with other projects, so they see the edit too. it stays; `fetchloom sync --force` puts the original back
 ```
 
-on windows, a directory listing can still show the recorded size and time after another link changed. a cache change mark then triggers a byte check; if that proves an otherwise unchanged alias damaged, sync repairs it and lists its path in `result.placement.restored`. an unseen change may need the editing project to sync, `cache verify`, or `sync --force` to trigger detection.
+on windows, a folder's listing can keep a hardlink's old size and time after another link changed it, so `status` and `sync` open each file placed as a hardlink to read it as it is. an edit made through another project's link then shows here at once, as on linux, and stays with the `shared` warning until `sync --force`.
 
 if cache registration fails, sync still succeeds with a warning that gc may not keep the project's files. check cache permissions and run sync again.
 

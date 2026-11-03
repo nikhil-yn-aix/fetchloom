@@ -191,6 +191,20 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
                 .help("check the link for a typo, and that this machine is online"),
             );
         }
+        // a certificate the system does not trust fails the same way on every try
+        if current
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("certificate")
+        {
+            return Failure::Final(
+                Error::new(
+                    Kind::NetworkUnreachable,
+                    format!("{} sent a certificate this machine does not trust: {current}", host(url)),
+                )
+                .help("check the link and this machine's clock. behind a company proxy that inspects https, its certificate belongs in the system's certificate store"),
+            );
+        }
         cause = current.source();
     }
     if err.is_timeout() {
@@ -253,14 +267,48 @@ pub(super) fn interrupted(url: &Url) -> Error {
 }
 
 fn gave_up(url: &Url, reason: &str, has_copy: bool) -> Error {
-    let error = Error::new(
-        Kind::NetworkUnreachable,
-        format!("gave up on {} after {ATTEMPTS} tries: {reason}", host(url)),
-    );
-    if has_copy {
-        error.help("check the connection, or add --offline to use the copy downloaded earlier")
+    let message = format!("gave up on {} after {ATTEMPTS} tries: {reason}", host(url));
+    let later = if has_copy {
+        "run the same command again later, or add --offline to use the copy downloaded earlier"
     } else {
-        error.help("check the connection and run the same command again")
+        "run the same command again later"
+    };
+    // the last answer says whose side the trouble is on
+    let status = reason
+        .rsplit_once("answered ")
+        .and_then(|(_, code)| code.parse::<u16>().ok());
+    match status {
+        Some(429) => {
+            return Error::new(Kind::NetworkRateLimited, message)
+                .help(format!("{} is limiting requests; {later}", host(url)));
+        }
+        Some(500..=599) => {
+            return Error::new(Kind::NetworkStatus, message)
+                .help(format!("{} is having trouble; {later}", host(url)));
+        }
+        _ => {}
+    }
+    let proxy = [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ]
+    .into_iter()
+    .find(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
+    let error = Error::new(Kind::NetworkUnreachable, message);
+    let check = match proxy {
+        Some(name) => format!("check the connection and the proxy {name} names"),
+        None => "check the connection".to_owned(),
+    };
+    if has_copy {
+        error.help(format!(
+            "{check}, or add --offline to use the copy downloaded earlier"
+        ))
+    } else {
+        error.help(format!("{check} and run the same command again"))
     }
 }
 
@@ -472,6 +520,21 @@ mod tests {
             assert!(error.message.contains("connection broke"));
             assert_eq!(error.help.unwrap().contains("--offline"), has_copy);
         }
+    }
+
+    #[test]
+    fn running_out_of_tries_says_whose_side_the_trouble_is_on() {
+        let url = Url::parse("https://example.org/list").unwrap();
+        let limited = gave_up(&url, "example.org answered 429", false);
+        assert_eq!(limited.kind, Kind::NetworkRateLimited);
+        assert!(limited.help.unwrap().contains("limiting requests"));
+        let down = gave_up(&url, "example.org answered 503", true);
+        assert_eq!(down.kind, Kind::NetworkStatus);
+        let help = down.help.unwrap();
+        assert!(
+            help.contains("having trouble") && help.contains("--offline"),
+            "{help}"
+        );
     }
 
     #[test]

@@ -27,9 +27,9 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 | `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
 | `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
-| full tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
-| full tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
-| full tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
+| disk-touching tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
+| disk-touching tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
+| disk-touching tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
 
 [deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. the advisory ignore list is empty; changes to exceptions belong with their reasons.
 

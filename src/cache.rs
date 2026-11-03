@@ -94,15 +94,28 @@ impl Cache {
             // where macos keeps caches, which time machine skips
             set("HOME").map(|home| home.join("Library").join("Caches").join("fetchloom"))
         } else {
+            // the XDG spec has a relative value ignored, which would put a cache in every folder
             set("XDG_CACHE_HOME")
+                .filter(|path| path.is_absolute())
                 .or_else(|| set("HOME").map(|home| home.join(".cache")))
                 .map(|path| path.join("fetchloom"))
         }
     }
 
-    /// opens the cache at `root`, creating its folders the first time.
+    /// opens the cache at `root`, creating its folders the first time. a cache fetchloom makes
+    /// itself is readable by this user only on unix, since gated and private datasets land in it;
+    /// a folder that already exists, such as a team's shared cache, keeps its permissions.
     pub(crate) fn open(root: PathBuf) -> io::Result<Cache> {
         let _span = tracing::debug_span!("open_cache").entered();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&root)?;
+        }
+        #[cfg(not(unix))]
         fs::create_dir_all(&root)?;
         for folder in FOLDERS {
             real_folder(&root.join(folder), FolderUse::Cache)?;
@@ -904,5 +917,30 @@ pub(crate) mod tests {
             Path::new("/xdg/fetchloom").to_path_buf()
         };
         assert_eq!(Cache::locate(&home), Some(expected));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_relative_xdg_cache_home_is_ignored() {
+        let var = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/ada")),
+            "XDG_CACHE_HOME" => Some(OsString::from("relative/cache")),
+            _ => None,
+        };
+        assert_eq!(
+            Cache::locate(&var),
+            Some(Path::new("/home/ada/.cache/fetchloom").to_path_buf())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_cache_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("made").join("cache");
+        Cache::open(root.clone()).unwrap();
+        let mode = fs::metadata(&root).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
     }
 }

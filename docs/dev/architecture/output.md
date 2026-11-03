@@ -47,14 +47,15 @@ non-terminal stderr has no bars, and lists such as search rows stay on stdout. a
 
 ### terminal capabilities
 
-stdout and stderr detect color separately. explicit `--color always` or `--color never` overrides environment settings. `auto` first requires the destination stream to be a terminal, then uses this order:
+stdout and stderr detect color separately. explicit `--color always` or `--color never` overrides environment settings. `auto` uses this order:
 
 1. nonempty `NO_COLOR` disables color.
-2. nonempty `CLICOLOR_FORCE` other than `0` enables it.
-3. `CLICOLOR=0`, `TERM=dumb`, nonempty `CI` or a coding agent's variable, below, disables it.
-4. otherwise, color is enabled.
+2. nonempty `CLICOLOR_FORCE` other than `0` enables it, even into a pipe or file, as the [CLICOLOR convention](https://bixense.com/clicolors/) asks.
+3. a destination stream that is not a terminal gets no color.
+4. `CLICOLOR=0`, `TERM=dumb`, nonempty `CI` or a coding agent's variable, below, disables it.
+5. otherwise, color is enabled.
 
-only `--color always` forces ANSI into a pipe or file. labels retain their meaning without color. forcing color does not enable interactivity.
+`--color always` and `CLICOLOR_FORCE` are the two ways to force ANSI into a pipe or file. labels retain their meaning without color. forcing color does not enable interactivity.
 
 bars and questions need terminal stderr outside CI, outside `TERM=dumb` and outside a coding agent. `by_agent` in [output/style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) checks `AGENT_VARIABLES`, such as `AI_AGENT`, `VSCODE_AGENT` and `CLAUDECODE`; any value other than empty, `0` or `false` marks an agent, which also turns off automatic color. add a variable there only if agents set it and people's own terminals do not. questions also require terminal stdin. JSON, quiet mode and stderr debug logs suppress bars; quiet does not waive a question. the dataset picker follows [selection rules](../../user/commands/search.md#choosing-a-dataset), including refusal to let `--yes` choose.
 

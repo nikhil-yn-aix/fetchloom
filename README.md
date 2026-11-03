@@ -44,6 +44,8 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetc
 pip install fetchloom
 ```
 
+the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_PATH=1` to keep them out of your shell profiles. [getting started](docs/user/getting-started.md#uninstall) says how to uninstall.
+
 ## quick start
 
 ```text
@@ -74,7 +76,7 @@ files in `data/` are read-only by default. `sync` keeps your local edits and rep
 
 | need | read |
 |---|---|
-| install and try it for the first time | [getting started](docs/user/getting-started.md) |
+| install and try it for the first time, or uninstall | [getting started](docs/user/getting-started.md) |
 | choose a user topic | [user guide](docs/user/README.md) |
 | understand the shopping list, receipt and pantry | [concepts](docs/user/concepts.md) |
 | look up a command or option | [commands](docs/user/commands/README.md) |

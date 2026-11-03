@@ -347,6 +347,13 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     outcome
 }
 
+/// whether `command`, as help quotes it, is a whole command line fetchloom would accept, so a
+/// script handed it as the next step can run it. `fetchloom add` alone names a command and is not one.
+pub(crate) fn runs(command: &str) -> bool {
+    use clap::Parser;
+    args::Args::try_parse_from(command.split_whitespace()).is_ok()
+}
+
 /// commands after which the cache may remind a person what no project needs: they change what
 /// projects need, and a dry run changes nothing at all.
 fn reminds(command: &args::Command) -> bool {

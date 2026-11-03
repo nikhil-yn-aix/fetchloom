@@ -68,7 +68,8 @@ fn help_follows_color_environment() -> Result {
         &["cache", "gc", "--help"],
         &["help", "cache", "gc"],
     ] {
-        for (no_color, force, colored) in [("1", "1", false), ("", "1", false), ("", "0", false)] {
+        // CLICOLOR_FORCE colors even into a pipe, as the convention says; NO_COLOR still wins
+        for (no_color, force, colored) in [("1", "1", false), ("", "1", true), ("", "0", false)] {
             let output = sandbox
                 .command(arguments)
                 .env("NO_COLOR", no_color)
@@ -445,7 +446,6 @@ fn color_marks_meaning_with_labels_and_stays_off_when_asked() -> Result {
     for (flag, variables) in [
         (&["--color", "never"][..], &[("CLICOLOR_FORCE", "1")][..]),
         (&[], &[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]),
-        (&[], &[("CLICOLOR_FORCE", "1")]),
         (&[], &[]),
     ] {
         let mut command = sandbox.command(&[flag, &["sycn"]].concat());

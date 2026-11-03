@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use clap::error::ErrorKind;
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 use crate::digest::Sha256;
@@ -200,21 +201,56 @@ pub(super) fn read() -> Result<Args, clap::Error> {
             .chain(std::iter::once("--json".into()))
             .collect();
     }
-    let mut matches = command.try_get_matches_from_mut(line)?;
+    let mut matches = match command.try_get_matches_from_mut(line.clone()) {
+        Ok(matches) => matches,
+        // a mistake elsewhere on a line that asks for help still gets the help it asked for
+        Err(error)
+            if !matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            let Some(topic) = help_topic(&command, &line) else {
+                return Err(error);
+            };
+            let asked = std::iter::once("fetchloom".to_owned())
+                .chain(topic)
+                .chain(std::iter::once("--help".to_owned()));
+            return Err(match command.try_get_matches_from_mut(asked) {
+                Err(help) if help.kind() == ErrorKind::DisplayHelp => help,
+                _ => error,
+            });
+        }
+        Err(error) => return Err(error),
+    };
     Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
 }
 
 /// `--help` beside `--json` asks for the help document, which stdout promises under `--json`.
 /// returns the command it asks about, as `help` takes it.
 fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
+    let json = line
+        .iter()
+        .skip(1)
+        .map_while(|word| word.to_str())
+        .take_while(|word| *word != "--")
+        .any(|word| word == "--json");
+    if !json {
+        return None;
+    }
+    help_topic(command, line)
+}
+
+/// the command a line asking for `-h` or `--help` is about, as `help` takes it, or nothing when
+/// it asks for no help.
+fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
     let words: Vec<&str> = line
         .iter()
         .skip(1)
         .map_while(|word| word.to_str())
         .take_while(|word| *word != "--")
         .collect();
-    let has = |flags: &[&str]| words.iter().any(|word| flags.contains(word));
-    if !has(&["--json"]) || !has(&["--help", "-h"]) {
+    if !words.iter().any(|word| matches!(*word, "--help" | "-h")) {
         return None;
     }
     let mut topic = Vec::new();
@@ -256,11 +292,14 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
 }
 
 pub(super) fn command() -> clap::Command {
-    linked(Args::command()).color(if Style::stdout_color(color()) {
-        clap::ColorChoice::Always
-    } else {
-        clap::ColorChoice::Never
-    })
+    // help is wrapped as it is printed, which keeps command lines in the examples whole
+    linked(Args::command())
+        .term_width(0)
+        .color(if Style::stdout_color(color()) {
+            clap::ColorChoice::Always
+        } else {
+            clap::ColorChoice::Never
+        })
 }
 
 const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";
@@ -269,7 +308,7 @@ const SITE: &str = "https://nikhil-yn-aix.github.io/fetchloom";
 /// report a bug.
 fn linked(root: clap::Command) -> clap::Command {
     let page = |name: &str| match name {
-        "help" => format!("{SITE}/user/commands/"),
+        "help" => format!("{SITE}/user/commands/README.html"),
         "cache gc" => format!("{SITE}/user/commands/cache.html#gc"),
         "cache verify" => format!("{SITE}/user/commands/cache.html#verify"),
         "auth login" | "auth logout" => format!("{SITE}/user/commands/auth.html"),
@@ -301,9 +340,7 @@ fn linked(root: clap::Command) -> clap::Command {
         .collect();
     let mut root = append(
         root,
-        format!(
-            "docs: {SITE}  \u{b7}  report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues"
-        ),
+        format!("docs: {SITE}\nreport a bug: https://github.com/nikhil-yn-aix/fetchloom/issues"),
     );
     for (name, inner) in names {
         root = root.mut_subcommand(&name, |mut command| {
@@ -341,7 +378,7 @@ pub(super) fn color() -> ColorChoice {
     reason = "each flag is a yes or no on the command line"
 )]
 pub(crate) struct Global {
-    /// print only the answer and errors
+    /// print only the answer, warnings and errors
     #[arg(
         short,
         long,
@@ -367,8 +404,8 @@ pub(crate) struct Global {
     #[arg(short, long, global = true, help_heading = "options")]
     pub(crate) yes: bool,
 
-    /// when to use color
-    #[arg(long, value_enum, value_name = "when", default_value_t = ColorChoice::Auto, global = true, help_heading = "options")]
+    /// when to use color: auto, the default, always or never
+    #[arg(long, value_enum, value_name = "when", default_value_t = ColorChoice::Auto, hide_default_value = true, hide_possible_values = true, global = true, help_heading = "options")]
     pub(crate) color: ColorChoice,
 
     /// run as if fetchloom started in <dir>
@@ -395,7 +432,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom sync [options]", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
 
-    /// update data.lock from data.toml without placing files in the data folder
+    /// update data.lock from data.toml without placing any files
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
@@ -403,7 +440,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status,
 
-    /// list the project's datasets: where each comes from, its size and its folder
+    /// list the project's datasets: source, size and folder
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
     List(List),
 
@@ -411,7 +448,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
 
-    /// show the cache, free what no project needs, or verify every file in it
+    /// show the cache, free what no project needs, or verify it
     #[command(override_usage = "fetchloom cache [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::CACHE)]
     Cache(Cache),
 
@@ -426,7 +463,7 @@ pub(crate) enum Command {
     /// sign in to sources for private and gated data
     #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
     Auth(Auth),
-    /// print a script that lets a shell complete fetchloom's commands and options
+    /// print a script that completes fetchloom's commands in a shell
     #[command(override_usage = "fetchloom completions [options] <shell>", help_template = TEMPLATE, after_help = examples::COMPLETIONS)]
     Completions(Completions),
 
@@ -470,7 +507,7 @@ impl Command {
     }
 }
 
-/// show the cache, free what no project needs, or verify every file in it
+/// show the cache, free what no project needs, or verify it
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Cache {
     #[command(subcommand)]
@@ -771,10 +808,11 @@ mod tests {
         assert!(verify.1.contains("mark changed files for replacement"));
         assert!(!verify.1.contains("deletes cached files"));
         let cache = help.iter().find(|(name, _)| name == "cache").unwrap();
+        // help wraps to the terminal's width, so a phrase may cross a line
+        let flat = cache.1.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            cache
-                .1
-                .contains("`cache verify` marks changed files for replacement")
+            flat.contains("`cache verify` marks changed files for replacement"),
+            "{flat}"
         );
     }
 

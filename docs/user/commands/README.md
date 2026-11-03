@@ -29,7 +29,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 
 | option | effect |
 |---|---|
-| `-q`, `--quiet` | keep stdout answers and errors; hide other normal output; questions still apply |
+| `-q`, `--quiet` | keep stdout answers, warnings and errors; hide other normal output; questions still apply |
 | `-v`, `--verbose` | add details, error kinds and work counters |
 | `-vv` | also enable debug logs |
 | `--json` | print one result document on stdout, including failures; never prompt |
@@ -60,7 +60,7 @@ project commands find the nearest `data.toml` at or above the working directory.
 
 stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
 
-a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested. quiet mode keeps stdout answers and errors. JSON mode returns one document and never prompts; explicit debug logging can still write stderr.
+a ready `path` has no closing summary. successful `lock --check` is silent unless verbose or JSON output was requested. quiet mode keeps stdout answers, warnings and errors. JSON mode returns one document and never prompts; explicit debug logging can still write stderr.
 
 [terminal output](../../dev/architecture/output.md) defines the palette and terminal fallbacks. [search selection](search.md#choosing-a-dataset) explains the picker and noninteractive refusal to guess.
 

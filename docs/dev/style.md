@@ -48,7 +48,7 @@ public items need a short caller-facing description and `# Errors` for non-obvio
 
 commit messages are one line, lowercase and imperative, under 60 characters, without a closing period. name the change, for example `retry downloads that stall mid-file`. use no prefixes, emoji, trailers, co-author lines or references to assistants or tools. keep commits small and check the affected behavior before committing.
 
-a pull request title says what changed. its body explains what and why in two or three plain sentences. include measurements for performance claims; omit stock checklists and footers.
+a pull request title says what changed. its body explains what and why in two or three plain sentences. include measurements for performance claims; keep the pull request template's checklist and add no other boilerplate or footers.
 
 ## existing checks
 

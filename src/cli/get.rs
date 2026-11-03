@@ -132,6 +132,14 @@ struct Wanted {
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
+    // `-` reads a list for -i, but a download is a folder of files, never one stream
+    if args.output.as_deref() == Some(std::path::Path::new("-")) {
+        return Err(Error::new(
+            Kind::Usage,
+            "get writes into a folder, so -o cannot be - for stdout",
+        )
+        .help("give -o a folder name, then read the files there; `fetchloom get` prints the folder's path"));
+    }
     let links = links(&args)?;
     if args.sha256.is_some() && links.len() != 1 {
         return Err(Error::new(

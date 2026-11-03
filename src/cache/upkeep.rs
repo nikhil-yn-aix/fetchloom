@@ -23,8 +23,8 @@ pub(crate) const GRACE: Duration = Duration::from_hours(24);
 pub(crate) struct Object {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
-    path: PathBuf,
-    modified: SystemTime,
+    pub(crate) path: PathBuf,
+    pub(crate) modified: SystemTime,
 }
 
 #[derive(Default)]

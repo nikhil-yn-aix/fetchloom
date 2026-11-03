@@ -312,16 +312,17 @@ fn wants_color(
         ColorChoice::Never => return false,
         ColorChoice::Auto => {}
     }
-    if !terminal {
-        return false;
-    }
     let is = |name: &str, value: &str| var(name).is_some_and(|v| v == value);
     let non_empty = |name: &str| var(name).is_some_and(|v| !v.is_empty());
     if non_empty("NO_COLOR") {
         return false;
     }
+    // CLICOLOR_FORCE asks for color where none would be, as into a pipe
     if non_empty("CLICOLOR_FORCE") && !is("CLICOLOR_FORCE", "0") {
         return true;
+    }
+    if !terminal {
+        return false;
     }
     if is("CLICOLOR", "0") || is("TERM", "dumb") || non_empty("CI") || by_agent(var) {
         return false;
@@ -408,7 +409,10 @@ mod tests {
             "an empty NO_COLOR is ignored"
         );
         assert!(auto(&[("CLICOLOR_FORCE", "1")], true));
-        assert!(!auto(&[("CLICOLOR_FORCE", "1")], false));
+        assert!(
+            auto(&[("CLICOLOR_FORCE", "1")], false),
+            "forced into a pipe too"
+        );
         assert!(!auto(&[("CLICOLOR_FORCE", "0")], false));
         assert!(!auto(&[("CLICOLOR", "0")], true));
         assert!(!auto(&[("TERM", "dumb")], true));
