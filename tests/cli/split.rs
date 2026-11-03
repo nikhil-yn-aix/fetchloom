@@ -4,9 +4,7 @@
 use std::fs;
 use std::process::Stdio;
 
-use serde_json::Value;
-
-use crate::support::{Ranged, Result, Sandbox, text, wait_until};
+use crate::support::{Ranged, Result, Sandbox, json, text, wait_until};
 
 /// the smallest file that may split, 64 MiB.
 const LARGE: u64 = 64 * 1024 * 1024;
@@ -19,10 +17,6 @@ fn large() -> Vec<u8> {
     (0..16 * 1024 * 1024u32)
         .flat_map(u32::to_le_bytes)
         .collect()
-}
-
-fn json(output: &std::process::Output) -> Result<Value> {
-    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 #[test]
@@ -148,7 +142,7 @@ fn saved_ranges(sandbox: &Sandbox) -> bool {
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| fs::read(path).ok())
-        .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .any(|record| {
             let received = record["received"].as_u64().unwrap_or_default();
             received > 0

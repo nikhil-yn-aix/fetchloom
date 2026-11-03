@@ -57,11 +57,11 @@ a download must be on disk before it takes its name in the cache, because the ca
 
 splitting requires at least 64 MiB, range support and proof that all answers belong to one version: a pinned SHA-256, a stated MD5 or an `If-Range` validator. one stream starts normally. after a 2 s window below 1 MB/s, with at least 16 MiB left, it hands its writer and remaining response to the split scheduler. the response continues at exactly the accepted offset; those bytes are not fetched again.
 
-the scheduler adds another stream immediately when the slow stream's rate is known. otherwise it waits for a measurement window. it checks every 250 ms, adds streams only while the last addition improved total rate by at least 15%, and stops at 8 streams or the available host and overall permits. extra streams use separate HTTP/1.1 connections so they do not share one HTTP/2 connection's window.
+the scheduler adds another stream immediately when the slow stream's rate is known. otherwise it waits for a measurement window. it checks every 250 ms, adds streams only while the last addition improved total rate by at least 15%, and stops when the host's four slots or the overall permits are taken. extra streams use separate HTTP/1.1 connections so they do not share one HTTP/2 connection's window.
 
 a finished stream takes half the largest remaining range only when that half is at least 8 MiB. a `200` response to a range or three failed streams ends further splitting; remaining work falls back to one stream. a changed validator restarts the file. a split checksum mismatch gets one full single-stream restart before failing.
 
-`FETCHLOOM_RATE` disables the slow-stream judgment. `FETCHLOOM_SPLIT=0` disables splitting; `1` requests it from the first eligible answer. without a rate cap, a resumed checkpoint containing ranges beyond the prefix can enter the split path directly to skip those ranges.
+`FETCHLOOM_RATE` disables the slow-stream judgment. `FETCHLOOM_SPLIT=0` disables splitting; `1` requests it from the first eligible answer. a rate cap leaves forced splitting alone, and a resumed checkpoint containing ranges beyond the prefix enters the split path directly to skip those ranges.
 
 ### resumption and revalidation
 
@@ -84,7 +84,7 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 | quota wait | reset within 120 s; at most 10 waits per request before consuming attempts |
 | diversion pages | at most 3, each at most 4 MiB |
 
-408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.unreachable`; excessive requested waits report `network.rate_limited` while retries remain.
+408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.rate_limited` after a 429, `network.status` after a 5xx and `network.unreachable` otherwise; excessive requested waits report `network.rate_limited` while retries remain.
 
 `Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. waits remain cancellable.
 

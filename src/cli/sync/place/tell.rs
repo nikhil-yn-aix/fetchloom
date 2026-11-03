@@ -47,7 +47,7 @@ pub(super) fn tell(
             ),
         );
     }
-    if tallies.values().any(|tally| tally.files > tally.links)
+    if tallies.values().any(|tally| tally.unlinked > 0)
         && let Some(why) = placer.unlinked()
     {
         output.warn(&why.copied_because(&manifest.data_dir, "files were"));

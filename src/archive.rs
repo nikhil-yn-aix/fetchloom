@@ -56,7 +56,13 @@ pub(crate) fn by_name(path: &str) -> Option<Packed> {
 /// source sends a file it wrapped: `train.csv` as `train.csv.zip`. once their own bytes are
 /// dropped, what this machine unpacked them to answers.
 pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
+    // unpacked members are recorded in NFC, so both answers compare in it on every machine
+    let nfc = |text: &str| {
+        icu_normalizer::ComposingNormalizerBorrowed::new_nfc()
+            .normalize(text)
+            .into_owned()
+    };
+    let name = nfc(path.rsplit('/').next().unwrap_or(path));
     if let Some(members) = cache.unpacked(digest, None) {
         return matches!(members.as_slice(), [only] if only.path == name);
     }
@@ -64,7 +70,7 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
         return false;
     };
     matches!(detect(&object), Ok(Detected::Archive(Format::Zip)))
-        && zip::sole_member(&object).as_deref() == Some(name)
+        && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
 }
 
 /// an archive's file name without its archive ending: `train` for `train.tar.gz`.

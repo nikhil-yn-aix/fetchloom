@@ -99,14 +99,6 @@ def times(result):
     return f"{shown}\u00d7"
 
 
-def compared(value, base):
-    """"1.6x slower", "2.4x faster" or "even", against fetchloom."""
-    result = value / base
-    if abs(result - 1) < .05:
-        return "even"
-    return f"{times(result)} slower" if result > 1 else f"{times(1 / result)} faster"
-
-
 def ordered(summaries):
     return sorted(summaries.items(), key=lambda pair: (bool(pair[1]["failures"]) or pair[1]["median"] is None,
                                                        pair[1]["median"] or float("inf"), pair[0]))
@@ -214,7 +206,7 @@ def render(results, repo):
         lines += [f"- recorded: `{meta.get('date', 'unknown')}`",
                   f"- CPU: {machine.get('cpu', 'unknown')}; cores: {machine.get('cores', 'unknown')}; memory: {machine.get('memory', 'unknown')}",
                   f"- kernel: `{meta.get('kernel', 'unknown')}`; seed: `{meta.get('seed', 'unknown')}`",
-                  f"- fetchloom: `{meta.get('fetchloom_version', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
+                  f"- fetchloom: `{meta.get('tool_versions', {}).get('fetchloom', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
                   f"- filesystems: `{json.dumps(meta.get('filesystems', {}), sort_keys=True)}`",
                   "- versions: " + "; ".join(f"{name} `{version}`" for name, version in meta.get("tool_versions", {}).items()), ""]
     networks = next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})

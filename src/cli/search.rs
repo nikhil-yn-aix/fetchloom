@@ -26,16 +26,20 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             units::count(report.candidates.len() as u64, "dataset", "datasets")
         ),
     );
-    // with stdout and stderr both captured, the references on stdout are the list
+    // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() {
         let parts = parts(output, &report.candidates);
         let pad = widest(parts.iter().map(|(reference, _, _)| reference.as_str()));
         for (number, (reference, title, facts)) in parts.iter().enumerate() {
             output.candidate(number + 1, reference, pad, title, facts);
         }
-    }
-    for candidate in &report.candidates {
-        output.answer_untold(&line(candidate));
+        for candidate in &report.candidates {
+            output.answer_untold(&line(candidate));
+        }
+    } else {
+        for candidate in &report.candidates {
+            output.answer(&line(candidate));
+        }
     }
     if limit < 20 && more(&report.candidates, limit) {
         output.hint(&format!(

@@ -411,9 +411,10 @@ pub(super) fn remind(context: &Context) {
     }
 }
 
-/// sets `marker`'s time to `now`. writing an empty file again leaves its time alone on windows.
+/// sets `marker`'s time to `now`. writing an empty file again leaves its time alone on windows,
+/// and the marker is opened without following a link someone planted in its place.
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
-    fs::File::create(marker)?.set_modified(now)
+    crate::cache::open_unfollowed(marker, true)?.set_modified(now)
 }
 /// as [`needed_with`], or none when a registered project is out of reach, as on a drive not
 /// plugged in: its lock cannot be read, so nothing it may need can be told apart. only

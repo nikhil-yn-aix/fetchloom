@@ -13,7 +13,7 @@ use crate::place::Method;
 
 const VERSION: u32 = 1;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub(crate) struct State {
     version: u32,
     /// keyed by the file's path in the project, with `/` between folders.

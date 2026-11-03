@@ -268,7 +268,7 @@ fn removing_a_dataset_keeps_files_of_an_archive_the_cache_never_saw() -> Result 
     ok(&sandbox.run(&["add", &zip.url])?)?;
     ok(&sandbox.run(&["add", &notes.url])?)?;
     let removed = sandbox
-        .command_in(&sandbox.work(), &["remove", "notes"])
+        .command(&["remove", "notes"])
         .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
         .output()?;
     ok(&removed)?;

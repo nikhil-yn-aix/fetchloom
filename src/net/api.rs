@@ -3,7 +3,6 @@
 use std::borrow::Cow;
 use std::future::Future;
 
-use bytes::BytesMut;
 use reqwest::header;
 use serde::de::DeserializeOwned;
 use url::Url;
@@ -115,7 +114,7 @@ impl Net {
             .and_then(|link| response.url().join(&link).ok());
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let final_url = response.url().clone();
-        let mut body = BytesMut::new();
+        let mut body = Vec::new();
         loop {
             let chunk = tokio::select! {
                 chunk = tokio::time::timeout(IDLE, response.chunk()) => chunk,
@@ -157,7 +156,7 @@ impl Net {
             url: final_url,
             next,
             region,
-            body: body.to_vec(),
+            body,
         })
     }
 }

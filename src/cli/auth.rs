@@ -406,13 +406,12 @@ fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
     if !cfg!(windows) {
         return;
     }
+    // compared part by part, so C:\Users\bob-shared is not inside C:\Users\bob
+    let lower =
+        |path: &std::path::Path| std::path::PathBuf::from(path.to_string_lossy().to_lowercase());
     let inside = auth::env("USERPROFILE")
         .map(std::path::PathBuf::from)
-        .is_some_and(|profile| {
-            path.to_string_lossy()
-                .to_lowercase()
-                .starts_with(&profile.to_string_lossy().to_lowercase())
-        });
+        .is_some_and(|profile| lower(path).starts_with(lower(&profile)));
     if !inside {
         output.warn(&format!(
             "{} is outside your user folder, so other users of this machine may be able to read it; keep the key in your profile, or limit the folder's permissions",
@@ -469,11 +468,26 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             let shared = account.shared_with();
             if let Some(tools) = shared {
                 let question = format!("{tools} read {} too. remove it?", path.display());
-                if output.ask_yes_no(&question, false)? == Some(false) {
-                    return Ok(Report::Logout {
-                        account: account.id(),
-                        removed_from: None,
-                    });
+                match output.ask_yes_no(&question, false)? {
+                    Some(true) => {}
+                    None if context.yes => {}
+                    Some(false) => {
+                        return Ok(Report::Logout {
+                            account: account.id(),
+                            removed_from: None,
+                        });
+                    }
+                    // nobody can be asked, so a file other tools need stays unless --yes says so
+                    None => {
+                        return Err(Error::new(
+                            Kind::Usage,
+                            format!("{tools} read {} too", path.display()),
+                        )
+                        .help(format!(
+                            "to sign them out as well, run `fetchloom auth logout {} --yes`",
+                            logout.account
+                        )));
+                    }
                 }
             }
             match &account {

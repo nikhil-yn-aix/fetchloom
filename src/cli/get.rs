@@ -684,7 +684,17 @@ fn unclaimed(folder: PathBuf, taken: &[PathBuf]) -> PathBuf {
 
 /// a link as reports show it, a secret in it masked.
 fn shown(link: &str) -> String {
-    net::mask_query(link.trim()).into_owned()
+    let link = link.trim();
+    // a refused link may still carry a login, which never reaches a message or the report
+    let link = match url::Url::parse(link) {
+        Ok(mut url) if !url.username().is_empty() || url.password().is_some() => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            url.to_string()
+        }
+        _ => link.to_owned(),
+    };
+    net::mask_query(&link).into_owned()
 }
 
 /// says at once that one of several links failed, so the others' story goes on around it.
@@ -1064,6 +1074,15 @@ mod drive_docs_tests;
 mod tests {
     use super::*;
     use crate::cli::args::Filter;
+
+    #[test]
+    fn a_link_is_shown_without_its_login_or_secret_query() {
+        assert_eq!(
+            shown(" https://ada:pw@example.org/a.csv?token=t&v=1 "),
+            "https://example.org/a.csv?token=***&v=1"
+        );
+        assert_eq!(shown("zenodo:1"), "zenodo:1");
+    }
 
     fn approval_context() -> Context {
         Context::new(crate::output::Output::new(

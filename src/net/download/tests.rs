@@ -304,6 +304,31 @@ fn a_resume_answered_from_another_version_starts_over() {
 /// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,
 /// which proves the joined bytes as a pinned SHA-256 does.
 #[test]
+fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
+    let (url, asked) = serve(vec![reply(
+        "206 Partial Content",
+        &[("Content-Range", "bytes 0-3/4")],
+        "abcd",
+    )]);
+    let fetched = download(&url.join("file").unwrap(), refuse).unwrap();
+    assert_eq!(fetched.size, 4);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+    // answered again and again, this would start over forever
+    let (url, asked) = serve(vec![
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 2-3/4")],
+            "cd"
+        );
+        3
+    ]);
+    assert!(download(&url.join("file").unwrap(), refuse).is_err());
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
+/// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,
+/// which proves the joined bytes as a pinned SHA-256 does.
+#[test]
 fn a_stated_md5_lets_a_download_without_validators_resume() {
     let cut = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\n\r\naaaa";
     let (url, _) = serve(vec![

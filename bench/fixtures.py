@@ -135,8 +135,6 @@ def prepare_native(case, fetchloom, names):
                 run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)
                 run(["datalad", "save", "-m", "prepare benchmark inputs"])
                 run(["git", "annex", "drop", "--force", "--all"])
-            else:
-                (target / "registry.json").write_text(json.dumps(case["files"]))
             (target / ".ready").write_text("1\n")
     case["prepared"] = str(root)
     return case

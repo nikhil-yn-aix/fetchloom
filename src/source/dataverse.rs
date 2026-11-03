@@ -54,6 +54,13 @@ impl Dataset {
             return Err(bad());
         }
         let (pid, version) = match rest.rsplit_once('@') {
+            Some((_, version)) if version.eq_ignore_ascii_case(":draft") => {
+                return Err(Error::new(
+                    Kind::ReferenceInvalid,
+                    "a dataverse draft changes until it is published, so it cannot be pinned",
+                )
+                .help("name a published version, such as @1.0, or none for the newest"));
+            }
             Some((pid, version)) if is_version(version) => (pid, Some(version.to_owned())),
             _ => (rest, None),
         };
@@ -62,9 +69,6 @@ impl Dataset {
             None if is_pid(pid) => Item::Dataset(pid.to_owned()),
             _ => return Err(bad()),
         };
-        if host.is_empty() || host.contains(['/', '?', '#']) {
-            return Err(bad());
-        }
         Ok(Dataset {
             host: host.to_ascii_lowercase(),
             item,
@@ -116,6 +120,11 @@ impl Dataset {
         }
     }
 
+    /// the account a key for this install is saved under.
+    pub(super) fn account(&self) -> crate::auth::Account {
+        crate::auth::Account::Dataverse(self.host_name().to_ascii_lowercase())
+    }
+
     /// asks the install's native API for the dataset's files.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
         if let Item::File(id) = &self.item {
@@ -129,7 +138,10 @@ impl Dataset {
     fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
         super::json(self, response).map_err(|error| {
             if error.kind == Kind::AuthRequired {
-                error.help("ask the dataset's owner for a public copy. fetchloom does not sign in to dataverse")
+                let command = self.account().command();
+                error.help(format!(
+                    "if you have access, sign in with `{command}` and run the same command again; otherwise ask the dataset's owner for access"
+                ))
             } else {
                 error
             }
@@ -187,7 +199,7 @@ fn is_pid(text: &str) -> bool {
     })
 }
 
-/// a dataverse version: `2.0`, `3`, or a name such as `:draft`.
+/// a dataverse version: `2.0`, `3`, or a name such as `:latest-published`.
 fn is_version(text: &str) -> bool {
     !text.is_empty()
         && (text.chars().all(|c| c.is_ascii_digit() || c == '.') || text.starts_with(':'))

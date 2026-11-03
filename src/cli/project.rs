@@ -213,7 +213,7 @@ async fn resolve_add(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    engine::filter(&parsed.reference.to_string(), &entry, &listing)?;
+    engine::filter(&parsed.reference.shown(), &entry, &listing)?;
     Ok(Addition {
         listing,
         reference,
@@ -414,7 +414,7 @@ async fn again(
             Kind::Usage,
             format!(
                 "{} is already in data.toml as {name}, with {differs}",
-                listing.resolved
+                listing.resolved.shown()
             ),
         )
         .help(format!(
@@ -544,16 +544,16 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Some(hold(context, &project, "sync").await?)
     };
     let (text, manifest) = project.manifest()?;
+    let read = project.lock_and_text()?;
     if args.locked {
-        let Some(lock) = project.lock()? else {
+        let Some((lock, _)) = &read else {
             return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
                 .help("run `fetchloom lock` and commit data.lock, or sync without --locked"));
         };
-        check(&project, &manifest, Some(&lock)).map_err(|error| {
+        check(&project, &manifest, Some(lock)).map_err(|error| {
             error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
         })?;
     }
-    let read = project.lock_and_text()?;
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
         lock: read
@@ -953,7 +953,7 @@ async fn sync_all(
     seen: Option<&Seen>,
 ) -> Result<(bool, Placement), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
-    survey.look_again(&work.project.root, &work.cache, force)?;
+    survey.check_doubted(&work.project.root, &work.cache)?;
     disk::audit(work.project, &survey, &work.cache)?;
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
@@ -999,7 +999,7 @@ async fn preview_all(
     seen: Option<&Seen>,
 ) -> Result<(bool, Preview), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
-    survey.look_again(&work.project.root, &work.cache, force)?;
+    survey.check_doubted(&work.project.root, &work.cache)?;
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
     {
@@ -1229,6 +1229,12 @@ fn choose_name(
         .or_else(|| listing.title.as_deref().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
+    // data.toml travels to windows machines, where a folder named con or aux cannot exist
+    let name = if name::is_reserved_on_windows(&name) {
+        format!("{name}-data")
+    } else {
+        name
+    };
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number
     if !manifest.datasets.contains_key(&name) {
         return Ok(name);
@@ -1237,8 +1243,7 @@ fn choose_name(
         .map(|number| format!("{name}-{number}"))
         .find(|numbered| !manifest.datasets.contains_key(numbered));
     let Some(numbered) = numbered else {
-        unused(&name, manifest)?;
-        return Ok(name);
+        return Err(taken(&name));
     };
     output.warn(&format!(
         "{name} was taken, so this one is {numbered}; choose a name with --as <name>"
@@ -1249,15 +1254,19 @@ fn choose_name(
 /// refuses a name data.toml already has.
 fn unused(name: &str, manifest: &Manifest) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
-        return Err(Error::new(
-            Kind::Usage,
-            format!("data.toml already has a dataset called {name}"),
-        )
-        .help(format!(
-            "give this one another name with --as <name>, or run `fetchloom remove {name}` first"
-        )));
+        return Err(taken(name));
     }
     Ok(())
+}
+
+fn taken(name: &str) -> Error {
+    Error::new(
+        Kind::Usage,
+        format!("data.toml already has a dataset called {name}"),
+    )
+    .help(format!(
+        "give this one another name with --as <name>, or run `fetchloom remove {name}` first"
+    ))
 }
 /// how data.toml records a reference: the canonical id where a source has one, and the link as
 /// pasted for drive and dropbox, and the raw endpoint for plain file links.

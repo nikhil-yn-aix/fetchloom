@@ -17,16 +17,33 @@ fn finishes(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
         .stderr(Stdio::piped())
         .spawn()?;
     let open = child.stdin.take();
+    // read as the command writes, so a long help or story never fills a pipe and stalls it
+    let drain = |stream: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut stream) = stream {
+                let _ = stream.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|s| Box::new(s) as _));
+    let stderr = drain(child.stderr.take().map(|s| Box::new(s) as _));
     let started = Instant::now();
     while child.try_wait()?.is_none() {
         if started.elapsed() > Duration::from_secs(60) {
             child.kill()?;
+            child.wait()?;
             return Err(format!("{args:?} is still waiting after a minute").into());
         }
         std::thread::sleep(Duration::from_millis(20));
     }
     drop(open);
-    Ok(child.wait_with_output()?)
+    Ok(Output {
+        status: child.wait()?,
+        stdout: stdout.join().map_err(|_| "reading stdout failed")?,
+        stderr: stderr.join().map_err(|_| "reading stderr failed")?,
+    })
 }
 
 #[test]

@@ -448,15 +448,20 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
         Account::Osf,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
-    accounts.extend(
-        netrc::read(var)
-            .into_iter()
-            .map(|entry| Account::Login(entry.host)),
-    );
     let mut found: Vec<Credential> = accounts
         .iter()
         .filter_map(|account| account.credential(&account.find(var)?))
         .collect();
+    // the file is read once here, rather than again for each login it holds
+    let path = netrc::path(var);
+    found.extend(netrc::read(var).into_iter().filter_map(|entry| {
+        let account = Account::Login(entry.host);
+        account.credential(&Found {
+            origin: Origin::File(path.clone()?),
+            secret: entry.password,
+            login: Some(entry.login),
+        })
+    }));
     found.extend(crate::source::kaggle_credentials(var));
     found
 }

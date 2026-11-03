@@ -132,14 +132,30 @@ fn words(text: &str) -> Vec<(String, usize, usize)> {
             text[start..at].to_owned()
         };
         if word == "macdef" {
-            at = text[at..]
-                .find("\n\n")
-                .map_or(bytes.len(), |found| at + found);
+            at = macro_end(text, at);
             continue;
         }
         words.push((word, start, at));
     }
     words
+}
+
+/// where a `macdef` body that starts at `at` ends: at the next line that is empty, a windows line
+/// ending included, or at the end of the file.
+fn macro_end(text: &str, at: usize) -> usize {
+    let mut line = text[at..]
+        .find('\n')
+        .map_or(text.len(), |found| at + found + 1);
+    while line < text.len() {
+        let end = text[line..]
+            .find('\n')
+            .map_or(text.len(), |found| line + found);
+        if text[line..end].trim_end_matches('\r').is_empty() {
+            return end;
+        }
+        line = end + 1;
+    }
+    text.len()
 }
 
 /// writes `login` and `password` for `host`, replacing an entry the file already has for it and
@@ -212,6 +228,11 @@ mod tests {
         ]
         .map(|(h, l, p)| (h.to_owned(), l.to_owned(), p.to_owned()));
         assert_eq!(pairs, expected);
+        // a windows _netrc ends its lines with \r\n, its blank lines too
+        let windows = "machine a.example login x password y\r\nmacdef init\r\ncd /\r\n\r\n\
+                       machine b.example login u password p\r\n";
+        let hosts: Vec<_> = parse(windows).into_iter().map(|e| e.host).collect();
+        assert_eq!(hosts, ["a.example", "b.example"]);
     }
 
     #[test]

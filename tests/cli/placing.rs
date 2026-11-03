@@ -304,7 +304,6 @@ fn ambiguous_aliases() -> Result {
     Ok(())
 }
 
-/// waits until `server` has seen `count` requests.
 /// sets when `path` was last written, leaving its read-only flag as it was.
 fn set_time(path: &Path, time: SystemTime) -> Result {
     let before = fs::metadata(path)?.permissions();
@@ -707,9 +706,7 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::p
     let modified =
         fs::metadata(sandbox.work().join("data").join("iris").join("iris.csv"))?.modified()?;
     if modified.duration_since(UNIX_EPOCH)?.subsec_nanos() == 0 {
-        while SystemTime::now() < modified + Duration::from_secs(2) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        sandbox.wait_for_a_later_time(modified)?;
         for project in [sandbox.work(), other.clone()] {
             let state = project.join(".fetchloom").join("state");
             fs::write(&state, fs::read(&state)?)?;
@@ -1135,7 +1132,8 @@ fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     } else {
         assert!(stderr.contains("1 file copied, 0 B"), "{stderr}");
         assert!(stderr.contains("1 copy"), "{stderr}");
-        assert!(stderr.contains("data is inside onedrive"), "{stderr}");
+        // copy = true asks for copies, so the sync client is not what made them
+        assert!(!stderr.contains("data is inside onedrive"), "{stderr}");
     }
     assert_eq!(
         fs::metadata(sandbox.work().join("data/empty/empty.csv"))?.len(),

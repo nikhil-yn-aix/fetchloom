@@ -10,7 +10,17 @@ authors = ["Nikhil Y N", "KairosLab India Private Limited"]
 readme = "README.md"
 keywords = ["dataset", "research", "reproducibility", "download", "lockfile"]
 categories = ["command-line-utilities", "science"]
-include = ["/src/**/*.rs", "/Cargo.toml", "/Cargo.lock", "/LICENSE", "/NOTICE", "/README.md"]
+include = [
+    "/src/**/*.rs",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/LICENSE",
+    "/NOTICE",
+    "/README.md",
+    # help.rs checks its topics against these pages in its tests
+    "/docs/user/reference/environment.md",
+    "/docs/user/reference/exit-codes.md",
+]
 default-run = "fetchloom"
 
 [[bin]]

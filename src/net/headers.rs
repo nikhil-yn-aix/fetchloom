@@ -76,16 +76,18 @@ pub(super) fn validators(headers: &HeaderMap) -> Validators {
 
 /// the first byte of a `Content-Range: bytes 100-199/200` answer.
 pub(super) fn range_start(headers: &HeaderMap) -> Option<u64> {
-    let value = headers.get(header::CONTENT_RANGE)?.to_str().ok()?;
-    let (range, _) = value.strip_prefix("bytes ")?.split_once('/')?;
-    range.split_once('-')?.0.trim().parse().ok()
+    range_bounds(headers)?.0.trim().parse().ok()
 }
 
 /// the last byte of a `Content-Range: bytes 100-199/200` answer.
 pub(super) fn range_end(headers: &HeaderMap) -> Option<u64> {
+    range_bounds(headers)?.1.trim().parse().ok()
+}
+
+fn range_bounds(headers: &HeaderMap) -> Option<(&str, &str)> {
     let value = headers.get(header::CONTENT_RANGE)?.to_str().ok()?;
     let (range, _) = value.strip_prefix("bytes ")?.split_once('/')?;
-    range.split_once('-')?.1.trim().parse().ok()
+    range.split_once('-')
 }
 
 /// whether a server says it answers requests for byte ranges.

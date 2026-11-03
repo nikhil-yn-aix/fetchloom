@@ -236,7 +236,7 @@ impl<'a> Placing<'a> {
             .into_iter()
             .filter(|target| !present.contains(&target.sha256))
             .filter(|target| seen.insert(target.locked.sha256))
-            .map(|target| (target.dataset.clone(), target.locked))
+            .map(|target| (target.dataset.to_owned(), target.locked))
             .collect())
     }
 
@@ -261,7 +261,7 @@ impl<'a> Placing<'a> {
                     preview.changes.replace.push(target.path.clone());
                     preview
                         .by_dataset
-                        .entry(target.dataset.clone())
+                        .entry(target.dataset.to_owned())
                         .or_default()
                         .replace
                         .push(target.path.clone());
@@ -271,7 +271,7 @@ impl<'a> Placing<'a> {
                     preview.changes.place.push(target.path.clone());
                     preview
                         .by_dataset
-                        .entry(target.dataset.clone())
+                        .entry(target.dataset.to_owned())
                         .or_default()
                         .place
                         .push(target.path.clone());
@@ -685,7 +685,7 @@ fn now(path: &Path) -> Option<Look> {
 
 fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: u64) -> Placed {
     Placed {
-        dataset: target.dataset.clone(),
+        dataset: target.dataset.to_owned(),
         sha256: target.sha256,
         method,
         look,
@@ -765,7 +765,7 @@ mod tests {
         let targets: Vec<Target> = names
             .iter()
             .map(|name| Target {
-                dataset: "weather".to_owned(),
+                dataset: "weather",
                 path: format!("data/weather/{name}.csv"),
                 sha256: stored.digest,
                 size: bytes.len() as u64,
@@ -785,7 +785,7 @@ mod tests {
                 state.files.insert(
                     target.path.clone(),
                     Placed {
-                        dataset: target.dataset.clone(),
+                        dataset: target.dataset.to_owned(),
                         sha256: target.sha256,
                         method: Method::Hardlink,
                         look: now(&path).unwrap(),

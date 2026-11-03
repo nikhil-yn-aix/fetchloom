@@ -75,7 +75,9 @@ impl Overall {
             let bar = context
                 .output
                 .bar("Downloading", units::count(count as u64, "file", "files"));
-            bar.start(sizes().sum(), 0);
+            // what the sources told now, and each server's size as its download starts
+            let known: Vec<u64> = sizes().flatten().collect();
+            bar.start((!known.is_empty()).then(|| known.iter().sum()), 0);
             bar
         });
         let what = match jobs {
@@ -91,6 +93,13 @@ impl Overall {
             bar.advance(bytes);
         }
         self.ticker.advance(bytes);
+    }
+
+    fn sized(&self, bytes: u64) {
+        if let Some(bar) = &self.bar {
+            bar.grow(bytes);
+        }
+        self.ticker.sized(bytes);
     }
 }
 
@@ -112,6 +121,10 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
+    /// how far into the file this download is, and the furthest point the overall progress
+    /// counted, so bytes fetched again after a retry or a fresh start count once.
+    position: AtomicU64,
+    counted: AtomicU64,
 }
 
 impl<'a> Watch<'a> {
@@ -132,6 +145,8 @@ impl<'a> Watch<'a> {
             sized: AtomicBool::new(false),
             unbounded: AtomicBool::new(false),
             received: AtomicU64::new(0),
+            position: AtomicU64::new(0),
+            counted: AtomicU64::new(0),
         }
     }
 
@@ -160,6 +175,14 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// moves the overall progress up to `position`, never back and never twice over a byte.
+    fn count(&self, position: u64) {
+        let before = self.counted.fetch_max(position, Ordering::Relaxed);
+        if position > before {
+            self.overall.advance(position - before);
+        }
+    }
+
     fn on(&self, event: &Event) -> Result<(), Error> {
         let label = &self.job.label;
         let bar = self.bar();
@@ -179,14 +202,15 @@ impl<'a> Watch<'a> {
                     if let Some(total) = total
                         && !self.sized.swap(true, Ordering::Relaxed)
                     {
-                        self.overall.ticker.sized(total);
+                        self.overall.sized(total);
                     }
                     self.unbounded.store(total.is_none(), Ordering::Relaxed);
                     self.received.store(resumed, Ordering::Relaxed);
                 }
                 bar.message("Downloading", label.clone());
                 bar.start(total, resumed);
-                self.overall.advance(resumed);
+                self.position.store(resumed, Ordering::Relaxed);
+                self.count(resumed);
             }
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
@@ -205,7 +229,7 @@ impl<'a> Watch<'a> {
             }
             Event::Bytes(bytes) => {
                 bar.advance(bytes);
-                self.overall.advance(bytes);
+                self.count(self.position.fetch_add(bytes, Ordering::Relaxed) + bytes);
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > super::ASK_ABOVE {
                     let size = format!("more than {}", units::size(super::ASK_ABOVE));
@@ -240,10 +264,11 @@ pub(super) async fn all(
             Err(error) => failed.push((index, error)),
         }
     }
+    // a cache that could not take the downloads in matters more than which of them failed
+    published?;
     if let Some(error) = together(&labels, failed) {
         return Err(error);
     }
-    published?;
     Ok(fetched)
 }
 
@@ -467,27 +492,25 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
 /// says which file a failure concerns, and for bytes that changed upstream, how to take them on.
 fn explain(error: Error, job: &Job) -> Error {
     // an MD5 mismatch comes with its own help, since the source contradicts itself
-    let changed_upstream = error.kind == Kind::IntegrityMismatch
-        && error.help.is_none()
-        && job.fetch.expect.sha256.is_some()
-        && job.dataset.is_some();
-    if !changed_upstream {
+    let dataset = job.dataset.as_ref().filter(|_| {
+        error.kind == Kind::IntegrityMismatch
+            && error.help.is_none()
+            && job.fetch.expect.sha256.is_some()
+    });
+    let Some(dataset) = dataset else {
         return if error.kind == Kind::IntegrityMismatch {
             error.or_help("run the same command again later. if it keeps happening, ask the dataset's owner to check the file and its published size or fingerprint")
         } else {
             error
         };
-    }
-    let mut error = Error {
-        message: format!("{} is not the file that was locked", job.label),
-        ..error
     };
-    if let Some(dataset) = &job.dataset {
-        error.help = Some(format!(
+    Error {
+        message: format!("{} is not the file that was locked", job.label),
+        help: Some(format!(
             "if the new version is intended, run `fetchloom lock --upgrade {dataset}`"
-        ));
+        )),
+        ..error
     }
-    error
 }
 
 #[cfg(test)]

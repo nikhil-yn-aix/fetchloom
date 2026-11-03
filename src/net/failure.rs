@@ -359,22 +359,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_honors_the_server_and_refuses_long_waits() {
-        for attempt in 1..=6 {
-            let wait = backoff(attempt, None).unwrap();
-            assert!(wait <= LONGEST_WAIT);
-        }
-        assert_eq!(
-            backoff(1, Some(Duration::from_secs(5))).unwrap(),
-            Duration::from_secs(5)
-        );
-        assert_eq!(
-            backoff(1, Some(Duration::from_secs(600))),
-            Err(Duration::from_secs(600))
-        );
-    }
-
-    #[test]
     fn a_permanent_http_status_says_what_to_do_without_retrying() {
         let url = Url::parse("https://example.org/data.csv").unwrap();
         for code in [400, 402, 418, 422, 451] {
@@ -516,6 +500,11 @@ mod tests {
                 Err(Duration::from_millis(60_001))
             );
         }
+        // a server's shorter wait is kept as it asked
+        assert_eq!(
+            backoff(1, Some(Duration::from_secs(5))),
+            Ok(Duration::from_secs(5))
+        );
     }
 
     #[test]

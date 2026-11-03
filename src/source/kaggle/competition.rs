@@ -154,6 +154,10 @@ impl Competition {
                 _ => {}
             }
             let page: Page = crate::source::json(self, &response)?;
+            // each page then adds a file, so the file limit bounds the pages too
+            if page.files.is_empty() && !page.next_page_token.is_empty() {
+                return Err(self.invalid("the listing sent an empty page with more to come"));
+            }
             for file in page.files {
                 files.push(self.remote(file)?);
             }

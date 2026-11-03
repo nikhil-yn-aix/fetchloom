@@ -138,11 +138,9 @@ mod tests {
 
     #[test]
     fn a_file_over_its_download_quota_says_to_wait() {
-        // no file was over its quota while this was written, so this page is not recorded. its
-        // markup is the one gdown reads
-        let text = r#"<div id="uc-text"><p class="uc-error-caption">Sorry, you can&#39;t view or download this file at this time.</p><p class="uc-error-subcaption">Too many users have viewed or downloaded this file recently. Please try accessing the file again later. If the file you are trying to access is particularly large or is shared with many people, it may take up to 24 hours to be able to view or download the file. If you still can&#39;t access a file after 24 hours, contact your domain administrator.</p></div>"#;
+        let text = page("drive/quota.html");
         for status in [200, 403] {
-            let err = divert(&download(BASNET), status, text).unwrap_err();
+            let err = divert(&download(BASNET), status, &text).unwrap_err();
             assert_eq!(err.kind, Kind::NetworkRateLimited, "{status}");
             assert_eq!(
                 err.message,

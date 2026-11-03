@@ -281,7 +281,8 @@ impl Net {
     /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
     /// hop is checked the way its connection will be made before it is sent, and waits while its
     /// host's rate limit is used up. a credential goes only to its own host, and never once a
-    /// redirect has left the first one.
+    /// redirect has left the first one, except a saved login, which answers its own host on any
+    /// hop as curl's does.
     async fn send(
         &self,
         url: &Url,

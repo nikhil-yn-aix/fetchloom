@@ -116,6 +116,10 @@ fn references_read_back_as_written() {
             "https://storage.googleapis.com/bucket/a%20folder/%2B/",
             "gs://bucket/a folder/+/",
         ),
+        (
+            "https://storage.googleapis.com/cloud-samples-data",
+            "gs://cloud-samples-data/",
+        ),
     ] {
         let parsed = Reference::parse(text).unwrap();
         assert!(matches!(parsed.reference, Reference::Bucket(_)), "{text}");
@@ -158,6 +162,8 @@ fn malformed_bucket_references_are_refused() {
         "s3://two..dots/",
         "gs://bad!name/",
         "s3://bucket/line\nbreak/",
+        "s3://bucket/./",
+        "gs://bucket/a/../b/",
     ] {
         let error = Reference::parse(text).unwrap_err();
         assert_eq!(error.kind, Kind::ReferenceInvalid, "{text:?}");

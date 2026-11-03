@@ -254,6 +254,11 @@ fn file_access_errors_do_not_suggest_unscoped_credentials() {
         let file = Dataset::parse("dataverse.harvard.edu/file:6867336").unwrap();
         let error = block_on(file.resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
-        assert!(error.help.unwrap().contains("public copy"));
+        assert!(
+            error
+                .help
+                .unwrap()
+                .contains("`fetchloom auth login dataverse`")
+        );
     }
 }

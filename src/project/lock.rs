@@ -96,6 +96,17 @@ impl Lock {
                 }
                 for dataset in &mut datasets {
                     dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
+                    if let Some(pair) = dataset
+                        .files
+                        .windows(2)
+                        .find(|pair| pair[0].path == pair[1].path)
+                    {
+                        return Err(Error::new(
+                            Kind::ProjectInvalid,
+                            format!("data.lock lists {} twice in {}", pair[0].path, dataset.name),
+                        )
+                        .help(BROKEN));
+                    }
                     check_paths(dataset)?;
                 }
                 Ok(Lock { datasets })
@@ -338,6 +349,18 @@ mod tests {
             assert_eq!(error.message, "data.lock lists the dataset iris twice");
             assert_eq!(error.help.as_deref(), Some(BROKEN));
         }
+    }
+
+    #[test]
+    fn a_file_listed_twice_is_refused_by_both_readers() {
+        let mut lock = sample();
+        let again = lock.datasets[0].files[0].clone();
+        lock.datasets[0].files.push(again);
+        let edited = format!("# edited lock\n{}", lock.render());
+        let error = Lock::parse(&edited).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(error.message.contains("twice"), "{}", error.message);
+        assert_eq!(error.help.as_deref(), Some(BROKEN));
     }
 
     #[test]

@@ -27,11 +27,12 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 | `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
 | `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
+| `python3 -m unittest discover -s bench` | x86_64 linux | benchmark harness: fixtures, runs, live comparison and report rendering |
 | disk-touching tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
 | disk-touching tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
 | disk-touching tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
 
-[deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. the advisory ignore list is empty; changes to exceptions belong with their reasons.
+[deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. three advisories are ignored, each with its reason: zvariant, zvariant_derive and zbus_names were folded into zbus 6, which keyring's linux secret service store does not use yet. they are notices that the crates moved, not flaws, and go once keyring moves.
 
 ## filesystem runs
 
@@ -55,7 +56,7 @@ this exercises the ignored live source tests and the larger archive test. jobs h
 
 default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in every workflow.
 
-[mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) runs only through manual dispatch. on `macos-latest` it builds a release executable and runs it as a person would against live zenodo and the search catalogs: `add zenodo:3608990`, `status`, `sync` after deleting `data/`, `get -o`, `search iris --json`, a second project that must clone or hardlink from the shared cache, a project in `~/Library/CloudStorage` that must not hardlink, the default cache in `~/Library/Caches/fetchloom`, `auth --offline` when the build has that command, and the bash and zsh completion scripts. every check runs even after one fails, and the job uploads everything the commands printed as the `mac-e2e-log` artifact.
+[mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) runs only through manual dispatch. on `macos-latest` it builds a release executable and runs it as a person would against live zenodo and the search catalogs: `add zenodo:3608990`, `status`, `sync` after deleting `data/`, `get -o`, `search iris --json`, a second project that must clone or hardlink from the shared cache, a project in `~/Library/CloudStorage` that must not hardlink, the default cache in `~/Library/Caches/fetchloom`, `auth --offline`, and the bash and zsh completion scripts. every check runs even after one fails, and the job uploads everything the commands printed as the `mac-e2e-log` artifact.
 
 ## documentation site
 

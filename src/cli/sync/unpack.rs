@@ -178,6 +178,10 @@ impl Loop<'_> {
     /// unpacks archives the cache holds, remembers them for [`Loop::drop_unpacked`], and says each
     /// one's tree hash, or none for a file whose bytes are no archive after all.
     async fn unpack(&self, archives: Vec<Unpack>) -> Result<Vec<Option<Sha256>>, Error> {
+        // most syncs unpack nothing, and need no progress ticker for it
+        if archives.is_empty() {
+            return Ok(Vec::new());
+        }
         let digests: Vec<Sha256> = archives.iter().map(|unpack| unpack.archive).collect();
         let unpacked = unpack_all(self.context, &self.cache, archives).await?;
         let mut done = self.unpacked.lock().unwrap_or_else(PoisonError::into_inner);

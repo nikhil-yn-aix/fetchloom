@@ -24,7 +24,7 @@ pub(crate) use changed::{Doubt, may_follow};
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{NewObject, Sealed};
-pub(crate) use partial::{Claim, Partial, PartialWriter, read_unfollowed};
+pub(crate) use partial::{Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
@@ -528,6 +528,8 @@ pub(crate) mod tests {
         }
         let cache = Cache::open(cache.root.clone()).unwrap();
         store(&cache, b"abc");
+        // finder leaves .DS_Store in any folder a person opens, objects/ too
+        fs::write(cache.root.join("objects/.DS_Store"), b"finder").unwrap();
 
         let checked = cache.verify_all(1, &|_| {});
         assert_eq!(checked.objects, 1);

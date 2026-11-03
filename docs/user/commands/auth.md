@@ -85,7 +85,7 @@ a key the source refuses is marked `Refused` with the command to sign in again. 
 
 ## signing out
 
-`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too. a key from an environment variable cannot be removed this way; unset the variable.
+`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too; where nobody can answer, as in a script, it removes the file only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable.
 
 ## JSON
 

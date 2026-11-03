@@ -139,7 +139,7 @@ fn local(name: &str) -> Result<&str, String> {
 }
 
 /// text with its entity and character references replaced.
-pub(super) fn unescape(text: &str) -> Result<Cow<'_, str>, String> {
+fn unescape(text: &str) -> Result<Cow<'_, str>, String> {
     if !text.contains('&') {
         return Ok(Cow::Borrowed(text));
     }

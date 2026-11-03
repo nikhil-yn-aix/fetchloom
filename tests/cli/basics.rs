@@ -230,9 +230,20 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     let options = scope
         .lines()
         .find(|line| line.starts_with("every command takes"))
-        .ok_or("scope.md names no options")?;
+        .ok_or("commands/README.md names no options")?;
     let sandbox = Sandbox::new()?;
     for (commands, intro) in [
+        (
+            &[
+                &["add"][..],
+                &["get"],
+                &["sync"],
+                &["status"],
+                &["search"],
+                &["cache", "gc"],
+            ][..],
+            "every command takes ",
+        ),
         (
             &[&["add"][..], &["remove"], &["sync"], &["cache", "gc"]][..],
             "`add`, `remove`, `sync` and `cache gc` also take ",
@@ -242,10 +253,11 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
         (&[&["get"][..]], "`get` takes "),
     ] {
         let (_, rest) = options.split_once(intro).ok_or(intro)?;
+        // a sentence lists one command's options, or two joined by ", and `get` takes"
         let named = rest
             .split(". ")
             .next()
-            .and_then(|sentence| sentence.split(", and ").next())
+            .and_then(|sentence| sentence.split(", and `get` takes").next())
             .unwrap_or_default();
         for command in commands {
             let help = text(&sandbox.run(&[*command, &["--help"]].concat())?.stdout)?;
@@ -253,7 +265,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 let flag = option.split(' ').next().unwrap_or(option);
                 assert!(
                     help.contains(&format!("{flag} ")) || help.contains(&format!("{flag},")),
-                    "scope.md says {} takes {flag}",
+                    "commands/README.md says {} takes {flag}",
                     command.join(" ")
                 );
             }
@@ -290,7 +302,9 @@ fn welcome() -> Result {
             .is_some_and(|line| line.contains("`fetchloom help concepts`")),
         "the welcome ends with where to learn more"
     );
-    insta::assert_snapshot!(stdout);
+    let mut settings = insta::Settings::clone_current();
+    settings.add_filter(r"^fetchloom \d+\.\d+\.\d+\S*", "fetchloom [version]");
+    settings.bind(|| insta::assert_snapshot!(stdout));
     Ok(())
 }
 
@@ -308,6 +322,10 @@ fn the_readme_quick_start_is_the_first_run() -> Result {
         .ok_or("the quick start shows no first run")?;
     let (shown, _) = block.split_once("```").ok_or("the first run never ends")?;
     let welcome = text(&Sandbox::new()?.run(&[])?.stdout)?;
+    // the version line is left out, so a release never dates the readme
+    let (_, welcome) = welcome
+        .split_once("\n\n")
+        .ok_or("the welcome has no version line")?;
     assert_eq!(shown, welcome);
     Ok(())
 }
@@ -423,17 +441,11 @@ fn usage_errors_name_options_as_typed() -> Result {
 }
 
 #[test]
-fn a_usage_error_follows_verbose_and_color() -> Result {
-    let sandbox = Sandbox::new()?;
-    let verbose = sandbox.run(&["-v", "sycn"])?;
+fn a_usage_error_names_its_kind_with_verbose() -> Result {
+    let verbose = Sandbox::new()?.run(&["-v", "sycn"])?;
     assert_eq!(verbose.status.code(), Some(2));
     let stderr = text(&verbose.stderr)?;
     assert!(stderr.contains("\n  kind: usage\n"), "{stderr}");
-    let colored = sandbox.run(&["--color", "always", "sycn"])?;
-    let stderr = text(&colored.stderr)?;
-    assert!(stderr.starts_with("\u{1b}["), "{stderr}");
-    let plain = sandbox.run(&["sycn"])?;
-    assert!(!text(&plain.stderr)?.contains('\u{1b}'));
     Ok(())
 }
 

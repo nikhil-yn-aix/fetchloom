@@ -38,10 +38,7 @@ pub(super) fn pasted(secret: &str) -> Option<String> {
         key: Some(key),
     }) = serde_json::from_str::<Key>(&secret)
     {
-        return Some(format!(
-            "Basic {}",
-            crate::source::base64(format!("{}:{}", username.trim(), key.trim()).as_bytes())
-        ));
+        return Some(crate::auth::basic(username.trim(), key.trim()));
     }
     Some(format!("Bearer {secret}"))
 }

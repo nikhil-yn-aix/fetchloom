@@ -119,7 +119,17 @@ impl Repo {
             first if !PAGES.contains(&first) => (RepoKind::Model, &parts[..]),
             _ => return None,
         };
-        let views = ["tree", "blob", "resolve", "commit", "discussions", "viewer"];
+        let views = [
+            "tree",
+            "blob",
+            "resolve",
+            "raw",
+            "blame",
+            "commit",
+            "commits",
+            "discussions",
+            "viewer",
+        ];
         let split = if rest.len() >= 2 && !views.contains(&rest[1].as_str()) {
             2
         } else {
@@ -132,7 +142,7 @@ impl Repo {
         let after = &rest[split..];
         let (revision, file) = match after.first().map(String::as_str) {
             Some("tree") => (after.get(1).cloned(), None),
-            Some("blob" | "resolve") if after.len() > 2 => {
+            Some("blob" | "resolve" | "raw" | "blame") if after.len() > 2 => {
                 (after.get(1).cloned(), Some(after[2..].join("/")))
             }
             _ => (None, None),

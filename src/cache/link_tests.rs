@@ -173,6 +173,40 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
 }
 
+#[test]
+fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return;
+    }
+    let outside = dir.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let kept = outside.join("old.tmp");
+    fs::write(&kept, b"keep these bytes").unwrap();
+    let a_week_ago = std::time::SystemTime::now() - std::time::Duration::from_hours(24 * 7);
+    fs::File::options()
+        .write(true)
+        .open(&kept)
+        .unwrap()
+        .set_modified(a_week_ago)
+        .unwrap();
+    // swapped after the cache opened, as by someone sharing it while gc reads the projects
+    let folder = cache.root.join("tmp");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
+    link_folder(&outside, &folder);
+
+    let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
+
+    assert_eq!(fs::read(&kept).unwrap(), b"keep these bytes");
+    assert!(
+        freed
+            .not_removed
+            .iter()
+            .any(|path| path.ends_with("old.tmp"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn verifying_never_hashes_an_object_swapped_for_a_symlink() {

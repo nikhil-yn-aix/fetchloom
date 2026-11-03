@@ -71,7 +71,7 @@ impl Dataset {
         crate::source::json(self, &response).map_err(|err| {
             if err.kind == Kind::AuthRequired {
                 // kaggle answers 403 alike for a private dataset and for one that does not exist
-                let signed_in = super::token::find(&|name| std::env::var_os(name)).is_some();
+                let signed_in = super::token::find(&crate::auth::env).is_some();
                 self.hidden(err, signed_in)
             } else {
                 err
@@ -128,6 +128,10 @@ impl Dataset {
                     "run the same command again later. if it keeps happening, check the dataset at {}",
                     self.page()
                 )));
+            }
+            // each page then adds a file, so the file limit bounds the pages too
+            if page.dataset_files.is_empty() && !page.next_page_token.is_empty() {
+                return Err(self.invalid("the listing sent an empty page with more to come"));
             }
             for file in page.dataset_files {
                 files.push(self.remote(&version, file)?);
@@ -370,6 +374,22 @@ mod tests {
             .fixture(&second, "kaggle/siim-files-1.json");
         let err = block_on(dataset(reference).resolve(&recorded)).unwrap_err();
         assert_eq!(err.kind, Kind::SourceInvalid);
+    }
+
+    #[test]
+    fn an_empty_page_that_promises_more_is_refused() {
+        let reference = "kmader/siim-medical-images";
+        let first = files(reference, 6);
+        let recorded = Recorded::default()
+            .fixture(&view(reference), "kaggle/siim-view.json")
+            .on(
+                &first,
+                200,
+                r#"{"datasetFiles":[],"nextPageToken":"again"}"#,
+            );
+        let err = block_on(dataset(reference).resolve(&recorded)).unwrap_err();
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert!(err.message.contains("empty page"), "{}", err.message);
     }
 
     #[test]

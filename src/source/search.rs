@@ -89,7 +89,11 @@ pub(crate) async fn search(
     let mut result = Search::default();
     let mut first_error = None;
     let mut lists = Vec::new();
-    for (source, answer) in [("hugging face", hf), ("kaggle", kaggle), ("zenodo", zenodo)] {
+    for (source, answer) in [
+        (Catalog::Hf.label(), hf),
+        (Catalog::Kaggle.label(), kaggle),
+        (Catalog::Zenodo.label(), zenodo),
+    ] {
         match answer {
             None => {}
             Some(Ok(candidates)) => lists.push(candidates.into_iter()),
@@ -208,7 +212,7 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
             Ok(Candidate {
                 reference: reference(&format!("hf:datasets/{}", item.id))?,
                 title: item.id,
-                source: "hugging face",
+                source: Catalog::Hf.label(),
                 size: item.main_size,
                 downloads: item.downloads,
                 note: gated.then(|| "needs access".to_owned()),
@@ -241,7 +245,7 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
             Ok(Candidate {
                 reference: reference(&format!("kaggle:{}", item.reference))?,
                 title: item.title,
-                source: "kaggle",
+                source: Catalog::Kaggle.label(),
                 size: item.total_bytes,
                 downloads: item.download_count,
                 note: None,
@@ -308,7 +312,7 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
             Ok(Candidate {
                 reference: reference(&format!("zenodo:{}", item.id))?,
                 title: item.metadata.title,
-                source: "zenodo",
+                source: Catalog::Zenodo.label(),
                 size: item.files.and_then(|files| {
                     files
                         .iter()

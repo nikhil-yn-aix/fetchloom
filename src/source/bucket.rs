@@ -87,7 +87,8 @@ impl Prefix {
     }
 
     fn new(store: Store, bucket: &str, key: &str) -> Option<Prefix> {
-        let usable_key = key.len() <= LONGEST_KEY && !key.chars().any(char::is_control);
+        let usable_key =
+            key.len() <= LONGEST_KEY && !key.chars().any(char::is_control) && !dotted(key);
         (is_bucket(store, bucket) && usable_key).then(|| Prefix {
             store,
             bucket: bucket.to_owned(),
@@ -106,7 +107,7 @@ impl Prefix {
             .decode_utf8()
             .ok()?;
         let (store, bucket, key) = if host == "storage.googleapis.com" {
-            let (bucket, key) = path.split_once('/')?;
+            let (bucket, key) = path.split_once('/').unwrap_or((&path, ""));
             if matches!(bucket, "storage" | "download" | "upload" | "batch") {
                 return None;
             }
@@ -176,6 +177,19 @@ impl Prefix {
                 (!path.is_empty() && !path.ends_with('/')).then(|| remote(object, &path))
             })
             .collect()
+    }
+
+    /// refuses a key with a `.` or `..` part: a link resolves those away, so it would fetch
+    /// another object than the one listed.
+    fn check_key(&self, key: &str) -> Result<(), Error> {
+        if !dotted(key) {
+            return Ok(());
+        }
+        Err(Error::new(
+            Kind::SourceInvalid,
+            format!("{self} holds \"{key}\", whose . or .. part no link can name"),
+        )
+        .help("name a prefix, ending in /, for a folder that leaves it out"))
     }
 
     /// the error for a listing that counted more objects than one dataset may hold.
@@ -313,6 +327,10 @@ fn query(pairs: &[(&str, &str)]) -> String {
 }
 
 /// `base` with the object key appended to its path, each segment escaped.
+fn dotted(key: &str) -> bool {
+    key.split('/').any(|part| matches!(part, "." | ".."))
+}
+
 fn object_url(base: &Url, key: &str) -> Url {
     let mut url = base.clone();
     let path = key

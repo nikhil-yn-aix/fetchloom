@@ -15,7 +15,7 @@ use crate::project::manifest::Manifest;
 /// one file a lock places.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Target<'a> {
-    pub(crate) dataset: String,
+    pub(crate) dataset: &'a str,
     /// the path in the project, with `/` between folders.
     pub(crate) path: String,
     pub(crate) sha256: Sha256,
@@ -102,7 +102,7 @@ pub(crate) fn expand<'a>(
     let alone = files.len() == 1;
     for file in files {
         let target = |path: &str, sha256, size| Target {
-            dataset: dataset.to_owned(),
+            dataset,
             path: join(folder, path),
             sha256,
             size,

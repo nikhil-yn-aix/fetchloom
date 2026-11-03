@@ -192,7 +192,10 @@ struct Argument {
 /// every command under `command`, depth first, named the way people type them.
 fn described(command: &clap::Command, parent: &str) -> Vec<Described> {
     let mut found = Vec::new();
-    for inner in command.get_subcommands() {
+    for inner in command
+        .get_subcommands()
+        .filter(|inner| !inner.is_hide_set())
+    {
         let name = format!("{parent}{}", inner.get_name()).trim().to_owned();
         let after = inner
             .get_after_help()
@@ -270,9 +273,15 @@ fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
 fn unknown(topic: &[String]) -> Error {
     let asked = topic.join(" ");
     let mut topics: Vec<String> = TOPICS.iter().map(|(name, _)| (*name).to_owned()).collect();
-    for command in args::Args::command().get_subcommands() {
+    for command in args::Args::command()
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+    {
         topics.push(command.get_name().to_owned());
-        for inner in command.get_subcommands() {
+        for inner in command
+            .get_subcommands()
+            .filter(|inner| !inner.is_hide_set())
+        {
             topics.push(format!("{} {}", command.get_name(), inner.get_name()));
         }
     }

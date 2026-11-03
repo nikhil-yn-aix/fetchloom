@@ -28,26 +28,15 @@ pub(crate) enum Detected {
 
 const BLOCK: usize = 512;
 
-/// documents and packages that are zip files inside, but one file to the people who use them.
-const ZIPPED_DOCUMENTS: &[&str] = &[
-    "3mf", "aar", "apk", "ckpt", "docm", "docx", "dotx", "epub", "jar", "keras", "kmz", "mlx",
-    "npz", "nupkg", "odg", "odp", "ods", "odt", "potx", "ppsx", "pptm", "pptx", "pt", "pth", "slx",
-    "vsdx", "war", "whl", "xlsb", "xlsm", "xlsx", "xltx",
-];
-
-/// tells an archive from any other file by its first bytes. the name only keeps documents such
-/// as `.xlsx` or `.npz`, which are zip files inside, from counting as archives.
+/// tells an archive from any other file by its first bytes. the cache names files by hash, so a
+/// document that is a zip inside, such as `.xlsx`, is kept whole earlier, by its listed name.
 pub(crate) fn detect(path: &Path) -> io::Result<Detected> {
     let mut file = File::open(path)?;
     let mut block = [0; BLOCK];
     let len = read_up_to(&mut file, &mut block)?;
     let head = &block[..len];
     if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-        return Ok(if is_zipped_document(path) {
-            Detected::Plain
-        } else {
-            Detected::Archive(Format::Zip)
-        });
+        return Ok(Detected::Archive(Format::Zip));
     }
     if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
         return Ok(Detected::Unsupported("7z"));
@@ -121,16 +110,6 @@ fn is_tar_header(block: &[u8]) -> bool {
     u32::from_str_radix(digits, 8).is_ok_and(|stated| stated == sum)
 }
 
-fn is_zipped_document(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            ZIPPED_DOCUMENTS
-                .iter()
-                .any(|document| extension.eq_ignore_ascii_case(document))
-        })
-}
-
 /// fills as much of `buffer` as the reader has, and says how much that was.
 fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
     let mut filled = 0;
@@ -166,14 +145,6 @@ mod tests {
             detected("empty.zip", &empty),
             Detected::Archive(Format::Zip)
         );
-    }
-
-    #[test]
-    fn documents_that_are_zips_inside_stay_whole() {
-        let zip = zip_of(&[("[Content_Types].xml", b"<Types/>")]);
-        assert_eq!(detected("results.xlsx", &zip), Detected::Plain);
-        assert_eq!(detected("weights.NPZ", &zip), Detected::Plain);
-        assert_eq!(detected("model.pt", &zip), Detected::Plain);
     }
 
     #[test]

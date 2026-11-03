@@ -13,6 +13,7 @@ authors = [{ name = "Nikhil Y N" }, { name = "KairosLab India Private Limited" }
 keywords = ["data", "datasets", "reproducibility", "research"]
 classifiers = [
     "Environment :: Console",
+    "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",

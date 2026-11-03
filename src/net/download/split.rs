@@ -26,8 +26,7 @@ use crate::work::Work;
 
 /// the smallest file split across streams.
 pub(crate) const SPLIT_ABOVE: u64 = 64 * 1024 * 1024;
-/// the most streams one file gets.
-pub(crate) const MOST_STREAMS: usize = 8;
+
 /// the smallest half of a range that a stream takes from another.
 pub(crate) const SMALLEST_PIECE: u64 = 8 * 1024 * 1024;
 /// how long a rate is measured before and after a stream is added.
@@ -486,7 +485,7 @@ impl Net {
                 }
                 Ok(response)
             }
-            StatusCode::OK | StatusCode::RANGE_NOT_SATISFIABLE if changed => Err(Ended::Changed),
+            StatusCode::OK if changed => Err(Ended::Changed),
             StatusCode::RANGE_NOT_SATISFIABLE => Err(Ended::Changed),
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => Err(Ended::NoRanges),
             status => Err(Ended::Failed(failure::refusal(job.from, status, head))),
@@ -536,9 +535,10 @@ impl Net {
                 .map_err(Ended::Failed)?;
             Work::add(&self.work.bytes_down, chunk.len() as u64);
             let (at, taken) = shared.board().deliver(id, chunk.len() as u64);
-            let Ok(length) = usize::try_from(taken) else {
-                continue;
-            };
+            // deliver never takes more than the chunk holds
+            let length = chunk
+                .len()
+                .min(usize::try_from(taken).unwrap_or(usize::MAX));
             if length == 0 {
                 continue;
             }
@@ -586,13 +586,13 @@ impl Net {
         };
         let window = self.split.window;
         let (before, added) = match *probe {
-            Probe::Measured { rate: before } => (before, self.add_stream(shared, running)),
+            Probe::Measured { rate: before } => (before, self.add_stream(shared)),
             Probe::Measure {
                 since,
                 delivered: from,
             } if now.duration_since(since) >= window => {
                 let before = rate(since, from);
-                (before, self.add_stream(shared, running))
+                (before, self.add_stream(shared))
             }
             Probe::Wait { before, .. } if started => {
                 *probe = Probe::Rise {
@@ -623,7 +623,7 @@ impl Net {
                     *probe = Probe::Settled;
                     return None;
                 }
-                (after, self.add_stream(shared, running))
+                (after, self.add_stream(shared))
             }
             _ => return None,
         };
@@ -637,16 +637,12 @@ impl Net {
         added
     }
 
-    /// a new stream with a range of its own, when there are fewer than [`MOST_STREAMS`], the
-    /// host has a free slot and a range is large enough to share.
+    /// a new stream with a range of its own, when the host has a free slot and a range is large
+    /// enough to share. the host's slots, four, are what cap a file's streams.
     fn add_stream(
         &self,
         shared: &Streams<'_>,
-        running: usize,
     ) -> Option<(usize, (OwnedSemaphorePermit, OwnedSemaphorePermit))> {
-        if running >= MOST_STREAMS {
-            return None;
-        }
         let mut board = shared.board();
         if board.stopped {
             return None;

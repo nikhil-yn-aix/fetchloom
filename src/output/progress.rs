@@ -74,6 +74,13 @@ impl Bar {
             bar.inc(bytes);
         }
     }
+
+    /// adds the size of a file whose download just told it to what the bar fills to.
+    pub(crate) fn grow(&self, bytes: u64) {
+        if let Some(bar) = &self.drawn {
+            bar.set_length(bar.length().unwrap_or(0) + bytes);
+        }
+    }
 }
 
 impl Drop for Bar {

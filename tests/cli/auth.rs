@@ -95,7 +95,15 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     assert_eq!(hf["signed_in"], true);
     assert_eq!(hf["from"], token.display().to_string());
 
-    let logout = sandbox.run(&["auth", "logout", "hf", "--json"])?;
+    // the hf tools read the same file, so nobody at a terminal means it stays without --yes
+    let refused = sandbox.run(&["auth", "logout", "hf", "--json"])?;
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
+    assert_eq!(
+        json(&refused)?["errors"][0]["fix"],
+        "fetchloom auth logout hf --yes"
+    );
+    assert!(token.exists());
+    let logout = sandbox.run(&["auth", "logout", "hf", "--json", "--yes"])?;
     assert!(logout.status.success(), "{}", text(&logout.stderr)?);
     assert!(!token.exists());
     let again = with_stdin(
@@ -110,7 +118,7 @@ fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
         "{told}"
     );
     assert!(!told.contains("hf_example"), "{told}");
-    let quiet_logout = sandbox.run(&["auth", "logout", "hf"])?;
+    let quiet_logout = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
     assert!(
         text(&quiet_logout.stderr)?.contains("Signed out of hugging face"),
         "{}",

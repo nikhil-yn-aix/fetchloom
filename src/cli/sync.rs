@@ -28,7 +28,7 @@ use crate::project::Project;
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
 use crate::project::state::Synced;
-use crate::source::{self, Listing, Reference, Remote};
+use crate::source::{self, Listing, Reference};
 use crate::units;
 
 /// the most of a title the `Resolved` line shows.
@@ -407,9 +407,7 @@ impl<'a> Loop<'a> {
                 Kind::OfflineMissing,
                 "offline, and a new link must be downloaded once to learn its fingerprint",
             );
-            for label in missing.iter().take(5) {
-                error = error.detail((*label).to_owned());
-            }
+            error = shown_five(error, &missing);
             return Err(error.help(format!(
                 "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
                 self.net.offline().retry()
@@ -423,14 +421,20 @@ impl<'a> Loop<'a> {
                 if missing.len() == 1 { "is" } else { "are" }
             ),
         );
-        for label in missing.iter().take(5) {
-            error = error.detail((*label).to_owned());
-        }
-        if missing.len() > 5 {
-            error = error.detail(format!("and {} more", missing.len() - 5));
-        }
+        error = shown_five(error, &missing);
         Err(error.help(format!("{} to download them", self.net.offline().retry())))
     }
+}
+
+/// names the first five of `labels` in `error`, and how many more there are.
+fn shown_five(mut error: Error, labels: &[&str]) -> Error {
+    for label in labels.iter().take(5) {
+        error = error.detail((*label).to_owned());
+    }
+    if labels.len() > 5 {
+        error = error.detail(format!("and {} more", labels.len() - 5));
+    }
+    error
 }
 
 /// datasets on their way into data.lock.
@@ -497,10 +501,7 @@ pub(super) fn tell_lock(
     }
 }
 
-/// the files a dataset's patterns keep from its listing, or why the patterns are wrong.
-pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
-    draft::filter(name, entry, listing)
-}
+pub(super) use draft::filter;
 
 /// resolves a reference, with progress or plain lines while its source takes its time.
 pub(super) async fn resolve(
@@ -637,7 +638,7 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     if matches!(listing.resolved, Reference::Url(_)) {
         return;
     }
-    let mut facts = vec![short_revision(listing.resolved.to_string())];
+    let mut facts = vec![short_revision(listing.resolved.shown())];
     facts.extend(
         listing
             .title

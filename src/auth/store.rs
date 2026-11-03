@@ -82,12 +82,13 @@ pub(crate) fn save(var: Var<'_>, id: &str, secret: &str, place: Place) -> io::Re
             .and_then(|entry| entry.set_password(secret))
             .map_err(io::Error::other)?,
         Place::File => {
-            let mut keys = file(var);
+            let path = folder.join("credentials.json");
+            let mut keys: BTreeMap<String, String> = load(&path)?;
             keys.insert(id.to_owned(), secret.to_owned());
-            write_private(&folder.join("credentials.json"), &json(&keys)?)?;
+            write_private(&path, &json(&keys)?)?;
         }
     }
-    let mut index = saved(var);
+    let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
     index.insert(id.to_owned(), place);
     write_private(&folder.join("accounts.json"), &json(&index)?)
 }
@@ -97,7 +98,7 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
     let Some(folder) = folder(var) else {
         return Ok(false);
     };
-    let mut index = saved(var);
+    let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
     let Some(place) = index.remove(id) else {
         return Ok(false);
     };
@@ -111,9 +112,10 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
             }
         }
         Place::File => {
-            let mut keys = file(var);
+            let path = folder.join("credentials.json");
+            let mut keys: BTreeMap<String, String> = load(&path)?;
             keys.remove(id);
-            write_private(&folder.join("credentials.json"), &json(&keys)?)?;
+            write_private(&path, &json(&keys)?)?;
         }
     }
     write_private(&folder.join("accounts.json"), &json(&index)?)?;
@@ -125,6 +127,24 @@ fn file(var: Var<'_>) -> BTreeMap<String, String> {
         .and_then(|folder| fs::read_to_string(folder.join("credentials.json")).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_default()
+}
+
+/// what `path` holds, empty when it does not exist. a file that cannot be read or is not valid
+/// JSON is an error, so writing it back never drops the keys it held.
+fn load<T: serde::de::DeserializeOwned + Default>(path: &Path) -> io::Result<T> {
+    match fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} is not valid JSON: {err}; fix or delete it",
+                    path.display()
+                ),
+            )
+        }),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(T::default()),
+        Err(err) => Err(err),
+    }
 }
 
 fn json<T: serde::Serialize>(value: &T) -> io::Result<Vec<u8>> {
@@ -232,5 +252,14 @@ mod tests {
                 0o600
             );
         }
+        // a damaged index is refused rather than written over, which would lose the other keys
+        let index = folder(&var).unwrap().join("accounts.json");
+        fs::write(&index, "{ not json").unwrap();
+        let error = save(&var, "osf", "o-key", Place::File).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(forget(&var, "dataverse:demo.dataverse.org").is_err());
+        assert_eq!(fs::read_to_string(&index).unwrap(), "{ not json");
+        let keys = fs::read_to_string(folder(&var).unwrap().join("credentials.json")).unwrap();
+        assert!(keys.contains("d-key"));
     }
 }

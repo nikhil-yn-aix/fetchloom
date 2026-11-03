@@ -304,7 +304,11 @@ fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
 
 /// the files `select` keeps and `exclude` leaves. a select pattern that matches nothing is a
 /// mistake worth stopping for, with real paths to compare against.
-pub(super) fn filter(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
+pub(in crate::cli) fn filter(
+    name: &str,
+    entry: &Entry,
+    listing: &Listing,
+) -> Result<Vec<Remote>, Error> {
     for glob in &entry.select {
         if !listing.paths().any(|path| glob.matches(path)) {
             return Err(unmatched(name, entry, glob, listing));
@@ -412,7 +416,10 @@ fn exclusion_flag(path: &str) -> String {
             other => pattern.push(other),
         }
     }
-    let quoted = if pattern.contains(['\'', '"', '$', '\u{60}']) {
+    // inside double quotes, bash and zsh still expand `!` from the history
+    let single =
+        pattern.contains(['\'', '"', '$', '\u{60}']) || (!cfg!(windows) && pattern.contains('!'));
+    let quoted = if single {
         if cfg!(windows) {
             format!("'{}'", pattern.replace('\'', "''"))
         } else {

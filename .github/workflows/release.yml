@@ -97,44 +97,41 @@ jobs:
       - run: cargo build --locked --release --target ${{ matrix.target }}
       - name: check that the binary runs
         run: |
-          for name in fetchloom; do
-            said=$("target/${{ matrix.target }}/release/$name${{ matrix.exe }}" --version)
-            echo "$name --version: $said"
-            if [ "$said" != "fetchloom $VERSION" ]; then
-              echo "::error::$name --version printed $said"
-              exit 1
-            fi
-          done
+          name=fetchloom
+          said=$("target/${{ matrix.target }}/release/$name${{ matrix.exe }}" --version)
+          echo "$name --version: $said"
+          if [ "$said" != "fetchloom $VERSION" ]; then
+            echo "::error::$name --version printed $said"
+            exit 1
+          fi
       - name: check that the linux binary is static
         if: runner.os == 'Linux'
         run: |
-          for name in fetchloom; do
-            said=$(ldd "target/${{ matrix.target }}/release/$name" 2>&1 || true)
-            echo "ldd $name: $said"
-            case "$said" in
-              *"statically linked"* | *"not a dynamic executable"*) ;;
-              *) echo "::error::$name links shared libraries"; exit 1 ;;
-            esac
-          done
+          name=fetchloom
+          said=$(ldd "target/${{ matrix.target }}/release/$name" 2>&1 || true)
+          echo "ldd $name: $said"
+          case "$said" in
+            *"statically linked"* | *"not a dynamic executable"*) ;;
+            *) echo "::error::$name links shared libraries"; exit 1 ;;
+          esac
       - name: check that the macos binary links only system libraries
         if: runner.os == 'macOS'
         run: |
-          for name in fetchloom; do
-            binary="target/${{ matrix.target }}/release/$name"
-            libraries=$(otool -L "$binary" | tail -n +2)
-            echo "otool -L $name:"
-            echo "$libraries"
-            if echo "$libraries" | grep -vqE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
-              echo "::error::$name links libraries macos does not ship"
-              exit 1
-            fi
-            minimum=$(otool -l "$binary" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "minos" { print $2; exit }')
-            echo "$name runs on macos $minimum and later"
-            if [ "$minimum" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
-              echo "::error::$name needs macos $minimum, not $MACOSX_DEPLOYMENT_TARGET"
-              exit 1
-            fi
-          done
+          name=fetchloom
+          binary="target/${{ matrix.target }}/release/$name"
+          libraries=$(otool -L "$binary" | tail -n +2)
+          echo "otool -L $name:"
+          echo "$libraries"
+          if echo "$libraries" | grep -vqE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
+            echo "::error::$name links libraries macos does not ship"
+            exit 1
+          fi
+          minimum=$(otool -l "$binary" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "minos" { print $2; exit }')
+          echo "$name runs on macos $minimum and later"
+          if [ "$minimum" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
+            echo "::error::$name needs macos $minimum, not $MACOSX_DEPLOYMENT_TARGET"
+            exit 1
+          fi
       - name: check that the windows binary carries its C runtime
         if: runner.os == 'Windows'
         shell: pwsh
@@ -153,12 +150,10 @@ jobs:
             }
             throw 'could not find dumpbin to check the C runtime'
           }
-          foreach ($name in 'fetchloom') {
-            $dlls = & $dumpbin /nologo /dependents "target\${{ matrix.target }}\release\$name.exe"
-            if ($LASTEXITCODE) { throw "dumpbin could not inspect $name.exe" }
-            $dlls
-            if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw "$name.exe loads the C runtime from a DLL" }
-          }
+          $dlls = & $dumpbin /nologo /dependents "target\${{ matrix.target }}\release\fetchloom.exe"
+          if ($LASTEXITCODE) { throw 'dumpbin could not inspect fetchloom.exe' }
+          $dlls
+          if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw 'fetchloom.exe loads the C runtime from a DLL' }
       - name: package the binary
         run: |
           name="fetchloom-$VERSION-${{ matrix.target }}"
@@ -231,14 +226,13 @@ jobs:
           "${{ matrix.python }}" -m venv .release/check
           check=.release/check/${{ matrix.scripts }}
           "$check/python" -m pip install --quiet --disable-pip-version-check --no-index dist/*.whl
-          for name in fetchloom; do
-            said=$("$check/$name" --version)
-            echo "wheel $name --version: $said"
-            if [ "$said" != "fetchloom $VERSION" ]; then
-              echo "::error::the wheel's $name --version printed $said"
-              exit 1
-            fi
-          done
+          name=fetchloom
+          said=$("$check/$name" --version)
+          echo "wheel $name --version: $said"
+          if [ "$said" != "fetchloom $VERSION" ]; then
+            echo "::error::the wheel's $name --version printed $said"
+            exit 1
+          fi
           mkdir -p .release/empty
           "$check/python" - <<'EOF'
           import fetchloom

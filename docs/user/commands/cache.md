@@ -76,7 +76,7 @@ fetchloom cache gc --now --dry-run
          Ok dry run, nothing was changed
 ```
 
-`-v` names each path gc would delete, including the registrations of projects whose `data.toml` is gone. a path it cannot read is named in a warning and does not fail the dry run. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+`-v` names each path gc would delete, including the registrations of projects whose `data.toml` is gone. a path it cannot remove is named in a warning and does not fail the dry run; an object folder or project registration it cannot read stops it, as it stops gc. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## verify
 

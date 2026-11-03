@@ -101,12 +101,9 @@ function Install-Fetchloom([string]$Version) {
 
         Expand-Archive -Path $archive -DestinationPath $work
         $folder = Join-Path $work ($asset -replace '\.zip$', '')
-        foreach ($name in 'fetchloom.exe') {
-            if (-not (Test-Path (Join-Path $folder $name))) { throw "$asset holds no $name. nothing was installed" }
-        }
-        foreach ($name in 'fetchloom.exe') {
-            Move-Item -Force (Join-Path $folder $name) (Join-Path $bin $name)
-        }
+        $name = 'fetchloom.exe'
+        if (-not (Test-Path (Join-Path $folder $name))) { throw "$asset holds no $name. nothing was installed" }
+        Move-Item -Force (Join-Path $folder $name) (Join-Path $bin $name)
     } finally {
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }

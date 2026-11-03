@@ -186,6 +186,7 @@ impl Partial {
 
     /// forgets the bytes so far, so the download starts again from the first byte.
     pub(crate) fn discard(&self) {
+        self.cache.forget_deferred(&self.bytes);
         let _ = fs::remove_file(&self.bytes);
         let _ = fs::remove_file(&self.record);
     }
@@ -235,7 +236,7 @@ impl Partial {
 
 /// opens `path` to read and write without following a link at its end, and refuses anything
 /// that is not a plain file. `create` makes a missing file.
-pub(super) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
+pub(crate) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)

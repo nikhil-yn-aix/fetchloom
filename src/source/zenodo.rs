@@ -11,7 +11,7 @@ use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
-/// a zenodo record. a record id names exactly one version.
+/// a zenodo record. a record id names one version, and a concept id the newest of its versions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Record {
     id: u64,

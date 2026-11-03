@@ -51,9 +51,7 @@ class Tool:
                    POOCH_CACHE=str(workdir / "cache" / "pooch"))
         return env
 
-    def prepare(self, scenario, workdir, cold=True):
-        if cold:
-            reset(workdir)
+    def prepare(self, scenario, workdir):
         workdir.mkdir(parents=True, exist_ok=True)
         for folder in ("home", "cache", "project", "scratch"):
             (workdir / folder).mkdir(exist_ok=True)

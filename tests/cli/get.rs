@@ -390,12 +390,18 @@ fn a_redirect_into_this_machine_is_refused() -> Result {
 #[test]
 fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
     let sandbox = Sandbox::new()?;
-    let huge = reply("200 OK", &[("Content-Length", "2147483648")], b"");
-    let server = Server::start("/huge.bin", vec![huge])?;
+    let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
+    let server = Server::start("/huge.bin", vec![huge(), huge()])?;
     let output = sandbox.run(&["get", &server.url])?;
     assert_eq!(output.status.code(), Some(1));
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    // the question comes before the body is read, so nothing was downloaded or kept
+    let document = json(&sandbox.run(&["--json", "get", &server.url])?)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
+    assert_eq!(document["work"]["bytes_down"], 0);
+    assert_eq!(document["work"]["objects_written"], 0);
+    assert!(!sandbox.work().join("huge").exists());
     Ok(())
 }
 
@@ -494,23 +500,6 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         fs::read(sandbox.work().join("second").join("iris.csv"))?,
         IRIS
     );
-    Ok(())
-}
-
-#[test]
-fn a_large_unknown_size_needs_approval_before_reading_the_body() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        "/large.bin",
-        vec![reply("200 OK", &[("Content-Length", "1073741825")], b"")],
-    )?;
-    let output = sandbox.run(&["--json", "get", &server.url])?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-    let document = json(&output)?;
-    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
-    assert_eq!(document["work"]["bytes_down"], 0);
-    assert_eq!(document["work"]["objects_written"], 0);
-    assert!(!sandbox.work().join("large").exists());
     Ok(())
 }
 

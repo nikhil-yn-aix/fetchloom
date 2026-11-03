@@ -188,16 +188,6 @@ fn missing_datasets_are_unresolved() {
 }
 
 #[test]
-fn access_refusals_require_authorization() {
-    for status in [401, 403] {
-        let recorded =
-            Recorded::default().on(DATASET, status, fixture_bytes("dataverse/refused.json"));
-        let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::AuthRequired);
-    }
-}
-
-#[test]
 fn directory_labels_reach_the_shared_path_check() {
     let body = changed(|value| {
         value["data"]["latestVersion"]["files"][1]["directoryLabel"] = "../code".into();
@@ -279,6 +269,11 @@ fn access_errors_do_not_suggest_unscoped_credentials() {
             Recorded::default().on(DATASET, status, fixture_bytes("dataverse/refused.json"));
         let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
-        assert!(error.help.unwrap().contains("public copy"));
+        assert!(
+            error
+                .help
+                .unwrap()
+                .contains("`fetchloom auth login dataverse`")
+        );
     }
 }

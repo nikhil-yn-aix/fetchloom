@@ -185,13 +185,7 @@ impl Version {
             .collect();
         // a key for this installation may be allowed the files; if not, their downloads are
         // refused and say so
-        let host = dataset
-            .host
-            .split(':')
-            .next()
-            .unwrap_or(&dataset.host)
-            .to_ascii_lowercase();
-        let account = crate::auth::Account::Dataverse(host);
+        let account = dataset.account();
         if !restricted.is_empty() && account.find(&crate::auth::env).is_none() {
             let command = account.command();
             return Err(Error::new(

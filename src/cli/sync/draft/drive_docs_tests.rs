@@ -200,12 +200,22 @@ fn exclusion_hints_quote_shell_characters() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">gdown&#39;s $notes&#96;extra<");
-    let listing = listing(body.into_bytes());
-    let error = filter("docs", &entry(&[], &[], true), &listing).unwrap_err();
+    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
     let expected = if cfg!(windows) {
         "--exclude 'gdown''s $notes`extra'"
     } else {
         "--exclude 'gdown'\"'\"'s $notes`extra'"
+    };
+    assert!(error.help.unwrap().contains(expected));
+    // bash and zsh expand `!` from the history even inside double quotes
+    let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
+        .unwrap()
+        .replace(">gdown<", ">notes!v2<");
+    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    let expected = if cfg!(windows) {
+        "--exclude \"notes!v2\""
+    } else {
+        "--exclude 'notes!v2'"
     };
     assert!(error.help.unwrap().contains(expected));
 }

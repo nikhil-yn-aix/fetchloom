@@ -18,7 +18,7 @@ objects are read-only files named by their content digest. the cache owns public
 | [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
 | [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `unpacked`, `holds_unpacked` |
 | [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
-| [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `sweep_with_stop`, `verify_with_stop` |
+| [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `scan_objects`, `sweep_with_stop`, `verify_scanned` |
 
 ## how it works
 
@@ -43,7 +43,7 @@ flowchart TD
 
 lookup checks that an object is a plain file and matches the expected size. a writable object or an object no newer than its change mark is doubtful and must be hashed before trusted placement. intact writable objects are sealed again; damaged objects remain marked until verified replacement bytes arrive.
 
-object hashing and copy input use `read_unfollowed`: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
+object hashing, gc and `cache verify` hashing, and copy input use `read_unfollowed`, and every gc removal first checks that no folder between it and the cache root became a link: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
 
 ### publication and repair
 

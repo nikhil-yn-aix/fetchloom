@@ -169,7 +169,6 @@ impl Error {
     }
 }
 
-/// what a person can do about an io error, when its cause is one they can change.
 /// what went wrong on the machine in plain words, without the system's own phrasing and its
 /// error number, which mean little to a person.
 pub(crate) fn said(err: &io::Error) -> String {
@@ -196,6 +195,7 @@ pub(crate) fn said(err: &io::Error) -> String {
     }
 }
 
+/// what a person can do about an io error, when its cause is one they can change.
 pub(crate) fn advice(err: &io::Error) -> Option<&'static str> {
     // windows refuses a file another program opened without sharing it, with a sharing or a
     // lock violation

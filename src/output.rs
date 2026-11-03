@@ -222,7 +222,12 @@ impl Output {
     /// whether [`Output::next`] prints: only to a person at a terminal, never with `-q` or
     /// `--json`, or when stdout goes to a pipe or a file.
     fn shows_next(&self) -> bool {
-        self.hints && self.style.watched && self.tells(Level::Normal)
+        self.hints && self.for_person()
+    }
+
+    /// whether a person reads both streams at a terminal, with the story on.
+    fn for_person(&self) -> bool {
+        self.style.watched && self.tells(Level::Normal)
     }
 
     /// free text from a source, such as a title, cut to fit one line of the story.
@@ -300,11 +305,6 @@ impl Output {
         self.line(line.trim_end());
     }
 
-    /// whether `--json` asked for one document on stdout instead of text.
-    pub(crate) fn is_json(&self) -> bool {
-        self.json
-    }
-
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
         if !self.json {
@@ -320,7 +320,7 @@ impl Output {
     /// a dim remark for a person at a terminal, never for a script, such as which project a
     /// command found above the current folder.
     pub(crate) fn aside(&self, text: &str) {
-        if self.shows_next() {
+        if self.for_person() {
             let dim = paint(self.style.color, Paint::new().dimmed());
             self.line(&format!("  {dim}{}{dim:#}", plain(text)));
         }
@@ -329,7 +329,7 @@ impl Output {
     /// an answer the story already showed, printed only when a script reads stdout or `-q`
     /// hid the story.
     pub(crate) fn answer_untold(&self, text: &str) {
-        if !self.shows_next() {
+        if !self.for_person() {
             self.answer(text);
         }
     }
@@ -509,7 +509,7 @@ impl Output {
         options: &[String],
         footer: &str,
     ) -> Result<Option<usize>, Error> {
-        if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
+        if !self.can_ask() {
             return Ok(None);
         }
         let ask = || picker::choose(question, options, footer, self.style);

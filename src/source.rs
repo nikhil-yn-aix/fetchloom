@@ -163,8 +163,10 @@ impl Reference {
     /// a presigned storage link: data.toml and data.lock would keep it, git would share it, and a
     /// signature stops working within days anyway.
     pub(crate) fn check_shareable(&self) -> Result<(), Error> {
-        let Reference::Url(url) = self else {
-            return Ok(());
+        let url = match self {
+            Reference::Url(url) => url,
+            Reference::Dropbox(link) => link.url(),
+            _ => return Ok(()),
         };
         match crate::net::secret(url) {
             None => Ok(()),
@@ -445,6 +447,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "kaggle.com" | "www.kaggle.com" => "kaggle",
         "drive.google.com" | "docs.google.com" => "google drive",
         "dropbox.com" | "www.dropbox.com" => "dropbox",
+        "doi.org" | "www.doi.org" | "dx.doi.org" => "doi",
         _ => return None,
     })
 }
@@ -719,6 +722,14 @@ mod tests {
             hf.file.as_deref(),
             Some("plain_text/train-00000-of-00001.parquet")
         );
+        let raw = parse("https://huggingface.co/datasets/org/name/raw/main/data.csv");
+        assert_eq!(raw.reference.to_string(), "hf:datasets/org/name@main");
+        assert_eq!(raw.file.as_deref(), Some("data.csv"));
+        let model = parse("https://huggingface.co/gpt2/raw/main/config.json");
+        assert_eq!(model.reference.to_string(), "hf:models/gpt2@main");
+        assert_eq!(model.file.as_deref(), Some("config.json"));
+        let history = parse("https://huggingface.co/gpt2/commits/main");
+        assert_eq!(history.reference.to_string(), "hf:models/gpt2");
     }
 
     #[test]

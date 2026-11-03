@@ -58,8 +58,9 @@ impl Survey {
             edited: HashSet::new(),
             needs_writing: false,
         };
-        survey.look_through_links(&project.root);
         survey.hash_racy(&project.root, written);
+        // after hash_racy, so a record found under another spelling is looked through too
+        survey.look_through_links(&project.root);
         survey
     }
 
@@ -196,9 +197,8 @@ impl Survey {
     }
 
     /// files placed as hardlinks whose object the cache marked as changed after fetchloom last
-    /// knew them to hold their bytes, while their listing still shows them as placed. on windows a
-    /// folder's listing keeps the old size and time of a hardlink changed through another name, so
-    /// the mark is the only sign of an edit made through another project. the link may also name
+    /// knew them to hold their bytes, while they still show the size and time they were placed
+    /// with, so the mark is the only sign of an edit made through another project. the link may also name
     /// an older copy of the object than the one that changed, so only hashing settles it. a mark
     /// within a coarse clock's step of that time is in doubt too, as its time may be cut down.
     pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
@@ -251,38 +251,6 @@ impl Survey {
                         &err,
                     ));
                 }
-            }
-        }
-        Ok(())
-    }
-
-    /// hashes what a mark puts in doubt, then reads hardlinks again by name, which windows answers
-    /// from the file itself where a listing may be stale: those in doubt, and with `force` every
-    /// one, since --force asks for every edit to be undone.
-    pub(crate) fn look_again(
-        &mut self,
-        root: &Path,
-        cache: &Cache,
-        force: bool,
-    ) -> Result<(), Error> {
-        self.check_doubted(root, cache)?;
-        let paths: Vec<String> = if force && cfg!(windows) {
-            self.state
-                .files
-                .iter()
-                .filter(|(_, placed)| placed.method == Method::Hardlink)
-                .map(|(path, _)| path.clone())
-                .collect()
-        } else {
-            self.elsewhere
-                .iter()
-                .chain(&self.vouched)
-                .cloned()
-                .collect()
-        };
-        for path in paths {
-            if let Ok(metadata) = fs::symlink_metadata(root.join(&path)) {
-                self.disk.insert(path, Look::of(&metadata));
             }
         }
         Ok(())
@@ -563,11 +531,9 @@ mod tests {
         cache.mark_changed(&good.digest).unwrap();
         cache.mark_changed(&bad.digest).unwrap();
         assert_eq!(survey.doubted(&cache).len(), 2);
-        survey.look_again(&project.root, &cache, false).unwrap();
+        survey.check_doubted(&project.root, &cache).unwrap();
         assert_eq!(survey.elsewhere, HashSet::from(["data/changed".to_owned()]));
         assert_eq!(survey.vouched, HashSet::from(["data/intact".to_owned()]));
-        assert_eq!(survey.disk["data/changed"].size, 28);
-        assert_eq!(survey.disk["data/intact"].size, 6);
         assert_eq!(
             fs::read(project.root.join("data/changed")).unwrap(),
             b"changed through another link"
@@ -673,7 +639,7 @@ mod tests {
             unpacks_to: None,
         };
         let target = Target {
-            dataset: "set".to_owned(),
+            dataset: "set",
             path: "data/A.txt".to_owned(),
             sha256: placed.sha256,
             size: 1,
@@ -692,7 +658,7 @@ mod tests {
 
     fn target<'a>(locked: &'a crate::project::lock::LockedFile, path: &str) -> Target<'a> {
         Target {
-            dataset: "set".to_owned(),
+            dataset: "set",
             path: path.to_owned(),
             sha256: locked.sha256,
             size: locked.size,

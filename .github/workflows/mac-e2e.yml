@@ -118,10 +118,6 @@ jobs:
             }
 
             signs_in_offline() {
-              if ! "$fetchloom" auth --help > /dev/null 2>&1; then
-                echo "this build has no auth command, so there is nothing to check"
-                return 0
-              fi
               "$fetchloom" auth --offline
             }
 

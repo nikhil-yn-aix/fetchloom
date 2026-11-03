@@ -72,11 +72,16 @@ impl Cache {
         let Some(pending) = pending.as_mut() else {
             return Err(Box::new(finished));
         };
+        // the same bytes from another link in this batch are stored once
+        let waiting = pending
+            .finished
+            .iter()
+            .any(|item| item.digest == finished.digest);
         let stored = Stored {
             digest: finished.digest,
             size: finished.size,
             md5: finished.md5,
-            new: !self.object_path(&finished.digest).exists(),
+            new: !waiting && !self.object_path(&finished.digest).exists(),
         };
         pending.finished.push(finished);
         Ok(stored)
@@ -105,6 +110,19 @@ impl Cache {
             }
         }
         first_error.map_or(Ok(()), Err)
+    }
+
+    /// drops a deferred download whose bytes at `bytes` are being thrown away, so the flush
+    /// never names the next download at that path after this one's hash.
+    pub(super) fn forget_deferred(&self, bytes: &std::path::Path) {
+        if let Some(pending) = self
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_mut()
+        {
+            pending.finished.retain(|item| item.bytes != bytes);
+        }
     }
 
     /// puts a deferred download of `url` in place now, with its own flush, so another download

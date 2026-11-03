@@ -2,7 +2,7 @@
 source: tests/cli/basics.rs
 expression: stdout
 ---
-fetchloom 0.1.0
+fetchloom [version]
 
 fetchloom puts the exact research data a project needs into its data/ folder.
 

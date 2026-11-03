@@ -19,6 +19,8 @@ pub(super) struct Tally {
     pub(super) files: u64,
     pub(super) links: u64,
     pub(super) copied: u64,
+    /// copies of files that could have been links, unlike those `copy = true` asks for.
+    pub(super) unlinked: u64,
 }
 
 /// places every file in `todo` several at once and records each one placed in `state`. a failure
@@ -62,10 +64,11 @@ pub(super) fn put_all<'t>(
             placed(target, method, look, writable, checked),
         );
         count(work, method);
-        let tally = tallies.entry(target.dataset.as_str()).or_default();
+        let tally = tallies.entry(target.dataset).or_default();
         tally.files += 1;
         if method == Method::Copy {
             tally.copied += target.size;
+            tally.unlinked += u64::from(!target.copy);
         } else {
             tally.links += 1;
         }
@@ -131,7 +134,7 @@ mod tests {
         // enough writable copies that the rest take a while once the first is in place
         let targets: Vec<Target> = (0..1000)
             .map(|index| Target {
-                dataset: "weather".to_owned(),
+                dataset: "weather",
                 path: format!("data/weather/{index:04}.csv"),
                 sha256: stored.digest,
                 size: bytes.len() as u64,

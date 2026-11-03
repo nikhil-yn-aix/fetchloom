@@ -49,8 +49,6 @@ the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_P
 ## quick start
 
 ```text
-fetchloom 0.1.0
-
 fetchloom puts the exact research data a project needs into its data/ folder.
 
   data.toml, the shopping list: which datasets you want

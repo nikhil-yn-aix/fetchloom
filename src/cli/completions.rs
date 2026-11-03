@@ -13,7 +13,7 @@ use crate::error::{Error, Kind};
 
 /// prints the script for `shell` on stdout, or the usage error `--json` gets.
 pub(super) fn print(context: &Context, shell: Shell, started: Instant) -> ExitCode {
-    let outcome = if context.output.is_json() {
+    let outcome = if context.output.json() {
         Err(Error::new(
             Kind::Usage,
             "completions prints a script for a shell, which a JSON document cannot hold",

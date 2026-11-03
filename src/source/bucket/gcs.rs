@@ -79,6 +79,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
 /// an object, linked at its generation, so a later upload under the same name is not taken
 /// for it.
 fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error> {
+    prefix.check_key(&item.name)?;
     let size = item
         .size
         .parse()

@@ -58,7 +58,11 @@ pub(crate) fn dataset_name(text: &str) -> Option<String> {
             name.push('-');
         }
     }
-    let mut name = name.trim_matches('-').to_owned();
+    // a name may not start with `_`, as a hidden `_data.csv` would make it
+    let mut name = name
+        .trim_start_matches(['-', '_'])
+        .trim_end_matches('-')
+        .to_owned();
     if name.len() > 40 {
         // names are ascii here, so byte offsets are character offsets
         let cut = name[..=40].rfind('-').filter(|&at| at >= 20).unwrap_or(40);
@@ -75,7 +79,8 @@ const DANGLING: [&str; 13] = [
 ];
 
 /// a dataset name made from a title: at most its first four words and 32 characters, without
-/// a dangling "and" or "of" at the end.
+/// a dangling "and" or "of" at the end. a first word too long for that is cut as
+/// [`dataset_name`] cuts any text, at 40 characters.
 pub(crate) fn title_name(title: &str) -> Option<String> {
     let lower = title.to_lowercase();
     let words = lower
@@ -516,6 +521,8 @@ mod tests {
             Some("snake_case_name")
         );
         assert_eq!(dataset_name("  ---  "), None);
+        assert_eq!(dataset_name("_data").as_deref(), Some("data"));
+        assert_eq!(dataset_name("__"), None);
         assert!(
             dataset_name(&"long ".repeat(20))
                 .is_some_and(|name| name.len() <= 40 && !name.ends_with('-'))

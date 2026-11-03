@@ -149,7 +149,7 @@ def metadata(args, adapters):
                 filesystems={fs: subprocess.check_output(["findmnt", "-n", "-o", "FSTYPE,OPTIONS", str(lab.ROOT / "fs" / fs)], text=True).strip()
                              for fs in args.fs},
                 tool_versions={name: tool.version() for name, tool in adapters.items()},
-                fetchloom_version=tools.Fetchloom(args.fetchloom).version(), repo_head=repo_head(),
+                repo_head=repo_head(),
                 seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.PROFILES,
                 commands={}, orders=[], cases=[],
                 native_packages=subprocess.check_output(["dpkg-query", "-W", "nginx", "aria2", "wget", "curl",
@@ -188,7 +188,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout):
     try:
         tools.reset(workdir)
         cold = case["id"] not in ("s5", "s6")
-        tool.prepare(case, workdir, cold=cold)
+        tool.prepare(case, workdir)
         argv = tool.command(case, workdir)
         row["command"] = exact_command(argv, workdir)
         row["command"]["cwd"] = str(tool.cwd(workdir))

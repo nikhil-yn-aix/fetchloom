@@ -387,7 +387,7 @@ fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
         .subsec_nanos()
         == 0
     {
-        std::thread::sleep(std::time::Duration::from_millis(2100));
+        sandbox.wait_for_a_later_time(written)?;
         fs::write(&state, fs::read(&state)?)?;
     }
     let cold = sandbox.cache().with_file_name("cold");

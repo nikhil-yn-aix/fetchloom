@@ -108,8 +108,22 @@ impl Cache {
         Ok(roots)
     }
 
+    /// removes `path`, refusing when a folder between it and the cache root was swapped for a
+    /// link or a file since the cache opened, so a sweep never deletes outside the cache.
+    fn remove_inside(&self, path: &Path) -> io::Result<()> {
+        let mut folder = path.parent();
+        while let Some(current) =
+            folder.filter(|folder| *folder != self.root && folder.starts_with(&self.root))
+        {
+            let metadata = fs::symlink_metadata(current)?;
+            crate::place::found_folder(current, &metadata, crate::place::FolderUse::Cache)?;
+            folder = current.parent();
+        }
+        self.volume.remove(path)
+    }
+
     pub(crate) fn forget(&self, root: &Path) {
-        let _ = self.volume.remove(&self.registration(root));
+        let _ = self.remove_inside(&self.registration(root));
     }
 
     /// checks an archive member without letting a large writable object delay cancellation.
@@ -121,10 +135,10 @@ impl Cache {
     ) -> Result<bool, Error> {
         stop.check()?;
         let path = self.object_path(digest);
-        let Ok(metadata) = fs::metadata(&path) else {
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
             return Ok(false);
         };
-        if !metadata.is_file() || metadata.len() != size {
+        if !crate::volume::is_plain(&metadata) || metadata.len() != size {
             return Ok(false);
         }
         let intact = !super::changed::doubted(&metadata, self.changed_at(digest))
@@ -139,6 +153,11 @@ impl Cache {
         for fan in scan_entries(&folder, &mut scan.unreadable, stop)? {
             stop.check()?;
             let prefix = fan.file_name().to_string_lossy().into_owned();
+            // a file the system leaves behind, such as finder's .DS_Store, is no fan folder. a
+            // fan's own name that is not a folder is damage, and is reported as unreadable
+            if prefix.len() != 2 || !prefix.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                continue;
+            }
             for entry in scan_entries(&fan.path(), &mut scan.unreadable, stop)? {
                 stop.check()?;
                 let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
@@ -201,7 +220,7 @@ impl Cache {
                 freed.kept_bytes += object.size;
             } else if removed(
                 &object.path,
-                self.volume.remove(&object.path),
+                self.remove_inside(&object.path),
                 &mut freed.not_removed,
             ) {
                 freed.objects += 1;
@@ -218,7 +237,7 @@ impl Cache {
                 .and_then(|metadata| metadata.modified())
                 .is_ok_and(unused);
             if !needed.unpacked.contains(&archive) && stale {
-                removed(&path, self.volume.remove(&path), &mut freed.not_removed);
+                removed(&path, self.remove_inside(&path), &mut freed.not_removed);
             }
         }
         self.sweep_partials(&old, stop, &mut freed)?;
@@ -234,7 +253,7 @@ impl Cache {
             if stale
                 && removed(
                     &entry.path(),
-                    self.volume.remove(&entry.path()),
+                    self.remove_inside(&entry.path()),
                     &mut freed.not_removed,
                 )
             {
@@ -267,7 +286,7 @@ impl Cache {
             if missing(&self.object_path(&record.sha256))
                 && missing(&self.unpacked_path(&record.sha256))
             {
-                removed(&path, self.volume.remove(&path), not_removed);
+                removed(&path, self.remove_inside(&path), not_removed);
             }
         }
         Ok(())
@@ -305,7 +324,7 @@ impl Cache {
                 stop.check()?;
                 if removed(
                     &leftover,
-                    self.volume.remove(&leftover),
+                    self.remove_inside(&leftover),
                     &mut freed.not_removed,
                 ) {
                     freed.leftovers += 1;
@@ -443,7 +462,7 @@ fn unreadable(path: &Path, error: &io::Error) -> Error {
 }
 
 fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
-    let mut file = fs::File::open(path)?;
+    let mut file = super::read_unfollowed(path)?;
     let mut hasher = digest::Hasher::default();
     let mut buffer = vec![0; 1024 * 1024];
     loop {

@@ -114,9 +114,11 @@ fn parts(url: &Url) -> Option<Vec<&str>> {
     )
 }
 
-/// an owner or a dataset name: letters, digits, `-`, `_` and `.`.
+/// an owner or a dataset name: letters, digits, `-`, `_` and `.`, but not only dots, which would
+/// move the api link to another endpoint.
 fn is_part(text: &str) -> bool {
     !text.is_empty()
+        && !text.chars().all(|c| c == '.')
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
@@ -242,6 +244,9 @@ mod tests {
             "kaggle:competitions/",
             "kaggle:competitions/..",
             "kaggle:competitions/titanic/data",
+            "kaggle:../iris",
+            "kaggle:uciml/..",
+            "kaggle:./.",
         ] {
             let err = Reference::parse(bad).unwrap_err();
             assert_eq!(err.kind, Kind::ReferenceInvalid, "{bad}");

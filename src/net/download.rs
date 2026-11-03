@@ -383,7 +383,7 @@ impl Net {
     fn in_cache(&self, fetch: &Fetch, cache: &Cache) -> Option<Fetched> {
         let Some(fetched) = fetch.cached(cache) else {
             // false means the cache had nothing to look the file up by
-            let stated = fetch.expect.sha256.is_some() || fetch.expect.md5.is_some();
+            let stated = fetch.expect.proves();
             tracing::debug!(stated_hash = stated, "not in the cache");
             return None;
         };
@@ -758,11 +758,7 @@ impl Net {
         response: reqwest::Response,
         expired: Expired,
     ) -> Result<bool, Failure> {
-        let page = tokio::select! {
-            page = self.page(url, response) => page,
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
-        };
-        match page {
+        match self.page(url, response).await {
             Ok(text) => Ok(expired(&text)),
             Err(Failure::Final(error)) if error.kind == Kind::Interrupted => {
                 Err(Failure::Final(error))
@@ -772,8 +768,19 @@ impl Net {
         }
     }
 
-    /// reads a page a server sent instead of the file.
-    async fn page(&self, url: &Url, mut response: reqwest::Response) -> Result<String, Failure> {
+    /// reads a page a server sent instead of the file, stopping when ctrl-c is pressed.
+    async fn page(&self, url: &Url, response: reqwest::Response) -> Result<String, Failure> {
+        tokio::select! {
+            page = self.read_page(url, response) => page,
+            () = self.stop.asked() => Err(Failure::Final(failure::interrupted(url))),
+        }
+    }
+
+    async fn read_page(
+        &self,
+        url: &Url,
+        mut response: reqwest::Response,
+    ) -> Result<String, Failure> {
         let mut page = Vec::new();
         loop {
             match tokio::time::timeout(IDLE, response.chunk()).await {
@@ -897,7 +904,11 @@ fn starting_offset(
             {
                 Ok(Some(*received))
             }
-            _ => Ok(None),
+            (Some(_), _) => Ok(None),
+            // a range nobody asked for: from the first byte it is the file, and anything else
+            // would be asked for again and again
+            (None, Some(0)) => Ok(Some(0)),
+            (None, _) => Err(failure::refusal(from, status, head)),
         },
         StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),
         status => Err(failure::refusal(from, status, head)),
