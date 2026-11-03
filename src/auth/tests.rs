@@ -143,9 +143,15 @@ fn signing_in_saves_where_the_sources_own_tools_read() {
         Account::Kaggle.home(&var, "KGAT_x"),
         Home::File(root.join(".kaggle/access_token"))
     );
+    // the kaggle CLI's own folder: on linux without ~/.kaggle, the one in XDG_CONFIG_HOME
+    let legacy = if cfg!(target_os = "linux") {
+        root.join(".config/kaggle/kaggle.json")
+    } else {
+        root.join(".kaggle/kaggle.json")
+    };
     assert_eq!(
         Account::Kaggle.home(&var, "{\"username\":\"a\",\"key\":\"b\"}"),
-        Home::File(root.join(".kaggle/kaggle.json"))
+        Home::File(legacy)
     );
     assert_eq!(
         Account::Login("physionet.org".into()).home(&var, "pw"),
