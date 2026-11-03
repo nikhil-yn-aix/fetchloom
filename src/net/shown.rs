@@ -57,13 +57,22 @@ pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
     text
 }
 
-/// replaces the `user:password@` of a link's authority with `***@`.
+/// replaces the `user:password@` of a web link's authority with `***@`. the authority starts
+/// after any number of slashes, as a URL parser reads `https:host` and `https:///host` too, and
+/// only web schemes count, so `figshare:1@2` keeps its version.
 fn mask_login(text: &str) -> Cow<'_, str> {
-    let Some(start) = text.find("://").map(|at| at + 3) else {
+    let Some((scheme, rest)) = text.split_once(':') else {
         return Cow::Borrowed(text);
     };
+    if !["http", "https", "ftp"]
+        .iter()
+        .any(|web| scheme.trim().eq_ignore_ascii_case(web))
+    {
+        return Cow::Borrowed(text);
+    }
+    let start = text.len() - rest.trim_start_matches(['/', '\\']).len();
     let end = text[start..]
-        .find(['/', '?', '#'])
+        .find(['/', '\\', '?', '#'])
         .map_or(text.len(), |at| start + at);
     match text[start..end].rfind('@') {
         Some(at) => Cow::Owned(format!("{}***{}", &text[..start], &text[start + at..])),
@@ -125,6 +134,19 @@ mod tests {
                 "https://***@example.org:bad/a.csv",
             ),
             ("https://example.org/a@b.csv", "https://example.org/a@b.csv"),
+            (
+                "https:ada:pw@example.org/a.csv",
+                "https:***@example.org/a.csv",
+            ),
+            (
+                "https:///ada:pw@example.org:bad/a.csv",
+                "https:///***@example.org:bad/a.csv",
+            ),
+            (
+                "HTTP:\\\\ada:pw@example.org\\a.csv",
+                "HTTP:\\\\***@example.org\\a.csv",
+            ),
+            ("figshare:34744689@1", "figshare:34744689@1"),
             ("zenodo:1", "zenodo:1"),
         ] {
             assert_eq!(mask_query(text), shown, "{text}");
