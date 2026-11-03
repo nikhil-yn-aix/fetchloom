@@ -797,6 +797,20 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
     Ok(())
 }
 
+/// a test running alongside may take a freed port at once, so either a refused connection or
+/// binding the port here proves the listener was released.
+fn released(address: std::net::SocketAddr) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
+        && std::net::TcpListener::bind(address).is_err()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the listener stayed open"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 #[test]
 fn dropping_a_scripted_server_releases_its_listener() -> Result {
     let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
@@ -806,7 +820,7 @@ fn dropping_a_scripted_server_releases_its_listener() -> Result {
         .trim_end_matches('/')
         .parse()?;
     drop(server);
-    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    released(address);
     Ok(())
 }
 
@@ -819,7 +833,7 @@ fn dropping_a_ranged_server_releases_its_listener() -> Result {
         .trim_end_matches('/')
         .parse()?;
     drop(server);
-    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    released(address);
     Ok(())
 }
 
@@ -828,7 +842,7 @@ fn dropping_a_proxy_releases_its_listener() -> Result {
     let proxy = Proxy::start()?;
     let address = proxy.url.trim_start_matches("http://").parse()?;
     drop(proxy);
-    assert!(TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err());
+    released(address);
     Ok(())
 }
 

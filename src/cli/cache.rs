@@ -29,7 +29,9 @@ pub(super) struct Info {
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let cache = open_cache()?;
-    let (needed, projects) = needed_with(&cache, None, &context.stop, false)?;
+    let Found {
+        needed, projects, ..
+    } = needed_with(&cache, None, &context.stop, false)?;
     let scan = cache.scan_objects(&context.stop)?;
     if let Some(path) = scan.unreadable.first() {
         return Err(
@@ -110,7 +112,9 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     } else {
         open_cache()?
     };
-    let (needed, projects) = needed_with(&cache, None, &context.stop, true)?;
+    let Found {
+        needed, projects, ..
+    } = needed_with(&cache, None, &context.stop, true)?;
     let grace = if now {
         std::time::Duration::ZERO
     } else {
@@ -419,14 +423,16 @@ pub(super) fn needed_by_all(
     current: Option<&Lock>,
     stop: &Stop,
 ) -> Result<Option<Needed>, Error> {
-    let roots = cache.registered_projects(stop)?;
-    if roots
-        .into_iter()
-        .any(|root| !Project { root }.manifest_path().is_file())
-    {
-        return Ok(None);
-    }
-    Ok(Some(needed_with(cache, current, stop, false)?.0))
+    let found = needed_with(cache, current, stop, false)?;
+    Ok(found.complete.then_some(found.needed))
+}
+
+/// what [`needed_with`] found. `complete` is false when a registered project's data.toml was
+/// missing, so what that project needs is not in `needed`.
+struct Found {
+    needed: Needed,
+    projects: Vec<PathBuf>,
+    complete: bool,
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
@@ -438,9 +444,10 @@ fn needed_with(
     current: Option<&Lock>,
     stop: &Stop,
     forget: bool,
-) -> Result<(Needed, Vec<PathBuf>), Error> {
+) -> Result<Found, Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
+    let mut complete = true;
     for root in cache.registered_projects(stop)? {
         stop.check()?;
         let project = Project { root };
@@ -450,6 +457,8 @@ fn needed_with(
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 if forget {
                     cache.forget(&project.root);
+                } else {
+                    complete = false;
                 }
                 continue;
             }
@@ -485,7 +494,11 @@ fn needed_with(
     if let Some(lock) = current {
         add_with_stop(&mut needed, cache, lock, stop)?;
     }
-    Ok((needed, projects))
+    Ok(Found {
+        needed,
+        projects,
+        complete,
+    })
 }
 
 /// adds what one lock needs. an archive needs the files it unpacked to, and its own bytes too
