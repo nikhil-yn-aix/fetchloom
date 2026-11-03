@@ -172,6 +172,17 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
     Failure::Final(error)
 }
 
+/// the certificate error inside `error`, however many `io::Error`s wrap it. a direct connection
+/// gets two, from tokio-rustls and hyper-rustls, and std's `source()` steps over both.
+fn untrusted<'e>(mut error: &'e (dyn std::error::Error + 'static)) -> Option<&'e rustls::Error> {
+    loop {
+        if let Some(tls) = error.downcast_ref::<rustls::Error>() {
+            return matches!(tls, rustls::Error::InvalidCertificate(_)).then_some(tls);
+        }
+        error = error.downcast_ref::<std::io::Error>()?.get_ref()?;
+    }
+}
+
 /// a request that failed before any answer came, sorted into what to retry and what not to.
 pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failure {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
@@ -193,16 +204,7 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
         }
         // a certificate the system does not trust fails the same way on every try. matched by
         // type: the text of the outer error holds the link, which may well say "certificate"
-        let untrusted = current
-            .downcast_ref::<rustls::Error>()
-            .or_else(|| {
-                current
-                    .downcast_ref::<std::io::Error>()
-                    .and_then(|io| io.get_ref())
-                    .and_then(|inner| inner.downcast_ref::<rustls::Error>())
-            })
-            .filter(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)));
-        if let Some(tls) = untrusted {
+        if let Some(tls) = untrusted(current) {
             return Failure::Final(
                 Error::new(
                     Kind::NetworkUnreachable,
@@ -526,6 +528,27 @@ mod tests {
             assert!(error.message.contains("connection broke"));
             assert_eq!(error.help.unwrap().contains("--offline"), has_copy);
         }
+    }
+
+    #[test]
+    fn a_certificate_error_is_found_however_deep_io_errors_wrap_it() {
+        use std::io;
+        let tls = || rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer);
+        // the shape of a direct https connection: tokio-rustls, then hyper-rustls
+        let direct = io::Error::other(io::Error::new(io::ErrorKind::InvalidData, tls()));
+        assert!(super::untrusted(&direct).is_some());
+        let proxied = io::Error::new(io::ErrorKind::InvalidData, tls());
+        assert!(super::untrusted(&proxied).is_some());
+        let other = io::Error::other(io::Error::new(
+            io::ErrorKind::InvalidData,
+            rustls::Error::DecryptError,
+        ));
+        assert!(
+            super::untrusted(&other).is_none(),
+            "only certificates count"
+        );
+        let reset = io::Error::new(io::ErrorKind::ConnectionReset, "reset by peer");
+        assert!(super::untrusted(&reset).is_none());
     }
 
     #[test]
