@@ -75,10 +75,10 @@ impl Bar {
         }
     }
 
-    /// adds the size of a file whose download just told it to what the bar fills to.
-    pub(crate) fn grow(&self, bytes: u64) {
+    /// what the bar fills to, as a size learned during the downloads changes it.
+    pub(crate) fn length(&self, total: u64) {
         if let Some(bar) = &self.drawn {
-            bar.set_length(bar.length().unwrap_or(0) + bytes);
+            bar.set_length(total);
         }
     }
 }

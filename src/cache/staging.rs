@@ -109,8 +109,9 @@ impl Cache {
         stop: &Stop,
         not_removed: &mut Vec<PathBuf>,
     ) -> u64 {
-        // someone able to rename inside tmp could swap a link in for the folder while it was used
-        if real_folder(folder, FolderUse::Cache).is_err() {
+        // someone able to rename inside tmp could swap a link in for the folder, or for tmp
+        // itself, while it was used
+        if real_folder(folder, FolderUse::Cache).is_err() || self.check_inside(folder).is_err() {
             not_removed.push(folder.to_path_buf());
             return 0;
         }
@@ -133,7 +134,7 @@ impl Cache {
             if entry.file_name() == "lock" || entry.file_name() == "unlocked" {
                 continue;
             }
-            match self.volume.remove(&entry.path()) {
+            match self.remove_inside(&entry.path()) {
                 Ok(()) => removed += 1,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                 Err(_) => {
@@ -148,9 +149,12 @@ impl Cache {
         if cleared {
             for name in ["lock", "unlocked"] {
                 let path = folder.join(name);
-                super::upkeep::removed(&path, self.volume.remove(&path), not_removed);
+                super::upkeep::removed(&path, self.remove_inside(&path), not_removed);
             }
-            super::upkeep::removed(folder, self.volume.remove_folder(folder), not_removed);
+            let folder_removed = self
+                .check_inside(folder)
+                .and_then(|()| self.volume.remove_folder(folder));
+            super::upkeep::removed(folder, folder_removed, not_removed);
         }
         removed
     }

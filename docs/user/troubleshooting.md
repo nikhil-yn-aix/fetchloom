@@ -20,7 +20,7 @@ fetchloom --version -v >> fetchloom-debug.txt
 
 on windows, run these lines in cmd or powershell 7; windows powershell 5.1 rewrites redirected stderr. attach `fetchloom-debug.txt`, the exit code, and the `data.toml` and `data.lock` entries for the dataset. debug lines say whether each file came from the cache or a download, why a placed file was hashed again, which placement method was used and why a better one was given up, which host a stored credential was sent to, and each retry and redirect.
 
-logs never include a token or password: a credential is named by its host and header only, and secret query values in links show as `***`. local paths and dataset references do appear, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
+logs never include a token or password: a credential is named by its host and header only, and a login or secret query value in a link shows as `***`. local paths and dataset references do appear, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
 
 ## errors
 

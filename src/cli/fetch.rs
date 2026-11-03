@@ -65,6 +65,9 @@ pub(super) fn wrapped(cache: &Cache, remote: &Remote, path: String, bytes: &Sha2
 struct Overall {
     bar: Option<Bar>,
     ticker: Ticker,
+    /// what the bar fills to so far. downloads run on several threads and learn sizes at once,
+    /// so each addition reads and writes it under one lock.
+    length: std::sync::Mutex<u64>,
 }
 
 impl Overall {
@@ -80,12 +83,17 @@ impl Overall {
             bar.start((!known.is_empty()).then(|| known.iter().sum()), 0);
             bar
         });
+        let length = std::sync::Mutex::new(sizes().flatten().sum());
         let what = match jobs {
             [only] => only.label.clone(),
             _ => units::count(count as u64, "file", "files"),
         };
         let ticker = context.output.ticker("Downloading", what, sizes());
-        Overall { bar, ticker }
+        Overall {
+            bar,
+            ticker,
+            length,
+        }
     }
 
     fn advance(&self, bytes: u64) {
@@ -97,7 +105,12 @@ impl Overall {
 
     fn sized(&self, bytes: u64) {
         if let Some(bar) = &self.bar {
-            bar.grow(bytes);
+            let mut length = self
+                .length
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *length += bytes;
+            bar.length(*length);
         }
         self.ticker.sized(bytes);
     }
@@ -539,6 +552,7 @@ mod tests {
         let overall = Overall {
             bar: None,
             ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+            length: std::sync::Mutex::default(),
         };
         let unknown = || Event::Started {
             total: None,
@@ -608,6 +622,7 @@ mod tests {
         let overall = Overall {
             bar: None,
             ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+            length: std::sync::Mutex::default(),
         };
         for (total, resumed, needs_approval) in [
             (super::super::ASK_ABOVE, 0, false),
@@ -653,6 +668,7 @@ mod tests {
         let overall = Overall {
             bar: None,
             ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+            length: std::sync::Mutex::default(),
         };
         let approval = Approval::new();
         let event = Event::Started {

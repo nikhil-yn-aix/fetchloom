@@ -48,8 +48,30 @@ impl fmt::Display for Shown<'_> {
     }
 }
 
-/// masks secret query values in a reference, even when it is not a valid URL yet.
+/// masks a login and secret query values in a reference, even when it is not a valid URL yet.
 pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
+    let text = mask_login(text);
+    if let Cow::Owned(masked) = mask_secret_values(&text) {
+        return Cow::Owned(masked);
+    }
+    text
+}
+
+/// replaces the `user:password@` of a link's authority with `***@`.
+fn mask_login(text: &str) -> Cow<'_, str> {
+    let Some(start) = text.find("://").map(|at| at + 3) else {
+        return Cow::Borrowed(text);
+    };
+    let end = text[start..]
+        .find(['/', '?', '#'])
+        .map_or(text.len(), |at| start + at);
+    match text[start..end].rfind('@') {
+        Some(at) => Cow::Owned(format!("{}***{}", &text[..start], &text[start + at..])),
+        None => Cow::Borrowed(text),
+    }
+}
+
+fn mask_secret_values(text: &str) -> Cow<'_, str> {
     let (head, fragment) = text.find('#').map_or((text, ""), |at| text.split_at(at));
     let Some((address, query)) = head.split_once('?') else {
         return Cow::Borrowed(text);
@@ -89,6 +111,24 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("X-Amz-Expires=600"), "{shown}");
+    }
+
+    #[test]
+    fn a_login_never_shows_even_in_a_link_that_does_not_parse() {
+        for (text, shown) in [
+            (
+                "https://ada:pw@example.org/a.csv?token=t",
+                "https://***@example.org/a.csv?token=***",
+            ),
+            (
+                "https://ada:pw@example.org:bad/a.csv",
+                "https://***@example.org:bad/a.csv",
+            ),
+            ("https://example.org/a@b.csv", "https://example.org/a@b.csv"),
+            ("zenodo:1", "zenodo:1"),
+        ] {
+            assert_eq!(mask_query(text), shown, "{text}");
+        }
     }
 
     #[test]

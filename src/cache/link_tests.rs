@@ -207,6 +207,30 @@ fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
     );
 }
 
+#[test]
+fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return;
+    }
+    let outside = dir.path().join("outside");
+    let stage = outside.join("0123456789abcdef.stage");
+    fs::create_dir_all(&stage).unwrap();
+    fs::write(stage.join("lock"), b"").unwrap();
+    let payload = stage.join("payload");
+    fs::write(&payload, b"keep these bytes").unwrap();
+    let folder = cache.root.join("tmp");
+    fs::create_dir_all(&folder).unwrap();
+    fs::rename(&folder, cache.root.join("old-tmp")).unwrap();
+    link_folder(&outside, &folder);
+
+    let freed = cache.sweep(&super::Needed::default(), std::time::SystemTime::now());
+
+    assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
+    assert!(stage.join("lock").exists());
+    assert_ne!(freed.not_removed, Vec::<std::path::PathBuf>::new());
+}
+
 #[cfg(unix)]
 #[test]
 fn verifying_never_hashes_an_object_swapped_for_a_symlink() {

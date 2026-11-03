@@ -110,7 +110,13 @@ impl Cache {
 
     /// removes `path`, refusing when a folder between it and the cache root was swapped for a
     /// link or a file since the cache opened, so a sweep never deletes outside the cache.
-    fn remove_inside(&self, path: &Path) -> io::Result<()> {
+    pub(super) fn remove_inside(&self, path: &Path) -> io::Result<()> {
+        self.check_inside(path)?;
+        self.volume.remove(path)
+    }
+
+    /// refuses `path` when a folder between it and the cache root is not a real folder.
+    pub(super) fn check_inside(&self, path: &Path) -> io::Result<()> {
         let mut folder = path.parent();
         while let Some(current) =
             folder.filter(|folder| *folder != self.root && folder.starts_with(&self.root))
@@ -119,7 +125,7 @@ impl Cache {
             crate::place::found_folder(current, &metadata, crate::place::FolderUse::Cache)?;
             folder = current.parent();
         }
-        self.volume.remove(path)
+        Ok(())
     }
 
     pub(crate) fn forget(&self, root: &Path) {

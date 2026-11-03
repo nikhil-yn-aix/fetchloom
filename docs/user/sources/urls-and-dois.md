@@ -33,7 +33,7 @@ a plain URL records the parsed URL as both `resolved` and the file's download UR
 
 project commands reject login details in plain URLs and recognized secret query keys. keep credentials out of `data.toml` and `data.lock`.
 
-`get` accepts secret query values for one-off downloads. its JSON file URLs and errors mask recognized keys, including malformed-link errors. recognized names include `token`, `signature` and `sig`; arbitrary secrets cannot be identified reliably.
+`get` accepts secret query values for one-off downloads. its JSON file URLs and errors mask logins and recognized keys, including malformed-link errors. recognized names include `token`, `signature` and `sig`; arbitrary secrets cannot be identified reliably.
 
 local URL records keep raw links. do not share those records or commit them. there is no general browser login or access-approval workflow.
 
