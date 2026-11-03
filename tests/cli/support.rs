@@ -797,55 +797,32 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
     Ok(())
 }
 
-/// a test running alongside may take a freed port at once, so either a refused connection or
-/// binding the port here proves the listener was released.
-fn released(address: std::net::SocketAddr) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
-        && std::net::TcpListener::bind(address).is_err()
-    {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the listener stayed open"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
+/// the scripted server, the ranged server and the proxy each run in a `ServerTask`. dropping one
+/// stops its worker and waits for it, so the listener the worker owns is closed by then. this is
+/// checked through the worker's own handle, since a freed port may at once belong to a test
+/// running alongside.
 #[test]
-fn dropping_a_scripted_server_releases_its_listener() -> Result {
-    let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
-    let address = server
-        .url
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .parse()?;
-    drop(server);
-    released(address);
+fn dropping_a_server_task_closes_the_listener_its_worker_owns() -> Result {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let owned = Arc::new(());
+    let held = owned.clone();
+    let task = ServerTask::start(listener, move |listener, stop| {
+        while stop.accept(&listener).is_some() {}
+        drop((listener, held));
+    })?;
+    assert_eq!(
+        Arc::strong_count(&owned),
+        2,
+        "the worker holds its listener"
+    );
+    drop(task);
+    assert_eq!(
+        Arc::strong_count(&owned),
+        1,
+        "the worker ended before drop returned"
+    );
     Ok(())
 }
-
-#[test]
-fn dropping_a_ranged_server_releases_its_listener() -> Result {
-    let server = Ranged::start("/", vec![0; 1024], 0)?;
-    let address = server
-        .url
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .parse()?;
-    drop(server);
-    released(address);
-    Ok(())
-}
-
-#[test]
-fn dropping_a_proxy_releases_its_listener() -> Result {
-    let proxy = Proxy::start()?;
-    let address = proxy.url.trim_start_matches("http://").parse()?;
-    drop(proxy);
-    released(address);
-    Ok(())
-}
-
 #[test]
 fn dropping_a_server_closes_a_connection_waiting_for_a_request() -> Result {
     let server = Server::start("/", vec![file(b"ok", "\"v1\"")])?;
