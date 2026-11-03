@@ -509,7 +509,20 @@ mod tests {
         };
         assert!(matches!(project.hold("sync").unwrap(), Hold::Busy));
         drop(held);
-        assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
+        // a test spawning a process at this moment shares the open lock file until its child
+        // runs its program, and a unix file lock lasts as long as any process holds that file.
+        // fetchloom spawns nothing while it holds a project, so only the tests wait it out
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let freed = loop {
+            match project.hold("sync").unwrap() {
+                Hold::Held(_) => break true,
+                Hold::Busy if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => break false,
+            }
+        };
+        assert!(freed, "the lock is free once its holder is dropped");
         assert_eq!(
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
