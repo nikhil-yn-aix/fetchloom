@@ -317,6 +317,7 @@ impl<'a> Placing<'a> {
         work: &Work,
         cache: &Cache,
         synced: Option<Synced>,
+        told: Option<&str>,
     ) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("place").entered();
         let Placing {
@@ -368,7 +369,7 @@ impl<'a> Placing<'a> {
         if let Some(error) = failure {
             return Err(error);
         }
-        tell(output, manifest, &placer, &tallies, &placement);
+        tell(output, manifest, &placer, &tallies, &placement, told);
         Ok(placement)
     }
 
@@ -400,7 +401,14 @@ impl<'a> Placing<'a> {
         if removed || forgot || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
-        tell(output, manifest, &placer, &BTreeMap::new(), &placement);
+        tell(
+            output,
+            manifest,
+            &placer,
+            &BTreeMap::new(),
+            &placement,
+            None,
+        );
         Ok(placement)
     }
 }
@@ -826,7 +834,7 @@ mod tests {
             false,
         );
         placing
-            .apply(&output, &Work::default(), &cache, None)
+            .apply(&output, &Work::default(), &cache, None, None)
             .unwrap();
         let (recorded, _) = project.state();
         for name in names {

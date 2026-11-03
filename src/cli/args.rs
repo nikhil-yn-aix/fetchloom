@@ -14,10 +14,10 @@ const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 /// disk.
 mod examples {
     pub(super) const ADD: &str = "examples:
-  fetchloom add https://zenodo.org/records/3608990
-  fetchloom add doi:10.5281/zenodo.3608990 --as flowers
-  fetchloom add zenodo:3608990 --select \"*.csv\" --dry-run
   fetchloom add iris    # at a terminal, pick one from a list
+  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+  fetchloom add https://zenodo.org/records/3608990 --as flowers
+  fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run
 
 on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. --dry-run writes nothing";
 
@@ -87,7 +87,7 @@ on disk: marks changed cached files for replacement on the next download. data/ 
 
     pub(super) const GET: &str = "examples:
   fetchloom get iris
-  fetchloom get zenodo:3608990 -o flowers
+  fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
   fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
   fetchloom get -i links.txt
 
@@ -151,12 +151,12 @@ pub(crate) const INTRO: &str =
   the cache, the pantry: shared by projects using it
   sync, restocking: fill data/ from the receipt
 
-try it with zenodo:3608990, a 4.1 KiB iris.csv:
+  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
+  fetchloom get iris    just download it, without a project
+  fetchloom sync        fill data/ in a project you cloned
 
-  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
-  fetchloom sync                 restock data/ in a project you cloned
-  fetchloom get zenodo:3608990   fetch it once, without a project
-  fetchloom search iris          find datasets by name
+a name searches hugging face, kaggle and zenodo. a link works as well:
+  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`";
 

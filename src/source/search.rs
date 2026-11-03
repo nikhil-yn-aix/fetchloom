@@ -164,9 +164,11 @@ fn reference(text: &str) -> Result<Reference, Error> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HubMatch {
     id: String,
     downloads: Option<u64>,
+    main_size: Option<u64>,
     #[serde(default)]
     private: bool,
     #[serde(default)]
@@ -182,6 +184,13 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
             ("limit", &most),
             ("sort", "downloads"),
             ("direction", "-1"),
+            // asking for any field returns only those asked for. mainSize is the size of the
+            // files at the main revision, what fetchloom downloads; card data would add the
+            // title some repositories set, but runs to hundreds of KB for popular words
+            ("expand[]", "downloads"),
+            ("expand[]", "mainSize"),
+            ("expand[]", "gated"),
+            ("expand[]", "private"),
         ],
     )?;
     let response = api.get(&url).await?;
@@ -200,7 +209,7 @@ async fn hugging_face(api: &impl Api, words: &str, limit: usize) -> Result<Vec<C
                 reference: reference(&format!("hf:datasets/{}", item.id))?,
                 title: item.id,
                 source: "hugging face",
-                size: None,
+                size: item.main_size,
                 downloads: item.downloads,
                 note: gated.then(|| "needs access".to_owned()),
             })

@@ -4,7 +4,7 @@
 
 ```sh
 fetchloom get iris
-fetchloom get zenodo:3608990 -o flowers
+fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
 fetchloom get https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz --no-extract
 fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
 fetchloom get -i links.txt
@@ -40,8 +40,8 @@ a single file defaults to a folder named after its filename stem. several files 
 stderr excerpt for a single-file download on a filesystem that supports links:
 
 ```text
-     Placed iris/iris.csv · linked from the cache
-    Fetched iris.csv into iris
+ Downloaded iris.csv · 81 B in [time]
+    Fetched iris.csv into iris · linked from the cache
 ```
 
 an unchanged direct URL can return a 304 response, avoiding its file-body download. without validators, bytes may download again. source listings can still need requests even when payloads are cached. a later `get` accepts changed upstream bytes; use [add](add.md) for pinned inputs.

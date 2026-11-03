@@ -190,25 +190,11 @@ fn tell_placed(
             output.done("Ok", &format!("{shown} is already up to date"));
             return;
         }
-        ([only], [outcome]) => {
-            let verb = if matches!(outcome, Outcome::Replaced(_)) {
-                "Replaced"
-            } else {
-                "Placed"
-            };
-            output.step(
-                verb,
-                &format!("{} · {how}", within(folder, &only.path).display()),
-            );
-        }
-        _ => output.step(
-            "Placed",
-            &format!(
-                "{} · {} {how}",
-                folder.display(),
-                units::count(changed, "file", "files")
-            ),
+        ([only], [Outcome::Replaced(_)]) => output.step(
+            "Replaced",
+            &within(folder, &only.path).display().to_string(),
         ),
+        _ => {}
     }
     let things = if targets.len() == 1 {
         "the file was"
@@ -223,7 +209,10 @@ fn tell_placed(
         [only] => only.path.clone(),
         _ => units::count(targets.len() as u64, "file", "files"),
     };
-    output.done("Fetched", &format!("{what} into {}", folder.display()));
+    output.done(
+        "Fetched",
+        &format!("{what} into {} · {how}", folder.display()),
+    );
     if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
         output.hint(&why.copied_because(folder.display(), things));
     }

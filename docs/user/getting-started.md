@@ -55,19 +55,25 @@ after the first release, the [README](https://github.com/nikhil-yn-aix/fetchloom
 
 ## first project
 
-a project is a folder with your work in it. make one and download the iris dataset, a 4.1 KiB table of flower measurements:
+a project is a folder with your work in it. make one and add the iris dataset, a small table of flower measurements:
 
 ```sh
 mkdir iris-study
 cd iris-study
-fetchloom add zenodo:3608990
+fetchloom add iris
 ```
 
-`zenodo:3608990` is the dataset's id: record 3608990 on zenodo. the last lines it prints:
+fetchloom searches hugging face, kaggle and zenodo for iris and shows a list. move to `hf:datasets/scikit-learn/iris` with the arrow keys and press enter. to skip the list, give the dataset's link instead:
+
+```sh
+fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+```
+
+either way, it prints:
 
 ```text
-     Locked iris · 1 file in data.lock
-     Placed data/iris · 1 file linked from the cache
+   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
+ Downloaded 4 files · 18.1 KiB in 287 ms
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
@@ -78,7 +84,7 @@ the folder now holds:
 |---|---|
 | `data.toml` | the datasets this project wants, one entry named `iris` |
 | `data.lock` | the exact files, with their sizes and SHA-256 fingerprints |
-| `data/iris/iris.csv` | the data itself, read-only so you cannot change it by accident |
+| `data/iris/Iris.csv` | the data itself, with the dataset's readme, read-only so you cannot change it by accident |
 | `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
 
 the downloaded bytes also live once in a shared cache, so another project that needs iris gets it without a second download. [concepts](concepts.md) explains the cache and how files are placed.
@@ -94,7 +100,7 @@ open the folder in your file manager:
 or print the full path of one file, for code that reads it:
 
 ```sh
-fetchloom path iris/iris.csv
+fetchloom path iris/Iris.csv
 ```
 
 `fetchloom list` shows every dataset in the project with its size and folder.
@@ -109,7 +115,7 @@ fetchloom sync
 
 `sync` downloads what is missing and checks every file against `data.lock`, so you get the same bytes.
 
-with git, `add` already put `data/` in `.gitignore` when the folder was a git repository. if you start git later, run `git init` and then `fetchloom add zenodo:3608990` again; it reuses the dataset and writes `.gitignore`. then:
+with git, `add` already put `data/` in `.gitignore` when the folder was a git repository. if you start git later, run `git init` and then `fetchloom add https://huggingface.co/datasets/scikit-learn/iris` again; it reuses the dataset and writes `.gitignore`. then:
 
 ```sh
 git add data.toml data.lock .gitignore

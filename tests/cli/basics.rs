@@ -280,7 +280,7 @@ fn welcome() -> Result {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
     assert!(
-        stdout.contains("\n  fetchloom add zenodo:3608990 "),
+        stdout.contains("\n  fetchloom add iris "),
         "the welcome has a first command to copy"
     );
     assert!(

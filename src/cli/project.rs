@@ -117,7 +117,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     };
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
-    let work = Loop::new(context, project, net, cache);
+    let work = Loop::new(context, project, net, cache).telling(&name);
     if dry_run {
         return preview_add(&work, &new_manifest, old.as_ref(), name, addition.listing).await;
     }
@@ -1005,7 +1005,7 @@ async fn preview_all(
     let changed = old != Some(&lock);
     let output = &work.context.output;
     if changed {
-        engine::tell_lock(output, old, &lock, ("Would lock", "Would drop"));
+        engine::tell_lock(output, old, &lock, ("Would lock", "Would drop"), None);
     }
     let preview = work.preview(manifest, &lock, force, survey, jobs)?;
     for download in &preview.changes.download {

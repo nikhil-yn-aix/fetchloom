@@ -9,32 +9,67 @@ use crate::error::{Error, Kind};
 pub(super) fn choose(
     question: &str,
     options: &[String],
+    footer: &str,
     style: Style,
 ) -> Result<Option<usize>, Error> {
     if options.is_empty() {
         return Err(cancelled());
     }
     let terminal = Term::stderr();
+    let width = usize::from(terminal.size().1);
+    let _ = terminal.hide_cursor();
     let mut cursor = 0;
-    draw(&terminal, question, options, cursor, style);
+    let mut shown = 0;
+    show(
+        &terminal,
+        &frame(question, options, footer, cursor, style, width),
+        &mut shown,
+    );
     let answer = loop {
         let previous = cursor;
         match selection_key(terminal.read_key_raw(), &mut cursor, options.len()) {
             Ok(None) => {
                 if previous != cursor {
-                    clear(&terminal, options.len() + 1);
-                    draw(&terminal, question, options, cursor, style);
+                    let lines = frame(question, options, footer, cursor, style, width);
+                    show(&terminal, &lines, &mut shown);
                 }
             }
             answer => break answer,
         }
     };
-    clear(&terminal, options.len() + 1);
+    // up to the first line, then clear to the end of the screen, in one write
+    let _ = terminal.write_str(&format!("\x1b[{shown}A\r\x1b[0J"));
+    let _ = terminal.show_cursor();
     answer
 }
 
-fn draw(terminal: &Term, question: &str, options: &[String], cursor: usize, style: Style) {
-    let width = usize::from(terminal.size().1);
+/// writes `lines` over the `shown` lines drawn before, as one write that replaces each line in
+/// place. clearing every line and then drawing again is what makes a picker flicker.
+fn show(terminal: &Term, lines: &[String], shown: &mut usize) {
+    let mut text = if *shown > 0 {
+        format!("\x1b[{shown}A")
+    } else {
+        String::new()
+    };
+    for line in lines {
+        text.push_str("\r\x1b[2K");
+        text.push_str(line);
+        text.push('\n');
+    }
+    let _ = terminal.write_str(&text);
+    let _ = terminal.flush();
+    *shown = lines.len();
+}
+
+/// the picker's lines: the question with its keys, a row for each option, then the footer.
+fn frame(
+    question: &str,
+    options: &[String],
+    footer: &str,
+    cursor: usize,
+    style: Style,
+    width: usize,
+) -> Vec<String> {
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
     let question = plain(question);
@@ -58,17 +93,26 @@ fn draw(terminal: &Term, question: &str, options: &[String], cursor: usize, styl
         .find(|legend| legend.chars().count() <= room)
         .copied()
         .unwrap_or("");
-    let _ = terminal.write_line(&format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}"));
+    let mut lines = vec![format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}")];
+    // what follows the widest reference, so a row with a blank title keeps its columns
+    let column = options
+        .iter()
+        .map(|option| reference(option).chars().count() + 2)
+        .max()
+        .unwrap_or_default();
     for (index, option) in options.iter().enumerate() {
-        let _ = terminal.write_line(&row(option, index, cursor, style, width));
+        lines.push(row(option, index, cursor, style, width, column));
     }
+    if !footer.is_empty() {
+        let more = if style.unicode { "\u{2026}" } else { "..." };
+        let footer = console::truncate_str(footer, width.saturating_sub(5), more);
+        lines.push(format!("    {dim}{}{dim:#}", plain(&footer)));
+    }
+    lines
 }
 
-fn clear(terminal: &Term, lines: usize) {
-    for _ in 0..lines {
-        let _ = terminal.move_cursor_up(1);
-        let _ = terminal.clear_line();
-    }
+fn reference(option: &str) -> &str {
+    option.split(' ').next().unwrap_or_default()
 }
 
 fn selection_key(
@@ -101,14 +145,24 @@ fn cancelled() -> Error {
         .help("run it again with one of the references above, or with a link or an id")
 }
 
-/// one option: the reference, then its title and facts, dim unless the cursor is on it. the
-/// reference is never cut; the rest gives way on a narrow terminal.
-fn row(option: &str, index: usize, cursor: usize, style: Style, width: usize) -> String {
+/// one option: the reference, then from `column` on its title and facts, dim unless the cursor
+/// is on it. the reference is never cut; the rest gives way on a narrow terminal.
+fn row(
+    option: &str,
+    index: usize,
+    cursor: usize,
+    style: Style,
+    width: usize,
+    column: usize,
+) -> String {
     let text = plain(option);
-    let (reference, rest) = text.split_once("  ").unwrap_or((&text, ""));
-    let rest = rest.trim_start();
+    let reference = reference(&text);
+    let rest: String = text
+        .chars()
+        .skip(column.max(reference.chars().count()))
+        .collect();
+    let rest = rest.trim_end();
     // the padding that lines the titles up, kept apart from the bold reference
-    let column = text.chars().count() - rest.chars().count();
     let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
     let room = width.saturating_sub(column + 7);
     let more = if style.unicode { "\u{2026}" } else { "..." };
@@ -217,15 +271,35 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_is_the_question_then_one_line_per_option_then_the_footer() {
+        let options = ["a   one".to_owned(), "bb  two".to_owned()];
+        let lines = frame("which?", &options, "more: x", 1, style(false, false), 80);
+        assert_eq!(
+            lines,
+            [
+                "  which?  up/down move, 1-9 or enter choose, q cancel",
+                "    1 a   one",
+                "  > 2 bb  two",
+                "    more: x",
+            ]
+        );
+        assert_eq!(
+            frame("which?", &options, "", 0, style(false, false), 80).len(),
+            3
+        );
+        assert!(lines.iter().all(|line| !line.contains('\n')));
+    }
+
+    #[test]
     fn rows_highlight_the_cursor_and_escape_untrusted_titles() {
-        let selected = row("iris", 0, 0, style(false, false), 80);
+        let selected = row("iris", 0, 0, style(false, false), 80, 6);
         assert_eq!(selected, "  > 1 iris");
-        assert_eq!(row("other", 1, 0, style(false, true), 80), "    2 other");
-        let colored = row("iris", 0, 0, style(true, true), 80);
+        assert_eq!(row("other", 1, 0, style(false, true), 80, 7), "    2 other");
+        let colored = row("iris", 0, 0, style(true, true), 80, 6);
         assert!(colored.contains('\u{203a}'));
         assert!(colored.contains("\x1b["));
         assert!(colored.contains("iris"));
-        let unsafe_text = row("iris\x1b[2J\nnext", 0, 0, style(false, false), 80);
+        let unsafe_text = row("iris\x1b[2J\nnext", 0, 0, style(false, false), 80, 6);
         assert!(!unsafe_text.contains(char::is_control));
         assert!(unsafe_text.contains("\\u{1b}"));
         let narrow = row(
@@ -234,6 +308,7 @@ mod tests {
             0,
             style(false, false),
             30,
+            10,
         );
         assert!(console::measure_text_width(&narrow) <= 30, "{narrow}");
         assert!(narrow.contains("zenodo:1"), "the reference is never cut");
@@ -243,11 +318,34 @@ mod tests {
             0,
             style(false, false),
             30,
+            39,
         );
         assert!(
             tight.contains("kaggle:owner/a-very-long-dataset-name"),
             "{tight}"
         );
+    }
+
+    #[test]
+    fn a_blank_title_keeps_the_facts_in_their_column() {
+        let titled = row(
+            "zenodo:1   Iris  3.6 KiB",
+            0,
+            1,
+            style(false, false),
+            80,
+            11,
+        );
+        let blank = row(
+            "zenodo:22        5.0 KiB",
+            1,
+            0,
+            style(false, false),
+            80,
+            11,
+        );
+        assert_eq!(titled, "    1 zenodo:1   Iris  3.6 KiB");
+        assert_eq!(blank, "    2 zenodo:22        5.0 KiB");
     }
 
     #[test]
@@ -263,7 +361,9 @@ mod tests {
                 false,
             );
             assert_eq!(
-                output.choose("which one?", &["iris".to_owned()]).unwrap(),
+                output
+                    .choose("which one?", &["iris".to_owned()], "")
+                    .unwrap(),
                 None
             );
         }

@@ -223,7 +223,7 @@ impl Output {
     }
 
     /// the width of the terminal a person watches the story on, or none for a pipe or a file.
-    fn width(&self) -> Option<usize> {
+    pub(crate) fn width(&self) -> Option<usize> {
         self.style
             .interactive
             .then(|| usize::from(console::Term::stderr().size().1))
@@ -236,8 +236,8 @@ impl Output {
             .then(|| usize::from(console::Term::stdout().size().1))
     }
 
-    /// one numbered choice: what to type, padded to `pad`, then its title and dim facts. on a
-    /// narrow terminal the facts, then the title, give way, and what to type never does.
+    /// one numbered choice: what to type, padded to `pad`, then its title and dim facts, both
+    /// already padded into columns. what is cut on a narrow terminal is the end, never what to type.
     pub(crate) fn candidate(
         &self,
         number: usize,
@@ -265,22 +265,25 @@ impl Output {
         };
         if head_width <= width {
             let room = width - head_width;
-            let mut rest = String::new();
-            if !title.is_empty() {
-                let _ = write!(rest, "  {title}");
-            }
-            if !facts.is_empty() {
-                let gap = if title.is_empty() { "  " } else { " \u{b7} " };
-                let _ = write!(rest, "{gap}{facts}");
-            }
-            if rest.chars().count() > room {
+            let named = if title.is_empty() {
+                String::new()
+            } else {
+                format!("  {title}")
+            };
+            let told = if facts.is_empty() {
+                String::new()
+            } else {
+                format!("  {facts}")
+            };
+            let mut rest = format!("{named}{told}");
+            if console::measure_text_width(&rest) > room {
                 rest = console::truncate_str(&rest, room, self.style.more()).into_owned();
             }
             if rest.trim().chars().count() > 3 {
-                let split = if title.is_empty() {
-                    0
+                let split = if rest.starts_with(&named) {
+                    named.len()
                 } else {
-                    rest.find(" \u{b7} ").unwrap_or(rest.len())
+                    rest.len()
                 };
                 let (named, told) = rest.split_at(split);
                 let _ = write!(line, "{named}{dim}{told}{dim:#}");
@@ -496,11 +499,12 @@ impl Output {
         &self,
         question: &str,
         options: &[String],
+        footer: &str,
     ) -> Result<Option<usize>, Error> {
         if self.json || !self.style.interactive || !std::io::stdin().is_terminal() {
             return Ok(None);
         }
-        let ask = || picker::choose(question, options, self.style);
+        let ask = || picker::choose(question, options, footer, self.style);
         match &self.bars {
             Some(bars) => bars.suspend(ask),
             None => ask(),

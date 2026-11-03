@@ -11,11 +11,11 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   the cache, the pantry: shared by projects using it
   sync, restocking: fill data/ from the receipt
 
-try it with zenodo:3608990, a 4.1 KiB iris.csv:
+  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
+  fetchloom get iris    just download it, without a project
+  fetchloom sync        fill data/ in a project you cloned
 
-  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
-  fetchloom sync                 restock data/ in a project you cloned
-  fetchloom get zenodo:3608990   fetch it once, without a project
-  fetchloom search iris          find datasets by name
+a name searches hugging face, kaggle and zenodo. a link works as well:
+  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`

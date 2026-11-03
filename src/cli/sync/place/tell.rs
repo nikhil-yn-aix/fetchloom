@@ -17,8 +17,12 @@ pub(super) fn tell(
     placer: &Placer,
     tallies: &BTreeMap<&str, Tally>,
     placement: &Placement,
+    told: Option<&str>,
 ) {
-    for (dataset, tally) in tallies {
+    for (dataset, tally) in tallies
+        .iter()
+        .filter(|(dataset, _)| told != Some(**dataset))
+    {
         let how = match (tally.links, tally.files - tally.links) {
             (_, 0) => "linked from the cache".to_owned(),
             (0, _) => format!("copied, {}", units::size(tally.copied)),

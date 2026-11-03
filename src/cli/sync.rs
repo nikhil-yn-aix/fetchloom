@@ -59,6 +59,8 @@ pub(super) struct Loop<'a> {
     pub(super) cache: Cache,
     /// archives this run unpacked, whose own bytes the cache may drop once their files are in.
     unpacked: Mutex<Vec<Sha256>>,
+    /// the dataset the command's last line tells about, so its lock and placement lines stay out.
+    told: Option<String>,
 }
 
 impl<'a> Loop<'a> {
@@ -74,7 +76,13 @@ impl<'a> Loop<'a> {
             net,
             cache,
             unpacked: Mutex::default(),
+            told: None,
         }
+    }
+
+    pub(super) fn telling(mut self, name: &str) -> Self {
+        self.told = Some(name.to_owned());
+        self
     }
 
     /// makes the data folder match `lock`, starting from `survey` of it. what each file needs is
@@ -111,6 +119,7 @@ impl<'a> Loop<'a> {
             &self.context.work,
             &self.cache,
             synced,
+            self.told.as_deref(),
         )
     }
 
@@ -260,7 +269,13 @@ impl<'a> Loop<'a> {
         }
         let _span = tracing::debug_span!("write_lock").entered();
         self.project.write(lock::FILE, lock.render().as_bytes())?;
-        tell_lock(&self.context.output, old, lock, ("Locked", "Removed"));
+        tell_lock(
+            &self.context.output,
+            old,
+            lock,
+            ("Locked", "Removed"),
+            self.told.as_deref(),
+        );
         Ok(true)
     }
 
@@ -443,12 +458,19 @@ fn settled(old: &Lock, kept: Vec<Locked>, drafted: impl Iterator<Item = Locked>)
 }
 
 /// says which datasets `lock` pins anew and which it no longer has, with `verbs` for each, such
-/// as `Locked` and `Removed`.
-pub(super) fn tell_lock(output: &Output, old: Option<&Lock>, lock: &Lock, verbs: (&str, &str)) {
+/// as `Locked` and `Removed`. `told` is left out, since a later line tells about it.
+pub(super) fn tell_lock(
+    output: &Output,
+    old: Option<&Lock>,
+    lock: &Lock,
+    verbs: (&str, &str),
+    told: Option<&str>,
+) {
     let pinned: Vec<&Locked> = lock
         .datasets
         .iter()
         .filter(|dataset| old.and_then(|old| old.get(&dataset.name)) != Some(*dataset))
+        .filter(|dataset| told != Some(dataset.name.as_str()))
         .collect();
     let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
     let which = match pinned.as_slice() {
@@ -596,13 +618,26 @@ pub(super) fn tell_raw(output: &Output, typed: &str, parsed: &Reference) {
     }
 }
 
+/// a reference pinned to a full 40-digit commit, cut to 7 digits as git shows them. data.lock
+/// keeps all 40.
+fn short_revision(reference: String) -> String {
+    match reference.rsplit_once('@') {
+        Some((head, revision))
+            if revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            format!("{head}@{}", &revision[..7])
+        }
+        _ => reference,
+    }
+}
+
 /// prints what a reference resolved to, before any file of it downloads.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
     // a plain link has nothing to tell before its bytes arrive
     if matches!(listing.resolved, Reference::Url(_)) {
         return;
     }
-    let mut facts = vec![listing.resolved.to_string()];
+    let mut facts = vec![short_revision(listing.resolved.to_string())];
     facts.extend(
         listing
             .title
@@ -682,6 +717,23 @@ mod tests {
     use crate::net::Offline;
     use crate::output::{Level, Style};
     use crate::source::recorded::block_on;
+
+    #[test]
+    fn a_full_commit_is_shown_short_and_anything_else_as_it_is() {
+        let full = "0bda0ce801be0fa2f464ff845a9d5ceae99aad7d";
+        assert_eq!(
+            short_revision(format!("hf:datasets/scikit-learn/iris@{full}")),
+            "hf:datasets/scikit-learn/iris@0bda0ce"
+        );
+        for kept in [
+            "zenodo:3608990",
+            "figshare:34744689@1",
+            "hf:datasets/a/b@main",
+            "kaggle:uciml/iris@2",
+        ] {
+            assert_eq!(short_revision(kept.to_owned()), kept);
+        }
+    }
 
     fn context() -> Context {
         let mut context = Context::new(Output::new(

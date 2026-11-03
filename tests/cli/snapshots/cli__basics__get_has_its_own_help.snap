@@ -40,7 +40,7 @@ options:
 
 examples:
   fetchloom get iris
-  fetchloom get zenodo:3608990 -o flowers
+  fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
   fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
   fetchloom get -i links.txt
 

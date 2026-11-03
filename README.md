@@ -2,17 +2,17 @@
 
 fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64.
 
-`data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry. `fetchloom sync` fills `data/` from that receipt by reflink, hardlink or copy.
-
 ```text
-$ fetchloom add zenodo:3608990
-   Resolved zenodo:3608990 · DatasetIris · 1 file · 4.1 KiB · cc-by-4.0
- Downloaded 1 file · 4.1 KiB in 251 ms
-     Locked iris · 1 file in data.lock
-     Placed data/iris · 1 file linked from the cache
+$ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
+ Downloaded 4 files · 18.1 KiB in 287 ms
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
+
+`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you pick. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` just downloads without a project.
+
+`data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry. `fetchloom sync` fills `data/` from that receipt by reflink, hardlink or copy.
 
 commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
 
@@ -58,12 +58,12 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   the cache, the pantry: shared by projects using it
   sync, restocking: fill data/ from the receipt
 
-try it with zenodo:3608990, a 4.1 KiB iris.csv:
+  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
+  fetchloom get iris    just download it, without a project
+  fetchloom sync        fill data/ in a project you cloned
 
-  fetchloom add zenodo:3608990   put iris.csv in data/iris and pin it
-  fetchloom sync                 restock data/ in a project you cloned
-  fetchloom get zenodo:3608990   fetch it once, without a project
-  fetchloom search iris          find datasets by name
+a name searches hugging face, kaggle and zenodo. a link works as well:
+  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 ```

@@ -4,8 +4,7 @@ use super::*;
 use crate::error::Kind;
 use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
-const HF: &str =
-    "https://huggingface.co/api/datasets?search=iris&limit=3&sort=downloads&direction=-1";
+const HF: &str = "https://huggingface.co/api/datasets?search=iris&limit=3&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private";
 const KAGGLE: &str = "https://api.kaggle.com/v1/datasets/list?search=iris&page=1";
 const ZENODO: &str =
     "https://zenodo.org/api/records?q=title%3A%28iris%29&type=dataset&sort=mostviewed&size=3";
@@ -73,7 +72,7 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     let hf = &result.candidates[0];
     assert_eq!(hf.title, "scikit-learn/iris");
     assert_eq!(hf.source, "hugging face");
-    assert_eq!(hf.size, None);
+    assert_eq!(hf.size, Some(18573));
     assert_eq!(hf.downloads, Some(11912));
     assert_eq!(hf.note, None);
     let kaggle = &result.candidates[1];
@@ -156,7 +155,7 @@ fn invalid_json_warns_instead_of_hiding_successful_catalogs() {
 #[test]
 fn query_words_are_encoded_and_lucene_syntax_is_removed() {
     let api = Recorded::default()
-        .on("https://huggingface.co/api/datasets?search=fashion+%28mnist%29%3A*%26&limit=3&sort=downloads&direction=-1", 200, b"[]".to_vec())
+        .on("https://huggingface.co/api/datasets?search=fashion+%28mnist%29%3A*%26&limit=3&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private", 200, b"[]".to_vec())
         .on("https://api.kaggle.com/v1/datasets/list?search=fashion+%28mnist%29%3A*%26&page=1", 200, b"[]".to_vec())
         .on("https://zenodo.org/api/records?q=title%3A%28fashion+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
     let result = block_on(search(&api, "fashion (mnist):*&", &[], LIMIT)).unwrap();
@@ -206,7 +205,11 @@ fn sources_are_asked_concurrently() {
 
 #[test]
 fn json_keeps_the_reference_as_text_and_unknown_fields_as_null() {
-    let result = block_on(search(&recorded(), "iris", &[], LIMIT)).unwrap();
+    let mut hf: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("search/hf.json")).unwrap();
+    hf[0].as_object_mut().unwrap().remove("mainSize");
+    let api = recorded().on(HF, 200, serde_json::to_vec(&hf).unwrap());
+    let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     let value = serde_json::to_value(&result.candidates[0]).unwrap();
     assert_eq!(
         value,
@@ -275,7 +278,7 @@ fn chosen_catalogs_alone_are_asked() {
 fn a_limit_asks_each_catalog_for_that_many() {
     let api = Recorded::default()
         .on(
-            "https://huggingface.co/api/datasets?search=iris&limit=1&sort=downloads&direction=-1",
+            "https://huggingface.co/api/datasets?search=iris&limit=1&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private",
             200,
             fixture_bytes("search/hf.json"),
         )
@@ -296,7 +299,7 @@ fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
     kaggle[0]["ref"] = "someone/Iris_Dataset".into();
     let api = Recorded::default()
         .on(
-            "https://huggingface.co/api/datasets?search=iris+dataset&limit=3&sort=downloads&direction=-1",
+            "https://huggingface.co/api/datasets?search=iris+dataset&limit=3&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private",
             200,
             fixture_bytes("search/hf.json"),
         )

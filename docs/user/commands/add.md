@@ -3,10 +3,10 @@
 `add` puts a dataset in your manifest, pins its files and syncs the whole project.
 
 ```sh
-fetchloom add https://zenodo.org/records/3608990
-fetchloom add zenodo:3608990 --as flowers --select "*.csv"
-fetchloom add zenodo:3608990 --select "*.csv" --dry-run
 fetchloom add iris    # at a terminal, pick one from a list
+fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+fetchloom add https://zenodo.org/records/3608990 --as flowers
+fetchloom add hf:datasets/scikit-learn/iris --select "*.csv" --dry-run
 ```
 
 ## usage
@@ -35,11 +35,10 @@ fetchloom add [options] <link>
 
 there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
 
-stderr excerpt for a single-file addition on a filesystem that supports links:
+stderr for a single-file addition, matching a test snapshot:
 
 ```text
-     Locked iris · 1 file in data.lock
-     Placed data/iris · 1 file linked from the cache
+ Downloaded iris.csv · 32 B in [time]
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```

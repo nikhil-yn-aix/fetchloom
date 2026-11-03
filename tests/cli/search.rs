@@ -157,7 +157,7 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
             stdout.contains("kaggle:uciml/iris\tIris Species\t3.6 KiB\n"),
             "{stdout}"
         );
-        assert!(stdout.contains("hf:datasets/scikit-learn/iris\tscikit-learn/iris\n"));
+        assert!(stdout.contains("hf:datasets/scikit-learn/iris\tscikit-learn/iris\t18.1 KiB\n"));
         let stderr = text(&output.stderr)?;
         if quiet {
             assert_eq!(stderr, "");
@@ -324,7 +324,8 @@ fn server_titles_are_clipped_and_cannot_control_the_terminal() -> Result {
     assert_eq!(output.status.code(), Some(10));
     let stderr = text(&output.stderr)?;
     assert!(!stderr.contains('\x1b'));
-    assert!(stderr.contains("\\u{1b}[2J"), "{stderr}");
+    // a control character in a title becomes a space, so it neither acts nor shifts the columns
+    assert!(stderr.contains("iris [2J long"), "{stderr}");
     assert!(!stderr.contains(&"long ".repeat(15)));
     Ok(())
 }
