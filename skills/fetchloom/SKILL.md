@@ -14,7 +14,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | the task | run |
 |---|---|
 | a project needs a dataset | `fetchloom add <ref> --json` |
-| a cloned project has data.toml or data.lock but no data/ | `fetchloom sync --json` |
+| a cloned project has data.toml but no data/ | `fetchloom sync --json` |
 | a script needs a dataset's path | `fetchloom path <name>`; stdout is the path, and it syncs first if needed |
 | download once, no project files | `fetchloom get <ref> -o <dir> --json` |
 | several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json` |

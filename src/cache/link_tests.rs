@@ -109,6 +109,29 @@ fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
     assert!(!fs::metadata(&outside).unwrap().permissions().readonly());
 }
 
+#[test]
+fn a_writable_partial_with_a_second_name_is_never_written_into() {
+    let (dir, cache) = super::tests::cache();
+    if !hardlinks(dir.path()) {
+        return;
+    }
+    let url = "https://example.org/data";
+    let outside = dir.path().join("outside");
+    fs::write(&outside, b"keep these bytes").unwrap();
+    let download = owned(&cache, url);
+    let part = cache
+        .root
+        .join("partial")
+        .join(format!("{}.part", key(url)));
+    fs::hard_link(&outside, &part).unwrap();
+    let mut writer = download
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"new").unwrap();
+    drop(writer);
+    assert_eq!(fs::read(&outside).unwrap(), b"keep these bytes");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_partial_and_its_lock_never_open_a_link() {

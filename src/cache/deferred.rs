@@ -29,6 +29,8 @@ pub(super) struct Pending {
     #[cfg(target_os = "linux")]
     batch: super::object::Batch,
     finished: Vec<Finished>,
+    /// the digests in `finished`, so a large batch is not searched once for each download.
+    digests: std::collections::HashSet<Sha256>,
 }
 
 impl Finished {
@@ -59,6 +61,7 @@ impl Cache {
             *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(Pending {
                 batch,
                 finished: Vec::new(),
+                digests: std::collections::HashSet::new(),
             });
             return Ok(true);
         }
@@ -73,10 +76,7 @@ impl Cache {
             return Err(Box::new(finished));
         };
         // the same bytes from another link in this batch are stored once
-        let waiting = pending
-            .finished
-            .iter()
-            .any(|item| item.digest == finished.digest);
+        let waiting = !pending.digests.insert(finished.digest);
         let stored = Stored {
             digest: finished.digest,
             size: finished.size,
@@ -122,6 +122,7 @@ impl Cache {
             .as_mut()
         {
             pending.finished.retain(|item| item.bytes != bytes);
+            pending.digests = pending.finished.iter().map(|item| item.digest).collect();
         }
     }
 

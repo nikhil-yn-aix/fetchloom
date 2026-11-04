@@ -357,7 +357,7 @@ impl Net {
                     self.typed
                         .check(&next)
                         .map_err(|reason| failure::refused(&next, &reason))?;
-                    tracing::debug!(%next, "the page points elsewhere");
+                    tracing::debug!(next = %super::Shown(&next), "the page points elsewhere");
                     from = next;
                 }
                 Err(Failure::Final(err)) => return Err(progress_kept(err, partial)),
@@ -905,9 +905,15 @@ fn starting_offset(
                 Ok(Some(*received))
             }
             (Some(_), _) => Ok(None),
-            // a range nobody asked for: from the first byte it is the file, and anything else
-            // would be asked for again and again
-            (None, Some(0)) => Ok(Some(0)),
+            // a range nobody asked for is the file only when it runs from the first byte to the
+            // stated last; anything else would be asked for again and again, or kept short
+            (None, Some(0))
+                if headers::total_length(head, status)
+                    .zip(headers::range_end(head))
+                    .is_some_and(|(total, end)| end.checked_add(1) == Some(total)) =>
+            {
+                Ok(Some(0))
+            }
             (None, _) => Err(failure::refusal(from, status, head)),
         },
         StatusCode::RANGE_NOT_SATISFIABLE if earlier.is_some() => Ok(None),

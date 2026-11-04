@@ -45,11 +45,19 @@ impl Cache {
         if !doubted(&metadata, marks.get(digest).copied()) {
             return Ok(Some(path));
         }
-        match hash_object(&path) {
-            Ok(actual) if actual == *digest => {
-                if writable {
+        // a writable object is hashed and sealed through one handle, so a link swapped in for
+        // its name between the two is never sealed in its place
+        let hashed = if writable {
+            super::open_unfollowed(&path, false)
+                .and_then(|file| Ok((Sha256::of_reader(&file)?, Some(file))))
+        } else {
+            hash_object(&path).map(|actual| (actual, None))
+        };
+        match hashed {
+            Ok((actual, file)) if actual == *digest => {
+                if let Some(file) = file {
                     permissions.set_readonly(true);
-                    fs::set_permissions(&path, permissions).map_err(|error| Doubt {
+                    file.set_permissions(permissions).map_err(|error| Doubt {
                         object: path.clone(),
                         changed: false,
                         error,

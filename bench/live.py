@@ -245,9 +245,6 @@ def main():
                            HUGGINGFACE_HUB_CACHE=str(work / "cache" / "hf" / "hub"),
                            HF_TOKEN_PATH=str(work / "home" / "hf-token"), HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
                            KAGGLEHUB_CACHE=str(work / "cache" / "kaggle"), HF_HUB_DISABLE_TELEMETRY="1")
-                # do not inherit credentials: the live comparison is public and reproducible.
-                for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "KAGGLE_KEY", "KAGGLE_USERNAME", "KAGGLE_API_TOKEN"):
-                    env.pop(key, None)
                 argv = command(name, dataset, work, args.fetchloom)
                 meta["commands"][f"{service}/{name}"] = run.exact_command(argv, work)
                 if (work / "download.py").exists():

@@ -260,7 +260,7 @@ async fn one(
         wanted,
         fetched,
         started.elapsed(),
-        &mut Vec::new(),
+        &mut Taken::default(),
     )
     .await?;
     context.output.answer(&done.folder.display().to_string());
@@ -315,7 +315,7 @@ async fn many(
     let elapsed = started.elapsed();
     let mut items = Vec::with_capacity(links.len());
     let mut failed = Vec::new();
-    let mut taken = Vec::new();
+    let mut taken = Taken::default();
     for (index, ((link, wanted), fetched)) in links.iter().zip(wanted).zip(fetched).enumerate() {
         let wanted = match wanted {
             Ok(wanted) => wanted,
@@ -509,7 +509,7 @@ async fn settle(
     wanted: Wanted,
     fetched: Vec<Result<Fetched, Error>>,
     elapsed: Duration,
-    taken: &mut Vec<PathBuf>,
+    taken: &mut Taken,
 ) -> Result<Done, Error> {
     let labels: Vec<String> = wanted.files.iter().map(|file| file.path.clone()).collect();
     let mut found = Vec::with_capacity(fetched.len());
@@ -534,7 +534,7 @@ async fn finish(
     wanted: Wanted,
     fetched: Vec<Fetched>,
     elapsed: Duration,
-    taken: &mut Vec<PathBuf>,
+    taken: &mut Taken,
 ) -> Result<Done, Error> {
     let Wanted {
         parsed,
@@ -632,7 +632,7 @@ fn vouch(
     paths: &[String],
     fetched: &[Fetched],
     sha256: Option<Sha256>,
-    taken: &mut Vec<PathBuf>,
+    taken: &mut Taken,
 ) -> Result<(), Error> {
     if let (Some(expected), [path], [found]) = (sha256, paths, fetched)
         && found.digest != expected
@@ -650,8 +650,7 @@ fn vouch(
     }
     // a folder another link filled could hold files of the same name, which its bytes in the
     // cache would let this link replace
-    let whole = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
-    if taken.contains(&whole) {
+    if !taken.claim(folder) {
         return Err(Error::new(
             Kind::LocalNotEmpty,
             format!(
@@ -661,15 +660,34 @@ fn vouch(
         )
         .help("fetch these links in separate runs, each with its own -o folder"));
     }
-    taken.push(whole);
     Ok(())
+}
+
+/// the folders the links of one run filled. windows and macos see `Data` and `data` as one
+/// folder, so they are compared as [`name::fold`] folds them, on every system alike.
+#[derive(Default)]
+struct Taken(std::collections::HashSet<String>);
+
+impl Taken {
+    fn key(folder: &Path) -> String {
+        let whole = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+        name::fold(&whole.to_string_lossy())
+    }
+
+    fn holds(&self, folder: &Path) -> bool {
+        self.0.contains(&Self::key(folder))
+    }
+
+    /// takes `folder` for one link, or says another link took it already.
+    fn claim(&mut self, folder: &Path) -> bool {
+        self.0.insert(Self::key(folder))
+    }
 }
 
 /// `folder`, or the first of `folder-2`, `folder-3` and so on that no earlier link of the run
 /// took.
-fn unclaimed(folder: PathBuf, taken: &[PathBuf]) -> PathBuf {
-    let whole = |path: &Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    if !taken.contains(&whole(&folder)) {
+fn unclaimed(folder: PathBuf, taken: &Taken) -> PathBuf {
+    if !taken.holds(&folder) {
         return folder;
     }
     let name = folder.file_name().map_or_else(
@@ -678,7 +696,7 @@ fn unclaimed(folder: PathBuf, taken: &[PathBuf]) -> PathBuf {
     );
     (2..=u32::MAX)
         .map(|number| folder.with_file_name(format!("{name}-{number}")))
-        .find(|candidate| !taken.contains(&whole(candidate)))
+        .find(|candidate| !taken.holds(candidate))
         .unwrap_or(folder)
 }
 
@@ -938,7 +956,11 @@ fn pin_command(args: &Get, link: &str) -> Option<String> {
 /// the files `--select` and `--exclude` keep, or the one file a pasted link names.
 fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote>, Error> {
     let select = if args.filter.select.is_empty() {
-        parsed.file.iter().cloned().collect()
+        parsed
+            .file
+            .iter()
+            .map(|file| crate::glob::escape(file))
+            .collect()
     } else {
         args.filter.select.clone()
     };
@@ -1064,6 +1086,24 @@ mod drive_docs_tests;
 mod tests {
     use super::*;
     use crate::cli::args::Filter;
+
+    #[test]
+    fn folders_differing_only_in_case_are_one_folder_for_the_run() {
+        let mut taken = Taken::default();
+        assert!(taken.claim(Path::new("data")));
+        assert!(
+            !taken.claim(Path::new("DATA")),
+            "windows and macos see one folder"
+        );
+        assert_eq!(
+            unclaimed(PathBuf::from("Data"), &taken),
+            PathBuf::from("Data-2")
+        );
+        assert_eq!(
+            unclaimed(PathBuf::from("other"), &taken),
+            PathBuf::from("other")
+        );
+    }
 
     #[test]
     fn a_link_is_shown_without_its_login_or_secret_query() {

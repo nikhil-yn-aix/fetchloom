@@ -100,8 +100,10 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         )
         .await;
     }
-    // a dry run downloads nothing, so it names the dataset from the link alone
-    if args.name.is_none() && !dry_run {
+    // a dry run downloads nothing, so it names the dataset from the link alone. patterns were
+    // written against the link's own name, which the server's name would replace before they apply
+    let patterns = !args.filter.select.is_empty() || !args.filter.exclude.is_empty();
+    if args.name.is_none() && !dry_run && !patterns {
         learn_name(
             context,
             &net,
@@ -181,9 +183,8 @@ async fn validate_add(
     if let Some(asked) = args.name.as_deref() {
         usable(asked, manifest)?;
     }
-    if let Reference::Url(url) = &parsed.reference {
-        net.typed(url);
-    }
+    // the host the person typed, such as a dataverse install on a university network
+    net.trust(parsed.reference.written_host());
     Ok(parsed)
 }
 
@@ -196,7 +197,11 @@ async fn resolve_add(
     let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
-        parsed.file.iter().cloned().collect()
+        parsed
+            .file
+            .iter()
+            .map(|file| crate::glob::escape(file))
+            .collect()
     } else {
         args.filter.select.clone()
     };

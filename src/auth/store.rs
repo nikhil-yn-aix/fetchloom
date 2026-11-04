@@ -72,25 +72,49 @@ pub(crate) fn read(var: Var<'_>, id: &str) -> Option<String> {
     }
 }
 
-/// saves `secret` for `id` in `place`, replacing what was saved for it before.
+/// saves `secret` for `id` in `place`, replacing what was saved for it before. the new key is
+/// stored before the old one goes, so a store that refuses it leaves the old key working.
 pub(crate) fn save(var: Var<'_>, id: &str, secret: &str, place: Place) -> io::Result<()> {
     let folder =
         folder(var).ok_or_else(|| io::Error::other("no folder for fetchloom's settings"))?;
-    forget(var, id)?;
+    let index_path = folder.join("accounts.json");
+    let mut index: BTreeMap<String, Place> = load(&index_path)?;
+    let before = index.get(id).copied();
     match place {
         Place::Keyring => keyring::Entry::new(SERVICE, id)
             .and_then(|entry| entry.set_password(secret))
             .map_err(io::Error::other)?,
-        Place::File => {
-            let path = folder.join("credentials.json");
-            let mut keys: BTreeMap<String, String> = load(&path)?;
+        Place::File => edit_file(&folder, |keys| {
             keys.insert(id.to_owned(), secret.to_owned());
-            write_private(&path, &json(&keys)?)?;
+        })?,
+    }
+    match before {
+        Some(Place::Keyring) if place != Place::Keyring => delete_from_keyring(id)?,
+        Some(Place::File) if place != Place::File => edit_file(&folder, |keys| {
+            keys.remove(id);
+        })?,
+        _ => {}
+    }
+    index.insert(id.to_owned(), place);
+    write_private(&index_path, &json(&index)?)
+}
+
+/// changes the keys `credentials.json` holds and writes them back.
+fn edit_file(folder: &Path, change: impl FnOnce(&mut BTreeMap<String, String>)) -> io::Result<()> {
+    let path = folder.join("credentials.json");
+    let mut keys: BTreeMap<String, String> = load(&path)?;
+    change(&mut keys);
+    write_private(&path, &json(&keys)?)
+}
+
+fn delete_from_keyring(id: &str) -> io::Result<()> {
+    if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(err) => return Err(io::Error::other(err)),
         }
     }
-    let mut index: BTreeMap<String, Place> = load(&folder.join("accounts.json"))?;
-    index.insert(id.to_owned(), place);
-    write_private(&folder.join("accounts.json"), &json(&index)?)
+    Ok(())
 }
 
 /// removes what was saved for `id`. returns whether anything was.
@@ -103,20 +127,10 @@ pub(crate) fn forget(var: Var<'_>, id: &str) -> io::Result<bool> {
         return Ok(false);
     };
     match place {
-        Place::Keyring => {
-            if let Ok(entry) = keyring::Entry::new(SERVICE, id) {
-                match entry.delete_credential() {
-                    Ok(()) | Err(keyring::Error::NoEntry) => {}
-                    Err(err) => return Err(io::Error::other(err)),
-                }
-            }
-        }
-        Place::File => {
-            let path = folder.join("credentials.json");
-            let mut keys: BTreeMap<String, String> = load(&path)?;
+        Place::Keyring => delete_from_keyring(id)?,
+        Place::File => edit_file(&folder, |keys| {
             keys.remove(id);
-            write_private(&path, &json(&keys)?)?;
-        }
+        })?,
     }
     write_private(&folder.join("accounts.json"), &json(&index)?)?;
     Ok(true)

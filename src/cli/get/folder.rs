@@ -142,18 +142,15 @@ fn put(
     })
 }
 
-/// whether the file at `path` already holds the target's bytes. a link or a copy keeps the
-/// object's size and modification time, so only a mismatch costs a hash.
+/// whether the file at `path` already holds the target's bytes. a hardlink is the cached
+/// object itself, so it needs no hash; a copy or a clone may carry the object's size and time
+/// over other bytes, so only hashing it says.
 fn holds(path: &Path, object: Option<&Path>, target: &Target) -> Result<bool, Error> {
     let there = fs::metadata(path).map_err(|err| local(path, &err))?;
     if !there.is_file() || there.len() != target.size {
         return Ok(false);
     }
-    let same_time = object
-        .and_then(|object| fs::metadata(object).ok())
-        .and_then(|object| object.modified().ok())
-        .is_some_and(|time| there.modified().is_ok_and(|there| there == time));
-    if same_time {
+    if object.is_some_and(|object| same_file::is_same_file(object, path).unwrap_or(false)) {
         return Ok(true);
     }
     Ok(Sha256::of_file(path).map_err(|err| local(path, &err))? == target.sha256)

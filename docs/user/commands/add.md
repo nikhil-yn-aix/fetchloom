@@ -51,7 +51,7 @@ if a new addition fails to sync, fetchloom attempts to restore both `data.toml` 
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do and writes nothing: no `data.toml`, `data.lock`, `.gitignore` or `data/`, no downloads and no new cache. it still resolves the link, so a source may be asked what the link holds. stderr from a git repository with no manifest yet, matching a test snapshot:
+`add --dry-run`, or `-n`, prints what adding would do and writes nothing: no `data.toml`, `data.lock`, `.gitignore` or `data/`, no downloads and no new cache. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file, 4 MiB at most, which is not kept. stderr from a git repository with no manifest yet, matching a test snapshot:
 
 ```text
  Would lock iris · 1 file in data.lock

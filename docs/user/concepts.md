@@ -101,7 +101,7 @@ if a locked download returns 404 or 410, fetchloom asks its recorded source for 
 
 successful downloads stay cached when another file fails. retries can reuse saved partial bytes when hashes or server validators allow it. unsupported ranges, changed validators or damaged saved bytes can require a restart.
 
-transfers retry transient failures and respect announced rate limits within bounded waits. several files download at once. eligible files of at least 64 MiB can split into parallel range requests after one stream stays below 1 MB/s over 2 seconds, with at least 16 MiB left. a configured rate cap prevents splitting. [environment settings](reference/environment.md) controls network work and rate limits.
+transfers retry transient failures and respect announced rate limits within bounded waits. several files download at once. eligible files of at least 64 MiB can split into parallel range requests after one stream stays below 1 MB/s over 2 seconds, with at least 16 MiB left. a configured rate cap turns off that adaptive split; `FETCHLOOM_SPLIT=1` and a resumed download whose later ranges are kept still split. [environment settings](reference/environment.md) controls network work and rate limits.
 
 ## approval
 

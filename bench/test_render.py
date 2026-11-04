@@ -21,8 +21,7 @@ class RenderTests(unittest.TestCase):
         from pathlib import Path
         import shutil
         import render
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-render"
-        root.mkdir(parents=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         try:
             records = [dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4",
@@ -35,14 +34,35 @@ class RenderTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_renderer_joins_campaigns_on_separate_filesystems_only(self):
+        import json
+        from pathlib import Path
+        import shutil
+        import render
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
+        try:
+            for fs in ("ext4", "xfs"):
+                (root / fs).mkdir()
+                record = dict(kind="lab", scenario="s1", profile="lan", filesystem=fs, tool="fetchloom",
+                              quick=False, count=1, file_size=4, status="passed", wall_seconds=1)
+                (root / fs / "runs.jsonl").write_text(json.dumps(record))
+                (root / fs / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, filesystems={fs: fs})))
+            render.render(root, root / "report")
+            self.assertTrue((root / "report" / "docs" / "assets" / "bench" / "s1-lan-xfs.svg").exists())
+            (root / "xfs" / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, filesystems={"ext4": "ext4"})))
+            with self.assertRaisesRegex(ValueError, "overlap"):
+                render.render(root, root / "report")
+        finally:
+            shutil.rmtree(root)
+
     def test_renderer_keeps_text_and_marks_failures(self):
         import json
         from pathlib import Path
         import shutil
         import xml.etree.ElementTree as ET
         import render
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-chart"
-        root.mkdir(parents=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         try:
             record = dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4",

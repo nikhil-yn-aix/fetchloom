@@ -730,6 +730,12 @@ mod tests {
         assert_eq!(model.file.as_deref(), Some("config.json"));
         let history = parse("https://huggingface.co/gpt2/commits/main");
         assert_eq!(history.reference.to_string(), "hf:models/gpt2");
+        // a repo may be named like a page
+        let named = parse("https://huggingface.co/datasets/acme/tree");
+        assert_eq!(named.reference.to_string(), "hf:datasets/acme/tree");
+        let inside = parse("https://huggingface.co/datasets/acme/tree/blob/main/file.csv");
+        assert_eq!(inside.reference.to_string(), "hf:datasets/acme/tree@main");
+        assert_eq!(inside.file.as_deref(), Some("file.csv"));
     }
 
     #[test]

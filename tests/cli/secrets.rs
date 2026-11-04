@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, file, reply, text};
+use crate::support::{Result, Sandbox, Server, file, json, reply, text};
 
 const PATH: &str = "/files/data.csv";
 
@@ -69,6 +69,28 @@ fn a_dropped_connection_never_shows_the_token() -> Result {
         "the retry is told: {stderr}"
     );
     assert!(!stderr.contains("abc123"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![])?;
+    let host = server
+        .url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .ok_or("no host")?
+        .to_owned();
+    let output = sandbox.run(&["--json", "add", &format!("dataverse:{host}/doi:10.1/X")])?;
+    let document = json(&output)?;
+    // the test server speaks plain http, so the request fails, but only after it was let through
+    assert_ne!(
+        document["errors"][0]["kind"], "network.refused",
+        "{document}"
+    );
+    assert!(!text(&output.stderr)?.contains("private address"));
     Ok(())
 }
 

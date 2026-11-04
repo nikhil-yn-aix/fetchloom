@@ -362,7 +362,16 @@ impl Project {
             Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
             Err(err) => return Err(self.unreadable(".gitignore", &err)),
         };
-        let entry = format!("/{data_dir}/");
+        // git reads [, *, ? and \ in a rule as a pattern, so a folder named data[1] needs them
+        // escaped to be ignored itself
+        let literal: String = data_dir
+            .chars()
+            .flat_map(|c| {
+                let escape = matches!(c, '[' | ']' | '*' | '?' | '\\').then_some('\\');
+                escape.into_iter().chain([c])
+            })
+            .collect();
+        let entry = format!("/{literal}/");
         let present = text.lines().map(str::trim).any(|line| {
             [
                 entry.as_str(),
@@ -796,6 +805,18 @@ mod tests {
         assert_eq!(
             project.data_dir(&blocked).unwrap_err().kind,
             Kind::ProjectInvalid
+        );
+    }
+
+    #[test]
+    fn a_data_folder_named_like_a_pattern_is_ignored_as_itself() {
+        let (dir, project) = project(&[("data.toml", "")]);
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        assert!(project.ignore_in_git("datasets[1]").unwrap());
+        assert!(!project.ignore_in_git("datasets[1]").unwrap(), "only once");
+        assert_eq!(
+            fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
+            "/datasets\\[1\\]/\n"
         );
     }
 

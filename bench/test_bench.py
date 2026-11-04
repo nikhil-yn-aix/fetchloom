@@ -32,11 +32,20 @@ class FixtureTests(unittest.TestCase):
 
 
 class MeasurementTests(unittest.TestCase):
+    def test_environment_inherits_no_keys_or_settings(self):
+        from unittest import mock
+        inherited = dict(PATH="/usr/bin", LANG="C.UTF-8", HF_TOKEN="hf_x", HUGGING_FACE_HUB_TOKEN="hf_y",
+                         ZENODO_TOKEN="z", KAGGLE_KEY="k", KAGGLE_CONFIG_DIR="/k", NETRC="/n",
+                         DATAVERSE_API_TOKEN="d", AWS_SECRET_ACCESS_KEY="a", FETCHLOOM_JOBS="1",
+                         XDG_CONFIG_HOME="/c", DBUS_SESSION_BUS_ADDRESS="unix:path=/b")
+        with mock.patch.dict(lab.os.environ, inherited, clear=True):
+            env = lab.environment()
+        self.assertEqual({key for key in inherited if key in env}, {"PATH", "LANG"})
+
     def test_exclusive_lock_rejects_overlapping_runs(self):
         from pathlib import Path
         import shutil
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-lock"
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         try:
             with lab.exclusive(root / "lock"):
                 with self.assertRaises(RuntimeError):
@@ -50,8 +59,7 @@ class MeasurementTests(unittest.TestCase):
         import run
         from pathlib import Path
         import shutil
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-checks"
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         try:
             path = root / "value"
             path.write_bytes(b"abc")
@@ -66,8 +74,7 @@ class MeasurementTests(unittest.TestCase):
         import os
         from pathlib import Path
         import shutil
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-process"
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         try:
             passed = run.measure(["/bin/true"], root, os.environ, root / "log", 2)
             self.assertEqual(passed["exit_code"], 0)
@@ -87,8 +94,7 @@ class MeasurementTests(unittest.TestCase):
         from pathlib import Path
         import shutil
         import run
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-")) / "unit-kill"
-        root.mkdir(parents=True, exist_ok=True)
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         try:
             result = run.measure(["bash", "-c", "trap '' INT; sleep 30 & wait"], root,
                                  os.environ, root / "log", .25)

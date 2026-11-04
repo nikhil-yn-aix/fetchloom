@@ -197,9 +197,11 @@ impl Partial {
     /// read-only one was sealed by a run that did not finish publishing, and may already be a
     /// second name of the object, which must never become writable.
     fn open(&self, offset: u64, keep: bool) -> io::Result<File> {
-        let kept = open_unfollowed(&self.bytes, false)
-            .ok()
-            .filter(|file| file.metadata().is_ok_and(|metadata| continuable(&metadata)));
+        // windows reports no link count in metadata, so a second name is asked for apart
+        let kept = open_unfollowed(&self.bytes, false).ok().filter(|file| {
+            file.metadata().is_ok_and(|metadata| continuable(&metadata))
+                && !crate::place::has_other_names(&self.bytes)
+        });
         let file = match kept {
             Some(file) => file,
             None if offset > 0 => {

@@ -54,6 +54,8 @@ struct Context {
     /// the account a failed command needed, kept so a person at the terminal can sign in and
     /// run it again.
     needed: std::sync::Mutex<Option<crate::auth::Need>>,
+    /// a key signed in with during this command but not saved, which the run again still uses.
+    unsaved: std::sync::Mutex<Vec<net::Credential>>,
 }
 
 impl Context {
@@ -70,13 +72,20 @@ impl Context {
             work: Arc::default(),
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
+            unsaved: std::sync::Mutex::default(),
         }
     }
 
     /// the network, with credentials from where each source keeps them, and retries reported as
     /// warnings.
     fn net(&self) -> Net {
-        self.net_with(crate::auth::credentials(&crate::auth::env))
+        let mut credentials = self
+            .unsaved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        credentials.extend(crate::auth::credentials(&crate::auth::env));
+        self.net_with(credentials)
     }
 
     /// the network with only `credentials`, as checking one key needs.
@@ -679,6 +688,34 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_kept_out_of_files_still_serves_the_command() {
+        let context = Context::new(Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.unsaved.lock().unwrap().push(net::Credential {
+            host: "unsaved.example.org".to_owned(),
+            header: "authorization",
+            value: "Bearer k".to_owned(),
+            every_hop: false,
+        });
+        assert!(
+            context
+                .net()
+                .credential_hosts()
+                .contains(&"unsaved.example.org")
+        );
+    }
 
     #[test]
     fn moved_commands_keep_other_option_values_and_literal_arguments() {

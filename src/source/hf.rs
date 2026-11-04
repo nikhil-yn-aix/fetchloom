@@ -130,11 +130,11 @@ impl Repo {
             "discussions",
             "viewer",
         ];
-        let split = if rest.len() >= 2 && !views.contains(&rest[1].as_str()) {
-            2
-        } else {
-            1
-        };
+        let view = |part: Option<&String>| part.is_some_and(|part| views.contains(&part.as_str()));
+        // a page word second is a page of a one-part id, as in gpt2/tree/main, unless a page
+        // word follows it too or nothing does, as for a repo named acme/tree
+        let one_part = view(rest.get(1)) && rest.len() > 2 && !view(rest.get(2));
+        let split = if rest.len() >= 2 && !one_part { 2 } else { 1 };
         let id = rest.get(..split)?.join("/");
         if !is_id(&id) {
             return None;

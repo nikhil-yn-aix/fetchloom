@@ -90,12 +90,18 @@ impl Cache {
     }
 }
 
+/// the members a record lists. a record with a path that leaves the folder it unpacks into, as
+/// a hand-edited one could, counts as no record, so the archive is unpacked again.
 fn parse(text: &str) -> Option<Vec<Member>> {
     text.lines()
         .map(|line| {
             let mut parts = line.split('\t');
+            let path = parts.next()?;
+            if crate::name::escapes(path).is_some() {
+                return None;
+            }
             let member = Member {
-                path: parts.next()?.to_owned(),
+                path: path.to_owned(),
                 size: parts.next()?.parse().ok()?,
                 sha256: Sha256::from_hex(parts.next()?)?,
             };
@@ -134,6 +140,15 @@ mod tests {
             tree_hash(&known_tree()).hex(),
             "fbeb559c9ccd9ab662f75914d0c93c7f2c94333ed82b6c4a151d0d342cb1e358"
         );
+    }
+
+    #[test]
+    fn a_record_with_a_path_out_of_its_folder_is_no_record() {
+        let digest = digest::sha256(b"x").hex();
+        assert!(parse(&format!("keep.csv\t1\t{digest}")).is_some());
+        for path in ["../victim", "a/../../b", "/etc/x", "C:/x", "a\\b"] {
+            assert!(parse(&format!("{path}\t1\t{digest}")).is_none(), "{path}");
+        }
     }
 
     #[test]

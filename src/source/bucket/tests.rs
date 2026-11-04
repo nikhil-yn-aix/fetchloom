@@ -572,6 +572,19 @@ fn malformed_gcs_pages_are_invalid_listings() {
         .on(&next, 200, page);
     let error = resolve("gs://cloud-samples-data/bigquery/us-states/", &recorded).unwrap_err();
     assert!(error.message.contains("repeated"));
+    // empty pages taking turns between two tokens never repeat the one just before
+    let page = |next: &str| format!(r#"{{"items":[],"nextPageToken":"{next}"}}"#).into_bytes();
+    let (to_a, to_b) = (
+        format!("{STATES}&pageToken=A"),
+        format!("{STATES}&pageToken=B"),
+    );
+    let recorded = Recorded::default()
+        .on(STATES, 200, page("A"))
+        .on(&to_a, 200, page("B"))
+        .on(&to_b, 200, page("A"));
+    let error = resolve("gs://cloud-samples-data/bigquery/us-states/", &recorded).unwrap_err();
+    assert!(error.message.contains("repeated"), "{}", error.message);
+    assert_eq!(recorded.asked(), [STATES.to_owned(), to_a, to_b]);
 }
 
 #[test]

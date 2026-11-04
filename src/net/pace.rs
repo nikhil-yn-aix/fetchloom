@@ -23,6 +23,9 @@ const SAME_WINDOW: Duration = Duration::from_millis(1500);
 const QUIET: Duration = Duration::from_secs(10);
 /// a reset this large is a time in seconds since 1970, and a smaller one seconds from now.
 const EPOCH_FROM: u64 = 1_000_000_000;
+/// the longest reset kept. a server may state any number, and a clock cannot add one too large
+/// to it; anything past [`LONGEST`] is refused as too long to wait anyway.
+const FARTHEST: Duration = Duration::from_hours(24);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Limit {
@@ -70,6 +73,9 @@ pub(super) fn limits(status: StatusCode, headers: &HeaderMap, now: SystemTime) -
                 stamp: None,
             });
         }
+    }
+    for limit in &mut limits {
+        limit.reset = limit.reset.min(FARTHEST);
     }
     limits
 }

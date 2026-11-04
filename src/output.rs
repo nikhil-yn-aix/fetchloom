@@ -451,18 +451,22 @@ impl Output {
                 } else {
                     terminal.read_line()
                 };
+                // a password may start or end with a space; a visible answer, such as a name,
+                // may not
                 let text = match read {
+                    Ok(text) if hidden => text.trim_end_matches(['\r', '\n']).to_owned(),
                     Ok(text) => text.trim().to_owned(),
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
                         return Err(Error::new(crate::error::Kind::Interrupted, "stopped"));
                     }
                     Err(err) => return Err(Error::io("could not read from the terminal", &err)),
                 };
-                if hidden && !text.is_empty() {
+                let blank = text.trim().is_empty();
+                if hidden && !blank {
                     let _ = terminal.clear_last_lines(1);
                     let _ = terminal.write_line(&format!("{label}{}", masked(&text)));
                 }
-                if !text.is_empty() {
+                if !blank {
                     return Ok(Some(text));
                 }
                 let paste = if cfg!(windows) {

@@ -3,6 +3,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,6 +17,9 @@ SERVER = "flb-server"
 BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
 HOST_LINE = "10.77.0.2 lab.flb # fl-bench\n"
+# runs are public and reproducible, so no key, account file or fetchloom setting is inherited
+INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE)_"
+                       r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS)$")
 PROFILES = {
     "lan": (0, 0, None, 1024 * 1024 * 1024, 1000),
     "home": (20, 0, 100, 256 * 1024 * 1024, 1000),
@@ -31,7 +35,7 @@ def call(argv, **kwargs):
 
 
 def environment():
-    env = os.environ.copy()
+    env = {key: value for key, value in os.environ.items() if not INHERITED.match(key)}
     env.update(REQUESTS_CA_BUNDLE=BUNDLE, SSL_CERT_FILE=BUNDLE,
                TMPDIR=str(ROOT / "scratch"), HOME=str(ROOT / "home"),
                XDG_CACHE_HOME=str(ROOT / "cache"), DVC_NO_ANALYTICS="true",

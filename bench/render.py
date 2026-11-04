@@ -194,8 +194,12 @@ def render(results, repo):
         if key in conditions and conditions[key] != condition:
             raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
         conditions[key] = condition
-    if sum(meta.get("kind") == "lab" for meta in metas) > 1:
-        raise ValueError("multiple lab campaigns have separate conditions; render them separately")
+    campaigns = [meta for meta in metas if meta.get("kind") == "lab"]
+    measured = [fs for meta in campaigns for fs in meta.get("filesystems") or {}]
+    if len(campaigns) > 1 and (any(not meta.get("filesystems") for meta in campaigns)
+                               or len(measured) != len(set(measured))
+                               or len({meta.get("quick") for meta in campaigns}) > 1):
+        raise ValueError("lab campaigns overlap on a filesystem or mix smoke and full runs; render them separately")
     charts = repo / "docs" / "assets" / "bench"
     charts.mkdir(parents=True, exist_ok=True)
     lines = ["# benchmark results\n", "measurements from the recorded commands and checked outputs.\n", "## conditions\n"]

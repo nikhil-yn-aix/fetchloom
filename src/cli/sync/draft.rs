@@ -1,7 +1,7 @@
 //! a dataset on its way into data.lock: resolved and filtered, with every hash no source states
 //! filled in from earlier locks or from the bytes themselves.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::super::fetch::{self, Job};
 use crate::archive::{self, Packed};
@@ -58,13 +58,17 @@ impl Draft {
         upgrading: bool,
         cache: &Cache,
     ) -> Result<Draft, Error> {
+        // the files data.lock pins by their link, so a dataset of many files is not searched
+        // once for each
+        let mut by_url: HashMap<&str, Vec<&LockedFile>> = HashMap::new();
+        for file in previous.iter().flat_map(|locked| &locked.files) {
+            by_url.entry(file.url.as_str()).or_default().push(file);
+        }
         let files = filter(name, entry, &listing)?
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
-                let earlier = previous
-                    .and_then(|locked| carried(locked, &remote))
-                    .filter(|_| pinned || !upgrading);
+                let earlier = carried(&by_url, &remote).filter(|_| pinned || !upgrading);
                 let known = match (remote.sha256, remote.size) {
                     (Some(sha256), Some(size)) => Some((sha256, size)),
                     _ => earlier
@@ -288,12 +292,14 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
 /// the file data.lock already pins for this remote file, when it is the same file: the same
 /// link, and the same path unless the server names the file or its source wrapped it in a zip.
 /// a listed size says nothing about the zip.
-fn carried<'a>(locked: &'a Locked, remote: &Remote) -> Option<&'a LockedFile> {
-    let url = remote.url.as_str();
-    locked.files.iter().find(|file| {
+fn carried<'a>(
+    by_url: &HashMap<&str, Vec<&'a LockedFile>>,
+    remote: &Remote,
+) -> Option<&'a LockedFile> {
+    let candidates = by_url.get(remote.url.as_str())?;
+    candidates.iter().copied().find(|file| {
         let wrapped = source::may_wrap(&remote.url) && file.path == format!("{}.zip", remote.path);
-        file.url == url
-            && (remote.named_by_server || file.path == remote.path || wrapped)
+        (remote.named_by_server || file.path == remote.path || wrapped)
             && (wrapped || remote.size.is_none_or(|size| size == file.size))
             && remote.sha256.is_none_or(|sha256| sha256 == file.sha256)
             && remote
@@ -407,15 +413,7 @@ fn unavailable_selection(
 }
 
 fn exclusion_flag(path: &str) -> String {
-    let mut pattern = String::new();
-    for character in path.chars() {
-        match character {
-            '[' => pattern.push_str("[[]"),
-            '*' => pattern.push_str("[*]"),
-            '?' => pattern.push_str("[?]"),
-            other => pattern.push(other),
-        }
-    }
+    let pattern = crate::glob::escape(path);
     // inside double quotes, bash and zsh still expand `!` from the history
     let single =
         pattern.contains(['\'', '"', '$', '\u{60}']) || (!cfg!(windows) && pattern.contains('!'));
@@ -655,9 +653,10 @@ mod tests {
             url: url.clone(),
             named_by_server: false,
         };
-        assert!(carried(&locked, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
+        let by_url = HashMap::from([(locked.files[0].url.as_str(), vec![&locked.files[0]])]);
+        assert!(carried(&by_url, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
         assert!(
-            carried(&locked, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
+            carried(&by_url, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
             "the bytes changed under the same link"
         );
     }

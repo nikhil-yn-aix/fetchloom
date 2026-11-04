@@ -173,6 +173,16 @@ async fn sign_in(
         user_name.as_deref(),
         login.with_token,
     )?;
+    // a key kept out of files still serves this command, as when it runs again after signing in
+    if saved_to.is_none()
+        && let Some(credential) = account.credential(&found)
+    {
+        context
+            .unsaved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(credential);
+    }
     let place = saved_to.as_ref().map_or_else(
         || "not saved, so it ends with this command".to_owned(),
         |to| format!("saved to {to}"),
@@ -227,7 +237,7 @@ fn ask(context: &Context, account: &Account) -> Result<(String, Option<String>),
                 .ok_or_else(stopped)?;
             let password = output
                 .ask_text("password", true)?
-                .filter(|text| !text.is_empty())
+                .filter(|text| !text.trim().is_empty())
                 .ok_or_else(stopped)?;
             Ok((password, Some(login)))
         }
@@ -260,8 +270,9 @@ fn read_stdin(account: &Account) -> Result<(String, Option<String>), Error> {
     std::io::stdin()
         .read_to_string(&mut text)
         .map_err(|err| Error::io("could not read the key from stdin", &err))?;
-    let text = text.trim().to_owned();
-    if text.is_empty() {
+    // only the line ending a pipe adds goes; a password may start or end with a space
+    let text = text.trim_end_matches(['\r', '\n']).to_owned();
+    if text.trim().is_empty() {
         return Err(
             Error::new(Kind::Usage, "--with-token read nothing from stdin").help(format!(
                 "pipe the key in, as in `echo $KEY | {} --with-token`",
@@ -277,7 +288,7 @@ fn read_stdin(account: &Account) -> Result<(String, Option<String>), Error> {
                     account.command()
                 ))
             })?;
-            Ok((password.to_owned(), Some(login.to_owned())))
+            Ok((password.to_owned(), Some(login.trim().to_owned())))
         }
         Secret::Token => Ok(token_from(account, &text)),
     }
@@ -506,6 +517,15 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
         "Signed out",
         &format!("of {} \u{b7} removed from {removed}", title(&account)),
     );
+    // the source's tools also read an older place, which may hold a key of its own
+    if let Some(left) = account.find(var) {
+        output.warn(&format!(
+            "a {} key is still read from {}; run `fetchloom auth logout {}` again to remove it too",
+            title(&account),
+            left.origin,
+            logout.account
+        ));
+    }
     Ok(Report::Logout {
         account: account.id(),
         removed_from: Some(removed),

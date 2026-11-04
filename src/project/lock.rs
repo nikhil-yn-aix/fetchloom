@@ -356,11 +356,14 @@ mod tests {
         let mut lock = sample();
         let again = lock.datasets[0].files[0].clone();
         lock.datasets[0].files.push(again);
-        let edited = format!("# edited lock\n{}", lock.render());
-        let error = Lock::parse(&edited).unwrap_err();
-        assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert!(error.message.contains("twice"), "{}", error.message);
-        assert_eq!(error.help.as_deref(), Some(BROKEN));
+        let canonical = lock.render();
+        let edited = format!("# edited lock\n{canonical}");
+        for text in [canonical, edited] {
+            let error = Lock::parse(&text).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert!(error.message.contains("twice"), "{}", error.message);
+            assert_eq!(error.help.as_deref(), Some(BROKEN));
+        }
     }
 
     #[test]

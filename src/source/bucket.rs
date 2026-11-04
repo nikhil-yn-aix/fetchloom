@@ -21,6 +21,26 @@ const PRIVATE: &str =
 
 /// the longest key S3 and cloud storage accept, in bytes.
 const LONGEST_KEY: usize = 1024;
+/// the most listing pages followed. both stores send up to 1,000 objects a page, so the file
+/// limit fits in a tenth of these, and a server that keeps sending pages stops here.
+const MOST_PAGES: usize = 1_000;
+
+/// the page tokens a listing followed, so a server that sends one again, or pages without end,
+/// cannot keep fetchloom asking.
+#[derive(Default)]
+struct Pages(std::collections::HashSet<String>);
+
+impl Pages {
+    fn follow(&mut self, prefix: &Prefix, token: &str) -> Result<(), Error> {
+        if self.0.len() >= MOST_PAGES {
+            return Err(prefix.invalid(&format!("the listing ran past {MOST_PAGES} pages")));
+        }
+        if !self.0.insert(token.to_owned()) {
+            return Err(prefix.invalid("a page repeated an earlier page's token"));
+        }
+        Ok(())
+    }
+}
 
 /// what stays unescaped in a query value or path segment: the unreserved characters, as both
 /// services sign and decode them. S3 reads a `+` in a path as a space, so it is escaped too.

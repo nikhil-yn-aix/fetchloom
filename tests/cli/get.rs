@@ -28,6 +28,37 @@ fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
 }
 
 #[test]
+fn a_file_with_the_same_size_and_time_but_other_bytes_is_not_taken_for_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    assert_eq!(sandbox.run(&["get", &server.url])?.status.code(), Some(0));
+    let placed = sandbox.work().join("iris").join("iris.csv");
+    let time = fs::metadata(&placed)?.modified()?;
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "only a writable file can be removed on windows"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&placed, permissions)?;
+    fs::remove_file(&placed)?;
+    fs::write(&placed, vec![b'x'; IRIS.len()])?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(time)?;
+    let output = sandbox.run(&["--json", "get", &server.url])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "local.not_empty");
+    assert_eq!(
+        fs::read(&placed)?,
+        vec![b'x'; IRIS.len()],
+        "nothing of yours is replaced"
+    );
+    Ok(())
+}
+
+#[test]
 fn json_describes_the_run_and_nothing_else() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

@@ -101,6 +101,8 @@ fn words(text: &str) -> Vec<(String, usize, usize)> {
     let bytes = text.as_bytes();
     let mut words = Vec::new();
     let mut at = 0;
+    // the word after machine, login, password or account is its value, even one spelled macdef
+    let mut value_next = false;
     while at < bytes.len() {
         if bytes[at].is_ascii_whitespace() {
             at += 1;
@@ -113,7 +115,8 @@ fn words(text: &str) -> Vec<(String, usize, usize)> {
             continue;
         }
         let start = at;
-        let word = if bytes[at] == b'"' {
+        let quoted = bytes[at] == b'"';
+        let word = if quoted {
             let mut word = Vec::new();
             at += 1;
             while at < bytes.len() && bytes[at] != b'"' {
@@ -131,10 +134,13 @@ fn words(text: &str) -> Vec<(String, usize, usize)> {
             }
             text[start..at].to_owned()
         };
-        if word == "macdef" {
+        if word == "macdef" && !quoted && !value_next {
             at = macro_end(text, at);
             continue;
         }
+        value_next = !value_next
+            && !quoted
+            && matches!(word.as_str(), "machine" | "login" | "password" | "account");
         words.push((word, start, at));
     }
     words
@@ -233,6 +239,20 @@ mod tests {
                        machine b.example login u password p\r\n";
         let hosts: Vec<_> = parse(windows).into_iter().map(|e| e.host).collect();
         assert_eq!(hosts, ["a.example", "b.example"]);
+        // a value spelled like the keyword is still a value
+        let named =
+            "machine a.example login u password macdef\nmachine b.example login v password w\n";
+        let pairs: Vec<_> = parse(named)
+            .into_iter()
+            .map(|e| (e.host, e.password))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("a.example".to_owned(), "macdef".to_owned()),
+                ("b.example".to_owned(), "w".to_owned())
+            ]
+        );
     }
 
     #[test]

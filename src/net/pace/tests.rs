@@ -298,6 +298,19 @@ fn a_limit_that_resets_too_late_to_wait_for_is_left_to_the_host() {
     assert!(paces.admit("huggingface.co", start).is_ok());
 }
 
+/// a server may state any number, and adding the largest to a clock would end the process
+#[test]
+fn a_reset_too_far_to_add_to_a_clock_is_capped() {
+    let answer = headers(&[("ratelimit", "\"api\";r=0;t=18446744073709551615")]);
+    let stated = limits(StatusCode::TOO_MANY_REQUESTS, &answer, SystemTime::now());
+    assert_eq!(stated[0].reset, FARTHEST);
+    let paces = Paces::default();
+    let start = Instant::now();
+    let ticket = paces.admit("huggingface.co", start).unwrap();
+    Paces::heard(ticket, stated, start);
+    assert!(paces.admit("huggingface.co", start).is_ok());
+}
+
 #[test]
 fn answers_from_one_window_keep_its_lowest_count() {
     let paces = Paces::default();

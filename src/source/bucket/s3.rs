@@ -50,6 +50,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
     let mut endpoint = Endpoint::new(prefix, None)?;
     let mut moved = false;
     let mut token: Option<String> = None;
+    let mut pages = super::Pages::default();
     let mut objects = Vec::new();
     loop {
         let response = api
@@ -99,9 +100,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             .text_of("NextContinuationToken")
             .filter(|next| !next.is_empty())
             .ok_or_else(|| prefix.invalid("a page says more follow but gives no token for them"))?;
-        if token.as_deref() == Some(next) {
-            return Err(prefix.invalid("a page repeated its continuation token"));
-        }
+        pages.follow(prefix, next)?;
         token = Some(next.to_owned());
     }
 }

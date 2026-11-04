@@ -105,6 +105,21 @@ impl Glob {
     }
 }
 
+/// a pattern that matches exactly `path`, its `[`, `*` and `?` each made a set of itself, as
+/// for the one file a pasted link names.
+pub(crate) fn escape(path: &str) -> String {
+    let mut pattern = String::with_capacity(path.len());
+    for character in path.chars() {
+        match character {
+            '[' => pattern.push_str("[[]"),
+            '*' => pattern.push_str("[*]"),
+            '?' => pattern.push_str("[?]"),
+            other => pattern.push(other),
+        }
+    }
+    pattern
+}
+
 fn tokens(part: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     let mut chars = part.chars().peekable();
@@ -201,6 +216,15 @@ mod tests {
 
     fn matches(pattern: &str, path: &str) -> bool {
         Glob::new(pattern).unwrap().matches(path)
+    }
+
+    #[test]
+    fn an_escaped_path_matches_only_itself() {
+        for path in ["data[1].csv", "a*b?.csv", "plain/name.csv", "x]y.csv"] {
+            assert!(matches(&escape(path), path), "{path}");
+        }
+        assert!(!matches(&escape("data[1].csv"), "data1.csv"));
+        assert!(!matches(&escape("a*.csv"), "abc.csv"));
     }
 
     #[test]

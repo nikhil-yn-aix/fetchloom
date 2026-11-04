@@ -45,6 +45,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
     ))
     .map_err(|_| bad())?;
     let mut token: Option<String> = None;
+    let mut pages = super::Pages::default();
     let mut objects = Vec::new();
     loop {
         let mut pairs = vec![("prefix", prefix.key.as_str()), ("fields", FIELDS)];
@@ -68,10 +69,10 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         }
         match page.next_page_token.filter(|next| !next.is_empty()) {
             None => return Ok(objects),
-            Some(next) if token.as_ref() == Some(&next) => {
-                return Err(prefix.invalid("a page repeated its page token"));
+            Some(next) => {
+                pages.follow(prefix, &next)?;
+                token = Some(next);
             }
-            Some(next) => token = Some(next),
         }
     }
 }

@@ -67,6 +67,27 @@ fn auth_status_lists_every_account_like_plain_auth() -> Result {
 }
 
 #[test]
+fn logout_says_when_an_older_key_still_signs_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = home(&sandbox);
+    for (folder, token) in [
+        (home.join(".cache").join("huggingface"), "hf_new\n"),
+        (home.join(".huggingface"), "hf_old\n"),
+    ] {
+        std::fs::create_dir_all(&folder)?;
+        std::fs::write(folder.join("token"), token)?;
+    }
+    let first = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
+    let stderr = text(&first.stderr)?;
+    assert!(first.status.success(), "{stderr}");
+    assert!(stderr.contains("is still read from"), "{stderr}");
+    let second = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
+    assert!(!text(&second.stderr)?.contains("is still read from"));
+    assert!(!home.join(".huggingface").join("token").exists());
+    Ok(())
+}
+
+#[test]
 fn a_hugging_face_key_goes_where_the_hf_tools_read_it_and_back_out() -> Result {
     let sandbox = Sandbox::new()?;
     let login = with_stdin(
@@ -170,6 +191,16 @@ fn a_login_lands_in_netrc_for_curl_and_wget_too() -> Result {
         std::fs::read_to_string(&netrc)?,
         "machine other.example login x password y\n\
          machine urs.earthdata.nasa.gov login ada password \"s3cret pass\"\n"
+    );
+    // a password keeps the spaces around it; only the line ending a pipe adds goes
+    let spaced = with_stdin(
+        sandbox.command(&["auth", "login", "physionet", "--with-token", "--offline"]),
+        " grace : pass \r\n",
+    )?;
+    assert!(spaced.status.success(), "{}", text(&spaced.stderr)?);
+    assert!(
+        std::fs::read_to_string(&netrc)?
+            .contains("machine physionet.org login grace password \" pass \"")
     );
     let bad = with_stdin(
         sandbox.command(&["auth", "login", "physionet", "--with-token", "--json"]),

@@ -313,17 +313,23 @@ fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
     let fetched = download(&url.join("file").unwrap(), refuse).unwrap();
     assert_eq!(fetched.size, 4);
     assert_eq!(asked.lock().unwrap().len(), 1);
-    // answered again and again, this would start over forever
-    let (url, asked) = serve(vec![
-        reply(
-            "206 Partial Content",
-            &[("Content-Range", "bytes 2-3/4")],
-            "cd"
+    // answered again and again, this would start over forever, and a part with no stated total
+    // or one short of it would be kept as if it were the whole file
+    for range in ["bytes 2-3/4", "bytes 0-3/*", "bytes 0-3/8"] {
+        let (url, asked) = serve(vec![
+            reply(
+                "206 Partial Content",
+                &[("Content-Range", range)],
+                "abcd"
+            );
+            3
+        ]);
+        assert!(
+            download(&url.join("file").unwrap(), refuse).is_err(),
+            "{range}"
         );
-        3
-    ]);
-    assert!(download(&url.join("file").unwrap(), refuse).is_err());
-    assert_eq!(asked.lock().unwrap().len(), 1);
+        assert_eq!(asked.lock().unwrap().len(), 1, "{range}");
+    }
 }
 
 /// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,

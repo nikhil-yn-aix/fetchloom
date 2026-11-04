@@ -38,6 +38,7 @@ const REDIRECTS: usize = 10;
 const PER_HOST: usize = 4;
 
 /// a token from where its source keeps it, sent only to its own host and only over https.
+#[derive(Clone)]
 pub(crate) struct Credential {
     pub(crate) host: String,
     pub(crate) header: &'static str,
@@ -272,6 +273,15 @@ impl Net {
         for host in manifest_hosts {
             self.typed.add_host(&host);
         }
+    }
+
+    /// the hosts a credential goes to, for tests.
+    #[cfg(test)]
+    pub(crate) fn credential_hosts(&self) -> Vec<&str> {
+        self.credentials
+            .iter()
+            .map(|(host, ..)| host.as_str())
+            .collect()
     }
 
     pub(crate) fn offline(&self) -> Offline {

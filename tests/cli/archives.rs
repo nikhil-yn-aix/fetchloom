@@ -236,6 +236,26 @@ fn an_archive_only_the_server_names_moves_nothing_the_second_time() -> Result {
 }
 
 #[test]
+fn a_select_on_the_links_own_name_holds_when_the_server_names_the_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let named = reply(
+        "200 OK",
+        &[
+            ("Content-Length", "4"),
+            ("ETag", "\"n1\""),
+            ("Content-Disposition", "attachment; filename=\"iris.csv\""),
+        ],
+        b"a,b\n",
+    );
+    let server = Server::start("/download.csv", vec![named])?;
+    let output = sandbox.run(&["add", &server.url, "--select", "download.csv"])?;
+    ok(&output)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains("path = \"iris.csv\""), "{lock}");
+    Ok(())
+}
+
+#[test]
 fn get_with_no_extract_keeps_the_zip_packed() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
