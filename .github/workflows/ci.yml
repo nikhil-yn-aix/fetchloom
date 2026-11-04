@@ -52,6 +52,9 @@ jobs:
       - run: cargo deny --locked check advisories licenses bans sources
         if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --all-targets --locked -- -D warnings
+      # code that only tests and debug builds use would be dead in the shipped binary
+      - run: cargo clippy --release --locked -- -D warnings
+        if: matrix.os == 'ubuntu-latest'
       - run: cargo test --locked
       - run: python3 -m unittest discover -s python
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'

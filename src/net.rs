@@ -267,7 +267,8 @@ impl Net {
     }
 
     /// marks the host of a URL a person wrote, so it may be a private address such as a lab
-    /// server.
+    /// server. only the test endpoints debug builds read need it.
+    #[cfg(debug_assertions)]
     pub(crate) fn typed(&self, url: &Url) {
         self.typed.add(url);
     }

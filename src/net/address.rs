@@ -26,6 +26,7 @@ struct Hosts {
 }
 
 impl Typed {
+    #[cfg(debug_assertions)]
     pub(crate) fn add(&self, url: &Url) {
         if let Some(host) = url.host_str() {
             self.add_host(host);
