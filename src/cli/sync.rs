@@ -306,8 +306,8 @@ impl<'a> Loop<'a> {
                 )));
             }
             let entry = &manifest.datasets[&name];
-            let parsed = Reference::parse(&text).map_err(|err| cite(err, entry, "ref"))?;
-            // the line itself holds the secret, so only its place is shown
+            let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
+            // the line itself may hold a secret, so only its place is shown
             parsed
                 .reference
                 .check_shareable()
@@ -588,14 +588,6 @@ fn restriction(license: &str) -> Option<&'static str> {
         Some("changed copies")
     } else {
         None
-    }
-}
-
-/// points an error at the data.toml line it comes from.
-fn cite(error: Error, entry: &Entry, key: &str) -> Error {
-    match entry.lines.get(key) {
-        Some(line) => error.detail(line.clone()),
-        None => error,
     }
 }
 
@@ -907,7 +899,7 @@ mod tests {
         context.offline = Offline::No;
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
         for (reference, detail) in [
-            ("not-a-reference", "data.toml:2   ref = 'not-a-reference'"),
+            ("not-a-reference", "data.toml:2"),
             (
                 "https://example.org/data?token=private-value",
                 "data.toml:2",

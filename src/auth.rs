@@ -108,16 +108,30 @@ impl Account {
             "zenodo" | "zenodo.org" => Account::Zenodo,
             "figshare" | "figshare.com" => Account::Figshare,
             "osf" | "osf.io" => Account::Osf,
-            "dataverse" => Account::Dataverse(host.map_or_else(|| HARVARD.to_owned(), clean_host)),
+            "dataverse" => {
+                match host.map_or_else(|| HARVARD.to_owned(), clean_host) {
+                    host if one_word(&host) => Account::Dataverse(host),
+                    host => {
+                        return Err(Error::new(
+                        Kind::Usage,
+                        format!("\"{}\" is not a host name", host.escape_debug()),
+                    )
+                    .help("use it as `fetchloom auth login dataverse --host dataverse.example.edu`"));
+                    }
+                }
+            }
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
-            other if other.contains('.') && !other.contains(['/', ' ', ':', '@']) => {
+            other if other.contains('.') && one_word(other) && !other.contains(['/', ':', '@']) => {
                 Account::Login(other.to_owned())
             }
             _ => {
                 return Err(Error::new(
                     Kind::Usage,
-                    format!("fetchloom does not know an account called \"{name}\""),
+                    format!(
+                        "fetchloom does not know an account called \"{}\"",
+                        name.escape_debug()
+                    ),
                 )
                 .help(format!(
                     "use one of {NAMES}, as in `fetchloom auth login hf`"
@@ -302,6 +316,26 @@ impl Account {
         })
     }
 
+    /// every host this account's key goes to. osf's download links sit on osf.io and send a
+    /// person on to files.osf.io, both osf's own, which need the key for a private file.
+    pub(crate) fn credentials(&self, found: &Found) -> Vec<Credential> {
+        let Some(credential) = self.credential(found) else {
+            return Vec::new();
+        };
+        let mut all = Vec::new();
+        if *self == Account::Osf {
+            for host in ["osf.io", "files.osf.io"] {
+                all.push(Credential {
+                    host: host.to_owned(),
+                    every_hop: true,
+                    ..credential.clone()
+                });
+            }
+        }
+        all.insert(0, credential);
+        all
+    }
+
     /// a request that proves a key works, where the source has one.
     pub(crate) fn check(&self) -> Option<Check> {
         let (url, who): (String, fn(&serde_json::Value) -> Option<String>) = match self {
@@ -450,7 +484,8 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut found: Vec<Credential> = accounts
         .iter()
-        .filter_map(|account| account.credential(&account.find(var)?))
+        .filter_map(|account| Some(account.credentials(&account.find(var)?)))
+        .flatten()
         .collect();
     // the file is read once here, rather than again for each login it holds
     let path = netrc::path(var);
@@ -522,6 +557,11 @@ pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
             crate::source::home(var)
                 .map(|home| home.join(".cache").join("huggingface").join("token"))
         })
+}
+
+/// whether a host is one word, since .netrc and the key index split on spaces and line breaks.
+fn one_word(host: &str) -> bool {
+    !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c.is_control() || c == '"')
 }
 
 fn clean_host(host: &str) -> String {

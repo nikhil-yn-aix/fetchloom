@@ -161,7 +161,6 @@ fn malformed_bucket_references_are_refused() {
         "s3://dot./",
         "s3://two..dots/",
         "gs://bad!name/",
-        "s3://bucket/line\nbreak/",
         "s3://bucket/./",
         "gs://bucket/a/../b/",
     ] {
@@ -169,6 +168,12 @@ fn malformed_bucket_references_are_refused() {
         assert_eq!(error.kind, Kind::ReferenceInvalid, "{text:?}");
         assert!(error.help.unwrap().contains("://"), "{text:?}");
     }
+    assert_eq!(
+        Reference::parse("s3://bucket/line\nbreak/")
+            .unwrap_err()
+            .kind,
+        Kind::ReferenceInvalid
+    );
     let long = format!("s3://bucket/{}", "k".repeat(LONGEST_KEY + 1));
     assert!(Reference::parse(&long).is_err());
 }

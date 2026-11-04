@@ -82,6 +82,17 @@ pub(super) fn unpack(
             kept?;
         }
     }
+    // a compressed stream's own check, such as gzip's CRC, comes after the tar's end
+    if !matches!(format, Format::Tar) {
+        let mut rest = tar.into_inner().inner.take(HEADERS_CAP + 1);
+        let trailing = io::copy(&mut rest, &mut io::sink()).map_err(|err| damaged(None, &err))?;
+        if trailing > HEADERS_CAP {
+            return Err(refused(format!(
+                "the archive holds more than {} after its end",
+                units::size(HEADERS_CAP)
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -239,6 +250,15 @@ mod tests {
             let scratch = Scratch::new();
             assert_eq!(paths(&scratch, format, &joined).len(), 3, "{format:?}");
         }
+    }
+
+    #[test]
+    fn a_damaged_check_after_the_tar_end_is_caught() {
+        let mut packed = compress(Format::TarGz, &tar_of(FILES));
+        let crc = packed.len() - 8;
+        packed[crc] ^= 0xff;
+        let err = Scratch::new().refuse(Format::TarGz, &packed);
+        assert!(err.message.contains("damaged"), "{err:?}");
     }
 
     #[test]

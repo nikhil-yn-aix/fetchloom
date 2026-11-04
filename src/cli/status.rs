@@ -96,7 +96,7 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
         .filter(|dataset| !manifest.datasets.contains_key(&dataset.name))
         .map(|dataset| dataset.name.clone())
         .collect();
-    let cache = super::open_cache()?;
+    let cache = super::peek_cache()?;
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
         .unknown

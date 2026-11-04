@@ -113,7 +113,7 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
             let locked = lock.get(name);
             Listed {
                 name: name.clone(),
-                reference: entry.reference.clone(),
+                reference: crate::net::mask_query(&entry.reference).into_owned(),
                 resolved: locked.map(|locked| locked.resolved.clone()),
                 files: locked.map(|locked| locked.files.len() as u64),
                 bytes: locked.map(|locked| locked.files.iter().map(|file| file.size).sum()),

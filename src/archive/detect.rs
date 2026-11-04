@@ -88,6 +88,7 @@ fn holds_tar(format: Format, file: File) -> bool {
 
 /// a tar header carries the ustar magic or, in the oldest tars, only a checksum that adds up.
 fn is_tar_header(block: &[u8]) -> bool {
+    // an empty tar is only zeros, as is many a data file, which must never unpack to nothing
     if block.len() < BLOCK || block.iter().all(|byte| *byte == 0) {
         return false;
     }

@@ -729,6 +729,21 @@ fn status_lists_what_differs() -> Result {
 }
 
 #[test]
+fn status_creates_no_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let unmade = sandbox.work().join("unmade-cache");
+    let output = sandbox
+        .command(&["status"])
+        .env("FETCHLOOM_CACHE", &unmade)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(!unmade.exists());
+    Ok(())
+}
+
+#[test]
 fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;

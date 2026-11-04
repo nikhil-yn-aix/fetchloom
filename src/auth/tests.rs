@@ -93,7 +93,9 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
         ("api.figshare.com", "authorization", "token f", false),
         ("api.osf.io", "authorization", "Bearer o", false),
         ("demo.dataverse.org", "x-dataverse-key", "dv", false),
+        ("files.osf.io", "authorization", "Bearer o", true),
         ("huggingface.co", "authorization", "Bearer hf_abc", false),
+        ("osf.io", "authorization", "Bearer o", true),
         (
             "urs.earthdata.nasa.gov",
             "authorization",
@@ -313,6 +315,15 @@ fn names_people_type_find_their_account() {
     );
     assert_eq!(
         Account::parse("hf", Some("x.org")).unwrap_err().kind,
+        Kind::Usage
+    );
+    for name in ["intended.example\nmachine\tother.example", "a.example\tb"] {
+        assert_eq!(Account::parse(name, None).unwrap_err().kind, Kind::Usage);
+    }
+    assert_eq!(
+        Account::parse("dataverse", Some("demo.example\nmachine other.example"))
+            .unwrap_err()
+            .kind,
         Kind::Usage
     );
     assert_eq!(

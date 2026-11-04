@@ -174,14 +174,12 @@ async fn sign_in(
         login.with_token,
     )?;
     // a key kept out of files still serves this command, as when it runs again after signing in
-    if saved_to.is_none()
-        && let Some(credential) = account.credential(&found)
-    {
+    if saved_to.is_none() {
         context
             .unsaved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(credential);
+            .extend(account.credentials(&found));
     }
     let place = saved_to.as_ref().map_or_else(
         || "not saved, so it ends with this command".to_owned(),

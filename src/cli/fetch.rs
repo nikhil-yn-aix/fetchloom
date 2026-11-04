@@ -4,6 +4,7 @@
 
 mod again;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -465,13 +466,14 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
     error.need = failed.iter().find_map(|(_, error)| error.need.clone());
     // files that failed the same way share one line, in the order the first of each failed
     let mut groups: Vec<(&Error, Vec<usize>)> = Vec::new();
+    let mut group_of: HashMap<(&str, Option<&str>), usize> = HashMap::new();
     for (index, failure) in &failed {
-        match groups
-            .iter_mut()
-            .find(|(seen, _)| seen.message == failure.message && seen.help == failure.help)
-        {
-            Some((_, indexes)) => indexes.push(*index),
-            None => groups.push((failure, vec![*index])),
+        let key = (failure.message.as_str(), failure.help.as_deref());
+        if let Some(&group) = group_of.get(&key) {
+            groups[group].1.push(*index);
+        } else {
+            group_of.insert(key, groups.len());
+            groups.push((failure, vec![*index]));
         }
     }
     for (failure, indexes) in groups.iter().take(NAMED) {

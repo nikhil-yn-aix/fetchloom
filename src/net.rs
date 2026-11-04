@@ -220,6 +220,9 @@ impl Wire {
 
 impl Net {
     pub(crate) fn new(options: Options, work: Arc<Work>, stop: Arc<Stop>, notify: Notify) -> Net {
+        // one value per header and host: the first, so a key just signed in with wins over an
+        // older one for the same host
+        let mut seen = std::collections::HashSet::new();
         let credentials = options
             .credentials
             .into_iter()
@@ -229,6 +232,7 @@ impl Net {
                 value.set_sensitive(true);
                 Some((credential.host, name, value, credential.every_hop))
             })
+            .filter(|(host, name, ..)| seen.insert((host.to_ascii_lowercase(), name.clone())))
             .collect();
         Net {
             wire: OnceLock::new(),
@@ -499,5 +503,33 @@ mod tests {
         assert!(net.wire.get().is_none());
         net.wire().unwrap();
         assert!(net.wire.get().is_some());
+    }
+
+    #[test]
+    fn a_host_gets_one_value_per_header_and_the_first_wins() {
+        let credential = |value: &str| Credential {
+            host: "HuggingFace.co".to_owned(),
+            header: "authorization",
+            value: value.to_owned(),
+            every_hop: false,
+        };
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: vec![credential("new"), credential("old")],
+            split: Splitting::Never,
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        let url = Url::parse("https://huggingface.co/api/datasets/org/data").unwrap();
+        let request = net
+            .request(&net.wire().unwrap().client, &url, true)
+            .build()
+            .unwrap();
+        let sent: Vec<_> = request
+            .headers()
+            .get_all(header::AUTHORIZATION)
+            .iter()
+            .collect();
+        assert_eq!(sent, ["new"]);
     }
 }

@@ -86,6 +86,9 @@ pub(super) fn put_all(
             &folder.join(&target.path),
         )?);
     }
+    placer
+        .flush_copies()
+        .map_err(|err| Error::io("could not flush the copied files to disk", &err))?;
     tell_placed(context, &placer, folder, targets, &outcomes);
     Ok(outcomes)
 }

@@ -126,9 +126,43 @@ impl Reader<'_> {
                 format!("datasets.{name} has an empty ref"),
             ));
         }
+        // data.lock tells entries apart by their text, which a line break inside a ref could fake
+        if reference.contains(char::is_control) {
+            let place = table
+                .get("ref")
+                .and_then(Item::span)
+                .map(|span| self.cite(span.start));
+            let error = Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "the ref of datasets.{name} holds a line break or another control character"
+                ),
+            )
+            .help("write the ref on one line, without tabs");
+            // the line may hold a key, so only its place is shown
+            return Err(
+                match place
+                    .as_deref()
+                    .and_then(|line| line.split_whitespace().next())
+                {
+                    Some(place) => error.detail(place.to_owned()),
+                    None => error,
+                },
+            );
+        }
+        let mut select = self.patterns(table.get("select"), "select")?;
+        // a link to one file means that file, as `add` writes it, unless select says otherwise
+        if select.is_empty()
+            && let Some(file) = crate::source::Reference::parse(&reference)
+                .ok()
+                .and_then(|parsed| parsed.file)
+            && let Ok(only) = Glob::new(&crate::glob::escape(&file))
+        {
+            select.push(only);
+        }
         Ok(Entry {
             reference,
-            select: self.patterns(table.get("select"), "select")?,
+            select,
             exclude: self.patterns(table.get("exclude"), "exclude")?,
             extract: self.boolean(table.get("extract"), "extract", true)?,
             copy: self.boolean(table.get("copy"), "copy", false)?,
@@ -521,6 +555,34 @@ mod tests {
     #[test]
     fn metadata_dataset_paths_are_refused() {
         refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");
+    }
+
+    #[test]
+    fn a_link_to_one_file_selects_that_file_unless_select_is_given() {
+        let manifest = Manifest::parse(
+            "[datasets.one]\nref = \"https://huggingface.co/datasets/acme/data/blob/main/a[1].csv\"\n\n[datasets.chosen]\nref = \"https://huggingface.co/datasets/acme/data/blob/main/a.csv\"\nselect = \"*.json\"\n",
+        )
+        .unwrap();
+        let select = |name: &str| {
+            manifest.datasets[name]
+                .select
+                .iter()
+                .map(|glob| glob.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(select("one"), ["a[[]1].csv"]);
+        assert_eq!(select("chosen"), ["*.json"]);
+    }
+
+    #[test]
+    fn a_ref_with_a_line_break_is_refused_without_showing_it() {
+        let error = Manifest::parse(
+            "[datasets.data]\nref = \"https://example.org/data?token=abc\\nselect=*\"\n",
+        )
+        .unwrap_err();
+        assert!(error.message.contains("control character"), "{error:?}");
+        assert_eq!(error.details, ["data.toml:2"]);
+        assert!(!format!("{error:?}").contains("abc"));
     }
 
     #[test]

@@ -107,6 +107,19 @@ impl Reference {
     /// pasted from a browser.
     pub(crate) fn parse(text: &str) -> Result<Parsed, Error> {
         let text = text.trim();
+        // a link parser drops tabs and line breaks, so what is written and what is fetched could
+        // differ, and data.lock's record of the entry could match another one
+        if text.contains(char::is_control) {
+            let text = net::mask_query(text);
+            return Err(Error::new(
+                Kind::ReferenceInvalid,
+                format!(
+                    "\"{}\" holds a line break or another control character",
+                    text.escape_debug()
+                ),
+            )
+            .help("write the reference on one line, without tabs"));
+        }
         let whole = |reference| {
             Ok(Parsed {
                 reference,

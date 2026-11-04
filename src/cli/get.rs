@@ -1017,6 +1017,12 @@ fn folder_for(
             .or_else(|| name::reference_name(&parsed.reference.to_string()))
             .unwrap_or_else(|| "download".to_owned()),
     };
+    // a folder named con or aux cannot exist on windows
+    let name = if name::is_reserved_on_windows(&name) {
+        format!("{name}-data")
+    } else {
+        name
+    };
     parent.map_or_else(|| PathBuf::from(&name), |parent| parent.join(&name))
 }
 
@@ -1102,6 +1108,24 @@ mod tests {
         assert_eq!(
             unclaimed(PathBuf::from("other"), &taken),
             PathBuf::from("other")
+        );
+    }
+
+    #[test]
+    fn a_dataset_named_like_a_windows_device_gets_a_usable_folder() {
+        let parsed = Reference::parse("s3://bucket/aux/").unwrap();
+        let listing = Listing {
+            resolved: parsed.reference.clone(),
+            title: Some("Aux".to_owned()),
+            license: None,
+            doi: None,
+            files: Vec::new(),
+            unavailable: Vec::new(),
+        };
+        let paths = ["aux/a.csv".to_owned(), "aux/b.csv".to_owned()];
+        assert_eq!(
+            folder_for(None, None, &listing, &parsed, &paths),
+            PathBuf::from("aux-data")
         );
     }
 
