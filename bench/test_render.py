@@ -15,6 +15,10 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(summary["failures"], 1)
         self.assertEqual(summary["cpu"], 2.25)
         self.assertIsNone(render.summarize([{"status": "failed"}])["median"])
+        late = render.summarize([{"status": "failed", "timeout": True}, {"status": "passed", "wall_seconds": 1}])
+        self.assertEqual((render.no_bar(late), render.failures(late)), ("timed out", "1/2 timed out"))
+        mixed = render.summarize([{"status": "failed", "timeout": True}, {"status": "failed"}])
+        self.assertEqual((render.no_bar(mixed), render.failures(mixed)), ("failed", "2/2"))
 
     def test_renderer_rejects_mixed_smoke_and_full_conditions(self):
         import json

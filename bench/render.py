@@ -20,9 +20,22 @@ def summarize(rows):
     cpu = [r.get("user_seconds", 0) + r.get("sys_seconds", 0) for r in successful]
     return dict(median=median(times) if times else None, low=min(times) if times else None,
                 high=max(times) if times else None, failures=sum(r.get("status") == "failed" for r in rows),
+                timeouts=sum(r.get("status") == "failed" and bool(r.get("timeout")) for r in rows),
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
                 cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
                 requests=metric("requests"), download_ratio=metric("download_ratio"))
+
+
+def no_bar(result):
+    """what a chart row without a bar says: a tool that only ran out of time did not fail."""
+    if not result["failures"]:
+        return "skipped"
+    return "timed out" if result.get("timeouts") == result["failures"] else "failed"
+
+
+def failures(entry):
+    text = f"{entry['failures']}/{entry['rounds']}"
+    return text + " timed out" if entry["failures"] and entry.get("timeouts") == entry["failures"] else text
 
 
 def seconds(value):
@@ -156,8 +169,7 @@ def chart(path, title, subtitle, summaries, dark=False, label=None):
                      f'rx="{BAR / 2}" fill="{colors["track"]}"/>')
         right = WIDTH - PAD
         if result["median"] is None or result["failures"]:
-            parts.append(text(right, middle + 4, "failed" if result["failures"] else "skipped",
-                              colors, "muted", 12.5, anchor="end"))
+            parts.append(text(right, middle + 4, no_bar(result), colors, "muted", 12.5, anchor="end"))
             continue
         width = max(span * result["median"] / reach, BAR)
         parts.append(f'<rect x="{left}" y="{middle - BAR / 2:.1f}" width="{width:.1f}" height="{BAR}" '
@@ -220,7 +232,7 @@ def render(results, repo):
             rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
             lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
         lines.append("")
-    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted and a tool with any failed run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
+    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past the 20-minute limit counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
     warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in all_rows)
     if warmup_failures:
         lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
@@ -243,7 +255,7 @@ def render(results, repo):
         base = None if base_summary.get("failures") else base_summary.get("median")
         for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
             ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
-            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {entry['requests'] if entry['requests'] is not None else 'n/a'} | {entry['failures']}/{entry['rounds']} |")
+            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {entry['requests'] if entry['requests'] is not None else 'n/a'} | {failures(entry)} |")
         if scenario == "s7":
             lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
             for tool, entry in summaries.items():
