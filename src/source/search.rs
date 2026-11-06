@@ -292,20 +292,13 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
         .chars()
         .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
         .collect();
-    let url = query(
-        "https://zenodo.org/api/records",
-        &[
-            ("q", &format!("title:({words})")),
-            ("type", "dataset"),
-            ("sort", "mostviewed"),
-            ("size", &limit.to_string()),
-        ],
-    )?;
-    let response = api.get(&url).await?;
-    let matches: ZenodoMatches = super::json(&url, &response)?;
+    // lowercase, so a word such as OR stays a word rather than an operator
+    let words: Vec<String> = words.split_whitespace().map(str::to_lowercase).collect();
+    let mut matches = zenodo_titles(api, &words.join(" AND "), limit).await?;
+    if matches.is_empty() && words.len() > 1 {
+        matches = zenodo_titles(api, &words.join(" OR "), limit).await?;
+    }
     matches
-        .hits
-        .hits
         .into_iter()
         .take(limit)
         .map(|item| {
@@ -323,6 +316,26 @@ async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
             })
         })
         .collect()
+}
+
+/// the most viewed datasets whose titles match `terms`.
+async fn zenodo_titles(
+    api: &impl Api,
+    terms: &str,
+    limit: usize,
+) -> Result<Vec<ZenodoMatch>, Error> {
+    let url = query(
+        "https://zenodo.org/api/records",
+        &[
+            ("q", &format!("title:({terms})")),
+            ("type", "dataset"),
+            ("sort", "mostviewed"),
+            ("size", &limit.to_string()),
+        ],
+    )?;
+    let response = api.get(&url).await?;
+    let matches: ZenodoMatches = super::json(&url, &response)?;
+    Ok(matches.hits.hits)
 }
 
 #[cfg(test)]

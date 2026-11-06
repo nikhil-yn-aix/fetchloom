@@ -157,11 +157,12 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
     let api = Recorded::default()
         .on("https://huggingface.co/api/datasets?search=fashion+%28mnist%29%3A*%26&limit=3&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private", 200, b"[]".to_vec())
         .on("https://api.kaggle.com/v1/datasets/list?search=fashion+%28mnist%29%3A*%26&page=1", 200, b"[]".to_vec())
-        .on("https://zenodo.org/api/records?q=title%3A%28fashion+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
+        .on("https://zenodo.org/api/records?q=title%3A%28fashion+AND+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec())
+        .on("https://zenodo.org/api/records?q=title%3A%28fashion+OR+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
     let result = block_on(search(&api, "fashion (mnist):*&", &[], LIMIT)).unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
-    assert_eq!(api.asked().len(), 3);
+    assert_eq!(api.asked().len(), 4);
 }
 
 #[test]
@@ -293,6 +294,25 @@ fn a_limit_asks_each_catalog_for_that_many() {
 }
 
 #[test]
+fn zenodo_titles_must_hold_every_word_before_any_will_do() {
+    let every = "https://zenodo.org/api/records?q=title%3A%28iris+AND+flower%29&type=dataset&sort=mostviewed&size=3";
+    let any = "https://zenodo.org/api/records?q=title%3A%28iris+OR+flower%29&type=dataset&sort=mostviewed&size=3";
+    let found = Recorded::default().fixture(every, "search/zenodo.json");
+    let result = block_on(search(&found, "Iris flower", &[Catalog::Zenodo], LIMIT)).unwrap();
+    assert_eq!(result.candidates.len(), 3);
+    assert_eq!(found.asked(), [every]);
+    let fallback = Recorded::default()
+        .on(every, 200, br#"{"hits":{"hits":[]}}"#.to_vec())
+        .fixture(any, "search/zenodo.json");
+    let result = block_on(search(&fallback, "Iris flower", &[Catalog::Zenodo], LIMIT)).unwrap();
+    assert_eq!(
+        result.candidates[0].reference.to_string(),
+        "zenodo:23233774"
+    );
+    assert_eq!(fallback.asked(), [every, any]);
+}
+
+#[test]
 fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
     let mut kaggle: serde_json::Value =
         serde_json::from_slice(&fixture_bytes("search/kaggle.json")).unwrap();
@@ -309,7 +329,7 @@ fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
             serde_json::to_vec(&kaggle).unwrap(),
         )
         .on(
-            "https://zenodo.org/api/records?q=title%3A%28iris+dataset%29&type=dataset&sort=mostviewed&size=3",
+            "https://zenodo.org/api/records?q=title%3A%28iris+AND+dataset%29&type=dataset&sort=mostviewed&size=3",
             200,
             fixture_bytes("search/zenodo.json"),
         );

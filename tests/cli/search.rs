@@ -216,7 +216,7 @@ fn search_json_carries_metadata_and_joins_words() -> Result {
         })
     );
     assert!(catalogs.hf.requests()[0].contains("search=fashion+mnist"));
-    assert!(catalogs.zenodo.requests()[0].contains("q=title%3a%28fashion+mnist%29"));
+    assert!(catalogs.zenodo.requests()[0].contains("q=title%3a%28fashion+and+mnist%29"));
     Ok(())
 }
 

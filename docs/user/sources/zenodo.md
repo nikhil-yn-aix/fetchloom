@@ -19,6 +19,10 @@ fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 
 patterns match listed paths. listing limits and access checks apply before filtering.
 
+## search
+
+`fetchloom search` asks zenodo for datasets whose titles hold every search word, most viewed first. when no title holds them all, it asks again for titles with any of the words.
+
 ## pins
 
 `resolved` is `zenodo:` followed by the concrete record id. download URLs use the record's API file-content endpoint. fetchloom checks stated MD5 while learning SHA-256 and size.
