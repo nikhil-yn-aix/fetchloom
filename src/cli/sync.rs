@@ -248,7 +248,7 @@ impl<'a> Loop<'a> {
         jobs.retain(|job| seen.insert(job.label.clone()));
         let mut seen = BTreeSet::new();
         unpack.retain(|label| seen.insert(label.clone()));
-        jobs.retain(|job| !in_cache(&self.cache, &job.fetch.expect));
+        jobs.retain(|job| !in_cache(&self.cache, &job.fetch));
         self.refuse_offline(&jobs)?;
         let mut preview = placing.preview();
         preview.changes.download = jobs
@@ -353,7 +353,7 @@ impl<'a> Loop<'a> {
         self.refuse_offline(&jobs)?;
         let size: u64 = jobs
             .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
+            .filter(|job| !in_cache(&self.cache, &job.fetch))
             .filter_map(|job| job.fetch.expect.size)
             .sum();
         super::confirm(
@@ -392,16 +392,16 @@ impl<'a> Loop<'a> {
         }
         let missing: Vec<&str> = jobs
             .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch.expect))
+            .filter(|job| !in_cache(&self.cache, &job.fetch))
             .map(|job| job.label.as_str())
             .collect();
         if missing.is_empty() {
             return Ok(());
         }
         // a new link has no fingerprint yet, so the cache cannot be asked for it
-        let unknown = jobs.iter().any(|job| {
-            job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch.expect)
-        });
+        let unknown = jobs
+            .iter()
+            .any(|job| job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch));
         if unknown {
             let mut error = Error::new(
                 Kind::OfflineMissing,
@@ -569,11 +569,12 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
     })
 }
 
-fn in_cache(cache: &Cache, expect: &Expect) -> bool {
+fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
+    let expect = &fetch.expect;
     match (expect.sha256, expect.md5) {
         (Some(digest), _) => cache.find(&digest, expect.size).is_some(),
         (None, Some(md5)) => cache
-            .stated_md5(&md5)
+            .stated_md5(&md5, fetch.url.as_str())
             .is_some_and(|(digest, size)| cache.find(&digest, Some(size)).is_some()),
         (None, None) => false,
     }
@@ -817,30 +818,45 @@ mod tests {
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let stored = store(&cache, b"data");
         let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc").unwrap();
-        assert!(!in_cache(&cache, &Expect::default()));
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        let fetch = |expect| Fetch {
+            expect,
+            ..Fetch::new(url.clone())
+        };
+        assert!(!in_cache(&cache, &fetch(Expect::default())));
         let sha = Expect {
             sha256: Some(stored.digest),
             size: Some(4),
             ..Expect::default()
         };
-        assert!(in_cache(&cache, &sha));
+        assert!(in_cache(&cache, &fetch(sha)));
         assert!(!in_cache(
             &cache,
-            &Expect {
+            &fetch(Expect {
                 size: Some(5),
                 ..sha
-            }
+            })
         ));
-        let md5_only = Expect {
+        let md5_only = fetch(Expect {
             md5: Some(md5),
             ..Expect::default()
-        };
+        });
         assert!(!in_cache(&cache, &md5_only));
-        cache.save_stated_md5(&md5, &stored.digest, 4).unwrap();
+        cache
+            .save_stated_md5(&md5, url.as_str(), &stored.digest, 4)
+            .unwrap();
         assert!(in_cache(&cache, &md5_only));
+        let elsewhere = Fetch {
+            expect: md5_only.expect,
+            ..Fetch::new(Url::parse("https://example.org/other.csv").unwrap())
+        };
+        assert!(
+            !in_cache(&cache, &elsewhere),
+            "another link may serve other bytes"
+        );
         cache.drop_object(&stored.digest).unwrap();
         assert!(!in_cache(&cache, &md5_only));
-        assert!(!in_cache(&cache, &sha));
+        assert!(!in_cache(&cache, &fetch(sha)));
     }
 
     #[test]

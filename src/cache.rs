@@ -241,16 +241,22 @@ impl Cache {
         self.write_hint(&self.url_record_path(&record.url), &text)
     }
 
-    /// the object holding the bytes a source stated this MD5 for, when an earlier download
-    /// checked it.
-    pub(crate) fn stated_md5(&self, md5: &Md5) -> Option<(Sha256, u64)> {
-        let text = fs::read_to_string(self.stated_path(md5)).ok()?;
+    /// the object holding the bytes `url` served when an earlier download hashed them to this
+    /// MD5. another link stating the same MD5 may serve other bytes, since MD5 collides.
+    pub(crate) fn stated_md5(&self, md5: &Md5, url: &str) -> Option<(Sha256, u64)> {
+        let text = fs::read_to_string(self.stated_path(md5, url)).ok()?;
         let (digest, size) = text.trim().split_once(' ')?;
         Some((Sha256::from_hex(digest)?, size.parse().ok()?))
     }
 
-    pub(crate) fn save_stated_md5(&self, md5: &Md5, digest: &Sha256, size: u64) -> io::Result<()> {
-        let path = self.stated_path(md5);
+    pub(crate) fn save_stated_md5(
+        &self,
+        md5: &Md5,
+        url: &str,
+        digest: &Sha256,
+        size: u64,
+    ) -> io::Result<()> {
+        let path = self.stated_path(md5, url);
         real_folder(&self.root.join("stated").join("md5"), FolderUse::Cache)?;
         if let Some(parent) = path.parent() {
             real_folder(parent, FolderUse::Cache)?;
@@ -264,13 +270,14 @@ impl Cache {
             .join(format!("{}.json", digest::sha256(url.as_bytes()).hex()))
     }
 
-    fn stated_path(&self, md5: &Md5) -> PathBuf {
+    fn stated_path(&self, md5: &Md5, url: &str) -> PathBuf {
         let hex = md5.hex();
+        let link = digest::sha256(url.as_bytes());
         self.root
             .join("stated")
             .join("md5")
             .join(&hex[..2])
-            .join(&hex[2..])
+            .join(format!("{}-{link}", &hex[2..]))
     }
 
     /// replaces `path` in one step, so a reader sees the old file or the new one, never half of one.
@@ -890,13 +897,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_stated_md5_finds_its_object() {
+    fn a_stated_md5_finds_its_object_for_its_link_alone() {
         let (_dir, cache) = cache();
         let stored = store(&cache, b"abc");
         let md5 = Md5::from_hex("900150983cd24fb0d6963f7d28e17f72").unwrap();
-        assert_eq!(cache.stated_md5(&md5), None);
-        cache.save_stated_md5(&md5, &stored.digest, 3).unwrap();
-        assert_eq!(cache.stated_md5(&md5), Some((stored.digest, 3)));
+        let url = "https://example.org/abc";
+        assert_eq!(cache.stated_md5(&md5, url), None);
+        cache.save_stated_md5(&md5, url, &stored.digest, 3).unwrap();
+        assert_eq!(cache.stated_md5(&md5, url), Some((stored.digest, 3)));
+        assert_eq!(cache.stated_md5(&md5, "https://example.org/other"), None);
     }
 
     #[test]

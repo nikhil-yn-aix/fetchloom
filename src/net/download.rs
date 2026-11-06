@@ -83,7 +83,7 @@ impl Fetch {
         let (digest, size) = match (expect.sha256, expect.md5) {
             (Some(digest), _) => (digest, expect.size),
             (None, Some(md5)) => {
-                let (digest, size) = cache.stated_md5(&md5)?;
+                let (digest, size) = cache.stated_md5(&md5, self.url.as_str())?;
                 if expect.size.is_some_and(|expected| expected != size) {
                     return None;
                 }
@@ -825,9 +825,11 @@ impl Net {
         if stored.new {
             Work::add(&self.work.objects_written, 1);
         }
-        // these records only spare later downloads, so failing to write one costs nothing more
-        if let Some(md5) = fetch.expect.md5
-            && let Err(err) = cache.save_stated_md5(&md5, &stored.digest, stored.size)
+        // these records only spare later downloads, so failing to write one costs nothing more.
+        // only an MD5 these bytes were hashed to may stand for them, and only for this link
+        if let Some(md5) = stored.md5.filter(|got| fetch.expect.md5 == Some(*got))
+            && let Err(err) =
+                cache.save_stated_md5(&md5, fetch.url.as_str(), &stored.digest, stored.size)
         {
             tracing::debug!(%err, "could not record the stated md5");
         }

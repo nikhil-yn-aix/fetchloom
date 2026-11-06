@@ -552,3 +552,94 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     assert_eq!(net.work.counts().resumes, 1);
     assert_eq!(asked.lock().unwrap().len(), 2);
 }
+
+/// a whole answer carrying `body` as it is.
+fn reply_bytes(body: &[u8]) -> Vec<u8> {
+    let mut answer = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    answer.extend_from_slice(body);
+    answer
+}
+
+fn md5(bytes: &[u8]) -> Md5 {
+    let mut hasher = crate::digest::Hasher::with_md5();
+    hasher.update(bytes);
+    hasher.finish().1.unwrap()
+}
+
+/// a lock may pair a SHA-256 with the MD5 of other bytes. its download checks only the SHA-256,
+/// so that MD5 must not come to stand for these bytes when a source states it for another file.
+#[test]
+fn an_md5_the_download_never_computed_stands_for_nothing() {
+    let (pinned, _) = serve(vec![reply("200 OK", &[], "aaaa")]);
+    let (listed, asked) = serve(vec![reply("200 OK", &[], "bbbb")]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut pin = Fetch::new(pinned.join("a").unwrap());
+    pin.expect = Expect {
+        sha256: Some(crate::digest::sha256(b"aaaa")),
+        md5: Some(md5(b"bbbb")),
+        size: Some(4),
+    };
+    block_on(net(&pinned).download(&pin, &cache, &|_| Ok(()))).unwrap();
+    let mut list = Fetch::new(listed.join("b").unwrap());
+    list.expect = Expect {
+        md5: Some(md5(b"bbbb")),
+        size: Some(4),
+        ..Expect::default()
+    };
+    let fetched = block_on(net(&listed).download(&list, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(b"bbbb"));
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        1,
+        "the listed file was asked for"
+    );
+}
+
+/// two blocks of other bytes with one MD5, the collision Xiaoyun Wang and Hongbo Yu published.
+const COLLIDING: [&str; 2] = [
+    "d131dd02c5e6eec4693d9a0698aff95c2fcab58712467eab4004583eb8fb7f8955ad340609f4b30283e488832571415a085125e8f7cdc99fd91dbdf280373c5bd8823e3156348f5bae6dacd436c919c6dd53e2b487da03fd02396306d248cda0e99f33420f577ee8ce54b67080a80d1ec69821bcb6a8839396f9652b6ff72a70",
+    "d131dd02c5e6eec4693d9a0698aff95c2fcab50712467eab4004583eb8fb7f8955ad340609f4b30283e4888325f1415a085125e8f7cdc99fd91dbd7280373c5bd8823e3156348f5bae6dacd436c919c6dd53e23487da03fd02396306d248cda0e99f33420f577ee8ce54b67080280d1ec69821bcb6a8839396f965ab6ff72a70",
+];
+
+#[test]
+fn an_md5_checked_for_one_link_proves_nothing_for_another() {
+    let [first, second] = COLLIDING.map(|hex| {
+        (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+            .collect::<Vec<u8>>()
+    });
+    assert_ne!(first, second);
+    assert_eq!(md5(&first), md5(&second));
+    let (one, _) = serve(vec![reply_bytes(&first)]);
+    let (other, asked) = serve(vec![reply_bytes(&second)]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = |url: &Url, bytes: &[u8]| {
+        let mut fetch = Fetch::new(url.join("file").unwrap());
+        fetch.expect.md5 = Some(md5(bytes));
+        fetch.expect.size = Some(bytes.len() as u64);
+        fetch
+    };
+    for (url, bytes) in [(&one, &first), (&other, &second)] {
+        let fetched = block_on(net(url).download(&fetch(url, bytes), &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(fetched.digest, crate::digest::sha256(bytes));
+    }
+    assert_eq!(
+        asked.lock().unwrap().len(),
+        1,
+        "the other link sent its bytes"
+    );
+    let again = block_on(net(&one).download(&fetch(&one, &first), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        again.origin,
+        Origin::Cache,
+        "the same link needs no download"
+    );
+    assert_eq!(again.digest, crate::digest::sha256(&first));
+}

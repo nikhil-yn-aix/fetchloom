@@ -848,7 +848,10 @@ fn known(
     if let Some(digest) = remote.sha256 {
         return Some((digest, remote.size));
     }
-    if let Some((digest, size)) = remote.md5.and_then(|md5| cache.stated_md5(&md5)) {
+    if let Some((digest, size)) = remote
+        .md5
+        .and_then(|md5| cache.stated_md5(&md5, remote.url.as_str()))
+    {
         return Some((digest, Some(size)));
     }
     record.map(|record| (record.sha256, Some(record.size)))

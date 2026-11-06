@@ -280,9 +280,10 @@ fn stand_in(what: &str) -> Sha256 {
     crate::digest::sha256(format!("fetchloom dry run stand-in for {what}").as_bytes())
 }
 
-/// the hash and size of the bytes an earlier download proved match the MD5 a source states.
+/// the hash and size of the bytes an earlier download of this link proved match the MD5 its
+/// source states.
 fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
-    let (sha256, size) = cache.stated_md5(&remote.md5?)?;
+    let (sha256, size) = cache.stated_md5(&remote.md5?, remote.url.as_str())?;
     remote
         .size
         .is_none_or(|stated| stated == size)
