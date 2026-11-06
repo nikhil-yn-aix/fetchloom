@@ -725,3 +725,50 @@ fn waiting_for_an_answer_is_no_network_silence() {
         assert_eq!(attempt_once(&net, &cache, &url, &asking), Ok(()), "{index}");
     }
 }
+
+/// a pinned size bounds what a download takes, so a far larger answer never needs approval.
+#[test]
+fn an_answer_stating_another_length_than_the_pin_is_refused_unread() {
+    let body = "x".repeat(256 * 1024);
+    let (url, asked) = serve(vec![reply("200 OK", &[], &body)]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut fetch = Fetch::new(url.clone());
+    fetch.expect = Expect {
+        sha256: Some(crate::digest::sha256(b"data")),
+        size: Some(4),
+        ..Expect::default()
+    };
+    let net = net(&url);
+    let error = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::IntegrityMismatch);
+    assert_eq!(error.details, ["expected 4 bytes, got 262144"]);
+    assert_eq!(net.work.counts().bytes_down, 0);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_body_of_unstated_length_stops_past_the_pinned_size() {
+    let chunk = format!("1000\r\n{}\r\n", "x".repeat(4096));
+    let chunks: String = std::iter::repeat_n(chunk, 64).collect();
+    let answer = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n{chunks}0\r\n\r\n"
+    );
+    let (url, _) = serve(vec![answer.into_bytes()]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut fetch = Fetch::new(url.clone());
+    fetch.expect = Expect {
+        sha256: Some(crate::digest::sha256(b"data")),
+        size: Some(4),
+        ..Expect::default()
+    };
+    let net = net(&url);
+    let error = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::IntegrityMismatch);
+    assert!(
+        net.work.counts().bytes_down < 64 * 4096,
+        "read {} bytes",
+        net.work.counts().bytes_down
+    );
+}

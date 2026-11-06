@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use bytes::Bytes;
 use reqwest::StatusCode;
@@ -463,6 +464,7 @@ impl Net {
         };
         let total = headers::total_length(&head, status);
         let name = describe_response(&response, &fetch.url, on)?;
+        refuse_other_length(fetch, total)?;
         let proven = pinned || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
         tracing::debug!(
@@ -496,10 +498,11 @@ impl Net {
         let watch = total.filter(|_| splits);
         // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
         let monitor = watch.filter(|_| self.rate.is_none());
+        let capped = bounded(fetch, offset, on);
         let (writer, response, total, slow) = match watch {
             Some(total) if at_once => (writer, response, total, None),
             _ => match self
-                .stream(from, writer, response, total, on, monitor)
+                .stream(from, writer, response, total, &capped, monitor)
                 .await?
             {
                 Run::Whole(writer) => {
@@ -940,16 +943,7 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
     if let Some(size) = expect.size
         && size != stored.size
     {
-        return Err(Error::new(
-            Kind::IntegrityMismatch,
-            format!(
-                "{} sent {} for {shown}, where {} were expected",
-                host(url),
-                units::size(stored.size),
-                units::size(size)
-            ),
-        )
-        .detail(format!("expected {size} bytes, got {}", stored.size)));
+        return Err(wrong_size(url, size, Some(stored.size)));
     }
     // a pinned SHA-256 decides first: bytes it rejects changed upstream, which the caller knows
     // how to fix, while an MD5 alone that disagrees means the source contradicts itself
@@ -980,6 +974,59 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         .help("run the same command again later. if it keeps happening, the copy on the server may be damaged"));
     }
     Ok(())
+}
+
+/// a pinned size bounds the download, so an answer stating another length is refused unread.
+fn refuse_other_length(fetch: &Fetch, total: Option<u64>) -> Result<(), Failure> {
+    match (fetch.expect.size, total) {
+        (Some(size), Some(total)) if size != total => {
+            Err(Failure::Final(wrong_size(&fetch.url, size, Some(total))))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `on` for a body starting at `offset`, refusing bytes past the pinned size, which bounds a body
+/// whose answer states no length.
+fn bounded<'a>(
+    fetch: &'a Fetch,
+    offset: u64,
+    on: Listener<'a>,
+) -> impl Fn(Event) -> Result<(), Error> + Sync + 'a {
+    let taken = AtomicU64::new(offset);
+    move |event| {
+        if let (Event::Bytes(bytes), Some(size)) = (&event, fetch.expect.size)
+            && taken.fetch_add(*bytes, Ordering::Relaxed) + bytes > size
+        {
+            return Err(wrong_size(&fetch.url, size, None));
+        }
+        on(event)
+    }
+}
+
+/// the error for `got` bytes, or for more than `expected` when the count is not known, where
+/// `expected` were pinned.
+fn wrong_size(url: &Url, expected: u64, got: Option<u64>) -> Error {
+    let (sent, detail) = match got {
+        Some(got) => (
+            units::size(got),
+            format!("expected {expected} bytes, got {got}"),
+        ),
+        None => (
+            format!("more than {}", units::size(expected)),
+            format!("expected {expected} bytes, got more"),
+        ),
+    };
+    Error::new(
+        Kind::IntegrityMismatch,
+        format!(
+            "{} sent {sent} for {}, where {} were expected",
+            host(url),
+            super::Shown(url),
+            units::size(expected)
+        ),
+    )
+    .detail(detail)
 }
 
 /// what the cache holds for the fetch's URL from an earlier download, when the bytes are still
