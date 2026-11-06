@@ -119,6 +119,40 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_preparation_timeout_kills_the_whole_group(self):
+        import subprocess
+        from pathlib import Path
+        from unittest import mock
+        import shutil
+        import tools
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        child = root / "child"
+        try:
+            class Slow(tools.Tool):
+                def command(self, scenario, workdir):
+                    return tools.script(workdir / "command.sh", [tools.shell(["bash", "-c", 'echo $$ > "$0"; exec sleep 60', child])])
+            with mock.patch.object(lab, "PREPARE_TIMEOUT", 1):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    Slow("fetchloom").untimed({}, root)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(child.read_text()), 0)
+        finally:
+            shutil.rmtree(root)
+
+    def test_preparation_passes_input_and_reports_failure(self):
+        import subprocess
+        from pathlib import Path
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        try:
+            with (root / "out").open("w") as out:
+                lab.run_group(["cat"], input="batch\n", text=True, stdout=out)
+            self.assertEqual((root / "out").read_text(), "batch\n")
+            with self.assertRaises(subprocess.CalledProcessError):
+                lab.run_group(["false"])
+        finally:
+            shutil.rmtree(root)
+
     def test_each_case_draws_its_own_reproducible_orders(self):
         import run
         tools = ["a", "b", "c", "d", "e", "f", "g"]

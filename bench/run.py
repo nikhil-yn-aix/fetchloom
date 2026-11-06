@@ -87,16 +87,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
         signal.signal(signal.SIGALRM, previous_handler)
     # a shell may exit before a child handles SIGINT; keep the next run isolated.
     if signalled is not None:
-        deadline = signalled + 5
-        while True:
-            try:
-                os.killpg(pid, 0)
-            except ProcessLookupError:
-                break
-            if time.monotonic() >= deadline:
-                os.killpg(pid, signal.SIGKILL)
-                break
-            time.sleep(0.02)
+        lab.end_group(pid, signalled + 5 - time.monotonic())
     return dict(wall_seconds=now - start, user_seconds=usage.ru_utime,
                 sys_seconds=usage.ru_stime, maxrss_bytes=usage.ru_maxrss * 1024,
                 exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,

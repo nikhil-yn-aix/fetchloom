@@ -97,8 +97,8 @@ def prepare_native(case, fetchloom, names):
         log = root / f"{tool}-prepare.log"
         with log.open("w") as output:
             def run(argv, cwd=target, input=None):
-                subprocess.run([str(x) for x in argv], cwd=cwd, env=env, input=input,
-                               text=True, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=1200)
+                lab.run_group(argv, cwd=cwd, env=env, input=input, text=True, stdout=output,
+                              stderr=subprocess.STDOUT, timeout=lab.PREPARE_TIMEOUT)
             if tool == "fetchloom":
                 text = "\n".join(f'[datasets.f{i:05}]\nref = "{item["url"]}"\n'
                                  for i, item in enumerate(case["files"]))

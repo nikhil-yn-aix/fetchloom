@@ -66,8 +66,8 @@ class Tool:
 
     def untimed(self, scenario, workdir):
         with (workdir / "prepare.log").open("a") as log:
-            subprocess.run(self.command(scenario, workdir), cwd=self.cwd(workdir), env=self.env(workdir),
-                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1200)
+            lab.run_group(self.command(scenario, workdir), cwd=self.cwd(workdir), env=self.env(workdir),
+                          stdout=log, stderr=subprocess.STDOUT, timeout=lab.PREPARE_TIMEOUT)
 
     def second_project(self, scenario, workdir):
         (workdir / "project").rename(workdir / "first-project")

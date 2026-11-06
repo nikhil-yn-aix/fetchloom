@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import time
 import urllib.request
@@ -26,6 +27,48 @@ PROFILES = {
     "far": (150, 1, 50, 4 * 1024 * 1024, 50),
     "poor": (300, 3, 10, 1024 * 1024, 20),
 }
+PREPARE_TIMEOUT = 1200
+
+
+def end_group(pgid, grace=0):
+    """wait up to grace seconds for a process group to empty, then kill what is left."""
+    deadline = time.monotonic() + grace
+    killed = None
+    while True:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        now = time.monotonic()
+        if killed is None and now >= deadline:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            killed = now
+        # killed orphans are reaped by init; a process stuck in the kernel is left after a while
+        if killed is not None and now - killed > 5:
+            return
+        time.sleep(0.02)
+
+
+def run_group(argv, input=None, timeout=None, **kwargs):
+    """subprocess.run with check, in a private process group that a timeout kills whole."""
+    if input is not None:
+        kwargs["stdin"] = subprocess.PIPE
+    with subprocess.Popen([str(x) for x in argv], start_new_session=True, **kwargs) as process:
+        try:
+            process.communicate(input, timeout=timeout)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            end_group(process.pid)
+            raise
+    if process.returncode:
+        raise subprocess.CalledProcessError(process.returncode, process.args)
 
 
 def call(argv, **kwargs):
