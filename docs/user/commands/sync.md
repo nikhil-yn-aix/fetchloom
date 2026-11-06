@@ -63,7 +63,7 @@ if cache registration fails, sync still succeeds with a warning that gc may not 
 
 ## dry run
 
-`sync --dry-run`, or `-n`, prints what sync would change and changes nothing on disk: no file downloads, no `data.lock` or state writes, nothing placed or deleted in `data/`, and no cache writes. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds. stderr after a dataset `cows` was added to `data.toml`, matching a test:
+`sync --dry-run`, or `-n`, prints what sync would change and changes nothing on disk: no file downloads, no `data.lock` or state writes, nothing placed or deleted in `data/`, and no cache writes. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file, 4 MiB at most, which is not kept. stderr after a dataset `cows` was added to `data.toml`, matching a test:
 
 ```text
  Would lock cows · 1 file in data.lock

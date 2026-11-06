@@ -45,7 +45,7 @@ answering no keeps the key for that command only. a key the source refuses is ne
 
 a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable only by you: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
 
-each key is sent over https to its own host only, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there.
+each key is sent over https to its own host only, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there. an osf key also goes to `osf.io` and `files.osf.io` on any hop, since osf's download links start on the one and send you to the other.
 
 ## scripts and CI
 

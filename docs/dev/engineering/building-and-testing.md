@@ -18,7 +18,7 @@ cargo run --locked -- --version
 
 the first cold build can take several minutes, especially while compiling native compression libraries and optimized development dependencies. subsequent focused test runs reuse those artifacts. python helper tests need python 3.9 or newer, matching `requires-python` in [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml).
 
-the crate on crates.io holds only `src`, the license files and the README; `include` in [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) keeps test data, docs and the benchmark out. [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
+the crate on crates.io holds `src`, `Cargo.lock`, the license and notice files, the README, and the two reference pages `fetchloom help` prints (`environment.md` and `exit-codes.md`); `include` in [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) keeps test data, docs and the benchmark out. [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
 
 ## test layers
 
@@ -31,7 +31,7 @@ the crate on crates.io holds only `src`, the license files and the README; `incl
 | [snapshots](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/cli/snapshots) | human output and selected JSON or lock text | run the owning CLI module |
 | [python tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/test_helper.py) | wrapper arguments, paths and structured errors | `python3 -m unittest discover -s python` |
 
-`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. [server ownership](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/support/server.rs) closes listeners and active connections and joins workers on drop. race tests wait for requests, captured child output or saved partial-file records through bounded helpers; fixed pauses belong only to timed response behavior. default tests use local servers or recorded answers. ignored tests cover live repositories and a larger archive workload.
+`tests/cli/main.rs` declares scenario modules; `support.rs` owns the custom `TcpListener` server and sandbox. it creates private work, cache and home folders and removes inherited fetchloom settings, source tokens, proxies and synced-folder settings. normal OS inputs such as `PATH`, `CI` and `TERM` remain. [server ownership](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/support/server.rs) closes listeners and active connections and joins workers on drop. race tests wait for requests, captured child output or saved partial-file records through bounded helpers; fixed pauses belong only to timed response behavior. default tests use local servers or recorded answers. ignored tests cover live repositories.
 
 snapshot filters normalize sandbox paths, ports, separators and durations and remove variable rates. inspect raw output when changing those fields. JSON work counters and output snapshots check different contracts.
 

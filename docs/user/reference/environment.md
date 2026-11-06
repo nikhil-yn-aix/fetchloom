@@ -23,7 +23,7 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `NO_COLOR` | nonempty value disables automatic color |
 | `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color even into a pipe or file, unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
-| `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. an entry it cannot read keeps its default and prints one warning |
+| `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. `theme=ansi`, `theme=dark` or `theme=light` picks the base the other entries change. without one, a terminal that draws full color (`COLORTERM=truecolor`, windows terminal, vs code, iTerm2, WezTerm, ghostty) gets a warm dark theme, or a light one when `COLORFGBG` says the background is white, and any other terminal keeps its own sixteen colors. an entry it cannot read keeps its default and prints one warning |
 | `FETCHLOOM_NO_HINTS` | exactly `1` drops the `hint:` and `next:` lines that suggest a next step. warnings, errors and their `help:` stay |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
@@ -59,6 +59,6 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 | `FETCHLOOM_KEYRING` | `0` keeps keys out of the system's credential store; `auth login` then asks before saving them in a file only you can read |
 | `NETRC` | the `.netrc` file to read and to save logins in |
 
-a key goes over https only, to its own host, and never after a redirect leaves that host. a `.netrc` login also answers on later hops to its own host, as curl sends it. no key appears in `data.toml`, `data.lock`, logs or `--json` output.
+a key goes over https only, to its own host, and never after a redirect leaves that host. a `.netrc` login also answers on later hops to its own host, as curl sends it, and an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. no key appears in `data.toml`, `data.lock`, logs or `--json` output.
 
 AWS and google cloud credentials, such as `AWS_ACCESS_KEY_ID`, `~/.aws` and `GOOGLE_APPLICATION_CREDENTIALS`, are not read. [public buckets](../sources/buckets.md) are listed and downloaded anonymously.

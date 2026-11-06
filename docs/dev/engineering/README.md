@@ -38,7 +38,7 @@ cargo test --locked
 | `cargo test --locked` | full rust gate, including short fuzz runs |
 | `cargo deny --locked check advisories licenses bans sources` | dependency changes and the CI dependency policy |
 | `python3 -m unittest discover -s python` | python wrapper arguments and report handling; use `py -3` on windows |
-| `cargo test --locked -- --ignored` | live service checks and the larger archive test; [details](building-and-testing.md#python-and-live-tests) |
+| `cargo test --locked -- --ignored` | live service checks; [details](building-and-testing.md#python-and-live-tests) |
 | `cargo test --locked --lib fuzz_` | parser fuzz properties in their ordinary test mode |
 
 ## workflows

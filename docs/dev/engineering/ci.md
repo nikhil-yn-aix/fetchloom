@@ -52,7 +52,7 @@ macos makes a 4 GB hfs+ disk image with `hdiutil`, attaches it without showing i
 cargo test --locked -- --ignored
 ```
 
-this exercises the ignored live source tests and the larger archive test. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
+this exercises the ignored live source tests. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
 
 default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in every workflow.
 

@@ -1,7 +1,7 @@
 name: live
 
-# the tests that talk to zenodo, figshare, dataverse, osf, hugging face, kaggle and doi.org, and
-# the heavy archive test. services change without notice, so this runs weekly and on demand,
+# the tests that talk to zenodo, figshare, dataverse, osf, hugging face, kaggle, buckets and doi.org.
+# services change without notice, so this runs weekly and on demand,
 # apart from the ci check that gates pull requests.
 on:
   schedule:

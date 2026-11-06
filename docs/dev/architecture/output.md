@@ -25,13 +25,15 @@ command handlers provide facts and completion verbs; `Output` owns formatting, p
 
 each color has one meaning, named by a `Tone` in [style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs):
 
-| tone | meaning | default |
-|---|---|---|
-| `done` | finished work | green |
-| `work` | work in progress and its bars | cyan |
-| `warn` | attention or a difference | yellow |
-| `fail` | failure | red |
-| `accent` | anything the user types, and choice numbers | cyan |
+| tone | meaning | ansi theme | dark theme | light theme |
+|---|---|---|---|---|
+| `done` | finished work | green | `#8fc086` | `#3c7a37` |
+| `work` | work in progress and its bars | cyan | `#ee7a4c` | `#b44f26` |
+| `warn` | attention or a difference | yellow | `#e8b65a` | `#8f6200` |
+| `fail` | failure | red | `#f25c6a` | `#bf213a` |
+| `accent` | anything the user types, and choice numbers | cyan | `#ee7a4c` | `#b44f26` |
+
+`Theme::detect` picks the theme: full-color terminals (`COLORTERM=truecolor` or `24bit`, `WT_SESSION`, or `TERM_PROGRAM` of vscode, iTerm.app, WezTerm or ghostty) get dark, or light when `COLORFGBG` ends in 7 or 15; every other terminal gets ansi, its own sixteen colors. `theme=` in `FETCHLOOM_COLORS` overrides the choice.
 
 subjects are bold and supporting facts are dim. `FETCHLOOM_COLORS` replaces any tone's color for the run. it is read once, when `Output` starts; an entry it cannot read keeps the default and becomes one warning. color code asks for a tone through `toned`, `tinted` or `accent`, never a fixed color.
 
@@ -76,7 +78,7 @@ JSON is one completed document, not a stream of progress events. it holds schema
 - snapshot filters remove paths, ports, times and rates. inspect unfiltered output when changing a value those filters can hide.
 - literal error kinds are stable script interfaces. prose can improve without renaming them.
 - masked display URLs do not sanitize raw URL values stored elsewhere.
-- there is no custom panic report; normal errors use `Error` and `Kind`.
+- a panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`.
 
 ## tests
 
