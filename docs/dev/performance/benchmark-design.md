@@ -113,7 +113,7 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 
 ## runs and statistics
 
-lab cases run 5 rounds on lan and home and 3 on far and poor, after one warmup round. a lossy link holds one TCP stream to roughly 120 KB/s at 1% loss and 150 ms, and 35 KB/s at 3% loss and 300 ms, so their sizes and round counts keep each case near a minute per run. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
+lab cases run 5 rounds on lan and home and 7 on far and poor, after one warmup round. a lossy link holds one TCP stream to roughly 120 KB/s at 1% loss and 150 ms, and 35 KB/s at 3% loss and 300 ms, so their sizes keep each run under a minute, and one tool's runs there can differ by several times, so they get more rounds for a median that holds. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
 
 ## results and presentation
 

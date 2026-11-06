@@ -17,8 +17,9 @@ import fixtures
 import lab
 import tools
 
-# measured rounds per profile, after one warmup. lossy links take minutes per run, so they get fewer
-ROUNDS = {"lan": 5, "home": 5, "far": 3, "poor": 3}
+# measured rounds per profile, after one warmup. lossy links spread one tool's runs by several times,
+# so they get more rounds for a median that holds
+ROUNDS = {"lan": 5, "home": 5, "far": 7, "poor": 7}
 TIME = "/usr/bin/time"
 
 
@@ -156,6 +157,19 @@ def free_bytes(path):
     return stat.f_bavail * stat.f_frsize
 
 
+def settled_free_bytes(path, attempts=50):
+    """free space once the filesystem has finished freeing what the last run removed."""
+    os.sync()
+    last = free_bytes(path)
+    for _ in range(attempts):
+        time.sleep(0.05)
+        now = free_bytes(path)
+        if now == last:
+            return now
+        last = now
+    return last
+
+
 def repo_head():
     repo = Path(__file__).resolve().parent.parent
     for argv in (["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -228,14 +242,15 @@ def one_run(tool, case, workdir, out, number, warmup, timeout):
         row["command"]["cwd"] = str(tool.cwd(workdir))
         row["environment"] = {key: value for key, value in tool.env(workdir).items()
                               if key in ("HOME", "XDG_CACHE_HOME", "FETCHLOOM_CACHE", "POOCH_CACHE",
-                                         "TMPDIR", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "DVC_NO_ANALYTICS")}
+                                         "TMPDIR", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "DVC_NO_ANALYTICS",
+                                         "DVC_SITE_CACHE_DIR")}
         if cold:
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))
             lab.drop_caches(path for path in server_files if path.is_file())
         access = lab.ROOT / "access.jsonl"
         access.write_text("")
-        before = free_bytes(workdir)
+        before = settled_free_bytes(workdir)
         row["free_before_bytes"] = before
         if case["id"] == "s7":
             first = measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10)

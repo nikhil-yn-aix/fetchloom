@@ -48,7 +48,9 @@ class Tool:
         env = lab.environment()
         env.update(HOME=str(workdir / "home"), TMPDIR=str(workdir / "scratch"), XDG_CACHE_HOME=str(workdir / "cache"),
                    FETCHLOOM_CACHE=str(workdir / "cache" / "fetchloom"),
-                   POOCH_CACHE=str(workdir / "cache" / "pooch"))
+                   POOCH_CACHE=str(workdir / "cache" / "pooch"),
+                   # dvc keeps its index under /var/tmp otherwise, outside the measured disk
+                   DVC_SITE_CACHE_DIR=str(workdir / "cache" / "dvc-site"))
         return env
 
     def prepare(self, scenario, workdir):

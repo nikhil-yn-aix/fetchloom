@@ -223,6 +223,22 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_free_space_is_read_once_it_stops_changing(self):
+        from unittest import mock
+        import run
+        readings = iter([100, 150, 180, 180, 999])
+        with mock.patch.object(run, "free_bytes", lambda _: next(readings)), \
+             mock.patch.object(run.os, "sync", lambda: None), \
+             mock.patch.object(run.time, "sleep", lambda _: None):
+            self.assertEqual(run.settled_free_bytes("/"), 180)
+
+    def test_dvc_keeps_its_site_cache_in_the_measured_folder(self):
+        from pathlib import Path
+        import tools
+        work = Path("/srv/fl-bench/fs/ext4/work")
+        env = tools.Dvc("fetchloom").env(work)
+        self.assertTrue(Path(env["DVC_SITE_CACHE_DIR"]).is_relative_to(work))
+
     def test_each_case_draws_its_own_reproducible_orders(self):
         import run
         tools = ["a", "b", "c", "d", "e", "f", "g"]
