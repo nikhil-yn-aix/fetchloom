@@ -12,6 +12,8 @@ fetchloom add kaggle:competitions/titanic --select "*.csv"
 
 use `kaggle:` followed by the owner and dataset name, with `@version` for a specific version. `resolved` records that version. an explicitly versioned reference stays on it under `lock --upgrade`.
 
+a kaggle DOI such as `doi:10.34740/kaggle/dsv/2736749` names one dataset version. fetchloom follows the `kaggle.com/dsv/` link it points to, one extra request, and resolves the dataset at that version.
+
 each file download uses the kaggle API with `datasetVersionNumber` and `raw=true`. the entire file path is encoded as one URL segment. SHA-256 and size pin its downloaded bytes.
 
 selection patterns match source paths. [manifest patterns](../reference/data-toml.md#patterns) defines matching and [lock records](../reference/data-lock.md#what-each-source-records) defines the stored URL form.

@@ -16,6 +16,7 @@ fetchloom get https://doi.org/10.5281/zenodo.3608990
 | `doi:10.5281/zenodo.3608990` | resolve the DOI handle and route its URL |
 | `10.5281/zenodo.3608990` | accept a bare DOI |
 | `https://doi.org/10.5281/zenodo.3608990` | accept the DOI link |
+| `doi:10.34740/kaggle/dsv/2736749` | follow kaggle's version link to that dataset version |
 
 `github.com` `/blob/` file links and `gitlab.com` `/-/blob/` file links are converted to their raw download URLs. `add` stores the raw reference.
 
@@ -39,6 +40,6 @@ local URL records keep raw links. do not share those records or commit them. the
 
 ## limits
 
-DOIs must route to a known source. a DOI alone does not provide a download permission or a permanent copy of the bytes.
+DOIs must route to a known source. a DOI that leads to a page of a known source that is not a dataset, such as a kaggle notebook, is refused as unresolved. a DOI alone does not provide a download permission or a permanent copy of the bytes.
 
 follow [offline preparation](../concepts.md#offline) for direct-URL reuse and locked projects.

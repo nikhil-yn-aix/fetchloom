@@ -53,6 +53,41 @@ fn all_four_real_handle_urls_route_without_getting_the_landing_page() {
     }
 }
 
+/// doi.org's answer for a kaggle dataset version, recorded on 2026-11-07.
+const KAGGLE_HANDLE: &str = r#"{"responseCode":1,"handle":"10.34740/kaggle/dsv/2736749","values":[{"index":100,"type":"HS_ADMIN","data":{"format":"admin","value":{"handle":"10.admin/codata","index":300,"permissions":"111111111111"}},"ttl":86400,"timestamp":"2024-10-10T15:05:22Z"},{"index":1,"type":"URL","data":{"format":"string","value":"https://www.kaggle.com/dsv/2736749"},"ttl":86400,"timestamp":"2024-10-10T15:05:22Z"}]}"#;
+
+#[test]
+fn kaggle_dois_follow_kaggle_to_the_dataset_version() {
+    let handle = "https://doi.org/api/handles/10.34740%2Fkaggle%2Fdsv%2F2736749";
+    let page = "https://www.kaggle.com/dsv/2736749";
+    let recorded = Recorded::default()
+        .on(handle, 200, KAGGLE_HANDLE)
+        .on(page, 200, "<!DOCTYPE html>")
+        .redirected(
+            page,
+            "https://www.kaggle.com/datasets/obulisainaren/retinal-oct-c8/versions/2",
+        );
+    let doi = Doi::parse("10.34740/kaggle/dsv/2736749").unwrap();
+    let target = block_on(doi.locate(&recorded)).unwrap();
+    assert_eq!(target.to_string(), "kaggle:obulisainaren/retinal-oct-c8@2");
+    assert_eq!(recorded.asked(), [handle, page]);
+}
+
+#[test]
+fn a_known_site_page_that_is_no_dataset_is_not_blamed_on_the_publisher() {
+    let handle = "https://doi.org/api/handles/10.34740%2Fkaggle%2Fdsv%2F2736749";
+    let body = KAGGLE_HANDLE.replace(
+        "https://www.kaggle.com/dsv/2736749",
+        "https://www.kaggle.com/code/someone/notebook",
+    );
+    let recorded = Recorded::default().on(handle, 200, body);
+    let doi = Doi::parse("10.34740/kaggle/dsv/2736749").unwrap();
+    let error = block_on(doi.locate(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert!(error.message.contains("kaggle"), "{}", error.message);
+    assert!(!error.help.unwrap_or_default().contains("publisher"));
+}
+
 #[test]
 fn bare_prefixed_and_web_dois_return_the_complete_dataset() {
     for text in [

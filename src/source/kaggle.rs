@@ -47,6 +47,18 @@ fn selected(url: &Url) -> Option<String> {
         .map(|(_, value)| value.into_owned())
 }
 
+/// the short link a kaggle DOI names, such as `https://www.kaggle.com/dsv/2736749`, which
+/// redirects to one version of a dataset.
+pub(super) fn version_link(text: &str) -> Option<Url> {
+    let url = Url::parse(text).ok()?;
+    let parts = parts(&url)?;
+    let ["dsv", number] = parts.as_slice() else {
+        return None;
+    };
+    let number: u64 = number.parse().ok()?;
+    Url::parse(&format!("https://www.kaggle.com/dsv/{number}")).ok()
+}
+
 /// a kaggle dataset, at a version or at its newest one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Dataset {

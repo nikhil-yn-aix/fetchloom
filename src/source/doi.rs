@@ -1,5 +1,6 @@
 //! DOIs: doi.org is asked where one points, without following the link, and the host it lands
-//! on picks the source. a DOI's prefix is never trusted, since every dataverse install and
+//! on picks the source. only kaggle's short version links are followed, since they name no
+//! dataset themselves. a DOI's prefix is never trusted, since every dataverse install and
 //! repository registers its own.
 
 use std::fmt;
@@ -60,10 +61,26 @@ impl Doi {
             .pop_if_empty()
             .push(&self.0);
         let response = api.get(&url).await?;
-        self.target(super::json(self, &response)?)
+        let location = self.location(super::json(self, &response)?)?;
+        // kaggle registers each dataset version under a short link that only redirects to it
+        let location = match super::kaggle::version_link(&location) {
+            Some(short) => {
+                let response = api.get(&short).await?;
+                if !(200..=299).contains(&response.status) {
+                    return Err(Self::unresolved(&format!(
+                        "{self} points to {short}, which kaggle answered with {}",
+                        response.status
+                    )));
+                }
+                response.url.to_string()
+            }
+            None => location,
+        };
+        self.target(&location)
     }
 
-    fn target(&self, answer: Handle) -> Result<Reference, Error> {
+    /// the link doi.org's record holds.
+    fn location(&self, answer: Handle) -> Result<String, Error> {
         match answer.code {
             1 => (),
             100 => return Err(Self::unresolved(&format!("{self} is not registered"))),
@@ -83,8 +100,22 @@ impl Doi {
         if location.format != "string" {
             return Err(self.invalid("the URL value is not in string format"));
         }
-        let parsed = Reference::parse(&location.value)
-            .map_err(|_| self.invalid("the URL value is not a dataset link"))?;
+        Ok(location.value)
+    }
+
+    fn target(&self, location: &str) -> Result<Reference, Error> {
+        let parsed = Reference::parse(location).map_err(|_| {
+            let known = Url::parse(location)
+                .ok()
+                .and_then(|url| Some((super::known_host(&url)?, url)));
+            match known {
+                Some((source, url)) => Self::unresolved(&format!(
+                    "{self} points to a {source} page fetchloom cannot list: {}",
+                    crate::net::Shown(&url)
+                )),
+                None => self.invalid("the URL value is not a dataset link"),
+            }
+        })?;
         match parsed.reference {
             Reference::Url(url) => Err(Self::unresolved(&format!(
                 "{self} points to {}, which fetchloom cannot list",
