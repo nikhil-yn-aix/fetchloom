@@ -8,21 +8,11 @@ use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::source::{Listing, Reference, Remote};
 
-/// a native API answer for a dataset or one of its versions.
+/// a native API answer for one version of a dataset.
 #[derive(Deserialize)]
 pub(super) struct Answer {
     status: String,
-    data: Data,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Data {
-    Dataset {
-        #[serde(rename = "latestVersion")]
-        latest_version: Version,
-    },
-    Version(Version),
+    data: Version,
 }
 
 #[derive(Deserialize)]
@@ -104,11 +94,7 @@ impl Answer {
         if self.status != "OK" {
             return Err(dataset.invalid("the API did not return an OK answer"));
         }
-        let (Data::Dataset {
-            latest_version: version,
-        }
-        | Data::Version(version)) = self.data;
-        version.listing(dataset)
+        self.data.listing(dataset)
     }
 }
 

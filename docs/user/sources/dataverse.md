@@ -20,6 +20,8 @@ fetchloom get dataverse:dataverse.harvard.edu/file:6867336
 
 resolved dataset references contain the host, persistent id and `@major.minor` version. resolved file references contain the host, numeric file id and version. a file PID is converted to its numeric id.
 
+a reference without a version resolves the newest published version, also when you are signed in with an account that can see an unpublished draft. drafts are never listed.
+
 file URLs use `/api/access/datafile/` followed by the numeric id and `?format=original`. fetchloom checks stated MD5 or SHA-256. other checksum algorithms are ignored; SHA-256 is learned from the download instead.
 
 [lock records](../reference/data-lock.md#what-each-source-records) defines the stored forms. changing filters keeps the resolved reference unless the manifest reference changes or an upgrade is requested.

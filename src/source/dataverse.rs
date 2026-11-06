@@ -148,6 +148,9 @@ impl Dataset {
         })
     }
 
+    /// `/api/datasets/:persistentId/versions/<version>`. without a version it names the newest
+    /// published one, since the dataset alone answers with the newest version the key may see,
+    /// a draft for its curators.
     fn url(&self) -> Result<Url, Error> {
         let Item::Dataset(pid) = &self.item else {
             return Err(self.invalid("a file has no dataset listing URL"));
@@ -157,12 +160,11 @@ impl Dataset {
             self.host
         ))
         .map_err(|_| self.invalid("the dataset URL is invalid"))?;
-        if let Some(version) = &self.version {
-            url.path_segments_mut()
-                .map_err(|()| self.invalid("the dataset URL has no path"))?
-                .pop_if_empty()
-                .extend(["versions", version]);
-        }
+        let version = self.version.as_deref().unwrap_or(":latest-published");
+        url.path_segments_mut()
+            .map_err(|()| self.invalid("the dataset URL has no path"))?
+            .pop_if_empty()
+            .extend(["versions", version]);
         url.query_pairs_mut().append_pair("persistentId", pid);
         Ok(url)
     }

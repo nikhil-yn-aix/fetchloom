@@ -9,17 +9,18 @@ use crate::source::{Reference, Remote};
 
 const ID: &str = "dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP";
 const DATASET: &str = "https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP";
+const LATEST: &str = "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP";
 const VERSION: &str = "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/5.0?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP";
 
 fn changed(change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
-    let mut value = serde_json::from_slice(&fixture_bytes("dataverse/dataset.json")).unwrap();
+    let mut value = serde_json::from_slice(&fixture_bytes("dataverse/version.json")).unwrap();
     change(&mut value);
     serde_json::to_vec(&value).unwrap()
 }
 
 #[test]
 fn lists_original_bytes_and_nested_paths_in_one_request() {
-    let recorded = Recorded::default().fixture(DATASET, "dataverse/dataset.json");
+    let recorded = Recorded::default().fixture(LATEST, "dataverse/version.json");
     let listing = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap();
     assert_eq!(
         listing.resolved.to_string(),
@@ -66,29 +67,47 @@ fn lists_original_bytes_and_nested_paths_in_one_request() {
             },
         ]
     );
-    assert_eq!(recorded.asked(), [DATASET]);
+    assert_eq!(recorded.asked(), [LATEST]);
 }
 
 #[test]
 fn resolving_the_result_asks_for_the_published_version() {
     let recorded = Recorded::default()
-        .fixture(DATASET, "dataverse/dataset.json")
+        .fixture(LATEST, "dataverse/version.json")
         .fixture(VERSION, "dataverse/version.json");
     let listing = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap();
     let pinned = block_on(listing.resolved.resolve(&recorded)).unwrap();
     assert_eq!(pinned.files, listing.files);
     assert_eq!(pinned.resolved, listing.resolved);
     assert_eq!(pinned.doi, listing.doi);
-    assert_eq!(recorded.asked(), [DATASET, VERSION]);
+    assert_eq!(recorded.asked(), [LATEST, VERSION]);
+}
+
+#[test]
+fn a_curators_draft_does_not_hide_the_published_version() {
+    // with a key, the dataset endpoint answers with the newest version that key can see, which
+    // for a curator is the open draft
+    let mut draft: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("dataverse/dataset.json")).unwrap();
+    draft["data"]["latestVersion"]["versionState"] = "DRAFT".into();
+    let recorded = Recorded::default()
+        .on(DATASET, 200, serde_json::to_vec(&draft).unwrap())
+        .fixture(LATEST, "dataverse/version.json");
+    let listing = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap();
+    assert_eq!(
+        listing.resolved.to_string(),
+        "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0"
+    );
+    assert_eq!(recorded.asked(), [LATEST]);
 }
 
 #[test]
 fn restricted_files_are_all_named_instead_of_skipped() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][0]["restricted"] = true.into();
-        value["data"]["latestVersion"]["files"][1]["restricted"] = true.into();
+        value["data"]["files"][0]["restricted"] = true.into();
+        value["data"]["files"][1]["restricted"] = true.into();
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert!(error.message.contains("data/2026-06-24.tsv"));
@@ -99,12 +118,12 @@ fn restricted_files_are_all_named_instead_of_skipped() {
 #[test]
 fn missing_original_sizes_cannot_be_replaced_with_ingested_sizes() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][0]["dataFile"]
+        value["data"]["files"][0]["dataFile"]
             .as_object_mut()
             .unwrap()
             .remove("originalFileSize");
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
 }
@@ -113,10 +132,10 @@ fn missing_original_sizes_cannot_be_replaced_with_ingested_sizes() {
 fn sha256_checksums_are_kept() {
     let hash = "2450eb9ff3db92a1bff370368b0552b270bd4b5ca0745b773c37d2662f94df8e";
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][1]["dataFile"]["checksum"] =
+        value["data"]["files"][1]["dataFile"]["checksum"] =
             serde_json::json!({"type": "SHA-256", "value": hash});
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let listing = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap();
     assert_eq!(listing.files[1].sha256, Sha256::from_hex(hash));
     assert_eq!(listing.files[1].md5, None);
@@ -125,9 +144,9 @@ fn sha256_checksums_are_kept() {
 #[test]
 fn unknown_checksum_algorithms_are_not_treated_as_md5() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][1]["dataFile"]["checksum"]["type"] = "SHA-1".into();
+        value["data"]["files"][1]["dataFile"]["checksum"]["type"] = "SHA-1".into();
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let listing = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap();
     assert_eq!(listing.files[1].sha256, None);
     assert_eq!(listing.files[1].md5, None);
@@ -136,18 +155,17 @@ fn unknown_checksum_algorithms_are_not_treated_as_md5() {
 #[test]
 fn malformed_known_checksums_are_refused() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][1]["dataFile"]["checksum"]["value"] =
-            "broken".into();
+        value["data"]["files"][1]["dataFile"]["checksum"]["value"] = "broken".into();
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
 }
 
 #[test]
 fn drafts_cannot_be_pinned_as_published_versions() {
-    let body = changed(|value| value["data"]["latestVersion"]["versionState"] = "DRAFT".into());
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let body = changed(|value| value["data"]["versionState"] = "DRAFT".into());
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert!(error.help.is_some());
@@ -169,16 +187,16 @@ fn requested_versions_cannot_silently_change() {
 #[test]
 fn a_response_for_another_dataset_is_refused() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["datasetPersistentId"] = "doi:10.7910/DVN/OTHER".into();
+        value["data"]["datasetPersistentId"] = "doi:10.7910/DVN/OTHER".into();
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
 }
 
 #[test]
 fn missing_datasets_are_unresolved() {
-    let url = "https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=doi%3A10.7910%2FDVN%2FFETCHLOOM-MISSING-999";
+    let url = "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.7910%2FDVN%2FFETCHLOOM-MISSING-999";
     let recorded = Recorded::default().on(url, 404, fixture_bytes("dataverse/missing.json"));
     let dataset =
         Dataset::parse("dataverse.harvard.edu/doi:10.7910/DVN/FETCHLOOM-MISSING-999").unwrap();
@@ -190,9 +208,9 @@ fn missing_datasets_are_unresolved() {
 #[test]
 fn directory_labels_reach_the_shared_path_check() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]["files"][1]["directoryLabel"] = "../code".into();
+        value["data"]["files"][1]["directoryLabel"] = "../code".into();
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let reference = Reference::parse(&format!("dataverse:{ID}"))
         .unwrap()
         .reference;
@@ -252,12 +270,9 @@ fn live_dataverse() {
 #[test]
 fn a_dataset_without_file_metadata_is_not_empty() {
     let body = changed(|value| {
-        value["data"]["latestVersion"]
-            .as_object_mut()
-            .unwrap()
-            .remove("files");
+        value["data"].as_object_mut().unwrap().remove("files");
     });
-    let recorded = Recorded::default().on(DATASET, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body);
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
 }
@@ -266,7 +281,7 @@ fn a_dataset_without_file_metadata_is_not_empty() {
 fn access_errors_do_not_suggest_unscoped_credentials() {
     for status in [401, 403] {
         let recorded =
-            Recorded::default().on(DATASET, status, fixture_bytes("dataverse/refused.json"));
+            Recorded::default().on(LATEST, status, fixture_bytes("dataverse/refused.json"));
         let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
         assert!(
