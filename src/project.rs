@@ -241,12 +241,15 @@ impl Project {
     /// missing or unreadable state is empty.
     pub(crate) fn state(&self) -> (State, u64) {
         let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
-        let read = File::open(self.root.join(FOLDER).join("state")).and_then(|mut file| {
-            let written = Look::of(&file.metadata()?).modified;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
-            Ok((bytes, written))
-        });
+        // a planted link to a device or a fifo would never end; it reads as no state at all
+        let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
+            |mut file| {
+                let written = Look::of(&file.metadata()?).modified;
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes)?;
+                Ok((bytes, written))
+            },
+        );
         match read {
             Ok((bytes, written)) => {
                 span.record("bytes", bytes.len());
@@ -766,6 +769,25 @@ mod tests {
         assert_eq!(err, Some(io::ErrorKind::InvalidInput));
         assert!(project.hold("sync").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"{}");
+    }
+
+    #[test]
+    fn a_linked_state_reads_as_none() {
+        let (_dir, project) = project(&[]);
+        project.write_state(&State::default()).unwrap();
+        let path = project.own_folder().join("state");
+        assert_ne!(project.state().1, 0, "a plain state is read");
+        let target = project.own_folder().join("elsewhere");
+        fs::rename(&path, &target).unwrap();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &path).is_ok();
+        // making a symlink on windows needs developer mode or admin
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
+        if !made {
+            return;
+        }
+        assert_eq!(project.state().1, 0);
     }
 
     #[test]

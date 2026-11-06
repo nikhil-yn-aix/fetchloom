@@ -35,7 +35,7 @@ an existing owner is stale when its `os` matches this process and this process h
 
 before removing a stale record, fetchloom reads it again and requires the same bytes and modification time.
 
-any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone.
+any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. an `owner` that is a link, a special file or larger than 64 KiB is refused with an error rather than read. a `state` that is a link or a special file is never read and counts as no state.
 
 a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
 

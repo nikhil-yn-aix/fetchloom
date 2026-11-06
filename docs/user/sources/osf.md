@@ -14,6 +14,7 @@ fetchloom get osf:3eunr
 | `osf:3eunr` | resolve an OSF node or file id |
 | an OSF project link | walk its osfstorage folders |
 | an OSF file GUID link | resolve that file |
+| an OSF download link with `?version=N` | download that version as a plain link, pinned by SHA-256; any other OSF link with `?version=` is refused, since its listing describes only the latest version |
 
 selection patterns match the listed paths before downloading. [pattern rules](../reference/data-toml.md#patterns) apply at every folder depth.
 

@@ -90,7 +90,7 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 
 ### trust boundaries
 
-plain URLs a person writes, and manifest URL or dataverse hosts, can name private servers. trust is host-wide, including other paths and ports. untrusted direct DNS results reject or filter private addresses. behind a proxy, local preflight lookup rejects an untrusted name if any answer is private; an unresolved name is left to the proxy. that lookup happens before the send deadline.
+plain URLs a person writes, and manifest URL or dataverse hosts, can name private servers. trust is host-wide, including other paths and ports. untrusted direct DNS results reject or filter private addresses; IPv4-mapped and NAT64 (`64:ff9b::/96`, `64:ff9b:1::/48`) addresses are judged by the IPv4 address they carry. behind a proxy, local preflight lookup rejects an untrusted name if any answer is private; an unresolved name is left to the proxy. that lookup happens before the send deadline.
 
 redirects are checked hop by hop. credentials attach only to their configured host over HTTPS on port 443. a source key never returns after a redirect leaves the original origin; a `.netrc` login answers its own host on any hop, as curl does, for earthdata's sign-in round trip. the osf key is the other exception: `Account::credentials` adds it for `osf.io` and `files.osf.io` on every hop, since osf download links redirect between the two. offline mode stops both requests and DNS lookup. OSF retries a forbidden XML storage answer only when it explicitly identifies an expired `X-Amz` request.
 

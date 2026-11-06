@@ -53,6 +53,7 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 | 1 TiB unpacked | actual member bytes across one archive |
 | 200:1 expansion | output against compressed bytes read, after 4 MiB of output |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
+| 256 MiB xz decoder memory | what an xz header asks for, checked before decoding; zstd keeps libzstd's 128 MiB window limit |
 
 names become NFC, a unicode normalization form that gives canonically equivalent text one representation. leading `./` is removed; windows-made zip separators become `/`. absolute paths, traversal, controls, duplicate files, folded-name collisions and file/folder clashes fail. identical repeated tar folder declarations are allowed; duplicate zip folder names are rejected by the zip reader.
 
