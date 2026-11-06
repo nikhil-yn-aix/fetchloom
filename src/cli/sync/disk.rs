@@ -58,7 +58,9 @@ impl Survey {
             edited: HashSet::new(),
             needs_writing: false,
         };
-        survey.hash_racy(&project.root, written);
+        let other_device = !survey.state.files.is_empty()
+            && apart(&project.root.join(data_dir), &project.own_folder());
+        survey.hash_racy(&project.root, written, other_device);
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
         survey
@@ -89,8 +91,15 @@ impl Survey {
     /// reconciles missing recorded names, then hashes files whose recorded time is not older than the
     /// state's own, `written`. a coarse clock, such as FAT's two seconds, gives a file edited in
     /// the tick it was placed the size and time recorded for it, and both times come from that
-    /// clock. git treats its racily clean index entries the same way.
-    fn hash_racy(&mut self, root: &Path, written: u64) {
+    /// clock. git treats its racily clean index entries the same way. a data folder on an
+    /// `other_device` than the state's may keep times to a coarser step than the state's, so
+    /// there the state vouches only for files older than it by the coarsest step.
+    fn hash_racy(&mut self, root: &Path, written: u64, other_device: bool) {
+        let written = if other_device {
+            written.saturating_sub(COARSE)
+        } else {
+            written
+        };
         let mut racy = Vec::new();
         let mut missing = Vec::new();
         for (path, placed) in &self.state.files {
@@ -343,6 +352,35 @@ fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
     false
 }
 
+/// the step of the coarsest clock a data folder may sit on: fat cuts a file's time down to two
+/// seconds.
+const COARSE: u64 = 2_000_000_000;
+
+/// whether `a` and `b` sit on different devices, whose filesystems may keep times to different
+/// steps. folders that cannot be read count as apart.
+fn apart(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (fs::metadata(a), fs::metadata(b)) {
+            (Ok(a), Ok(b)) => a.dev() != b.dev(),
+            _ => true,
+        }
+    }
+    #[cfg(windows)]
+    {
+        let volume = |path: &Path| {
+            winapi_util::Handle::from_path_any(path)
+                .and_then(|handle| winapi_util::file::information(&handle))
+                .map(|information| information.volume_serial_number())
+        };
+        match (volume(a), volume(b)) {
+            (Ok(a), Ok(b)) => a != b,
+            _ => true,
+        }
+    }
+}
+
 /// every file under the data folder and how it looks, by its path in the project. links are
 /// neither followed nor touched.
 fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
@@ -471,13 +509,60 @@ mod tests {
             Look::of(&fs::metadata(&path).unwrap()),
             survey.disk["data/changed"]
         );
-        survey.hash_racy(&project.root, 0);
+        survey.hash_racy(&project.root, 0, false);
         assert_eq!(survey.edited, HashSet::from(["data/changed".to_owned()]));
         assert!(survey.needs_writing);
         survey.smudge_edited();
         assert_eq!(survey.state.files["data/changed"].look.size, u64::MAX);
         assert_eq!(survey.state.files["data/intact"].look.size, 8);
         assert_eq!(fs::read(path).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn a_data_folder_on_another_device_allows_for_a_coarser_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let path = project.root.join("data/table.csv");
+        let stamp = |bytes: &[u8], time: SystemTime| {
+            fs::write(&path, bytes).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(time)
+                .unwrap();
+        };
+        // fat cuts times down to two seconds: a file placed at 10.3 s and edited at 11 s keeps
+        // 10 s, while a state on a finer clock was written at 10.5 s
+        let placed = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
+        stamp(b"original", placed);
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        survey.state.files.insert(
+            "data/table.csv".to_owned(),
+            record(&project.root, "data/table.csv", b"original", Method::Copy),
+        );
+        stamp(b"modified", placed);
+        let written = nanos(placed) + 500_000_000;
+
+        survey.hash_racy(&project.root, written, false);
+        assert!(survey.edited.is_empty(), "one clock dates both");
+        survey.hash_racy(&project.root, written, true);
+        assert_eq!(survey.edited, HashSet::from(["data/table.csv".to_owned()]));
+    }
+
+    #[test]
+    fn only_folders_on_different_devices_are_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (data, own) = (dir.path().join("data"), dir.path().join(".fetchloom"));
+        fs::create_dir(&data).unwrap();
+        fs::create_dir(&own).unwrap();
+        assert!(!apart(&data, &own));
+        assert!(apart(&dir.path().join("missing"), &own));
+        #[cfg(target_os = "linux")]
+        assert!(apart(Path::new("/proc"), &own));
     }
 
     #[test]
@@ -711,7 +796,7 @@ mod tests {
             .state
             .files
             .insert("data/a.txt".to_owned(), placed.clone());
-        survey.hash_racy(&project.root, 0);
+        survey.hash_racy(&project.root, 0, false);
         assert_eq!(survey.disk.len(), 1);
         assert_eq!(survey.disk["data/a.txt"], placed.look);
         assert_eq!(survey.listed["data/a.txt"], "data/A.txt");
