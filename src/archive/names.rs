@@ -7,7 +7,18 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 
 use super::{refused, refused_member};
 use crate::error::Error;
-use crate::name;
+use crate::{name, units};
+
+/// the longest path an entry may have, in bytes, both as the archive spells it and in NFC. linux
+/// takes no longer path either.
+const LONGEST_PATH: usize = 4096;
+
+/// the most one archive's names may take: each entry counts the length of its path, and each
+/// folder or file seen for the first time its own name plus [`PER_NAME`].
+const NAME_BYTES: u64 = 256 << 20;
+
+/// roughly what keeping one folder or file costs besides the bytes of its name.
+const PER_NAME: u64 = 64;
 
 /// what an entry turned out to be, once its name passed every check.
 #[derive(Debug, PartialEq, Eq)]
@@ -19,23 +30,47 @@ pub(super) enum Named {
 }
 
 /// every name one archive used so far, compared the way a case-insensitive disk compares them.
-#[derive(Default)]
+/// folders form a tree, so a path keeps each of its names once rather than every folder above it
+/// whole.
 pub(super) struct Names {
-    seen: HashMap<String, Seen>,
+    /// every folder and file, by the id of the folder holding it and its own name folded. the
+    /// archive's root is folder 0.
+    seen: HashMap<(usize, Box<str>), Seen>,
+    /// what the names took so far, counted as [`NAME_BYTES`] says.
+    kept: u64,
+    budget: u64,
 }
 
 struct Seen {
-    /// the path in NFC, when it differs from the key.
-    path: Option<Box<str>>,
-    /// the name as the archive spelled it, when that was not NFC.
+    id: usize,
+    /// the name in NFC, when it differs from the key.
+    name: Option<Box<str>>,
+    /// the whole path as the archive spelled it, when that was not NFC.
     raw: Option<Box<str>>,
     is_folder: bool,
 }
 
+impl Default for Names {
+    fn default() -> Names {
+        Names::with_budget(NAME_BYTES)
+    }
+}
+
 impl Names {
+    fn with_budget(budget: u64) -> Names {
+        Names {
+            seen: HashMap::new(),
+            kept: 0,
+            budget,
+        }
+    }
+
     /// checks an entry's name. `is_folder` is what the archive says the entry is; a name that
     /// ends with `/` is a folder too.
     pub(super) fn add(&mut self, raw: &str, is_folder: bool) -> Result<Named, Error> {
+        if raw.len() > LONGEST_PATH {
+            return Err(too_long(raw));
+        }
         let mut path = raw;
         while let Some(rest) = path.strip_prefix("./") {
             path = rest;
@@ -48,6 +83,9 @@ impl Names {
         let nfc = ComposingNormalizerBorrowed::new_nfc()
             .normalize(path)
             .into_owned();
+        if nfc.len() > LONGEST_PATH {
+            return Err(too_long(raw));
+        }
         if nfc.chars().any(name::is_control) {
             return Err(refused_member(
                 &raw.escape_debug().to_string(),
@@ -62,11 +100,16 @@ impl Names {
                 "the archive holds \"{raw}\", which this machine cannot store: {reason}"
             )));
         }
-        for (at, _) in nfc.match_indices('/') {
-            self.insert(&nfc[..at], None, true)?;
+        self.kept = self.kept.saturating_add(nfc.len() as u64);
+        self.check_budget()?;
+        let mut folder = 0;
+        let mut start = 0;
+        for (end, _) in nfc.match_indices('/') {
+            folder = self.insert(folder, &nfc[..end], start, None, true)?;
+            start = end + 1;
         }
         let raw = (raw != nfc).then_some(raw);
-        self.insert(&nfc, raw, is_folder)?;
+        self.insert(folder, &nfc, start, raw, is_folder)?;
         Ok(if is_folder {
             Named::Folder
         } else {
@@ -74,30 +117,45 @@ impl Names {
         })
     }
 
-    fn insert(&mut self, path: &str, raw: Option<&str>, is_folder: bool) -> Result<(), Error> {
-        let key = name::fold(path);
+    /// adds the last name in `path`, which starts at byte `at`, to the folder `folder`, and
+    /// returns its id.
+    fn insert(
+        &mut self,
+        folder: usize,
+        path: &str,
+        at: usize,
+        raw: Option<&str>,
+        is_folder: bool,
+    ) -> Result<usize, Error> {
+        let name = &path[at..];
+        let id = self.seen.len() + 1;
+        let key = (folder, name::fold(name).into_boxed_str());
         let seen = match self.seen.entry(key) {
             Entry::Vacant(vacant) => {
-                let path = (vacant.key() != path).then(|| path.into());
+                let spelled = (*vacant.key().1 != *name).then(|| name.into());
+                let cost = PER_NAME + (name.len() + raw.map_or(0, str::len)) as u64;
+                self.kept = self.kept.saturating_add(cost);
                 vacant.insert(Seen {
-                    path,
+                    id,
+                    name: spelled,
                     raw: raw.map(Into::into),
                     is_folder,
                 });
-                return Ok(());
+                return self.check_budget().map(|()| id);
             }
             Entry::Occupied(occupied) => occupied,
         };
         let old = seen.get();
-        let old_path = old.path.as_deref().unwrap_or(seen.key());
-        if old_path != path {
+        let old_name = old.name.as_deref().unwrap_or(&*seen.key().1);
+        if old_name != name {
+            let old_path = format!("{}{old_name}", &path[..at]);
             return Err(refused(format!(
                 "the archive holds \"{old_path}\" and \"{path}\", which are one name on disks that ignore case"
             )));
         }
         match (old.is_folder, is_folder) {
-            (true, true) => Ok(()),
-            (false, false) if old.raw.as_deref().unwrap_or(old_path) == raw.unwrap_or(path) => {
+            (true, true) => Ok(old.id),
+            (false, false) if old.raw.as_deref().unwrap_or(path) == raw.unwrap_or(path) => {
                 Err(refused(format!("the archive holds \"{path}\" twice")))
             }
             (false, false) => Err(refused(format!(
@@ -108,6 +166,26 @@ impl Names {
             ))),
         }
     }
+
+    fn check_budget(&self) -> Result<(), Error> {
+        if self.kept > self.budget {
+            return Err(refused(format!(
+                "the archive's names take more than {}, the most fetchloom keeps for one archive",
+                units::size(self.budget)
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// a path too long to take, shown by its start only.
+fn too_long(raw: &str) -> Error {
+    let start: String = raw.chars().take(60).collect();
+    refused(format!(
+        "the archive holds \"{}…\", a path longer than {}, the longest fetchloom takes",
+        start.escape_debug(),
+        units::count(LONGEST_PATH as u64, "byte", "bytes")
+    ))
 }
 
 #[cfg(test)]
@@ -216,6 +294,66 @@ mod tests {
         assert!(
             add_all(&["caf\u{e9}/a.txt", "cafe\u{301}/b.txt"]).is_ok(),
             "one folder however it is spelled"
+        );
+    }
+
+    impl Names {
+        /// the bytes of text kept for every name added so far.
+        fn stored(&self) -> usize {
+            self.seen
+                .iter()
+                .map(|((_, key), seen)| {
+                    key.len()
+                        + seen.name.as_deref().map_or(0, str::len)
+                        + seen.raw.as_deref().map_or(0, str::len)
+                })
+                .sum()
+        }
+    }
+
+    #[test]
+    fn what_names_keep_grows_with_their_length() {
+        let mut names = Names::default();
+        let mut added = 0;
+        for top in ["a", "b", "c", "d"] {
+            let deep = format!("{top}/{}", vec!["x"; 2000].join("/"));
+            added += deep.len();
+            names.add(&deep, false).unwrap();
+        }
+        assert!(
+            names.stored() <= 2 * added,
+            "{} bytes kept for {added} bytes of names",
+            names.stored()
+        );
+    }
+
+    #[test]
+    fn a_path_longer_than_4096_bytes_is_refused() {
+        let longest = vec!["x"; 2048].join("/");
+        assert!(add_all(&[&longest]).is_ok());
+        let err = add_all(&[&format!("{longest}/y")]).unwrap_err();
+        assert!(err.contains("longer than 4,096 bytes"), "{err}");
+        let dotted = format!("{}a", "./".repeat(2048));
+        assert!(
+            add_all(&[&dotted]).is_err(),
+            "the name as the archive spells it"
+        );
+    }
+
+    #[test]
+    fn names_past_their_budget_refuse_the_archive() {
+        let mut names = Names::with_budget(1000);
+        names.add("data/a.csv", false).unwrap();
+        for _ in 0..100 {
+            names.add("data/", true).unwrap();
+        }
+        let err = (0..100)
+            .find_map(|n| names.add(&format!("data/{n}.csv"), false).err())
+            .unwrap();
+        assert_eq!(err.kind, crate::error::Kind::SourceInvalid);
+        assert_eq!(
+            err.message,
+            "the archive's names take more than 1000 B, the most fetchloom keeps for one archive"
         );
     }
 
