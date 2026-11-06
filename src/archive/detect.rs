@@ -77,8 +77,8 @@ fn compression(head: &[u8]) -> Option<Format> {
 }
 
 /// whether the stream decompresses to a tar header. a stream that fails to decompress is no
-/// archive, unless xz asks for more memory than unpacking allows: unpacking then refuses it and
-/// says why, rather than a tar staying packed unnoticed.
+/// archive, unless xz or zstd asks for more memory than unpacking allows: unpacking then refuses
+/// it and says why, rather than a tar staying packed unnoticed.
 fn holds_tar(format: Format, file: File) -> bool {
     let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file)) else {
         return false;
@@ -86,7 +86,7 @@ fn holds_tar(format: Format, file: File) -> bool {
     let mut block = [0; BLOCK];
     match read_up_to(&mut decoded, &mut block) {
         Ok(len) => is_tar_header(&block[..len]),
-        Err(err) => tar::needs_too_much_memory(&err),
+        Err(err) => tar::needs_too_much_memory(&err) || tar::needs_too_large_window(&err),
     }
 }
 
@@ -132,7 +132,9 @@ fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::samples::{Scratch, compress, tar_of, xz_asking_for, zip_of};
+    use crate::archive::samples::{
+        Scratch, compress, tar_of, xz_asking_for, zip_of, zstd_asking_for,
+    };
 
     fn detected(name: &str, bytes: &[u8]) -> Detected {
         let scratch = Scratch::new();
@@ -188,6 +190,18 @@ mod tests {
         let tar = tar_of(&[("a.csv", b"1,2\n")]);
         let packed = xz_asking_for(&compress(Format::TarXz, &tar), 34);
         assert_eq!(detected("data", &packed), Detected::Archive(Format::TarXz));
+    }
+
+    #[test]
+    fn a_zstd_frame_too_costly_to_read_is_left_for_unpacking_to_refuse() {
+        let tar = tar_of(&[("a.csv", b"1,2\n")]);
+        for log in [28, 31] {
+            assert_eq!(
+                detected("data", &zstd_asking_for(log, &tar)),
+                Detected::Archive(Format::TarZst),
+                "a window of 2^{log} bytes"
+            );
+        }
     }
 
     #[test]

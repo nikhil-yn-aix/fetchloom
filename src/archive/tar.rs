@@ -22,9 +22,14 @@ use crate::units;
 const HEADERS_CAP: u64 = 16 << 20;
 
 /// the most memory an xz stream may ask for to be decompressed. `xz -9e` streams ask for 65 MiB,
-/// while a header of a few bytes may ask for 4 GiB before any output. zstd frames have a bound
-/// of their own: libzstd refuses a window above 128 MiB unless asked to allow it.
+/// while a header of a few bytes may ask for 4 GiB before any output.
 pub(super) const XZ_MEMORY: u64 = 256 << 20;
+
+/// the largest window a zstd frame may ask for: 128 MiB, libzstd's own default. `zstd --long`
+/// stays within it, while `--long=28` and above go past it.
+pub(super) const ZSTD_WINDOW: u64 = 1 << ZSTD_WINDOW_LOG;
+
+const ZSTD_WINDOW_LOG: u32 = 27;
 
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
 /// to end, as pigz, bgzip and pbzip2 write them.
@@ -38,7 +43,11 @@ pub(super) fn decompressed<'r>(
             compressed,
             Stream::new_auto_decoder(XZ_MEMORY, CONCATENATED)?,
         )),
-        Format::TarZst => Box::new(zstd::stream::read::Decoder::with_buffer(compressed)?),
+        Format::TarZst => {
+            let mut decoder = zstd::stream::read::Decoder::with_buffer(compressed)?;
+            decoder.window_log_max(ZSTD_WINDOW_LOG)?;
+            Box::new(decoder)
+        }
         Format::TarBz2 => Box::new(MultiBzDecoder::new(compressed)),
         Format::Tar | Format::Zip => Box::new(compressed),
     })
@@ -52,6 +61,32 @@ pub(super) fn needs_too_much_memory(err: &(dyn std::error::Error + 'static)) -> 
         .is_some_and(|inner| *inner == liblzma::stream::Error::MemLimit)
 }
 
+/// whether `err` is a zstd frame refused for asking a window larger than [`ZSTD_WINDOW`].
+pub(super) fn needs_too_large_window(err: &(dyn std::error::Error + 'static)) -> bool {
+    use zstd::zstd_safe::{get_error_name, zstd_sys::ZSTD_ErrorCode};
+    // the zstd crate keeps only libzstd's name for the error, so the name is what tells it apart
+    let code = ZSTD_ErrorCode::ZSTD_error_frameParameter_windowTooLarge as usize;
+    let window_too_large = get_error_name(code.wrapping_neg());
+    err.downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .is_some_and(|inner| inner.to_string() == window_too_large)
+}
+
+/// an archive whose decompressed stream could not be read: refused when its zstd frame asks for
+/// too large a window, and damaged otherwise.
+pub(super) fn unreadable_stream(
+    at: Option<&str>,
+    err: &(dyn std::error::Error + 'static),
+) -> Error {
+    if needs_too_large_window(err) {
+        return refused(format!(
+            "the archive's zstd stream needs a window larger than {} to unpack",
+            units::size(ZSTD_WINDOW)
+        ));
+    }
+    damaged(at, err)
+}
+
 pub(super) fn unpack(
     archive: &Path,
     format: Format,
@@ -63,16 +98,19 @@ pub(super) fn unpack(
         inner: BufReader::with_capacity(BUFFER, file),
         meter: guard.meter(),
     };
-    let decoded = decompressed(format, counted).map_err(|err| damaged(None, &err))?;
+    let decoded = decompressed(format, counted).map_err(|err| unreadable_stream(None, &err))?;
     let headers = Headers::default();
     let mut tar = Archive::new(Capped {
         inner: decoded,
         headers: &headers,
     });
-    let entries = tar.entries().map_err(|err| damaged(None, &err))?;
+    let entries = tar.entries().map_err(|err| unreadable_stream(None, &err))?;
     for entry in entries {
-        let mut entry =
-            entry.map_err(|err| headers.refusal().unwrap_or_else(|| damaged(None, &err)))?;
+        let mut entry = entry.map_err(|err| {
+            headers
+                .refusal()
+                .unwrap_or_else(|| unreadable_stream(None, &err))
+        })?;
         headers.read.set(0);
         guard.entry()?;
         let raw = String::from_utf8(entry.path_bytes().into_owned()).map_err(|err| {
@@ -102,7 +140,8 @@ pub(super) fn unpack(
     // a compressed stream's own check, such as gzip's CRC, comes after the tar's end
     if !matches!(format, Format::Tar) {
         let mut rest = tar.into_inner().inner.take(HEADERS_CAP + 1);
-        let trailing = io::copy(&mut rest, &mut io::sink()).map_err(|err| damaged(None, &err))?;
+        let trailing =
+            io::copy(&mut rest, &mut io::sink()).map_err(|err| unreadable_stream(None, &err))?;
         if trailing > HEADERS_CAP {
             return Err(refused(format!(
                 "the archive holds more than {} after its end",
@@ -443,10 +482,10 @@ mod tests {
     fn a_zstd_frame_asking_for_too_much_memory_is_refused() {
         let packed = zstd_asking_for(31, &tar_of(FILES));
         let err = Scratch::new().refuse(Format::TarZst, &packed);
-        assert!(
-            err.message.starts_with("the archive is damaged"),
-            "{}",
-            err.message
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert_eq!(
+            err.message,
+            "the archive's zstd stream needs a window larger than 128.0 MiB to unpack"
         );
         let within = zstd_asking_for(20, &tar_of(FILES));
         assert_eq!(paths(&Scratch::new(), Format::TarZst, &within).len(), 3);

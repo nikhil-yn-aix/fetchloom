@@ -5,7 +5,8 @@ use std::cell::Cell;
 use std::io::{self, Read, Write};
 
 use super::names::{Named, Names};
-use super::{Limits, damaged, not_written, refused};
+use super::tar::unreadable_stream;
+use super::{Limits, not_written, refused};
 use crate::error::{Error, Kind};
 use crate::units;
 
@@ -85,7 +86,7 @@ impl<'a> Guard<'a> {
                 Ok(0) => return Ok(()),
                 Ok(read) => read,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                Err(err) => return Err(damaged(Some(path), &err)),
+                Err(err) => return Err(unreadable_stream(Some(path), &err)),
             };
             self.written += read as u64;
             self.check_limits(path)?;

@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use super::samples::{Scratch, compress, tar_of, zip_of};
+use super::samples::{Scratch, compress, tar_of, zip_of, zstd_asking_for};
 use super::{Detected, Format, Limits, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
 
@@ -222,6 +222,28 @@ fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
     )
     .unwrap();
     assert_eq!(scratch.cache.unpacked_tree(&archive.digest), Some(pinned));
+}
+
+/// `zstd --long=28` and above write frames asking for more than libzstd's 128 MiB window. such a
+/// tar must be refused by unpacking, never left packed as if it were no archive.
+#[test]
+fn a_tar_zst_asking_for_a_large_window_is_refused_not_left_packed() {
+    let scratch = Scratch::new();
+    let packed = crate::cache::tests::store(&scratch.cache, &zstd_asking_for(28, &tar_of(FILES)));
+    let err = super::unpack_cached(
+        &scratch.cache,
+        &packed.digest,
+        packed.size,
+        None,
+        &|_| false,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, Kind::SourceInvalid);
+    assert_eq!(
+        err.message,
+        "the archive's zstd stream needs a window larger than 128.0 MiB to unpack"
+    );
 }
 
 #[test]
