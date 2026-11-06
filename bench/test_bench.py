@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 
@@ -32,6 +33,20 @@ class FixtureTests(unittest.TestCase):
 
 
 class MeasurementTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("FL_BENCH_LAB_CHECKS") == "1", "needs a set-up lab")
+    def test_a_profile_without_a_rate_drops_the_last_cap(self):
+        import subprocess
+        def server_shaping():
+            return subprocess.check_output(["ip", "netns", "exec", lab.NS, "tc", "qdisc", "show", "dev",
+                                            lab.SERVER, "root"], text=True).split()
+        for name in ("poor", "lan", "home", "far", "lan"):
+            lab.profile(name)
+            rate = lab.PROFILES[name][2]
+            shown = server_shaping()
+            self.assertEqual("rate" in shown, bool(rate), (name, shown))
+            if rate:
+                self.assertIn(f"{rate}Mbit", shown, (name, shown))
+
     def test_environment_inherits_no_keys_or_settings(self):
         from unittest import mock
         inherited = dict(PATH="/usr/bin", LANG="C.UTF-8", HF_TOKEN="hf_x", HUGGING_FACE_HUB_TOKEN="hf_y",

@@ -71,9 +71,14 @@ def profile(name):
     if not (ROOT / "owned.json").exists():
         raise RuntimeError("run lab.py setup before changing a profile")
     client, server = shaping(name)
-    call(["tc", "qdisc", "replace", "dev", CLIENT, "root", *client])
-    call(["ip", "netns", "exec", NS, "tc", "qdisc", "replace", "dev", SERVER,
-          "root", *server])
+    # replacing a netem qdisc keeps any field the new one leaves out, so a rate cap would outlive
+    # a profile without one; each profile starts from no shaping instead
+    for prefix, dev, spec in (([], CLIENT, client), (["ip", "netns", "exec", NS], SERVER, server)):
+        subprocess.run([*prefix, "tc", "qdisc", "del", "dev", dev, "root"], stderr=subprocess.DEVNULL)
+        call([*prefix, "tc", "qdisc", "add", "dev", dev, "root", *spec])
+        shown = subprocess.check_output([*prefix, "tc", "qdisc", "show", "dev", dev, "root"], text=True)
+        if ("rate" in shown.split()) != ("rate" in spec):
+            raise RuntimeError(f"{dev} did not take the {name} profile: {shown.strip()}")
 
 
 def drop_caches(files):
