@@ -195,7 +195,7 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_datalad_clones_outside_the_clock_except_for_a_second_project(self):
+    def test_datalad_clones_outside_the_clock_even_for_a_second_project(self):
         from pathlib import Path
         from unittest import mock
         import shutil
@@ -214,12 +214,12 @@ class MeasurementTests(unittest.TestCase):
                 self.assertNotIn("datalad clone", tools.shell(tool.command(dict(id="s1"), work)) + (work / "command.sh").read_text())
                 tools.reset(work)
                 calls.clear()
+                (work / "project").mkdir(parents=True, exist_ok=True)
                 tool.prepare(dict(id="s5", prepared=str(root / "prepared")), work)
                 self.assertEqual(calls[0], ["datalad", "clone", str(prepared), str(work / "project")])
-                self.assertNotIn("datalad clone", (work / "command.sh").read_text())
+                self.assertEqual(calls[-1], ["datalad", "clone", str(work / "first-project"), str(work / "project")])
                 tool.command(dict(id="s5"), work)
-                self.assertIn(tools.shell(["datalad", "clone", work / "first-project", work / "project"]),
-                              (work / "command.sh").read_text())
+                self.assertNotIn("datalad clone", (work / "command.sh").read_text())
         finally:
             shutil.rmtree(root)
 

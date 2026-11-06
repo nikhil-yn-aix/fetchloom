@@ -219,15 +219,16 @@ class Datalad(Tool):
                           timeout=lab.PREPARE_TIMEOUT)
 
     def second_project(self, scenario, workdir):
+        # a second project is a clone of the first, made before the clock starts as DVC's copy is
         (workdir / "project").rename(workdir / "first-project")
-        (workdir / "project").mkdir()
+        with (workdir / "prepare.log").open("a") as log:
+            lab.run_group(["datalad", "clone", workdir / "first-project", workdir / "project"],
+                          cwd=workdir, env=self.env(workdir), stdout=log, stderr=subprocess.STDOUT,
+                          timeout=lab.PREPARE_TIMEOUT)
 
     def command(self, scenario, workdir):
-        lines = []
-        if scenario["id"] == "s5":
-            lines.append(shell(["datalad", "clone", workdir / "first-project", workdir / "project"]))
-        lines += [shell(["cd", workdir / "project"]),
-                  "git config annex.security.allowed-ip-addresses 10.77.0.2", "datalad get -J 4 data"]
+        lines = [shell(["cd", workdir / "project"]),
+                 "git config annex.security.allowed-ip-addresses 10.77.0.2", "datalad get -J 4 data"]
         return script(workdir / "command.sh", lines)
 
 

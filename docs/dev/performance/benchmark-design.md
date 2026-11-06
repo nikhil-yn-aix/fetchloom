@@ -35,7 +35,7 @@ the benchmark suite compares the time and resources needed to retrieve checked r
 | s6 | the same command again | everything in place | the cost of a no-op, paid by a notebook on every run |
 | s7 | s1 interrupted after 10 s, then run again | a partial download | bytes downloaded twice |
 
-cold runs empty every tool's cache and drop the machine's page cache; the server's files are read once after the drop, so the server is warm like a real one. warm runs keep caches and page cache. s5 and s6 first populate each client using s2 outside the clock. s5 gives fetchloom and DVC a new project; pooch returns paths in its shared cache. datalad clones the first project inside the timed command, then gets its files.
+cold runs empty every tool's cache and drop the machine's page cache; the server's files are read once after the drop, so the server is warm like a real one. warm runs keep caches and page cache. s5 and s6 first populate each client using s2 outside the clock. s5 gives fetchloom and DVC a new project and datalad a clone of the first one, all made before the clock starts; pooch returns paths in its shared cache. datalad then gets its files inside the timed command.
 
 in s7 every tool gets ctrl-c (SIGINT) at the same moment, 10 seconds into a download on the home profile; tools still running after 5 more seconds get SIGKILL. the metric is the bytes the server sent for that file across both runs, divided by its size. curl and wget use their documented resume switches; wget otherwise writes a second filename and leaves the required output partial. quick mode keeps the 256 MiB home file for this case, since a tiny file would finish before the signal.
 
@@ -51,7 +51,7 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6, s7 |
 | pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |
 | DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
-| datalad | `datalad get -J 4` from URLs registered with git-annex, in a `datalad clone` of the prepared dataset made before the clock starts, like DVC's project copy; s5 times the clone of the first project | s1 to s3, s5 to s7 |
+| datalad | `datalad get -J 4` from URLs registered with git-annex, in a `datalad clone` made before the clock starts, like DVC's project copy: of the prepared dataset, or for s5 of the first project | s1 to s3, s5 to s7 |
 
 cache locations and the system CA bundle are set explicitly. DVC analytics and hugging face telemetry are disabled explicitly. use a clean benchmark environment so unrelated credentials and settings do not affect clients. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
