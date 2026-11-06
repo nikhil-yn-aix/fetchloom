@@ -643,3 +643,85 @@ fn an_md5_checked_for_one_link_proves_nothing_for_another() {
     );
     assert_eq!(again.digest, crate::digest::sha256(&first));
 }
+
+/// takes one answer for `url` into the cache, without trying again, and says why it failed. it
+/// runs on worker threads, as fetchloom does, so timers fire while a listener holds one thread.
+fn attempt_once(net: &Net, cache: &Cache, url: &Url, on: Listener<'_>) -> Result<(), String> {
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let mut split = false;
+    let fetch = Fetch::new(url.clone());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    match runtime.block_on(net.attempt(url, &fetch, &partial, None, on, &mut split)) {
+        Ok(Answer::Stored { .. }) => Ok(()),
+        Ok(_) => Err("no file in the answer".to_owned()),
+        Err(Failure::Transient { reason, .. } | Failure::Limited { reason }) => Err(reason),
+        Err(Failure::Final(error)) => Err(error.message),
+    }
+}
+
+/// a stream held back by `FETCHLOOM_RATE` waits on this machine, not on the server. each small
+/// answer after the cap's burst waits longer than the idle deadline before its end is read.
+#[test]
+fn waiting_for_the_rate_cap_is_no_network_silence() {
+    let burst = vec![b'x'; 1024 * 1024];
+    let mut answers = vec![reply_bytes(&burst)];
+    answers.extend(std::iter::repeat_n(reply_bytes(&[b'y'; 2048]), 10));
+    let (url, _) = serve(answers);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let rate = crate::net::Rate::read(&|_| Some("8K".into())).unwrap();
+    let mut net = net(&url).with_rate(rate);
+    net.idle = std::time::Duration::from_millis(100);
+    for index in 0..11 {
+        let url = url.join(&format!("f{index}")).unwrap();
+        assert_eq!(
+            attempt_once(&net, &cache, &url, &|_| Ok(())),
+            Ok(()),
+            "{index}"
+        );
+    }
+}
+
+/// a question to the person running fetchloom holds the stream until it is answered. each body
+/// comes a moment after its head, so the stream is already waiting on its idle deadline.
+#[test]
+fn waiting_for_an_answer_is_no_network_silence() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    std::thread::spawn(move || {
+        for _ in 0..10 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 4\r\n\r\n");
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let _ = stream.write_all(b"data");
+        }
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut net = net(&url);
+    net.idle = std::time::Duration::from_millis(100);
+    let asking = |event: Event| {
+        if matches!(event, Event::Bytes(_)) {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Ok(())
+    };
+    for index in 0..10 {
+        let url = url.join(&format!("f{index}")).unwrap();
+        assert_eq!(attempt_once(&net, &cache, &url, &asking), Ok(()), "{index}");
+    }
+}

@@ -732,7 +732,6 @@ impl Net {
                 }
                 Ok(None) => break Ok(None),
                 Ok(Some(chunk)) => {
-                    idle = tokio::time::Instant::now() + self.idle;
                     if let Err(err) = self.throttle(url, chunk.len()).await {
                         break Err(err);
                     }
@@ -747,6 +746,9 @@ impl Net {
                     if batch.full() && batch.flush(sender).await.is_err() {
                         break Ok(None);
                     }
+                    // waiting on this machine, for the rate cap, the writer or an answer to a
+                    // question, is no silence from the server
+                    idle = tokio::time::Instant::now() + self.idle;
                 }
             }
         }
