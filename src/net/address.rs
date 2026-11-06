@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use hyper_util::client::proxy::matcher::Matcher;
@@ -291,9 +291,20 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || ip.is_unicast_link_local()
                 || ip
                     .to_ipv4_mapped()
+                    .or_else(|| nat64(ip))
                     .is_some_and(|mapped| is_private(IpAddr::V4(mapped)))
         }
     }
+}
+
+/// the IPv4 address a NAT64 translator reaches for `ip`: one in the well-known prefix
+/// `64:ff9b::/96`, or in the local-use `64:ff9b:1::/48` read as a /96, as translators set it up.
+fn nat64(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    let well_known = segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+    let local = segments[..3] == [0x64, 0xff9b, 1];
+    let [.., a, b, c, d] = ip.octets();
+    (well_known || local).then(|| Ipv4Addr::new(a, b, c, d))
 }
 
 #[cfg(test)]
@@ -346,6 +357,22 @@ mod tests {
             "2001:4860:4860::8888",
             "100.128.0.1",
         ] {
+            assert!(!is_private(ip(text)), "{text} is public");
+        }
+    }
+
+    #[test]
+    fn a_nat64_address_is_judged_by_the_ipv4_address_it_reaches() {
+        for text in [
+            "64:ff9b::169.254.169.254",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b::10.0.0.1",
+            "64:ff9b::127.0.0.1",
+            "64:ff9b:1::192.168.1.1",
+        ] {
+            assert!(is_private(ip(text)), "{text} is private");
+        }
+        for text in ["64:ff9b::8.8.8.8", "64:ff9b:1::188.184.98.157"] {
             assert!(!is_private(ip(text)), "{text} is public");
         }
     }
