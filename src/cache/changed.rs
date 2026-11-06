@@ -90,10 +90,10 @@ impl Cache {
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
-    /// the mark's time stays when the change was found, and it holds when `source`, the copy
-    /// replacing the object, was written, which stays out of doubt.
-    pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
-        let written = fs::metadata(source)?.modified()?;
+    /// the mark's time stays when the change was found, and it holds `written`, when the copy
+    /// that replaced the object was written, which stays out of doubt. only a finished
+    /// replacement may record it.
+    pub(super) fn mark_replaced(&self, digest: &Sha256, written: SystemTime) -> io::Result<()> {
         let folder = self.changed_folder();
         real_folder(&folder, FolderUse::Cache)?;
         self.write_atomically(

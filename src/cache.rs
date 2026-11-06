@@ -374,11 +374,23 @@ impl Cache {
                 Existing::Keep => {}
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
+                    // the mark doubts the object until the swap succeeds, so a failed repair never
+                    // makes the changed bytes look like the replacement
                     if found.is_ok() {
-                        self.mark_replaced(digest, source)?;
+                        self.mark_changed(digest)?;
                     }
+                    let written = fs::metadata(source).and_then(|metadata| metadata.modified());
                     match volume.replace(source, path) {
-                        Ok(()) => return Ok(true),
+                        Ok(()) => {
+                            // without the replacement's time the object stays in doubt and is
+                            // hashed when found, which costs time but trusts nothing changed
+                            if found.is_ok()
+                                && let Ok(written) = written
+                            {
+                                let _ = self.mark_replaced(digest, written);
+                            }
+                            return Ok(true);
+                        }
                         // another repair may have replaced the read-only destination while ours
                         // was being opened to clear its flag
                         Err(_)
@@ -915,6 +927,31 @@ pub(crate) mod tests {
         let holds = fs::read(&object).unwrap() == b"abc";
         assert_eq!(published.is_ok(), holds, "{published:?}");
         assert!(fs::metadata(&object).unwrap().permissions().readonly());
+    }
+
+    #[test]
+    fn a_failed_repair_leaves_the_changed_object_in_doubt() {
+        let (_dir, cache) = cache();
+        let digest = store(&cache, b"good").digest;
+        let object = cache.object_path(&digest);
+        rewrite(&object, b"evil");
+        seal(&object);
+        assert!(!cache.verify(&digest).unwrap());
+        let held = hold(&object);
+        let mut again = cache.new_object().unwrap();
+        again.write_all(b"good").unwrap();
+        let published = again.seal(true).unwrap().publish(&cache);
+        drop(held);
+        // root on unix can replace the changed object despite its folder's permissions
+        if fs::read(&object).unwrap() == b"good" {
+            return;
+        }
+        assert!(published.is_err());
+        assert_eq!(cache.find(&digest, Some(4)), None);
+        assert!(matches!(
+            cache.trusted(&digest, Some(4), &cache.doubts()),
+            Ok(None)
+        ));
     }
 
     #[test]
