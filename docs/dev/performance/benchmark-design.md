@@ -55,7 +55,7 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 
 cache locations and the system CA bundle are set explicitly. DVC analytics and hugging face telemetry are disabled explicitly. use a clean benchmark environment so unrelated credentials and settings do not affect clients. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
-for s4 the downloaders run `unzip -q` after the check, in the same timed command. DVC and datalad track files rather than archives, so they sit s4 out. s6 uses each tool's own way to skip work: curl `-z` asks the server whether each file changed, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
+for s4 the downloaders run `unzip -q` after the check, in the same timed command. DVC and datalad track files rather than archives, so they sit s4 out. s6 uses each tool's own way to skip work: curl `-z` asks the server whether each file changed since the local copy was written, and nginx runs with `if_modified_since before` so any later date gets a 304, wget `-nc` keeps existing files, aria2c rechecks with `--check-integrity`, pooch rehashes, DVC and datalad report nothing to do.
 
 live runs fetch real public datasets, 5 interleaved rounds each with empty caches, against each service's own tool:
 

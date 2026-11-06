@@ -47,6 +47,26 @@ class MeasurementTests(unittest.TestCase):
             if rate:
                 self.assertIn(f"{rate}Mbit", shown, (name, shown))
 
+    @unittest.skipUnless(os.environ.get("FL_BENCH_LAB_CHECKS") == "1", "needs a set-up lab")
+    def test_server_answers_a_later_if_modified_since_with_not_modified(self):
+        # curl -z sends the local file's time, which is when it was downloaded, not the server's time
+        from email.utils import formatdate
+        import time
+        import urllib.error
+        import urllib.request
+        path = lab.ROOT / "www" / "if-modified-since"
+        path.write_text("fl-bench\n")
+        try:
+            os.utime(path, (time.time() - 3600, time.time() - 3600))
+            request = urllib.request.Request("https://lab.flb/if-modified-since",
+                                             headers={"If-Modified-Since": formatdate(time.time() - 60, usegmt=True)})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                opener.open(request, timeout=5).close()
+            self.assertEqual(caught.exception.code, 304)
+        finally:
+            path.unlink()
+
     def test_environment_inherits_no_keys_or_settings(self):
         from unittest import mock
         inherited = dict(PATH="/usr/bin", LANG="C.UTF-8", HF_TOKEN="hf_x", HUGGING_FACE_HUB_TOKEN="hf_y",

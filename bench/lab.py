@@ -189,6 +189,9 @@ http {{
         ssl_certificate {cert}/server.crt;
         ssl_certificate_key {cert}/server.key;
         root {ROOT}/www;
+        # curl -z sends its own file's time, which is when it downloaded the file; the default
+        # exact match would answer that with the whole body again
+        if_modified_since before;
     }}
 }}
 '''
