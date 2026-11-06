@@ -271,7 +271,7 @@ def render(results, repo):
             for tool, entry in summaries.items():
                 value = entry["download_ratio"]
                 lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
-            lines.append("\nwall time is the second attempt. bytes cover both attempts; interruption is at 10 s, with a 5 s kill grace period.\n")
+            lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both; interruption is at 10 s, with a 5 s kill grace period.\n")
         for dark in (False, True):
             chart(charts / f"{name}{'-dark' if dark else ''}.svg", title, subtitle, summaries, dark)
             if profile == "lan" and verdict(summaries):

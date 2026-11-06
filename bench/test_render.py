@@ -25,6 +25,25 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(render.story("s4", 10000, 4096),
                          "a zip of 10,000 files of 4 KiB each, downloaded, checked and unpacked")
 
+    def test_resume_note_covers_cpu_and_memory_of_both_attempts(self):
+        import json
+        from pathlib import Path
+        import shutil
+        import render
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
+        try:
+            record = dict(kind="lab", scenario="s7", profile="home", filesystem="ext4", tool="fetchloom",
+                          quick=True, count=1, file_size=4, status="passed", wall_seconds=1,
+                          download_ratio=1.0)
+            (root / "runs.jsonl").write_text(json.dumps(record))
+            render.render(root, root / "report")
+            page = (root / "report" / "docs" / "dev" / "performance" / "benchmarks.md").read_text()
+            self.assertIn("wall time is the second attempt. CPU adds both attempts, peak memory is the larger "
+                          "of the two and bytes cover both", page)
+        finally:
+            shutil.rmtree(root)
+
     def test_renderer_rejects_mixed_smoke_and_full_conditions(self):
         import json
         from pathlib import Path
