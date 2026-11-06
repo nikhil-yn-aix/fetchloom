@@ -664,14 +664,15 @@ fn vouch(
 }
 
 /// the folders the links of one run filled. windows and macos see `Data` and `data` as one
-/// folder, so they are compared as [`name::fold`] folds them, on every system alike.
+/// folder, so they are compared as [`name::fold`] folds them, on every system alike. a folder
+/// reached through a link or junction is the folder it leads to.
 #[derive(Default)]
 struct Taken(std::collections::HashSet<String>);
 
 impl Taken {
     fn key(folder: &Path) -> String {
         let whole = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
-        name::fold(&whole.to_string_lossy())
+        name::fold(&resolved(&whole).to_string_lossy())
     }
 
     fn holds(&self, folder: &Path) -> bool {
@@ -681,6 +682,27 @@ impl Taken {
     /// takes `folder` for one link, or says another link took it already.
     fn claim(&mut self, folder: &Path) -> bool {
         self.0.insert(Self::key(folder))
+    }
+}
+
+/// `path` with the longest part of it that exists resolved, links and all, and the rest kept.
+fn resolved(path: &Path) -> PathBuf {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            return missing
+                .iter()
+                .rev()
+                .fold(real, |whole, part| whole.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(part)) => {
+                missing.push(part);
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
     }
 }
 

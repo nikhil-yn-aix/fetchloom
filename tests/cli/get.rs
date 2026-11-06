@@ -968,3 +968,42 @@ fn links_named_alike_each_get_their_own_folder() -> Result {
     );
     Ok(())
 }
+
+/// a folder that is another link's folder through a link or junction is that folder, so a
+/// second link of the run cannot replace the files the first one put there.
+#[test]
+fn a_folder_reached_through_a_link_is_not_filled_twice() -> Result {
+    let sandbox = Sandbox::new()?;
+    let one = sandbox.work().join("one");
+    fs::create_dir_all(&one)?;
+    if !link_folder(&one, &sandbox.work().join("two")) {
+        return Ok(());
+    }
+    let zipped = |bytes: &[u8]| -> Result<Vec<u8>> {
+        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        archive.start_file("data.csv", zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut archive, bytes)?;
+        Ok(archive.finish()?.into_inner())
+    };
+    let first = Server::start("/one.zip", vec![file(&zipped(IRIS)?, "\"one\"")])?;
+    let second = Server::start("/two.zip", vec![file(&zipped(WINE)?, "\"two\"")])?;
+    let output = sandbox.run(&["--json", "get", &first.url, &second.url])?;
+    assert!(output.status.success(), "{}", text(&output.stdout)?);
+    assert_eq!(fs::read(one.join("data.csv"))?, IRIS);
+    assert_eq!(
+        fs::read(sandbox.work().join("two-2").join("data.csv"))?,
+        WINE
+    );
+    let document = json(&output)?;
+    let folders: Vec<&str> = document["result"]["items"]
+        .as_array()
+        .ok_or("no items")?
+        .iter()
+        .filter_map(|item| item["folder"].as_str())
+        .collect();
+    assert!(
+        folders.len() == 2 && folders[0].ends_with("one") && folders[1].ends_with("two-2"),
+        "{folders:?}"
+    );
+    Ok(())
+}
