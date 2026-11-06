@@ -688,39 +688,45 @@ fn waiting_for_the_rate_cap_is_no_network_silence() {
     }
 }
 
-/// a question to the person running fetchloom holds the stream until it is answered. each body
-/// comes a moment after its head, so the stream is already waiting on its idle deadline.
+/// a question to the person running fetchloom holds the stream until it is answered, longer than
+/// the idle deadline. the rest of the body comes just after the answer, so only a deadline that
+/// restarts after the question finds it in time.
 #[test]
 fn waiting_for_an_answer_is_no_network_silence() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
     std::thread::spawn(move || {
-        for _ in 0..10 {
+        for _ in 0..3 {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
+            let _ = stream.set_nodelay(true);
             let mut head = Vec::new();
             let mut byte = [0u8; 1];
             while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
                 head.push(byte[0]);
             }
             let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 4\r\n\r\n");
-            std::thread::sleep(std::time::Duration::from_millis(30));
-            let _ = stream.write_all(b"data");
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 4\r\n\r\nda");
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            let _ = stream.write_all(b"ta");
         }
     });
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let mut net = net(&url);
-    net.idle = std::time::Duration::from_millis(100);
+    net.idle = std::time::Duration::from_millis(400);
+    let first = std::sync::atomic::AtomicBool::new(true);
     let asking = |event: Event| {
-        if matches!(event, Event::Bytes(_)) {
-            std::thread::sleep(std::time::Duration::from_millis(250));
+        if matches!(event, Event::Bytes(_))
+            && first.swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(800));
         }
         Ok(())
     };
-    for index in 0..10 {
+    for index in 0..3 {
+        first.store(true, std::sync::atomic::Ordering::Relaxed);
         let url = url.join(&format!("f{index}")).unwrap();
         assert_eq!(attempt_once(&net, &cache, &url, &asking), Ok(()), "{index}");
     }
