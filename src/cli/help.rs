@@ -274,6 +274,7 @@ fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
 /// the error for a topic that is neither `concepts` nor a command, suggesting the closest one.
 fn unknown(topic: &[String]) -> Error {
     let asked = topic.join(" ");
+    let shown = crate::net::mask_query(&asked);
     let mut topics: Vec<String> = TOPICS.iter().map(|(name, _)| (*name).to_owned()).collect();
     for command in args::Args::command()
         .get_subcommands()
@@ -289,7 +290,7 @@ fn unknown(topic: &[String]) -> Error {
     }
     let error = Error::new(
         Kind::Usage,
-        format!("there is no help topic called \"{asked}\""),
+        format!("there is no help topic called \"{shown}\""),
     );
     match name::closest(&asked, topics.iter().map(String::as_str)) {
         Some(best) => error.help(format!("did you mean `fetchloom help {best}`?")),

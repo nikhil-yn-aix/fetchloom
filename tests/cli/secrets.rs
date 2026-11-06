@@ -157,3 +157,17 @@ fn debug_logs_never_show_a_token_or_a_stored_key() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn an_unknown_help_topic_never_shows_the_token() -> Result {
+    let sandbox = Sandbox::new()?;
+    let link = "https://example.org/file?token=abc123";
+    for args in [vec!["help", link], vec!["--json", "help", link]] {
+        let output = sandbox.run(&args)?;
+        let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+        assert_eq!(output.status.code(), Some(2), "{shown}");
+        assert!(!shown.contains("abc123"), "{shown}");
+        assert!(shown.contains("token=***"), "{shown}");
+    }
+    Ok(())
+}
