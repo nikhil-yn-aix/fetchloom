@@ -41,7 +41,7 @@ flowchart TD
 
 ### safe object access
 
-lookup checks that an object is a plain file and matches the expected size. a writable object, or an object no newer than the time its change mark puts in doubt, is doubtful and must be hashed before trusted placement. a mark's file time is when the change was found; a repair writes the replacement copy's time inside it, and doubt then reaches only objects written before that. intact writable objects are sealed again; damaged objects remain marked until verified replacement bytes arrive.
+lookup checks that an object is a plain file and matches the expected size. a writable object, or an object no newer than the time its change mark puts in doubt, is doubtful and must be hashed before trusted placement. a mark's file time is when the change was found; a repair writes the replacement copy's time inside it only once the replacement holds the object's name, and doubt then reaches only objects written before that; until then, and after a failed repair, the empty mark keeps the old object in doubt. intact writable objects are sealed again; damaged objects remain marked until verified replacement bytes arrive.
 
 object hashing, gc and `cache verify` hashing, and copy input use `read_unfollowed`, and every gc removal first checks that no folder between it and the cache root became a link: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
 

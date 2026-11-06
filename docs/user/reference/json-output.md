@@ -8,7 +8,7 @@ fetchloom --json --yes sync
 fetchloom --json status
 ```
 
-`--json` prints one document on stdout, including usage errors, welcome, version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. without `--json`, help is text. an unknown help topic is a usage error with a null command. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
+`--json` prints one document on stdout, including usage errors, welcome, version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. without `--json`, help is text. an unknown help topic is a usage error with a null command, its topic shown with link secrets masked. explicit debug logging may also write stderr. JSON mode never prompts; use `--yes` when approval is needed.
 
 | field | value |
 |---|---|
