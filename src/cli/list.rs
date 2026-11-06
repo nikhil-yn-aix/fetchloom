@@ -116,7 +116,12 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
                 reference: crate::net::mask_query(&entry.reference).into_owned(),
                 resolved: locked.map(|locked| locked.resolved.clone()),
                 files: locked.map(|locked| locked.files.len() as u64),
-                bytes: locked.map(|locked| locked.files.iter().map(|file| file.size).sum()),
+                bytes: locked.map(|locked| {
+                    locked
+                        .files
+                        .iter()
+                        .fold(0, |total: u64, file| total.saturating_add(file.size))
+                }),
                 folder: plan::folder(manifest, name),
                 title: locked.and_then(|locked| locked.title.clone()),
                 license: locked.and_then(|locked| locked.license.clone()),

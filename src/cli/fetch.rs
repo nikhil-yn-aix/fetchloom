@@ -81,10 +81,13 @@ impl Overall {
                 .bar("Downloading", units::count(count as u64, "file", "files"));
             // what the sources told now, and each server's size as its download starts
             let known: Vec<u64> = sizes().flatten().collect();
-            bar.start((!known.is_empty()).then(|| known.iter().sum()), 0);
+            bar.start(
+                (!known.is_empty()).then(|| known.iter().copied().fold(0, u64::saturating_add)),
+                0,
+            );
             bar
         });
-        let length = std::sync::Mutex::new(sizes().flatten().sum());
+        let length = std::sync::Mutex::new(sizes().flatten().fold(0, u64::saturating_add));
         let what = match jobs {
             [only] => only.label.clone(),
             _ => units::count(count as u64, "file", "files"),
@@ -110,7 +113,7 @@ impl Overall {
                 .length
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *length += bytes;
+            *length = length.saturating_add(bytes);
             bar.length(*length);
         }
         self.ticker.sized(bytes);

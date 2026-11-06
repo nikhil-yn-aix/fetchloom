@@ -788,7 +788,10 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         .iter()
         .filter(|job| job.fetch.cached(cache).is_none())
         .collect();
-    let size: u64 = missing.iter().filter_map(|job| job.fetch.expect.size).sum();
+    let size = missing
+        .iter()
+        .filter_map(|job| job.fetch.expect.size)
+        .fold(0, u64::saturating_add);
     super::confirm(
         &context.output,
         context.yes,

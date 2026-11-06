@@ -355,7 +355,7 @@ impl<'a> Loop<'a> {
             .iter()
             .filter(|job| !in_cache(&self.cache, &job.fetch))
             .filter_map(|job| job.fetch.expect.size)
-            .sum();
+            .fold(0, u64::saturating_add);
         super::confirm(
             &self.context.output,
             self.context.yes,
@@ -644,7 +644,10 @@ pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
             .map(|title| output.clip(title, TITLE)),
     );
     facts.push(units::count(listing.files.len() as u64, "file", "files"));
-    let size: Option<u64> = listing.files.iter().map(|file| file.size).sum();
+    let size = listing
+        .files
+        .iter()
+        .try_fold(0, |total: u64, file| Some(total.saturating_add(file.size?)));
     facts.extend(
         size.filter(|_| listing.unavailable.is_empty())
             .map(units::size),

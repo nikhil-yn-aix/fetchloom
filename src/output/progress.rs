@@ -307,7 +307,11 @@ impl Ticker {
                 })
                 .is_ok()
         {
-            shared.total.fetch_add(bytes, Ordering::Relaxed);
+            let _ = shared
+                .total
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                    Some(total.saturating_add(bytes))
+                });
         }
     }
 }

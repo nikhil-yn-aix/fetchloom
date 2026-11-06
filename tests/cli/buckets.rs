@@ -396,3 +396,48 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
     assert_eq!(large.targets(), [s3_listing(base, "data/", None)]);
     Ok(())
 }
+
+#[test]
+fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/audit-bucket.s3.amazonaws.com/";
+    let huge = 1 << 63;
+    let routes = stated_bucket(
+        base,
+        &[
+            ("data/a.bin", md5(b"a"), huge),
+            ("data/b.bin", md5(b"b"), huge),
+        ],
+    )?;
+    let listing = s3_listing(base, "data/", None);
+
+    let got = command(
+        &sandbox,
+        &routes,
+        &["--json", "get", "s3://audit-bucket/data/", "-o", "out"],
+    )
+    .output()?;
+    assert_eq!(got.status.code(), Some(1), "{}", text(&got.stderr)?);
+    assert_eq!(json(&got)?["errors"][0]["kind"], "unconfirmed");
+    let added = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "s3://audit-bucket/data/"],
+    )
+    .output()?;
+    assert_eq!(added.status.code(), Some(1), "{}", text(&added.stderr)?);
+    assert_eq!(json(&added)?["errors"][0]["kind"], "unconfirmed");
+    assert!(routes.targets().iter().all(|target| *target == listing));
+
+    // approved, the totals reach the progress lines, and only the missing files fail
+    let approved = command(
+        &sandbox,
+        &routes,
+        &["get", "s3://audit-bucket/data/", "-o", "approved", "--yes"],
+    )
+    .output()?;
+    let stderr = text(&approved.stderr)?;
+    assert_eq!(approved.status.code(), Some(10), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+    Ok(())
+}

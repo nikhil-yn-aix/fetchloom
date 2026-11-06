@@ -372,7 +372,7 @@ impl Output {
         let known = sizes
             .into_iter()
             .fold((0, 0), |(total, unknown), size| match size {
-                Some(size) => (total + size, unknown),
+                Some(size) => (u64::saturating_add(total, size), unknown),
                 None => (total, unknown + 1),
             });
         let color = self.style.color;
