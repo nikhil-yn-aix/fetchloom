@@ -1,5 +1,7 @@
 //! sources: where datasets live, how a person names one, and how each lists its files. a source
-//! never downloads file bodies. it says what to download and how to check it.
+//! says what to download and how to check it, and leaves file bodies to the downloader; the one
+//! exception is kaggle, which reads a competition's smallest file to learn whether its rules
+//! were accepted.
 
 mod bucket;
 mod dataverse;
