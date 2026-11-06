@@ -77,13 +77,17 @@ fn compression(head: &[u8]) -> Option<Format> {
 }
 
 /// whether the stream decompresses to a tar header. a stream that fails to decompress is no
-/// archive.
+/// archive, unless xz asks for more memory than unpacking allows: unpacking then refuses it and
+/// says why, rather than a tar staying packed unnoticed.
 fn holds_tar(format: Format, file: File) -> bool {
     let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file)) else {
         return false;
     };
     let mut block = [0; BLOCK];
-    read_up_to(&mut decoded, &mut block).is_ok_and(|len| is_tar_header(&block[..len]))
+    match read_up_to(&mut decoded, &mut block) {
+        Ok(len) => is_tar_header(&block[..len]),
+        Err(err) => tar::needs_too_much_memory(&err),
+    }
 }
 
 /// a tar header carries the ustar magic or, in the oldest tars, only a checksum that adds up.
@@ -128,7 +132,7 @@ fn read_up_to(reader: &mut impl Read, buffer: &mut [u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::samples::{Scratch, compress, tar_of, zip_of};
+    use crate::archive::samples::{Scratch, compress, tar_of, xz_asking_for, zip_of};
 
     fn detected(name: &str, bytes: &[u8]) -> Detected {
         let scratch = Scratch::new();
@@ -177,6 +181,13 @@ mod tests {
             detected("reads.fastq.gz", &compress(Format::TarGz, &fastq)),
             Detected::Plain
         );
+    }
+
+    #[test]
+    fn an_xz_stream_too_costly_to_read_is_left_for_unpacking_to_refuse() {
+        let tar = tar_of(&[("a.csv", b"1,2\n")]);
+        let packed = xz_asking_for(&compress(Format::TarXz, &tar), 34);
+        assert_eq!(detected("data", &packed), Detected::Archive(Format::TarXz));
     }
 
     #[test]

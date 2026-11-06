@@ -9,6 +9,7 @@ use ::tar::{Archive, Entry, EntryType};
 use bzip2::bufread::MultiBzDecoder;
 use flate2::bufread::MultiGzDecoder;
 use liblzma::bufread::XzDecoder;
+use liblzma::stream::{CONCATENATED, Stream};
 
 use super::guard::{Guard, Meter};
 use super::names::Named;
@@ -20,6 +21,11 @@ use crate::units;
 /// records. it holds long names and pax records in memory whole.
 const HEADERS_CAP: u64 = 16 << 20;
 
+/// the most memory an xz stream may ask for to be decompressed. `xz -9e` streams ask for 65 MiB,
+/// while a header of a few bytes may ask for 4 GiB before any output. zstd frames have a bound
+/// of their own: libzstd refuses a window above 128 MiB unless asked to allow it.
+pub(super) const XZ_MEMORY: u64 = 256 << 20;
+
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
 /// to end, as pigz, bgzip and pbzip2 write them.
 pub(super) fn decompressed<'r>(
@@ -28,11 +34,22 @@ pub(super) fn decompressed<'r>(
 ) -> io::Result<Box<dyn Read + 'r>> {
     Ok(match format {
         Format::TarGz => Box::new(MultiGzDecoder::new(compressed)),
-        Format::TarXz => Box::new(XzDecoder::new_multi_decoder(compressed)),
+        Format::TarXz => Box::new(XzDecoder::new_stream(
+            compressed,
+            Stream::new_auto_decoder(XZ_MEMORY, CONCATENATED)?,
+        )),
         Format::TarZst => Box::new(zstd::stream::read::Decoder::with_buffer(compressed)?),
         Format::TarBz2 => Box::new(MultiBzDecoder::new(compressed)),
         Format::Tar | Format::Zip => Box::new(compressed),
     })
+}
+
+/// whether `err` is an xz stream refused for asking more than [`XZ_MEMORY`] to be decompressed.
+pub(super) fn needs_too_much_memory(err: &(dyn std::error::Error + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .and_then(|inner| inner.downcast_ref::<liblzma::stream::Error>())
+        .is_some_and(|inner| *inner == liblzma::stream::Error::MemLimit)
 }
 
 pub(super) fn unpack(
@@ -196,7 +213,9 @@ mod tests {
     use ::tar::{Builder, EntryType, Header};
 
     use super::super::Format;
-    use super::super::samples::{Scratch, compress, pax, raw_entry, tar_of};
+    use super::super::samples::{
+        Scratch, compress, pax, raw_entry, tar_of, xz_asking_for, zstd_asking_for,
+    };
     use crate::digest;
     use crate::error::Kind;
 
@@ -404,5 +423,32 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    #[test]
+    fn an_xz_stream_asking_for_too_much_memory_is_refused() {
+        // a 512 MiB dictionary, twice what an xz stream may ask for
+        let packed = xz_asking_for(&compress(Format::TarXz, &tar_of(FILES)), 34);
+        let err = Scratch::new().refuse(Format::TarXz, &packed);
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert_eq!(
+            err.message,
+            "the archive's xz stream needs more than 256.0 MiB of memory to unpack"
+        );
+        let within = xz_asking_for(&compress(Format::TarXz, &tar_of(FILES)), 18);
+        assert_eq!(paths(&Scratch::new(), Format::TarXz, &within).len(), 3);
+    }
+
+    #[test]
+    fn a_zstd_frame_asking_for_too_much_memory_is_refused() {
+        let packed = zstd_asking_for(31, &tar_of(FILES));
+        let err = Scratch::new().refuse(Format::TarZst, &packed);
+        assert!(
+            err.message.starts_with("the archive is damaged"),
+            "{}",
+            err.message
+        );
+        let within = zstd_asking_for(20, &tar_of(FILES));
+        assert_eq!(paths(&Scratch::new(), Format::TarZst, &within).len(), 3);
     }
 }

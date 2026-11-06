@@ -155,3 +155,37 @@ pub(super) fn compress(format: Format, bytes: &[u8]) -> Vec<u8> {
         }
     }
 }
+
+/// `xz`, an xz stream holding one LZMA2 block, with that block's dictionary property set to
+/// `property`, which says how much memory decoding needs, and its header checksum to match.
+pub(super) fn xz_asking_for(xz: &[u8], property: u8) -> Vec<u8> {
+    let mut xz = xz.to_vec();
+    // the block header follows the 12-byte stream header and ends with its CRC32
+    let start = 12;
+    let size = (usize::from(xz[start]) + 1) * 4;
+    let flags = xz[start + 1];
+    let mut at = start + 2;
+    for present in [0x40, 0x80] {
+        if flags & present != 0 {
+            while xz[at] & 0x80 != 0 {
+                at += 1;
+            }
+            at += 1;
+        }
+    }
+    assert_eq!(xz[at..at + 2], [0x21, 0x01], "one LZMA2 filter");
+    xz[at + 2] = property;
+    let mut crc = flate2::Crc::new();
+    crc.update(&xz[start..start + size - 4]);
+    xz[start + size - 4..start + size].copy_from_slice(&crc.sum().to_le_bytes());
+    xz
+}
+
+/// a zstd frame whose header asks for a window of 2^`log` bytes, holding `bytes` in one raw block.
+pub(super) fn zstd_asking_for(log: u8, bytes: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0x28, 0xb5, 0x2f, 0xfd, 0x00, (log - 10) << 3];
+    let header = (u32::try_from(bytes.len()).unwrap() << 3) | 1;
+    frame.extend_from_slice(&header.to_le_bytes()[..3]);
+    frame.extend_from_slice(bytes);
+    frame
+}

@@ -206,8 +206,15 @@ fn refused_member(path: &str, reason: &str) -> Error {
     ))
 }
 
-/// an archive that could not be read to the end: cut short, corrupted or not what it seemed.
-fn damaged(at: Option<&str>, err: &dyn std::fmt::Display) -> Error {
+/// an archive that could not be read to the end: cut short, corrupted or not what it seemed, or
+/// refused when its xz stream asks for too much memory.
+fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
+    if tar::needs_too_much_memory(err) {
+        return refused(format!(
+            "the archive's xz stream needs more than {} of memory to unpack",
+            crate::units::size(tar::XZ_MEMORY)
+        ));
+    }
     let message = match at {
         Some(path) => format!("the archive is damaged at \"{path}\": {err}"),
         None => format!("the archive is damaged: {err}"),
