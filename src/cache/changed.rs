@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Cache, hash_object};
 use crate::digest::Sha256;
@@ -24,9 +24,9 @@ pub(crate) struct Doubt {
 
 impl Cache {
     /// the object for `digest` when the cache holds it, with `size` when one is known, and its
-    /// bytes can be trusted. a mark in `marks` at least as new as the object puts it in doubt,
-    /// as does a writable flag. intact writable objects are sealed again; changed ones are
-    /// marked and left at their names until a fetched copy replaces them.
+    /// bytes can be trusted. a mark in `marks`, from [`Cache::doubts`], at least as new as the
+    /// object puts it in doubt, as does a writable flag. intact writable objects are sealed
+    /// again; changed ones are marked and left at their names until a fetched copy replaces them.
     pub(crate) fn trusted(
         &self,
         digest: &Sha256,
@@ -90,23 +90,39 @@ impl Cache {
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
-    /// dates it before `source` was written so the replacement stays out of doubt, by three of
-    /// FAT's two second steps: the mark's own time may round up one step and doubt allows another.
+    /// the mark's time stays when the change was found, and it holds when `source`, the copy
+    /// replacing the object, was written, which stays out of doubt.
     pub(super) fn mark_replaced(&self, digest: &Sha256, source: &Path) -> io::Result<()> {
         let written = fs::metadata(source)?.modified()?;
-        self.mark_changed(digest)?;
-        let before = written
-            .checked_sub(Duration::from_secs(6))
-            .unwrap_or(written);
-        fs::File::options()
-            .write(true)
-            .open(self.changed_folder().join(digest.hex()))?
-            .set_modified(before)
+        let folder = self.changed_folder();
+        real_folder(&folder, FolderUse::Cache)?;
+        self.write_atomically(
+            &folder.join(digest.hex()),
+            nanos(written).to_string().as_bytes(),
+        )
     }
 
     /// every object found changed, with when it was found, in nanoseconds since 1970 like the
     /// times a project records for its files.
+    #[cfg(test)]
     pub(crate) fn changed(&self) -> HashMap<Sha256, u64> {
+        self.marks()
+            .into_iter()
+            .map(|(digest, mark)| (digest, mark.found))
+            .collect()
+    }
+
+    /// every object found changed, with the time an object of its name must be newer than to
+    /// be out of doubt, for [`Cache::trusted`].
+    pub(crate) fn doubts(&self) -> HashMap<Sha256, u64> {
+        self.marks()
+            .into_iter()
+            .map(|(digest, mark)| (digest, mark.doubt_since()))
+            .collect()
+    }
+
+    /// every object found changed, with its mark.
+    pub(crate) fn marks(&self) -> HashMap<Sha256, Mark> {
         let folder = self.changed_folder();
         if !fs::symlink_metadata(&folder).is_ok_and(|metadata| {
             let kind = metadata.file_type();
@@ -123,8 +139,7 @@ impl Cache {
                     return None;
                 }
                 let digest = Sha256::from_hex(&entry.file_name().to_string_lossy())?;
-                let found = entry.metadata().ok()?.modified().ok()?;
-                Some((digest, nanos(found)))
+                Some((digest, Mark::read(&entry.path(), &entry.metadata().ok()?)?))
             })
             .collect()
     }
@@ -169,16 +184,44 @@ impl Cache {
         Ok(())
     }
 
+    /// the time the object for `digest` must be newer than to be out of doubt, when it is marked.
     pub(super) fn changed_at(&self, digest: &Sha256) -> Option<u64> {
-        fs::metadata(self.changed_folder().join(digest.hex()))
-            .ok()?
-            .modified()
-            .ok()
-            .map(nanos)
+        let path = self.changed_folder().join(digest.hex());
+        Some(Mark::read(&path, &fs::metadata(&path).ok()?)?.doubt_since())
     }
 
     fn changed_folder(&self) -> PathBuf {
         self.root.join("changed")
+    }
+}
+
+/// the record that an object no longer held its bytes, in nanoseconds since 1970.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Mark {
+    /// when the change was found, which projects compare with when they last checked a link.
+    pub(crate) found: u64,
+    /// when the copy a repair put in place of the object was written. a hardlink to that copy
+    /// shares its time.
+    pub(crate) replacement: Option<u64>,
+}
+
+impl Mark {
+    fn read(path: &Path, metadata: &fs::Metadata) -> Option<Mark> {
+        let replacement = fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse().ok());
+        Some(Mark {
+            found: nanos(metadata.modified().ok()?),
+            replacement,
+        })
+    }
+
+    /// the time an object of the mark's name must be newer than to be out of doubt. a repaired
+    /// object counts from before its copy was written, by three of FAT's two second steps: its
+    /// time may round up one step and doubt allows another.
+    fn doubt_since(self) -> u64 {
+        self.replacement
+            .map_or(self.found, |written| written.saturating_sub(3 * COARSE))
     }
 }
 

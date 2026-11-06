@@ -722,7 +722,7 @@ pub(crate) mod tests {
             let other = Cache::open(cache.root().to_path_buf()).unwrap();
             for run in [&cache, &other] {
                 assert!(
-                    run.trusted(&stored.digest, Some(4), &run.changed())
+                    run.trusted(&stored.digest, Some(4), &run.doubts())
                         .unwrap()
                         .is_none()
                 );
@@ -765,7 +765,8 @@ pub(crate) mod tests {
                         .new
                 );
                 assert_eq!(fs::read(&object).unwrap(), b"good");
-                let marked = UNIX_EPOCH + Duration::from_nanos(cache.changed()[&stored.digest]);
+                let marked =
+                    UNIX_EPOCH + Duration::from_nanos(cache.changed_at(&stored.digest).unwrap());
                 assert!(marked < fs::metadata(&object).unwrap().modified().unwrap());
                 marked
             };
@@ -773,6 +774,44 @@ pub(crate) mod tests {
             let first = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
             let second = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_010));
             assert!(second > first, "another corruption needs a fresh mark");
+        }
+    }
+
+    /// a project that last checked its hardlink just before the corruption was found must still
+    /// learn of it after a repair, while the repaired object itself stays out of doubt.
+    #[test]
+    fn a_repair_still_tells_projects_checked_before_it() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        for (dir, cache) in [cache(), fat()] {
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            let checked = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let checked = u64::try_from(checked).unwrap();
+            rewrite(&object, b"evil");
+            seal(&object);
+            let source = dir.path().join("repair");
+            fs::write(&source, b"good").unwrap();
+            seal(&source);
+            assert!(
+                cache
+                    .link_object(&source, stored.digest, 4, None)
+                    .unwrap()
+                    .new
+            );
+            let found = cache.changed()[&stored.digest];
+            assert!(
+                may_follow(found, checked),
+                "the mark must date from the repair, not before it"
+            );
+            let metadata = fs::metadata(&object).unwrap();
+            assert!(!changed::doubted(
+                &metadata,
+                cache.changed_at(&stored.digest)
+            ));
         }
     }
 

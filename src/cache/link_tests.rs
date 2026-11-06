@@ -312,7 +312,7 @@ fn trusting_never_hashes_an_object_swapped_for_a_symlink() {
     fs::rename(&object, dir.path().join("original")).unwrap();
     std::os::unix::fs::symlink(&outside, &object).unwrap();
 
-    let found = cache.trusted(&stored.digest, Some(4), &cache.changed());
+    let found = cache.trusted(&stored.digest, Some(4), &cache.doubts());
 
     assert!(!matches!(found, Ok(Some(_))));
     assert_eq!(fs::read(&outside).unwrap(), b"good");

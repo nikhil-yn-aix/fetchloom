@@ -200,10 +200,12 @@ impl Survey {
     /// knew them to hold their bytes, while they still show the size and time they were placed
     /// with, so the mark is the only sign of an edit made through another project. the link may also name
     /// an older copy of the object than the one that changed, so only hashing settles it. a mark
-    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down.
+    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down. a
+    /// link sharing the time of the copy a repair put in place is that copy, which the cache
+    /// trusts.
     pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
-        let changed = cache.changed();
-        if changed.is_empty() {
+        let marks = cache.marks();
+        if marks.is_empty() {
             return Vec::new();
         }
         self.state
@@ -211,8 +213,9 @@ impl Survey {
             .iter()
             .filter(|(path, placed)| {
                 placed.method == Method::Hardlink
-                    && changed.get(&placed.sha256).is_some_and(|found| {
-                        cache::may_follow(*found, placed.look.modified.max(placed.checked))
+                    && marks.get(&placed.sha256).is_some_and(|mark| {
+                        cache::may_follow(mark.found, placed.look.modified.max(placed.checked))
+                            && mark.replacement != Some(placed.look.modified)
                     })
                     && self.disk.get(*path) == Some(&placed.look)
                     && !self.edited.contains(*path)
@@ -597,6 +600,59 @@ mod tests {
                 "{seconds}"
             );
         }
+    }
+
+    /// a repair replaces a changed object. its mark must still reach a link to the old copy that
+    /// was checked before the change was found, while a link to the new copy stays trusted.
+    #[test]
+    fn a_repair_doubts_links_to_the_old_copy_alone() {
+        use crate::cache::tests::{hardlinks, seal, store};
+
+        let dir = tempfile::tempdir().unwrap();
+        if !hardlinks(dir.path()) {
+            return;
+        }
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let long_ago = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+        let mut permissions = fs::metadata(&object).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test edits a cached object as a writable hardlink would"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(&object, permissions).unwrap();
+        let set_time = || {
+            fs::File::options()
+                .write(true)
+                .open(&object)
+                .unwrap()
+                .set_modified(long_ago)
+                .unwrap();
+        };
+        set_time();
+        fs::hard_link(&object, project.root.join("data/old")).unwrap();
+        let mut old = record(&project.root, "data/old", b"good", Method::Hardlink);
+        // the scan of the sync that repairs, and the last check of the old link, come first
+        let checked = nanos(SystemTime::now());
+        old.checked = checked;
+        // the old copy changes keeping its size and time, then a fresh download replaces it
+        fs::write(&object, b"evil").unwrap();
+        set_time();
+        seal(&object);
+        assert!(store(&cache, b"good").new);
+        fs::hard_link(&object, project.root.join("data/new")).unwrap();
+        let mut new = record(&project.root, "data/new", b"good", Method::Hardlink);
+        new.checked = checked;
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        survey.state.files.insert("data/old".to_owned(), old);
+        survey.state.files.insert("data/new".to_owned(), new);
+        assert_eq!(survey.doubted(&cache), ["data/old"]);
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default

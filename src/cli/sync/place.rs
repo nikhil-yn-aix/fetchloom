@@ -186,7 +186,7 @@ impl<'a> Placing<'a> {
     /// object a mark puts in doubt is hashed first, and changed bytes are listed for replacement.
     /// a failed read, seal or change mark stops the run.
     pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
-        let marks = cache.changed();
+        let marks = cache.doubts();
         self.lacking(|digest, size| {
             cache
                 .trusted(digest, Some(size), &marks)
