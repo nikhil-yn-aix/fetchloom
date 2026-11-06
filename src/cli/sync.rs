@@ -573,9 +573,14 @@ fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     let expect = &fetch.expect;
     match (expect.sha256, expect.md5) {
         (Some(digest), _) => cache.find(&digest, expect.size).is_some(),
-        (None, Some(md5)) => cache
-            .stated_md5(&md5, fetch.url.as_str())
-            .is_some_and(|(digest, size)| cache.find(&digest, Some(size)).is_some()),
+        (None, Some(md5)) => {
+            cache
+                .stated_md5(&md5, fetch.url.as_str())
+                .is_some_and(|(digest, size)| {
+                    expect.size.is_none_or(|expected| expected == size)
+                        && cache.find(&digest, Some(size)).is_some()
+                })
+        }
         (None, None) => false,
     }
 }
@@ -846,6 +851,16 @@ mod tests {
             .save_stated_md5(&md5, url.as_str(), &stored.digest, 4)
             .unwrap();
         assert!(in_cache(&cache, &md5_only));
+        assert!(
+            !in_cache(
+                &cache,
+                &fetch(Expect {
+                    size: Some(1 << 30),
+                    ..md5_only.expect
+                })
+            ),
+            "a hint for other bytes than the listed size is not those bytes"
+        );
         let elsewhere = Fetch {
             expect: md5_only.expect,
             ..Fetch::new(Url::parse("https://example.org/other.csv").unwrap())

@@ -29,6 +29,15 @@ fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> String {
 /// an S3 listing page of `(key, body)` objects, with each key escaped as `encoding-type=url`
 /// asks.
 fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
+    let stated: Vec<(&str, String, u64)> = objects
+        .iter()
+        .map(|(key, body)| (*key, md5(body), body.len() as u64))
+        .collect();
+    s3_stated(&stated, next)
+}
+
+/// an S3 listing page of `(key, md5, size)` objects, stating whatever the test asks.
+fn s3_stated(objects: &[(&str, String, u64)], next: Option<&str>) -> Vec<Part> {
     let mut xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>b</Name><EncodingType>url</EncodingType>",
     );
@@ -41,13 +50,11 @@ fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
         }
         None => xml.push_str("<IsTruncated>false</IsTruncated>"),
     }
-    for (key, body) in objects {
+    for (key, md5, size) in objects {
         let _ = write!(
             xml,
-            "<Contents><Key>{}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>&quot;{}&quot;</ETag><Size>{}</Size></Contents>",
+            "<Contents><Key>{}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>&quot;{md5}&quot;</ETag><Size>{size}</Size></Contents>",
             key.replace('/', "%2F").replace(' ', "+"),
-            md5(body),
-            body.len()
         );
     }
     xml.push_str("</ListBucketResult>");
@@ -342,5 +349,50 @@ fn a_private_bucket_is_refused_with_auth_required() -> Result {
     );
     assert!(!sandbox.work().join("data.toml").exists());
     assert_anonymous(&routes);
+    Ok(())
+}
+
+/// a bucket at `base` whose one prefix lists `objects`, stated as the test asks, and serves no
+/// file.
+fn stated_bucket(base: &str, objects: &[(&str, String, u64)]) -> Result<Routes> {
+    Routes::start(vec![(
+        s3_listing(base, "data/", None),
+        s3_stated(objects, None),
+    )])
+}
+
+#[test]
+fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/audit-bucket.s3.amazonaws.com/";
+    let small = Routes::start(vec![
+        (
+            s3_listing(base, "data/", None),
+            s3_page(&[("data/a.bin", SCAN)], None),
+        ),
+        (
+            format!("{base}data/a.bin"),
+            file(SCAN, &format!("\"{}\"", md5(SCAN))),
+        ),
+    ])?;
+    let primed = command(
+        &sandbox,
+        &small,
+        &["get", "s3://audit-bucket/data/", "-o", "primed"],
+    )
+    .output()?;
+    assert_eq!(primed.status.code(), Some(0), "{}", text(&primed.stderr)?);
+    let large = stated_bucket(base, &[("data/a.bin", md5(SCAN), (1 << 30) + 1)])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.data]\nref = \"s3://audit-bucket/data/\"\n",
+    )?;
+
+    let output = command(&sandbox, &large, &["--json", "lock"]).output()?;
+
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed", "{document}");
+    assert_eq!(large.targets(), [s3_listing(base, "data/", None)]);
     Ok(())
 }
