@@ -125,8 +125,14 @@ impl Lock {
         }
     }
 
+    /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
+    /// name: as read, in either reader, and as a sync settles it.
     pub(crate) fn get(&self, name: &str) -> Option<&Locked> {
-        self.datasets.iter().find(|dataset| dataset.name == name)
+        let index = self
+            .datasets
+            .binary_search_by(|dataset| dataset.name.as_str().cmp(name))
+            .ok()?;
+        self.datasets.get(index)
     }
 
     /// the lock's text, the same bytes for the same contents.
@@ -413,6 +419,33 @@ mod tests {
             BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
         );
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
+    }
+
+    /// a sync looks up every dataset of data.toml, so a lookup must not scan the whole lock.
+    #[test]
+    fn looking_up_every_dataset_of_a_large_lock_is_quick() {
+        let template = sample().datasets.swap_remove(0);
+        let names: Vec<String> = (0..50_000).map(|index| format!("f{index:05}")).collect();
+        let lock = Lock {
+            datasets: names
+                .iter()
+                .map(|name| Locked {
+                    name: name.clone(),
+                    ..template.clone()
+                })
+                .collect(),
+        };
+        let started = std::time::Instant::now();
+        for name in &names {
+            assert_eq!(lock.get(name).map(|locked| &locked.name), Some(name));
+        }
+        assert!(lock.get("f50000").is_none());
+        assert!(lock.get("").is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

@@ -546,7 +546,7 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
         // `fetchloom lock` keeps a dataset whose entry did not change, link and all
         .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
-    let pinned = lock.datasets.iter().find(|locked| locked.name == dataset);
+    let pinned = lock.get(dataset);
 
     Ok(Job {
         fetch: Fetch {
