@@ -56,6 +56,10 @@ class RenderTests(unittest.TestCase):
             render.render(root, root / "report")
             for name in ("s1-lan-ext4", "s1-home-ext4", "s1-lan-xfs"):
                 self.assertTrue((root / "report" / "docs" / "assets" / "bench" / f"{name}.svg").exists())
+            page = (root / "report" / "docs" / "dev" / "performance" / "benchmarks.md").read_text()
+            self.assertEqual(page.count("- CPU:"), 1)
+            self.assertEqual(page.count("- recorded"), 3)
+            self.assertIn("xfs/lan/s1", page)
             twice = dict(kind="lab", quick=False, cases=[dict(filesystem="ext4", profile="lan", id="s1")])
             (root / "two" / "meta.json").write_text(json.dumps(twice))
             with self.assertRaisesRegex(ValueError, "twice"):

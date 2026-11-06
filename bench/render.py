@@ -196,7 +196,7 @@ def render(results, repo):
         raise ValueError("no runs.jsonl found")
     all_rows = [json.loads(line) for path in paths for line in path.read_text().splitlines() if line.strip()]
     rows = [row for row in all_rows if not row.get("warmup") and row.get("kind") in ("lab", "live")]
-    metas = [json.loads(path.read_text()) for path in sorted(results.rglob("meta.json"))]
+    metas = sorted((json.loads(path.read_text()) for path in results.rglob("meta.json")), key=lambda meta: meta.get("date", ""))
     conditions = {}
     for row in rows:
         if row.get("kind") != "lab":
@@ -218,14 +218,23 @@ def render(results, repo):
     lines = ["# benchmark results\n", "measurements from the recorded commands and checked outputs.\n", "## conditions\n"]
     if any(meta.get("quick") for meta in metas):
         lines.append("these are smoke-test sizes and rounds, not full benchmark results.\n")
+    shared = None
     for meta in metas:
         machine = meta.get("machine", {})
-        lines += [f"- recorded: `{meta.get('date', 'unknown')}`",
-                  f"- CPU: {machine.get('cpu', 'unknown')}; cores: {machine.get('cores', 'unknown')}; memory: {machine.get('memory', 'unknown')}",
-                  f"- kernel: `{meta.get('kernel', 'unknown')}`; seed: `{meta.get('seed', 'unknown')}`",
-                  f"- fetchloom: `{meta.get('tool_versions', {}).get('fetchloom', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
-                  f"- filesystems: `{json.dumps(meta.get('filesystems', {}), sort_keys=True)}`",
-                  "- versions: " + "; ".join(f"{name} `{version}`" for name, version in meta.get("tool_versions", {}).items()), ""]
+        setting = [f"- CPU: {machine.get('cpu', 'unknown')}; cores: {machine.get('cores', 'unknown')}; memory: {machine.get('memory', 'unknown')}",
+                   f"- kernel: `{meta.get('kernel', 'unknown')}`; seed: `{meta.get('seed', 'unknown')}`",
+                   f"- fetchloom: `{meta.get('tool_versions', {}).get('fetchloom', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
+                   "- versions: " + "; ".join(f"{name} `{version}`" for name, version in meta.get("tool_versions", {}).items())]
+        cases = ", ".join(sorted({f"{case['filesystem']}/{case['profile']}/{case['id']}" for case in meta.get("cases") or []}))
+        recorded = f"- recorded `{meta.get('date', 'unknown')}`" + (f": {cases}" if cases else f": {meta.get('kind', 'unknown')} run")
+        if meta.get("filesystems"):
+            recorded += f" on `{json.dumps(meta['filesystems'], sort_keys=True)}`"
+        # chunks of one campaign share a machine and versions, which are shown once
+        if setting == shared:
+            lines.insert(len(lines) - 1, recorded)
+            continue
+        shared = setting
+        lines += setting + [recorded, ""]
     networks = next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
     if networks:
         lines += ["| profile | round-trip delay | loss per direction | server egress |", "|---|---:|---:|---:|"]

@@ -103,6 +103,22 @@ class MeasurementTests(unittest.TestCase):
             self.assertGreaterEqual(result["wall_seconds"], 5)
         finally:
             shutil.rmtree(root)
+
+    def test_each_case_draws_its_own_reproducible_orders(self):
+        import run
+        tools = ["a", "b", "c", "d", "e", "f", "g"]
+        def orders(fs, profile, scenario):
+            rng = run.case_rng(1729, fs, dict(profile=profile, id=scenario))
+            drawn = []
+            for _ in range(6):
+                order = list(tools)
+                rng.shuffle(order)
+                drawn.append(order)
+            return drawn
+        self.assertEqual(orders("ext4", "lan", "s1"), orders("ext4", "lan", "s1"))
+        self.assertNotEqual(orders("ext4", "lan", "s1"), orders("ext4", "lan", "s3"))
+        self.assertNotEqual(orders("ext4", "lan", "s1"), orders("ext4", "home", "s1"))
+
     def test_access_counts_request_bytes_and_file_only_bytes(self):
         import run
         result = run.parse_access([

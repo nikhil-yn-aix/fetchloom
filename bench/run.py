@@ -248,6 +248,10 @@ def csv_choices(value, allowed):
     return values
 
 
+def case_rng(seed, fs, case):
+    return random.Random(f"{seed}/{fs}/{case['profile']}/{case['id']}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
@@ -285,7 +289,6 @@ def main():
             parser.error(f"{fs} is not mounted")
     meta = metadata(args, adapters)
     meta_path = args.out / "meta.json"
-    rng = random.Random(args.seed)
     estimate = 0
     for case in cases:
         rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
@@ -309,6 +312,9 @@ def main():
             rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]
             meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds))
             lab.profile(case["profile"])
+            # each case draws its own orders, so a campaign split into chunks shuffles as one run
+            # would, rather than every chunk replaying the same sequence
+            rng = case_rng(args.seed, fs, case)
             for number in range(rounds + 1):
                 order = list(eligible)
                 rng.shuffle(order)
