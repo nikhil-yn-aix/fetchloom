@@ -111,7 +111,7 @@ pub(super) fn unpack(
                 .refusal()
                 .unwrap_or_else(|| unreadable_stream(None, &err))
         })?;
-        headers.read.set(0);
+        guard.skip(headers.read.replace(0))?;
         guard.entry()?;
         let raw = String::from_utf8(entry.path_bytes().into_owned()).map_err(|err| {
             refused(format!(
@@ -137,6 +137,7 @@ pub(super) fn unpack(
             kept?;
         }
     }
+    guard.skip(headers.read.replace(0))?;
     // a compressed stream's own check, such as gzip's CRC, comes after the tar's end
     if !matches!(format, Format::Tar) {
         let mut rest = tar.into_inner().inner.take(HEADERS_CAP + 1);
@@ -148,6 +149,7 @@ pub(super) fn unpack(
                 units::size(HEADERS_CAP)
             )));
         }
+        guard.skip(trailing)?;
     }
     Ok(())
 }
@@ -444,6 +446,20 @@ mod tests {
         });
         let err = Scratch::new().refuse(Format::TarZst, &compress(Format::TarZst, &tar));
         assert!(err.message.contains("tar headers"), "{}", err.message);
+    }
+
+    #[test]
+    fn data_the_tar_skips_counts_toward_the_ratio() {
+        let zeros = vec![0; 1 << 20];
+        let tar = built(|tar| {
+            for _ in 0..8 {
+                raw_entry(tar, b"pax_global_header", EntryType::XGlobalHeader, &zeros);
+                raw_entry(tar, b"data/", EntryType::Directory, &zeros);
+            }
+            raw_entry(tar, b"a.csv", EntryType::Regular, b"1");
+        });
+        let err = Scratch::new().refuse(Format::TarZst, &compress(Format::TarZst, &tar));
+        assert!(err.message.contains("200 times"), "{}", err.message);
     }
 
     #[test]

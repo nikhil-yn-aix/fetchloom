@@ -32,6 +32,9 @@ pub(super) struct Guard<'a> {
     names: Names,
     entries: u64,
     written: u64,
+    /// bytes the archive decompressed to that no member holds, such as the declared contents of
+    /// a tar folder entry, which the reader reads only to skip.
+    skipped: u64,
 }
 
 impl<'a> Guard<'a> {
@@ -47,6 +50,7 @@ impl<'a> Guard<'a> {
             names: Names::default(),
             entries: 0,
             written: 0,
+            skipped: 0,
         }
     }
 
@@ -96,6 +100,13 @@ impl<'a> Guard<'a> {
         }
     }
 
+    /// counts bytes read past without writing them, which count against the expansion ratio as
+    /// written bytes do, so an archive cannot make fetchloom decompress endlessly for nothing.
+    pub(super) fn skip(&mut self, bytes: u64) -> Result<(), Error> {
+        self.skipped = self.skipped.saturating_add(bytes);
+        self.check_ratio(None)
+    }
+
     pub(super) fn check_stopped(&self) -> Result<(), Error> {
         if (self.watch)(self.meter.compressed.get()) {
             return Err(Error::new(
@@ -113,12 +124,18 @@ impl<'a> Guard<'a> {
                 units::size(self.limits.bytes)
             )));
         }
+        self.check_ratio(Some(path))
+    }
+
+    fn check_ratio(&self, at: Option<&str>) -> Result<(), Error> {
+        let expanded = self.written.saturating_add(self.skipped);
         let compressed = self.meter.compressed.get();
-        if self.written >= RATIO_FLOOR
-            && u128::from(self.written) > u128::from(compressed) * u128::from(self.limits.ratio)
+        if expanded >= RATIO_FLOOR
+            && u128::from(expanded) > u128::from(compressed) * u128::from(self.limits.ratio)
         {
+            let at = at.map(|path| format!(" at \"{path}\"")).unwrap_or_default();
             return Err(refused(format!(
-                "the archive grew past {} times its compressed size at \"{path}\", which is how zip bombs fill disks",
+                "the archive grew past {} times its compressed size{at}, which is how zip bombs fill disks",
                 self.limits.ratio
             )));
         }
