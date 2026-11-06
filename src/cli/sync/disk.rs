@@ -201,9 +201,9 @@ impl Survey {
     /// with, so the mark is the only sign of an edit made through another project. the link may also name
     /// an older copy of the object than the one that changed, so only hashing settles it. a mark
     /// within a coarse clock's step of that time is in doubt too, as its time may be cut down. a
-    /// link sharing the time of the copy a repair put in place is that copy, which the cache
-    /// trusts.
-    pub(crate) fn doubted(&self, cache: &Cache) -> Vec<String> {
+    /// link that is the very file a repair put in place is that copy, which the cache trusts; a
+    /// shared time alone proves nothing, since two files can carry the same coarse time.
+    pub(crate) fn doubted(&self, root: &Path, cache: &Cache) -> Vec<String> {
         let marks = cache.marks();
         if marks.is_empty() {
             return Vec::new();
@@ -215,7 +215,12 @@ impl Survey {
                 placed.method == Method::Hardlink
                     && marks.get(&placed.sha256).is_some_and(|mark| {
                         cache::may_follow(mark.found, placed.look.modified.max(placed.checked))
-                            && mark.replacement != Some(placed.look.modified)
+                            && !(mark.replacement == Some(placed.look.modified)
+                                && same_file::is_same_file(
+                                    root.join(path.as_str()),
+                                    cache.object_path(&placed.sha256),
+                                )
+                                .unwrap_or(false))
                     })
                     && self.disk.get(*path) == Some(&placed.look)
                     && !self.edited.contains(*path)
@@ -227,7 +232,7 @@ impl Survey {
     /// hashes the files a mark puts in doubt, separating changed links from intact ones.
     /// an unreadable file stops the check.
     pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) -> Result<(), Error> {
-        let doubted = self.doubted(cache);
+        let doubted = self.doubted(root, cache);
         if doubted.is_empty() {
             return Ok(());
         }
@@ -533,7 +538,7 @@ mod tests {
         .unwrap();
         cache.mark_changed(&good.digest).unwrap();
         cache.mark_changed(&bad.digest).unwrap();
-        assert_eq!(survey.doubted(&cache).len(), 2);
+        assert_eq!(survey.doubted(&project.root, &cache).len(), 2);
         survey.check_doubted(&project.root, &cache).unwrap();
         assert_eq!(survey.elsewhere, HashSet::from(["data/changed".to_owned()]));
         assert_eq!(survey.vouched, HashSet::from(["data/intact".to_owned()]));
@@ -595,7 +600,7 @@ mod tests {
                 .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
                 .unwrap();
             assert_eq!(
-                survey.doubted(&cache).len(),
+                survey.doubted(&project.root, &cache).len(),
                 usize::from(doubted),
                 "{seconds}"
             );
@@ -652,7 +657,38 @@ mod tests {
         let mut survey = Survey::read(&project, "data", Threads::default());
         survey.state.files.insert("data/old".to_owned(), old);
         survey.state.files.insert("data/new".to_owned(), new);
-        assert_eq!(survey.doubted(&cache), ["data/old"]);
+        assert_eq!(survey.doubted(&project.root, &cache), ["data/old"]);
+
+        // a coarse clock can give the old copy the very time of the new one; only the file
+        // itself says which copy a link names
+        let old_path = project.root.join("data/old");
+        let replaced = fs::metadata(&object).unwrap().modified().unwrap();
+        let mut permissions = fs::metadata(&old_path).unwrap().permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test retimes the old copy, which its seal made read-only"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(&old_path, permissions.clone()).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&old_path)
+            .unwrap()
+            .set_modified(replaced)
+            .unwrap();
+        permissions.set_readonly(true);
+        fs::set_permissions(&old_path, permissions).unwrap();
+        let mut old = record(&project.root, "data/old", b"good", Method::Hardlink);
+        old.checked = checked;
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let new = record(&project.root, "data/new", b"good", Method::Hardlink);
+        assert_eq!(old.look.modified, new.look.modified);
+        survey.state.files.insert("data/old".to_owned(), old);
+        survey.state.files.insert(
+            "data/new".to_owned(),
+            crate::project::state::Placed { checked, ..new },
+        );
+        assert_eq!(survey.doubted(&project.root, &cache), ["data/old"]);
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default
