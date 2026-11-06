@@ -195,6 +195,34 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_datalad_clones_outside_the_clock_except_for_a_second_project(self):
+        from pathlib import Path
+        from unittest import mock
+        import shutil
+        import tools
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        try:
+            tool = tools.Datalad("fetchloom")
+            work = root / "work"
+            prepared = root / "prepared" / "datalad"
+            calls = []
+            def record(argv, **_):
+                calls.append([str(x) for x in argv])
+            with mock.patch.object(tools.lab, "run_group", record):
+                tool.prepare(dict(id="s1", prepared=str(root / "prepared")), work)
+                self.assertEqual(calls, [["datalad", "clone", str(prepared), str(work / "project")]])
+                self.assertNotIn("datalad clone", tools.shell(tool.command(dict(id="s1"), work)) + (work / "command.sh").read_text())
+                tools.reset(work)
+                calls.clear()
+                tool.prepare(dict(id="s5", prepared=str(root / "prepared")), work)
+                self.assertEqual(calls[0], ["datalad", "clone", str(prepared), str(work / "project")])
+                self.assertNotIn("datalad clone", (work / "command.sh").read_text())
+                tool.command(dict(id="s5"), work)
+                self.assertIn(tools.shell(["datalad", "clone", work / "first-project", work / "project"]),
+                              (work / "command.sh").read_text())
+        finally:
+            shutil.rmtree(root)
+
     def test_each_case_draws_its_own_reproducible_orders(self):
         import run
         tools = ["a", "b", "c", "d", "e", "f", "g"]

@@ -212,7 +212,11 @@ class Datalad(Tool):
     scenarios = Dvc.scenarios
 
     def populate(self, scenario, workdir):
-        pass
+        # like DVC's project copy, cloning the prepared dataset is setup, not retrieval
+        with (workdir / "prepare.log").open("a") as log:
+            lab.run_group(["datalad", "clone", Path(scenario["prepared"]) / self.name, workdir / "project"],
+                          cwd=workdir, env=self.env(workdir), stdout=log, stderr=subprocess.STDOUT,
+                          timeout=lab.PREPARE_TIMEOUT)
 
     def second_project(self, scenario, workdir):
         (workdir / "project").rename(workdir / "first-project")
@@ -220,9 +224,8 @@ class Datalad(Tool):
 
     def command(self, scenario, workdir):
         lines = []
-        if not (workdir / "project" / ".git").exists():
-            source = workdir / "first-project" if scenario["id"] == "s5" else Path(scenario["prepared"]) / self.name
-            lines.append(shell(["datalad", "clone", source, workdir / "project"]))
+        if scenario["id"] == "s5":
+            lines.append(shell(["datalad", "clone", workdir / "first-project", workdir / "project"]))
         lines += [shell(["cd", workdir / "project"]),
                   "git config annex.security.allowed-ip-addresses 10.77.0.2", "datalad get -J 4 data"]
         return script(workdir / "command.sh", lines)

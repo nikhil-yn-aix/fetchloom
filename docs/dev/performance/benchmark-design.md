@@ -51,7 +51,7 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 | wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6, s7 |
 | pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |
 | DVC | `dvc pull -j 4` from an HTTP remote with `verify = true`, reflink, hardlink or copy as the cache type | s1 to s3, s5 to s7 |
-| datalad | `datalad clone`, then `datalad get -J 4` from URLs registered with git-annex | s1 to s3, s5 to s7 |
+| datalad | `datalad get -J 4` from URLs registered with git-annex, in a `datalad clone` of the prepared dataset made before the clock starts, like DVC's project copy; s5 times the clone of the first project | s1 to s3, s5 to s7 |
 
 cache locations and the system CA bundle are set explicitly. DVC analytics and hugging face telemetry are disabled explicitly. use a clean benchmark environment so unrelated credentials and settings do not affect clients. git-annex is allowed to reach `10.77.0.2`, since its private-address guard would otherwise reject the lab URLs. these environment and access settings are recorded; transfer settings stay as listed above.
 
