@@ -89,6 +89,8 @@ the planned release will include [install.sh](https://github.com/nikhil-yn-aix/f
 
 both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_NO_MODIFY_PATH=1` leaves shell profiles and the user PATH alone. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
+`install.sh` downloads with curl when it can, held to https and TLS 1.2 or later by `--proto =https --tlsv1.2`. otherwise it uses wget with `--https-only --secure-protocol=TLSv1_2`, the options rustup's installer passes; `--secure-protocol=TLSv1_2` makes wget speak TLS 1.2 only, and gnu wget applies `--https-only` to recursive downloads alone, so wget does not refuse a redirect to http the way curl does. busybox wget takes neither option, so the installer warns and downloads without them. a `FETCHLOOM_DOWNLOAD_URL` test folder may be served over http, so neither downloader insists on https for it.
+
 ## local fake-release test
 
 use a folder named `release` holding a locally packaged archive with the layout above and its matching `SHA256SUMS`. an archive from a successful build-job artifact also works; no published release is needed. on linux, from the folder holding those archives, write the checksum file with `sha256sum -- *.tar.gz > SHA256SUMS`. on windows, from the repository root:
