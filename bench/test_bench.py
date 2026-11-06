@@ -104,6 +104,27 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_peak_memory_excludes_the_harness(self):
+        import run
+        from pathlib import Path
+        import shutil
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        ballast = bytearray(os.urandom(200 * 1024 * 1024))
+        try:
+            small = run.measure(["/bin/true"], root, os.environ, root / "log", 5)
+            self.assertLess(small["maxrss_bytes"], 32 * 1024 * 1024)
+            large = run.measure(["python3", "-c", "b = bytearray(100 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096])"],
+                                root, os.environ, root / "log", 30)
+            self.assertGreater(large["maxrss_bytes"], 100 * 1024 * 1024)
+            self.assertLess(large["maxrss_bytes"], 160 * 1024 * 1024)
+            self.assertEqual(run.measure(["bash", "-c", "kill -INT $$"], root, os.environ, root / "log", 5)["exit_code"], -2)
+            self.assertEqual(run.measure(["bash", "-c", "exit 3"], root, os.environ, root / "log", 5)["exit_code"], 3)
+            self.assertEqual(run.measure(["no-such-benchmark-tool"], root, os.environ, root / "log", 5)["exit_code"], 127)
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["log"])
+        finally:
+            del ballast
+            shutil.rmtree(root)
+
     def test_timeout_escalates_for_a_group_ignoring_interrupts(self):
         import os
         from pathlib import Path
@@ -115,6 +136,7 @@ class MeasurementTests(unittest.TestCase):
                                  os.environ, root / "log", .25)
             self.assertTrue(result["timeout"])
             self.assertEqual(result["exit_code"], -9)
+            self.assertIsNotNone(result["maxrss_bytes"])
             self.assertGreaterEqual(result["wall_seconds"], 5)
         finally:
             shutil.rmtree(root)

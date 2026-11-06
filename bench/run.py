@@ -19,6 +19,7 @@ import tools
 
 # measured rounds per profile, after one warmup. lossy links take minutes per run, so they get fewer
 ROUNDS = {"lan": 5, "home": 5, "far": 3, "poor": 3}
+TIME = "/usr/bin/time"
 
 
 def verify(outputs):
@@ -36,26 +37,32 @@ def verify(outputs):
 
 
 def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
-    start = time.monotonic()
-    pid = os.fork()
-    if pid == 0:
-        try:
-            os.setsid()
-            os.chdir(cwd)
-            with open(logfile, "ab", buffering=0) as log:
-                os.dup2(log.fileno(), 1)
-                os.dup2(log.fileno(), 2)
-                os.execvpe(str(argv[0]), [str(x) for x in argv], dict(env))
-        except BaseException as error:
-            os.write(2, (str(error) + "\n").encode())
-            os._exit(127)
+    if not os.access(TIME, os.X_OK):
+        raise RuntimeError(f"{TIME} is missing; install GNU time")
+    usage_file = Path(f"{logfile}.usage")
+    usage_file.unlink(missing_ok=True)
+    launcher = [TIME, "-o", str(usage_file), "-f", "%M %x", *(str(x) for x in argv)]
+    log = os.open(logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    home = os.getcwd()
+    try:
+        os.chdir(cwd)
+        start = time.monotonic()
+        # a child made by fork starts from this process's peak memory and pays to unmap it. GNU time
+        # is spawned without a copy of this process, and only the command it starts is reported.
+        pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
+                             file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
+    finally:
+        os.chdir(home)
+        os.close(log)
     interrupted = False
     timed_out = False
     signalled = None
+    stage = 0
 
     def alarm(_signal, _frame):
-        nonlocal interrupted, timed_out, signalled
-        if signalled is None:
+        nonlocal interrupted, timed_out, signalled, stage
+        stage += 1
+        if stage == 1:
             signalled = time.monotonic()
             interrupted = interrupt_after is not None and interrupt_after < timeout
             timed_out = not interrupted
@@ -64,6 +71,15 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
             except ProcessLookupError:
                 return
             signal.setitimer(signal.ITIMER_REAL, 5)
+        elif stage == 2:
+            # GNU time ignores SIGINT and survives this, so it can still report the killed command
+            for member in group(pid):
+                if member != pid:
+                    try:
+                        os.kill(member, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            signal.setitimer(signal.ITIMER_REAL, 1)
         else:
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -81,6 +97,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
         except ProcessLookupError:
             pass
         os.wait4(pid, 0)
+        usage_file.unlink(missing_ok=True)
         raise
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
@@ -88,10 +105,36 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
     # a shell may exit before a child handles SIGINT; keep the next run isolated.
     if signalled is not None:
         lab.end_group(pid, signalled + 5 - time.monotonic())
-    return dict(wall_seconds=now - start, user_seconds=usage.ru_utime,
-                sys_seconds=usage.ru_stime, maxrss_bytes=usage.ru_maxrss * 1024,
-                exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
-                interruption_sent=interrupted)
+    result = dict(wall_seconds=now - start, user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime,
+                  maxrss_bytes=None, exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
+                  interruption_sent=interrupted)
+    try:
+        report = usage_file.read_text().splitlines()
+        usage_file.unlink()
+    except OSError:
+        report = []
+    if report:
+        peak, code = report[-1].split()
+        result["maxrss_bytes"] = int(peak) * 1024
+        result["exit_code"] = int(code)
+        for line in report[:-1]:
+            if line.startswith("Command terminated by signal "):
+                result["exit_code"] = -int(line.rsplit(" ", 1)[1])
+    return result
+
+
+def group(pgid):
+    members = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if int(fields[2]) == pgid:
+            members.append(int(entry.name))
+    return members
 
 
 def parse_access(lines, file_paths):
@@ -145,7 +188,7 @@ def metadata(args, adapters):
                 commands={}, orders=[], cases=[],
                 native_packages=subprocess.check_output(["dpkg-query", "-W", "nginx", "aria2", "wget", "curl",
                                                          "git-annex", "git", "iproute2", "python3", "xfsprogs",
-                                                         "e2fsprogs", "unzip", "openssl"], text=True).splitlines(),
+                                                         "e2fsprogs", "unzip", "openssl", "time"], text=True).splitlines(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
                 installed_packages=subprocess.check_output(
                     ["/opt/fl-bench/venv/bin/python", "-c",
@@ -204,7 +247,8 @@ def one_run(tool, case, workdir, out, number, warmup, timeout):
         if case["id"] == "s7":
             row["user_seconds"] += first["user_seconds"]
             row["sys_seconds"] += first["sys_seconds"]
-            row["maxrss_bytes"] = max(row["maxrss_bytes"], first["maxrss_bytes"])
+            peaks = (row["maxrss_bytes"], first["maxrss_bytes"])
+            row["maxrss_bytes"] = None if None in peaks else max(peaks)
         os.sync()
         row["free_after_bytes"] = free_bytes(workdir)
         row["disk_bytes"] = before - row["free_after_bytes"]

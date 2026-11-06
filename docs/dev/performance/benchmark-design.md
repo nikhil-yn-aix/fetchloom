@@ -105,8 +105,8 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 | metric | how |
 |---|---|
 | wall time | monotonic clock around the whole command |
-| CPU time, user and system | the resource-usage result from `os.wait4` for the finished command and its children |
-| peak memory | the largest resident set among the command's processes |
+| CPU time, user and system | the resource-usage result from `os.wait4` for GNU time, which starts the command; it covers the command, its children and under 2 ms of launcher work |
+| peak memory | the largest resident set among the command's processes, as GNU time reports it. the harness spawns GNU time without a forked copy of itself, so no command inherits the harness's own peak memory |
 | bytes and requests | the server's access log for that run |
 | disk used | free-space change of the dedicated filesystem, so links and reflinks count once |
 | correctness | SHA-256 of every expected output file |

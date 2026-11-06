@@ -16,7 +16,8 @@ apt-get install -y \
   git-annex=10.20240129-1build1 git=1:2.43.0-1ubuntu7.4 \
   iproute2=6.1.0-1ubuntu6.4 xfsprogs=6.6.0-1ubuntu2.1 \
   e2fsprogs=1.47.0-2.4~exp1ubuntu4.1 unzip=6.0-28ubuntu4.1 \
-  openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 python3-venv
+  openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 python3-venv \
+  time=1.9-0.2build1
 ```
 
 use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner and the chart renderer import only the standard library. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it.
