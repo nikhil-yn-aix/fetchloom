@@ -48,6 +48,8 @@ the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and
 
 for the current Cargo version, 0.1.0, the workflow will produce six archives, two debian packages, six wheels, two installers and a checksum file.
 
+the archives are packed so the same files give the same bytes. the build job exports `SOURCE_DATE_EPOCH`, the tag commit's committer time, and every file and folder in an archive gets that time. tar archives list their entries in byte order, record owner and group as 0 without names and pass through `gzip -n`, so the gzip header holds no file name or time; macos writes them in ustar format. windows zips are written by 7-Zip from the same sorted list, with `-mtc=off`, which leaves out the ntfs creation and access times.
+
 | artifact | contents |
 |---|---|
 | `fetchloom-0.1.0-x86_64-pc-windows-msvc.zip` | `fetchloom.exe`, LICENSE, NOTICE and README.md in a matching top-level folder |

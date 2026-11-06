@@ -88,6 +88,8 @@ jobs:
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          # the archives give every file the tag commit's time
+          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
       # installs the version rust-toolchain.toml pins
       - run: rustup toolchain install
       - run: rustup target add ${{ matrix.target }}
@@ -181,6 +183,8 @@ jobs:
           if ($LASTEXITCODE) { throw 'dumpbin could not inspect fetchloom.exe' }
           $dlls
           if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw 'fetchloom.exe loads the C runtime from a DLL' }
+      # the same files pack into the same bytes: entries in a fixed order, every time set to the
+      # commit's, owners as numbers and, for gzip, a header that holds no name or time
       - name: package the binary
         run: |
           name="fetchloom-$VERSION-${{ matrix.target }}"
@@ -188,13 +192,23 @@ jobs:
           cp "target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }}" \
             LICENSE NOTICE README.md ".release/$name/"
           cd .release
+          if [ "$RUNNER_OS" = macOS ]; then
+            stamp=$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
+          else
+            stamp=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
+          fi
+          find "$name" -exec env TZ=UTC0 touch -t "$stamp" {} +
+          find "$name" | LC_ALL=C sort > files.txt
           if [ "$RUNNER_OS" = Windows ]; then
-            7z a -tzip -bso0 "../dist/$name.zip" "$name"
+            # -mtc=off leaves out the ntfs creation and access times
+            7z a -tzip -bso0 -mtc=off "../dist/$name.zip" @files.txt
           elif [ "$RUNNER_OS" = macOS ]; then
             # bsdtar names the owner with --uid and --gid rather than gnu tar's --owner
-            tar --uid 0 --gid 0 --numeric-owner --no-xattrs -czf "../dist/$name.tar.gz" "$name"
+            tar --uid 0 --gid 0 --numeric-owner --no-xattrs --format ustar -n -T files.txt -cf - |
+              gzip -n > "../dist/$name.tar.gz"
           else
-            tar --owner=0 --group=0 --numeric-owner -czf "../dist/$name.tar.gz" "$name"
+            tar --owner=0 --group=0 --numeric-owner --no-recursion -T files.txt -cf - |
+              gzip -n > "../dist/$name.tar.gz"
           fi
       - name: package the debian archive
         if: runner.os == 'Linux'
