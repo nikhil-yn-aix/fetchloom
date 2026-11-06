@@ -19,6 +19,9 @@ use crate::error::{Error, Kind};
 
 const FOLDER: &str = ".fetchloom";
 
+/// the most an owner record is read for. one is a line of JSON naming a command and a process.
+const OWNER_CAP: u64 = 64 << 10;
+
 pub(crate) struct Project {
     pub(crate) root: PathBuf,
 }
@@ -164,10 +167,21 @@ fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Re
 }
 
 fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
-    let mut file = File::open(path)?;
+    // a cloned or planted owner could be a link to a device or a fifo, which never ends
+    let file = crate::cache::read_unfollowed(path)?;
     let modified = file.metadata()?.modified()?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    file.take(OWNER_CAP + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > OWNER_CAP {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} holds more than {}, too much for an owner record",
+                path.display(),
+                crate::units::size(OWNER_CAP)
+            ),
+        ));
+    }
     Ok((bytes, modified))
 }
 
@@ -722,6 +736,36 @@ mod tests {
         };
         assert!(message.contains(&path.display().to_string()));
         assert_eq!(fs::read(path).unwrap(), b"{");
+    }
+
+    #[test]
+    fn an_owner_too_large_to_be_one_is_not_read_whole() {
+        let large = "x".repeat(2 << 20);
+        let (_dir, project) = project(&[(".fetchloom/owner", &large)]);
+        let path = project.own_folder().join("owner");
+        let err = read_owner(&path).err().map(|err| err.kind());
+        assert_eq!(err, Some(io::ErrorKind::InvalidData));
+        assert!(project.hold("sync").is_err());
+        assert_eq!(fs::metadata(&path).unwrap().len(), large.len() as u64);
+    }
+
+    #[test]
+    fn a_linked_owner_is_never_followed() {
+        let (_dir, project) = project(&[(".fetchloom/elsewhere", "{}")]);
+        let target = project.own_folder().join("elsewhere");
+        let path = project.own_folder().join("owner");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&target, &path).is_ok();
+        // making a symlink on windows needs developer mode or admin
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
+        if !made {
+            return;
+        }
+        let err = read_owner(&path).err().map(|err| err.kind());
+        assert_eq!(err, Some(io::ErrorKind::InvalidInput));
+        assert!(project.hold("sync").is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"{}");
     }
 
     #[test]
