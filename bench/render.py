@@ -215,6 +215,10 @@ def render(results, repo):
         raise ValueError("lab campaigns measure a case twice or mix smoke and full runs; render them separately")
     charts = repo / "docs" / "assets" / "bench"
     charts.mkdir(parents=True, exist_ok=True)
+    # every card here is generated, so a card the new results do not produce, such as a hero
+    # without a verdict, must not survive from an earlier render
+    for old in charts.glob("*.svg"):
+        old.unlink()
     lines = ["# benchmark results\n", "measurements from the recorded commands and checked outputs.\n", "## conditions\n"]
     if any(meta.get("quick") for meta in metas):
         lines.append("these are smoke-test sizes and rounds, not full benchmark results.\n")

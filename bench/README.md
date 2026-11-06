@@ -95,7 +95,7 @@ mkdir -p bench/results
 cp -a /srv/fl-bench/results/full bench/results/
 ```
 
-rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scenario in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. a card's title states the result, including when another tool wins. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
+rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scenario in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. it first removes every SVG card already in that folder, so no card, including a `hero-*` card, outlives the results that produced it. a card's title states the result, including when another tool wins. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
 
 `meta.json` records the machine, binary and repository versions, seed, random orders, exact commands and package versions. `runs.jsonl` contains metrics, checker failures and exit statuses. command logs retain errors. s7 records both attempts, file-body bytes across them and the second attempt's wall time.
 

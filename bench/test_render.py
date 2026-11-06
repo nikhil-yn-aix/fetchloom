@@ -44,6 +44,30 @@ class RenderTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_rerender_drops_a_hero_card_without_a_verdict(self):
+        import json
+        from pathlib import Path
+        import shutil
+        import render
+        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
+        (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
+        charts = root / "report" / "docs" / "assets" / "bench"
+        try:
+            record = dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4", tool="fetchloom",
+                          quick=True, count=1, file_size=4, status="passed", wall_seconds=1)
+            rival = dict(record, tool="curl", wall_seconds=2)
+            (root / "runs.jsonl").write_text(json.dumps(record) + "\n" + json.dumps(rival))
+            render.render(root, root / "report")
+            self.assertTrue((charts / "hero-s1-ext4.svg").exists())
+            self.assertTrue((charts / "hero-s1-ext4-dark.svg").exists())
+            failed = dict(record, status="failed")
+            (root / "runs.jsonl").write_text(json.dumps(failed) + "\n" + json.dumps(rival))
+            render.render(root, root / "report")
+            self.assertTrue((charts / "s1-lan-ext4.svg").exists())
+            self.assertEqual(sorted(path.name for path in charts.glob("hero-*")), [])
+        finally:
+            shutil.rmtree(root)
+
     def test_renderer_rejects_mixed_smoke_and_full_conditions(self):
         import json
         from pathlib import Path
