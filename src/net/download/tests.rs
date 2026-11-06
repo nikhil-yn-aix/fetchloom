@@ -574,28 +574,33 @@ fn md5(bytes: &[u8]) -> Md5 {
 /// so that MD5 must not come to stand for these bytes when a source states it for another file.
 #[test]
 fn an_md5_the_download_never_computed_stands_for_nothing() {
-    let (pinned, _) = serve(vec![reply("200 OK", &[], "aaaa")]);
-    let (listed, asked) = serve(vec![reply("200 OK", &[], "bbbb")]);
+    // both downloads ask the same link, so only the check on what the first computed keeps its
+    // stated MD5 from standing for the bytes it really served
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[], "aaaa"),
+        reply("200 OK", &[], "bbbb"),
+    ]);
+    let link = url.join("a").unwrap();
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let mut pin = Fetch::new(pinned.join("a").unwrap());
+    let mut pin = Fetch::new(link.clone());
     pin.expect = Expect {
         sha256: Some(crate::digest::sha256(b"aaaa")),
         md5: Some(md5(b"bbbb")),
         size: Some(4),
     };
-    block_on(net(&pinned).download(&pin, &cache, &|_| Ok(()))).unwrap();
-    let mut list = Fetch::new(listed.join("b").unwrap());
+    block_on(net(&url).download(&pin, &cache, &|_| Ok(()))).unwrap();
+    let mut list = Fetch::new(link);
     list.expect = Expect {
         md5: Some(md5(b"bbbb")),
         size: Some(4),
         ..Expect::default()
     };
-    let fetched = block_on(net(&listed).download(&list, &cache, &|_| Ok(()))).unwrap();
+    let fetched = block_on(net(&url).download(&list, &cache, &|_| Ok(()))).unwrap();
     assert_eq!(fetched.digest, crate::digest::sha256(b"bbbb"));
     assert_eq!(
         asked.lock().unwrap().len(),
-        1,
+        2,
         "the listed file was asked for"
     );
 }
