@@ -197,11 +197,7 @@ async fn resolve_add(
     let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
     engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
-        parsed
-            .file
-            .iter()
-            .map(|file| crate::glob::escape(file))
-            .collect()
+        parsed.select()
     } else {
         args.filter.select.clone()
     };

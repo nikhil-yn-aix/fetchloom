@@ -221,6 +221,39 @@ fn asks_for_version(url: &Url) -> bool {
     url.query_pairs().any(|(key, _)| key == "version")
 }
 
+/// an osf.io link to one file or folder in a project's storage, such as
+/// `https://osf.io/ezcuj/files/osfstorage/553e69248c5e4a219919ea54`, is refused: its last part is
+/// a storage id, not a path a selection could match, and the whole project is more than was asked
+/// for.
+pub(super) fn stored_item(url: &Url) -> Option<Error> {
+    if !is_osf(url) {
+        return None;
+    }
+    let parts: Vec<&str> = url
+        .path_segments()?
+        .filter(|part| !part.is_empty())
+        .collect();
+    let [id, "files", _provider, _item, ..] = parts.as_slice() else {
+        return None;
+    };
+    let id = id.to_ascii_lowercase();
+    if !is_id(&id) || PAGES.contains(&id.as_str()) {
+        return None;
+    }
+    Some(
+        Error::new(
+            Kind::ReferenceInvalid,
+            format!(
+                "{} names one file or folder of osf:{id} by a storage id, from which fetchloom cannot tell its path",
+                net::Shown(url)
+            ),
+        )
+        .help(format!(
+            "for a file, paste its download link, which starts with https://osf.io/download/. for a folder, add osf:{id} with --select \"<folder>/**\""
+        )),
+    )
+}
+
 /// an osf.io link that asks for one version of a file. its download link fetches that version
 /// as a plain link, pinned to those bytes, while any other such link is refused, since an OSF
 /// reference follows the file's current version.

@@ -100,8 +100,8 @@ impl Repo {
         })
     }
 
-    /// a pasted huggingface.co link, and the file in it when the link names one.
-    pub(super) fn from_link(url: &Url) -> Option<(Repo, Option<String>)> {
+    /// a pasted huggingface.co link, and the file or folder in it when the link names one.
+    pub(super) fn from_link(url: &Url) -> Option<(Repo, Option<String>, Option<String>)> {
         if !matches!(
             url.host_str()?,
             "huggingface.co" | "www.huggingface.co" | "hf.co"
@@ -140,14 +140,15 @@ impl Repo {
             return None;
         }
         let after = &rest[split..];
-        let (revision, file) = match after.first().map(String::as_str) {
-            Some("tree") => (after.get(1).cloned(), None),
+        let inside = || (after.len() > 2).then(|| after[2..].join("/"));
+        let (revision, file, folder) = match after.first().map(String::as_str) {
+            Some("tree") => (after.get(1).cloned(), None, inside()),
             Some("blob" | "resolve" | "raw" | "blame") if after.len() > 2 => {
-                (after.get(1).cloned(), Some(after[2..].join("/")))
+                (after.get(1).cloned(), inside(), None)
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
-        Some((Repo { kind, id, revision }, file))
+        Some((Repo { kind, id, revision }, file, folder))
     }
 }
 

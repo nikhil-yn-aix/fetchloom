@@ -15,6 +15,7 @@ fetchloom get osf:3eunr
 | an OSF project link | walk its osfstorage folders |
 | an OSF file GUID link | resolve that file |
 | an OSF download link with `?version=N` | download that version as a plain link, pinned by SHA-256; any other OSF link with `?version=` is refused, since its listing describes only the latest version |
+| an OSF link to one file or folder in a project's storage, such as `https://osf.io/ezcuj/files/osfstorage/553e69248c5e4a219919ea54` | refused, since its last part is a storage id rather than a path; paste a file's download link, or add the project with `--select "<folder>/**"` |
 
 selection patterns match the listed paths before downloading. [pattern rules](../reference/data-toml.md#patterns) apply at every folder depth.
 

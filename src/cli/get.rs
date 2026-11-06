@@ -981,14 +981,10 @@ fn pin_command(args: &Get, link: &str) -> Option<String> {
     Some(parts.join(" "))
 }
 
-/// the files `--select` and `--exclude` keep, or the one file a pasted link names.
+/// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.
 fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote>, Error> {
     let select = if args.filter.select.is_empty() {
-        parsed
-            .file
-            .iter()
-            .map(|file| crate::glob::escape(file))
-            .collect()
+        parsed.select()
     } else {
         args.filter.select.clone()
     };

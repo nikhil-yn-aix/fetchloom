@@ -53,11 +53,24 @@ pub(crate) enum Reference {
     Bucket(bucket::Prefix),
 }
 
-/// a reference, and the one file inside it when a pasted link pointed at a single file.
+/// a reference, and the one file or folder inside it when a pasted link pointed at one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Parsed {
     pub(crate) reference: Reference,
     pub(crate) file: Option<String>,
+    pub(crate) folder: Option<String>,
+}
+
+impl Parsed {
+    /// the select patterns the pasted link implies: its one file, or everything in its folder.
+    pub(crate) fn select(&self) -> Vec<String> {
+        let file = self.file.iter().map(|file| crate::glob::escape(file));
+        let folder = self
+            .folder
+            .iter()
+            .map(|folder| format!("{}/**", crate::glob::escape(folder)));
+        file.chain(folder).collect()
+    }
 }
 
 /// what a source says a dataset holds, at one exact version.
@@ -126,6 +139,7 @@ impl Reference {
             Ok(Parsed {
                 reference,
                 file: None,
+                folder: None,
             })
         };
         if let Some(doi) = doi::Doi::bare(text) {
@@ -379,34 +393,48 @@ fn link(text: &str) -> Result<Parsed, Error> {
             "copy the complete link from your browser, including https:// and the website name",
         ));
     }
+    let parsed = |reference, file| Parsed {
+        reference,
+        file,
+        folder: None,
+    };
     if let Some(versioned) = osf::versioned(&url) {
-        return versioned.map(|url| Parsed {
-            reference: Reference::Url(url),
-            file: None,
-        });
+        return versioned.map(|url| parsed(Reference::Url(url), None));
+    }
+    if let Some(error) = osf::stored_item(&url) {
+        return Err(error);
     }
     let routed = doi::Doi::from_link(&url)
-        .map(|doi| (Reference::Doi(doi), None))
+        .map(|doi| parsed(Reference::Doi(doi), None))
         .or_else(|| {
-            zenodo::Record::from_link(&url).map(|(record, file)| (Reference::Zenodo(record), file))
+            zenodo::Record::from_link(&url)
+                .map(|(record, file)| parsed(Reference::Zenodo(record), file))
         })
         .or_else(|| {
-            figshare::Article::from_link(&url).map(|article| (Reference::Figshare(article), None))
+            figshare::Article::from_link(&url)
+                .map(|article| parsed(Reference::Figshare(article), None))
         })
         .or_else(|| {
-            dataverse::Dataset::from_link(&url).map(|dataset| (Reference::Dataverse(dataset), None))
+            dataverse::Dataset::from_link(&url)
+                .map(|dataset| parsed(Reference::Dataverse(dataset), None))
         })
-        .or_else(|| osf::Node::from_link(&url).map(|node| (Reference::Osf(node), None)))
+        .or_else(|| osf::Node::from_link(&url).map(|node| parsed(Reference::Osf(node), None)))
         .or_else(|| {
-            hf::Repo::from_link(&url).map(|(repo, file)| (Reference::HuggingFace(repo), file))
+            hf::Repo::from_link(&url).map(|(repo, file, folder)| Parsed {
+                reference: Reference::HuggingFace(repo),
+                file,
+                folder,
+            })
         })
-        .or_else(|| kaggle::from_link(&url))
-        .or_else(|| drive::Item::from_link(&url).map(|item| (Reference::Drive(item), None)))
-        .or_else(|| dropbox::Link::from_link(&url).map(|link| (Reference::Dropbox(link), None)))
+        .or_else(|| kaggle::from_link(&url).map(|(reference, file)| parsed(reference, file)))
+        .or_else(|| drive::Item::from_link(&url).map(|item| parsed(Reference::Drive(item), None)))
         .or_else(|| {
-            bucket::Prefix::from_link(&url).map(|prefix| (Reference::Bucket(prefix), None))
+            dropbox::Link::from_link(&url).map(|link| parsed(Reference::Dropbox(link), None))
+        })
+        .or_else(|| {
+            bucket::Prefix::from_link(&url).map(|prefix| parsed(Reference::Bucket(prefix), None))
         });
-    let Some((reference, file)) = routed else {
+    let Some(routed) = routed else {
         if let Some(source) = known_host(&url) {
             return Err(Error::new(
                 Kind::ReferenceInvalid,
@@ -417,12 +445,9 @@ fn link(text: &str) -> Result<Parsed, Error> {
             )
             .help("paste the link of the dataset's own page, as in `fetchloom add https://zenodo.org/records/3608990`, or a name to search for"));
         }
-        return Ok(Parsed {
-            reference: Reference::Url(raw_link(&url).unwrap_or(url)),
-            file: None,
-        });
+        return Ok(parsed(Reference::Url(raw_link(&url).unwrap_or(url)), None));
     };
-    Ok(Parsed { reference, file })
+    Ok(routed)
 }
 
 /// repository file pages have a stable raw endpoint, unlike their HTML view.
@@ -757,6 +782,49 @@ mod tests {
         let inside = parse("https://huggingface.co/datasets/acme/tree/blob/main/file.csv");
         assert_eq!(inside.reference.to_string(), "hf:datasets/acme/tree@main");
         assert_eq!(inside.file.as_deref(), Some("file.csv"));
+    }
+
+    #[test]
+    fn folder_links_select_their_folder() {
+        let folder =
+            parse("https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/sample/10BT");
+        assert_ne!(folder, parse("hf:datasets/HuggingFaceFW/fineweb@main"));
+        assert_eq!(
+            folder.reference.to_string(),
+            "hf:datasets/HuggingFaceFW/fineweb@main"
+        );
+        assert_eq!(folder.file, None);
+        assert_eq!(folder.select(), ["sample/10BT/**"]);
+        let glob = crate::glob::Glob::new(&folder.select()[0]).unwrap();
+        assert!(glob.matches("sample/10BT/000_00000.parquet"));
+        assert!(glob.matches("sample/10BT/deeper/000_00000.parquet"));
+        assert!(!glob.matches("sample/100BT/000_00000.parquet"));
+        assert!(!glob.matches("data/CC-MAIN-2013-20/000_00000.parquet"));
+        let marked = parse("https://huggingface.co/datasets/org/name/tree/v1/data%5B1%5D/*");
+        assert_eq!(marked.select(), ["data[[]1]/[*]/**"]);
+        let glob = crate::glob::Glob::new(&marked.select()[0]).unwrap();
+        assert!(glob.matches("data[1]/*/x.csv"));
+        assert!(!glob.matches("data1/a/x.csv"));
+        let file = parse("https://huggingface.co/datasets/org/name/blob/main/data[1].csv");
+        assert_eq!(file.select(), ["data[[]1].csv"]);
+        for whole in [
+            "https://huggingface.co/datasets/org/name/tree/main",
+            "https://huggingface.co/datasets/org/name/tree/main/",
+            "hf:datasets/org/name",
+        ] {
+            assert_eq!(parse(whole).select(), Vec::<String>::new(), "{whole}");
+        }
+        let inside =
+            Reference::parse("https://osf.io/ezcuj/files/osfstorage/553e69248c5e4a219919ea54");
+        let error = inside.unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid);
+        assert!(error.help.unwrap_or_default().contains("osf:ezcuj"));
+        for whole in [
+            "https://osf.io/ezcuj/files/osfstorage",
+            "https://osf.io/ezcuj/files/",
+        ] {
+            assert_eq!(parse(whole).reference.to_string(), "osf:ezcuj", "{whole}");
+        }
     }
 
     #[test]

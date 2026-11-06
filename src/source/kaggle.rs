@@ -230,6 +230,7 @@ mod tests {
             crate::source::Parsed {
                 reference: Reference::KaggleCompetition(competition),
                 file,
+                ..
             } => (competition.to_string(), file),
             other => panic!("{text}: {other:?}"),
         };
