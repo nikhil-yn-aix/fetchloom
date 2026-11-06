@@ -2,6 +2,7 @@
 //! `get` fills. FAT32 and exFAT cannot hardlink, and on windows they refuse to remove a read-only
 //! file, which every object and, by default, every placed file is.
 
+use std::collections::HashSet;
 use std::fs::{self, File, Metadata, OpenOptions, Permissions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,8 +19,15 @@ pub(crate) struct Volume {
     rename: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
     links: OnceLock<bool>,
-    /// for a volume that only pretends, every existing path a removal named, in order.
-    pretended: Option<Mutex<Vec<PathBuf>>>,
+    /// for a volume that only pretends, every existing path a removal named.
+    pretended: Option<Mutex<Pretended>>,
+}
+
+/// the paths a pretending volume would have removed, in order, and as a set a sweep can ask.
+#[derive(Debug, Default)]
+struct Pretended {
+    order: Vec<PathBuf>,
+    paths: HashSet<PathBuf>,
 }
 
 impl Volume {
@@ -50,7 +58,11 @@ impl Volume {
     /// the paths a pretending volume would have removed, in order. empty for a real volume.
     pub(crate) fn pretended(&self) -> Vec<PathBuf> {
         self.pretended.as_ref().map_or_else(Vec::new, |paths| {
-            paths.lock().unwrap_or_else(PoisonError::into_inner).clone()
+            paths
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .order
+                .clone()
         })
     }
 
@@ -60,8 +72,8 @@ impl Volume {
             paths
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .iter()
-                .any(|removed| removed == path)
+                .paths
+                .contains(path)
         })
     }
 
@@ -76,10 +88,9 @@ impl Volume {
     fn pretend_removal(&self, path: &Path) -> io::Result<()> {
         fs::symlink_metadata(path)?;
         if let Some(paths) = &self.pretended {
-            paths
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(path.to_path_buf());
+            let mut pretended = paths.lock().unwrap_or_else(PoisonError::into_inner);
+            pretended.order.push(path.to_path_buf());
+            pretended.paths.insert(path.to_path_buf());
         }
         Ok(())
     }
@@ -391,6 +402,32 @@ mod tests {
 
     fn probes_left(dir: &Path) -> usize {
         fs::read_dir(dir.join("tmp")).unwrap().count()
+    }
+
+    /// a dry run of a large cache asks after every removal whether a path is among them.
+    #[test]
+    fn a_dry_run_knows_its_removals_without_searching_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let volume = Volume::pretend(dir.path().to_path_buf());
+        let paths: Vec<PathBuf> = (0..10_000)
+            .map(|index| dir.path().join(format!("object{index:05}")))
+            .collect();
+        for path in &paths {
+            fs::write(path, b"").unwrap();
+            volume.remove(path).unwrap();
+        }
+        let started = std::time::Instant::now();
+        for path in &paths {
+            assert!(volume.pretends_removed(path));
+        }
+        assert!(!volume.pretends_removed(&dir.path().join("other")));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(volume.pretended(), paths, "in the order removed");
+        assert!(paths.iter().all(|path| path.exists()), "nothing removed");
     }
 
     #[test]
