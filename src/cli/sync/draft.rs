@@ -292,7 +292,8 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
 
 /// the file data.lock already pins for this remote file, when it is the same file: the same
 /// link, and the same path unless the server names the file or its source wrapped it in a zip.
-/// a listed size says nothing about the zip.
+/// a listed size says nothing about the zip. a pin made without an MD5 says nothing of whether
+/// its bytes have the one the source now states, unless the source states their SHA-256 too.
 fn carried<'a>(
     by_url: &HashMap<&str, Vec<&'a LockedFile>>,
     remote: &Remote,
@@ -305,7 +306,7 @@ fn carried<'a>(
             && remote.sha256.is_none_or(|sha256| sha256 == file.sha256)
             && remote
                 .md5
-                .is_none_or(|md5| file.md5.is_none_or(|was| was == md5))
+                .is_none_or(|md5| file.md5.map_or(remote.sha256.is_some(), |was| was == md5))
     })
 }
 
@@ -659,6 +660,67 @@ mod tests {
         assert!(
             carried(&by_url, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
             "the bytes changed under the same link"
+        );
+    }
+
+    #[test]
+    fn an_unknown_md5_in_data_lock_never_vouches_for_a_stated_one() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.d]\nref = \"https://example.org/data.csv\"\n").unwrap();
+        let locked = Locked {
+            name: "d".to_owned(),
+            reference: url.to_string(),
+            spec: String::new(),
+            resolved: url.to_string(),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: String::new(),
+            files: vec![LockedFile {
+                path: "data.csv".to_owned(),
+                size: 4,
+                sha256: digest::sha256(b"a,b\n"),
+                md5: None,
+                url: url.to_string(),
+                unpacks_to: None,
+            }],
+        };
+        // the same link now states the MD5 of other bytes of the same size
+        let stated = crate::digest::Md5::from_hex("e80b5017098950fc58aad83c8c14978e");
+        let listing = || Listing {
+            unavailable: Vec::new(),
+            resolved: Reference::Url(url.clone()),
+            title: None,
+            license: None,
+            doi: None,
+            files: vec![Remote {
+                path: "data.csv".to_owned(),
+                size: Some(4),
+                sha256: None,
+                md5: stated,
+                url: url.clone(),
+                named_by_server: false,
+            }],
+        };
+        let entry = &manifest.datasets["d"];
+        for upgrading in [true, false] {
+            let draft =
+                Draft::new("d", entry, listing(), Some(&locked), upgrading, &cache).unwrap();
+            assert_eq!(draft.files[0].known, None, "upgrading {upgrading}");
+            let jobs = draft.jobs(&cache);
+            assert_eq!(jobs.len(), 1, "upgrading {upgrading}");
+            assert_eq!(jobs[0].1.fetch.expect.md5, stated);
+        }
+        let by_url = HashMap::from([(locked.files[0].url.as_str(), vec![&locked.files[0]])]);
+        let mut remote = listing().files.remove(0);
+        assert!(carried(&by_url, &remote).is_none());
+        remote.sha256 = Some(locked.files[0].sha256);
+        assert!(
+            carried(&by_url, &remote).is_some(),
+            "a stated SHA-256 vouches for the pinned bytes"
         );
     }
 
