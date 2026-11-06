@@ -293,18 +293,22 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                     .to_ipv4_mapped()
                     .or_else(|| nat64(ip))
                     .is_some_and(|mapped| is_private(IpAddr::V4(mapped)))
+                || local_nat64(ip)
         }
     }
 }
 
-/// the IPv4 address a NAT64 translator reaches for `ip`: one in the well-known prefix
-/// `64:ff9b::/96`, or in the local-use `64:ff9b:1::/48` read as a /96, as translators set it up.
+/// the IPv4 address a NAT64 translator on the well-known prefix `64:ff9b::/96` reaches for `ip`.
 fn nat64(ip: Ipv6Addr) -> Option<Ipv4Addr> {
-    let segments = ip.segments();
-    let well_known = segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
-    let local = segments[..3] == [0x64, 0xff9b, 1];
     let [.., a, b, c, d] = ip.octets();
-    (well_known || local).then(|| Ipv4Addr::new(a, b, c, d))
+    (ip.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| Ipv4Addr::new(a, b, c, d))
+}
+
+/// whether `ip` sits in the local-use NAT64 prefix `64:ff9b:1::/48`. a network picks its own prefix
+/// length inside it, and with it where the IPv4 address sits, so no address there can be read
+/// for sure and every one is treated as private.
+fn local_nat64(ip: Ipv6Addr) -> bool {
+    ip.segments()[..3] == [0x64, 0xff9b, 1]
 }
 
 #[cfg(test)]
@@ -369,10 +373,13 @@ mod tests {
             "64:ff9b::10.0.0.1",
             "64:ff9b::127.0.0.1",
             "64:ff9b:1::192.168.1.1",
+            // a local-use prefix can place the IPv4 address elsewhere, as at 169.254.169.254 here
+            "64:ff9b:1:a9fe:a9:fe00:808:808",
+            "64:ff9b:1::188.184.98.157",
         ] {
             assert!(is_private(ip(text)), "{text} is private");
         }
-        for text in ["64:ff9b::8.8.8.8", "64:ff9b:1::188.184.98.157"] {
+        for text in ["64:ff9b::8.8.8.8", "64:ff9b::188.184.98.157"] {
             assert!(!is_private(ip(text)), "{text} is public");
         }
     }
