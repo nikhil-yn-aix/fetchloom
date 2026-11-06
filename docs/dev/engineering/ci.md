@@ -4,7 +4,7 @@ CI checks the same crate across processor architectures and filesystems that exp
 
 ## triggers and permissions
 
-[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: test` and `if: always()`. it passes only when the matrix result is `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
+[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: [test, musl]` and `if: always()`. it passes only when both results are `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
 
 ## test job
 
@@ -24,6 +24,7 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 |---|---|---|
 | `cargo fmt --check` | x86_64 linux | one formatting result for platform-independent source |
 | `cargo clippy --all-targets --locked -- -D warnings` | all five | every target and test must satisfy configured lints |
+| `cargo check --locked --release --target x86_64-apple-darwin` | macos | the x86_64 macos release target, C dependencies included, which the arm64 runner otherwise never compiles; `MACOSX_DEPLOYMENT_TARGET` is 11.0 as in the release |
 | `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
 | `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
@@ -33,6 +34,10 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 | disk-touching tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
 
 [deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. three advisories are ignored, each with its reason: zvariant, zvariant_derive and zbus_names were folded into zbus 6, which keyring's linux secret service store does not use yet. they are notices that the crates moved, not flaws, and go once keyring moves.
+
+## musl job
+
+the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static binaries that use mimalloc in place of musl's allocator, while the `test` job builds for glibc. the `musl` job, named `x86_64-unknown-linux-musl`, builds that target on `ubuntu-latest` the way [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) does: it installs musl-tools for the C dependencies and runs `cargo build --locked --release --target x86_64-unknown-linux-musl`. it then checks that the binary's `--version` prints `fetchloom` and the Cargo version. it has a 45-minute timeout and restores the rust cache. it does not run the tests or the release workflow's linkage checks.
 
 ## filesystem runs
 

@@ -20,11 +20,42 @@ jobs:
   # the one check branch protection requires, so it names no platform and passes only when
   # every platform did
   ci:
-    needs: test
+    needs: [test, musl]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: test "${{ needs.test.result }}" = success
+      - run: |
+          test "${{ needs.test.result }}" = success
+          test "${{ needs.musl.result }}" = success
+
+  # the linux release ships a static musl binary that uses mimalloc, while the test job builds
+  # for glibc. this builds the shipped target the way release.yml does and runs it
+  musl:
+    name: x86_64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - run: rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # the cc crate builds zstd, liblzma, ring and mimalloc with musl-gcc for the musl target
+      - name: install the musl C compiler
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools > /dev/null
+      - run: cargo build --locked --release --target x86_64-unknown-linux-musl
+      - name: check that the binary runs
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          said=$(target/x86_64-unknown-linux-musl/release/fetchloom --version)
+          echo "fetchloom --version: $said"
+          if [ "$said" != "fetchloom $version" ]; then
+            echo "::error::fetchloom --version printed $said"
+            exit 1
+          fi
 
   test:
     name: ${{ matrix.os }}
@@ -55,6 +86,15 @@ jobs:
       # code that only tests and debug builds use would be dead in the shipped binary
       - run: cargo clippy --release --locked -- -D warnings
         if: matrix.os == 'ubuntu-latest'
+      # the x86_64 macos release is otherwise first compiled when a tag runs release.yml. checking
+      # it here also builds its C dependencies for that target
+      - name: cargo check for x86_64 macos
+        if: matrix.os == 'macos-latest'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo check --locked --release --target x86_64-apple-darwin
       - run: cargo test --locked
       - run: python3 -m unittest discover -s python
         if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
