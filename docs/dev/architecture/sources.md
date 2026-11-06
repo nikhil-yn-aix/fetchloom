@@ -71,7 +71,7 @@ no credential is read for either store and none is attached to these hosts; `no_
 
 - credentials come from the context, never a `Remote` field or a serialized lock.
 - project references reject recognized secret query keys. masking a URL is explicit through `Shown` or `shown`, not an invariant of `url::Url`.
-- a reported MD5 is checked against bytes before its mapping to SHA-256 can be reused.
+- a reported MD5 is checked against the bytes a URL served before its mapping to SHA-256 can be reused, and only for that URL.
 - mutable services cannot guarantee historical listings. the lock's hashes establish byte identity even when a source changes.
 - default tests use recorded responses or local servers. [ignored live tests](../engineering/ci.md#live-source-checks) check current services separately.
 

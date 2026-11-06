@@ -76,7 +76,7 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 | network operations | 8 by default, with 4 per initial hostname |
 | connect timeout | 45 s |
 | send and response-header deadline | 75 s per hop |
-| body idle timeout | 30 s between chunks; no total download deadline |
+| body idle timeout | 30 s between chunks, not counting time held back on this machine by the rate cap, the writer or a question; no total download deadline |
 | redirects | at most 10 per attempt |
 | metadata body | at most 64 MiB |
 | transient attempts | 5 including the first |

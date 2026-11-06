@@ -35,7 +35,7 @@ already pinned ordinary files need not be cached. a source that supplies SHA-256
 
 ## upgrading
 
-`--upgrade` revalidates unchecksummed URLs. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
+`--upgrade` revalidates unchecksummed URLs and files whose source now states an MD5 that `data.lock` lacks. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
 
 filter or extraction changes resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting an upgrade resolves the manifest reference instead. [spec hashes](../reference/data-lock.md#the-spec-hash) defines these rules.
 

@@ -27,7 +27,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   partial/<sha256 of URL>.json
   partial/<sha256 of URL>.lock
   urls/<sha256 of URL>.json
-  stated/md5/<first 2 md5 digits>/<remaining 30 digits>
+  stated/md5/<first 2 md5 digits>/<remaining 30 digits>-<sha256 of URL>
   unpacked/<archive sha256>
   projects/<sha256 of project root>.json
   changed/<object sha256>
@@ -71,10 +71,10 @@ the `.lock` file coordinates writers; its contents are unused. gc removes an aba
 
 ## other indexes
 
-- an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records a previously checked MD5, including when its object is no longer cached.
+- an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records an MD5 that a download of that URL computed and checked, and is used only for that URL, including when its object is no longer cached. a download pinned by SHA-256 records none.
 - an unpack record uses the [tree encoding](data-lock.md#the-tree-hash). its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
-- a change mark is an empty file named by an object's SHA-256. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one that no longer holds its bytes. its modification time records when. each replacement refreshes the mark and dates it just before the new bytes were written, so projects recheck old hardlinks without putting the good object in doubt. gc removes a mark only after its object is gone and no registered project needs it. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains what other projects do with a mark.
+- a change mark is a file named by an object's SHA-256, empty unless a repair wrote it. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one that no longer holds its bytes. its modification time records when. each replacement refreshes the mark, keeping its time as when the change was found, and writes into it the replacement copy's modification time in nanoseconds since 1970. the cache trusts objects written well after that time, and a hardlink sharing that time is the replacement, so only projects linking the old copy recheck it. gc removes a mark only after its object is gone and no registered project needs it. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains what other projects do with a mark.
 
 archive bytes may be deleted after successful unpacking when no registered project or current lock needs them packed. deletion failures or unreadable project locks leave them cached. members remain ordinary objects. [cache commands](../commands/cache.md) explain retention and gc.
 

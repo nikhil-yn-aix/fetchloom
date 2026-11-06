@@ -116,6 +116,7 @@ approval is required above 1 GiB, not at exactly 1 GiB.
 | `get` | known bytes still needing download; cached checksummed files and unpacked archives do not count |
 | project commands | known bytes still missing from the cache |
 | unknown source size | the server's length against the remaining download, or received bytes after a file passes 1 GiB |
+| known source size | never asked; an answer stating another length is refused before download, and a body without a stated length stops once it passes the known size |
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
 
