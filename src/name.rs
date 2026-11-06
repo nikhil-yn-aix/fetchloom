@@ -252,10 +252,12 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     None
 }
 
-/// why a data path names repository metadata, including spellings windows treats as aliases.
+/// why a data path names repository metadata, including spellings windows treats as aliases and
+/// spellings hfs+ reads as the same name.
 pub(crate) fn metadata(path: &str) -> Option<&'static str> {
     for part in path.split('/') {
-        let part = part
+        let visible = visible_to_hfs(part);
+        let part = visible
             .split(':')
             .next()
             .unwrap_or_default()
@@ -277,6 +279,25 @@ pub(crate) fn metadata(path: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// `part` without the code points hfs+ ignores in names, so `.g\u{200c}it` names `.git` there.
+/// the set is the one git skips before its own `.git` check.
+fn visible_to_hfs(part: &str) -> std::borrow::Cow<'_, str> {
+    if part.is_ascii() {
+        return std::borrow::Cow::Borrowed(part);
+    }
+    part.chars()
+        .filter(|character| {
+            !matches!(
+                character,
+                '\u{200c}'..='\u{200f}'
+                    | '\u{202a}'..='\u{202e}'
+                    | '\u{206a}'..='\u{206f}'
+                    | '\u{feff}'
+            )
+        })
+        .collect()
 }
 
 /// why this machine's disks cannot store a path, if they cannot. checked before anything is
@@ -509,6 +530,28 @@ mod tests {
         assert_eq!(unstorable("data/CON.txt").is_some(), cfg!(windows));
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
     }
+
+    #[test]
+    fn metadata_names_hide_no_code_points_hfs_plus_ignores() {
+        for ignored in [
+            '\u{200c}', '\u{200d}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}',
+            '\u{202d}', '\u{202e}', '\u{206a}', '\u{206b}', '\u{206c}', '\u{206d}', '\u{206e}',
+            '\u{206f}', '\u{feff}',
+        ] {
+            for path in [
+                format!("data/x/.g{ignored}it/config"),
+                format!("data/{ignored}.git"),
+                format!("data/.git{ignored}/hooks/pre-commit"),
+                format!("data/.H{ignored}g/hgrc"),
+                format!("data/.git.{ignored}/config"),
+            ] {
+                assert!(metadata(&path).is_some(), "accepted {path:?}");
+            }
+        }
+        assert_eq!(metadata("data/.g\u{200b}it/config"), None);
+        assert_eq!(metadata("data/.github/workflows.yml"), None);
+    }
+
     #[test]
     fn dataset_names_come_from_free_text() {
         assert_eq!(dataset_name("DatasetIris").as_deref(), Some("datasetiris"));
