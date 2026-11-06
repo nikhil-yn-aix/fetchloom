@@ -87,7 +87,7 @@ to exercise build jobs without a tag, temporarily add a branch trigger for `rele
 
 the planned release will include [install.sh](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.sh), which detects x86_64 or arm64 linux and macos and installs into `$HOME/.local/bin`, updating supported shell profiles when needed. on macos it also writes `~/.zshrc`, since zsh, the default shell there, never reads `~/.profile`, and a shell running under rosetta on apple silicon gets the arm64 build. [install.ps1](https://github.com/nikhil-yn-aix/fetchloom/blob/main/install.ps1) detects 64-bit windows, including arm64, and installs into `%LOCALAPPDATA%\Programs\fetchloom\bin`, updating the user PATH.
 
-both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage beside the destination before moving the executable into place. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_NO_MODIFY_PATH=1` leaves shell profiles and the user PATH alone. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
+both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage it beside the destination. they run the staged executable's `--version` before moving it into place; when it cannot run, `install.sh` prints an `error:` line, `install.ps1` throws, and the installed executable stays as it was. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_NO_MODIFY_PATH=1` leaves shell profiles and the user PATH alone. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
 `install.sh` downloads with curl when it can, held to https and TLS 1.2 or later by `--proto =https --tlsv1.2`. otherwise it uses wget with `--https-only --secure-protocol=TLSv1_2`, the options rustup's installer passes; `--secure-protocol=TLSv1_2` makes wget speak TLS 1.2 only, and gnu wget applies `--https-only` to recursive downloads alone, so wget does not refuse a redirect to http the way curl does. busybox wget takes neither option, so the installer warns and downloads without them. a `FETCHLOOM_DOWNLOAD_URL` test folder may be served over http, so neither downloader insists on https for it.
 
@@ -131,6 +131,6 @@ try {
 }
 ```
 
-stop the local server with ctrl-c when finished and remove only the test folders you created. also test a deliberately wrong checksum: installation must fail before replacing the installed executable.
+stop the local server with ctrl-c when finished and remove only the test folders you created. also test a deliberately wrong checksum and an archive whose executable cannot run: installation must fail before replacing the installed executable.
 
 contributions and distributions use [Apache-2.0](https://github.com/nikhil-yn-aix/fetchloom/blob/main/LICENSE). include [NOTICE](https://github.com/nikhil-yn-aix/fetchloom/blob/main/NOTICE), which names Nikhil Y N and KairosLab India Private Limited. [decisions](../decisions.md#apache-20) explains the license boundary.

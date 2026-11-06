@@ -102,13 +102,25 @@ function Install-Fetchloom([string]$Version) {
         Expand-Archive -Path $archive -DestinationPath $work
         $folder = Join-Path $work ($asset -replace '\.zip$', '')
         $name = 'fetchloom.exe'
-        if (-not (Test-Path (Join-Path $folder $name))) { throw "$asset holds no $name. nothing was installed" }
-        Move-Item -Force (Join-Path $folder $name) (Join-Path $bin $name)
+        $staged = Join-Path $folder $name
+        if (-not (Test-Path $staged)) { throw "$asset holds no $name. nothing was installed" }
+        # run the staged program before it replaces anything, so a build this machine cannot run
+        # leaves a working fetchloom in place
+        try {
+            $installed = & $staged --version
+        } catch {
+            $reason = $_.Exception
+            if ($reason.InnerException) { $reason = $reason.InnerException }
+            throw "the downloaded $name does not run on this machine: $($reason.Message) nothing was installed"
+        }
+        if ($LASTEXITCODE) {
+            throw "the downloaded $name exited with code $LASTEXITCODE when asked for its version. nothing was installed"
+        }
+        Move-Item -Force $staged (Join-Path $bin $name)
     } finally {
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }
 
-    $installed = & (Join-Path $bin 'fetchloom.exe') --version
     Write-Host "installed $installed in $bin"
     if (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $bin) { $env:Path = "$env:Path;$bin" }
     if ($env:FETCHLOOM_NO_MODIFY_PATH -eq '1') {
