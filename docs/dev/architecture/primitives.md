@@ -28,7 +28,7 @@ these modules contain small value types and policies used by more than one compo
 
 `sanitize` cleans suggested names; validation of manifest and locked paths instead refuses unsafe input. do not replace validation with sanitization, which could silently change a requested destination. `fold` uses ASCII lowercase for ASCII names, or NFC followed by uppercase and lowercase for unicode collision detection.
 
-path components longer than 255 UTF-8 bytes are refused on every platform. windows also rejects reserved device names, forbidden characters and trailing dots or spaces. metadata path checks keep data placements out of fetchloom and project-control files.
+path components longer than 255 UTF-8 bytes are refused, except on windows, which counts the 255 in UTF-16 units as ntfs does. windows also rejects reserved device names, forbidden characters and trailing dots or spaces. metadata path checks keep data placements out of fetchloom and project-control files.
 
 `Glob` compiles patterns once and matches the whole dataset-relative path. `*` and `?` stay inside one folder, `**` spans folders, and character sets match one character. `**` must occupy its own path component. patterns use `/` even on windows.
 

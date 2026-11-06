@@ -304,7 +304,13 @@ fn visible_to_hfs(part: &str) -> std::borrow::Cow<'_, str> {
 /// written, since other platforms may store the same path fine.
 pub(crate) fn unstorable(path: &str) -> Option<String> {
     for part in path.split('/') {
-        if part.len() > 255 {
+        // ntfs allows 255 utf-16 units in a name, ext4 255 bytes
+        let length = if cfg!(windows) {
+            part.encode_utf16().count()
+        } else {
+            part.len()
+        };
+        if length > 255 {
             return Some(format!("\"{}…\" is longer than disks allow", shorten(part)));
         }
         if cfg!(windows) {
@@ -529,6 +535,19 @@ mod tests {
         );
         assert_eq!(unstorable("data/CON.txt").is_some(), cfg!(windows));
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
+    }
+
+    #[test]
+    fn windows_counts_name_length_in_utf_16_units() {
+        // 100 characters, 300 bytes of utf-8 and 100 units of utf-16
+        let wide = "名".repeat(100);
+        assert_eq!(
+            unstorable(&format!("data/{wide}.csv")).is_some(),
+            !cfg!(windows)
+        );
+        // characters beyond the basic plane take two units each
+        assert!(unstorable(&"😀".repeat(128)).is_some());
+        assert_eq!(unstorable(&"😀".repeat(127)).is_some(), !cfg!(windows));
     }
 
     #[test]
