@@ -87,6 +87,35 @@ fn download_links_name_the_file_guid() {
 }
 
 #[test]
+fn a_download_link_to_one_version_downloads_that_version() {
+    for link in [
+        "https://osf.io/download/sejcv/?version=1",
+        "https://osf.io/download/sejcv/?action=download&version=1",
+    ] {
+        let parsed = Reference::parse(link).unwrap();
+        assert_eq!(
+            parsed.reference,
+            Reference::Url(Url::parse(link).unwrap()),
+            "{link}"
+        );
+        assert_eq!(parsed.reference.to_string(), link);
+        assert_eq!(Reference::parse(link).unwrap().reference, parsed.reference);
+    }
+}
+
+#[test]
+fn a_page_link_to_one_version_is_refused_rather_than_read_as_the_latest() {
+    let error = Reference::parse("https://osf.io/sejcv/?version=1").unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceInvalid);
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "paste its download link, https://osf.io/download/sejcv/?version=1, or osf:sejcv for the current version"
+        )
+    );
+}
+
+#[test]
 fn missing_projects_and_guids_are_unresolved() {
     let node = "https://api.osf.io/v2/nodes/zzzzzzzzzzzz/?embed=license&embed=identifiers";
     let guid = "https://api.osf.io/v2/guids/zzzzzzzzzzzz/";

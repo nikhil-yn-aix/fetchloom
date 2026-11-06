@@ -10,7 +10,7 @@ use url::Url;
 
 use super::{Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
-use crate::net::{Api, Expired};
+use crate::net::{self, Api, Expired};
 
 /// first path segments on osf.io that are pages, not ids.
 const PAGES: [&str; 12] = [
@@ -45,9 +45,10 @@ impl Node {
         }
     }
 
-    /// a pasted osf.io link.
+    /// a pasted osf.io link. a link asking for one version of a file is no node, since a node
+    /// follows the file's current version; [`versioned`] takes it.
     pub(super) fn from_link(url: &Url) -> Option<Node> {
-        if !matches!(url.host_str()?, "osf.io" | "www.osf.io") {
+        if !is_osf(url) || asks_for_version(url) {
             return None;
         }
         let mut parts = url.path_segments()?.filter(|part| !part.is_empty());
@@ -191,6 +192,49 @@ fn is_id(text: &str) -> bool {
         && text
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+fn is_osf(url: &Url) -> bool {
+    matches!(url.host_str(), Some("osf.io" | "www.osf.io"))
+}
+
+fn asks_for_version(url: &Url) -> bool {
+    url.query_pairs().any(|(key, _)| key == "version")
+}
+
+/// an osf.io link that asks for one version of a file. its download link fetches that version
+/// as a plain link, pinned to those bytes, while any other such link is refused, since an OSF
+/// reference follows the file's current version.
+pub(super) fn versioned(url: &Url) -> Option<Result<Url, Error>> {
+    if !is_osf(url) || !asks_for_version(url) {
+        return None;
+    }
+    let first = url.path_segments()?.find(|part| !part.is_empty());
+    if first == Some("download") {
+        return Some(Ok(url.clone()));
+    }
+    let id = first.map(str::to_ascii_lowercase).filter(|id| is_id(id));
+    let version = url
+        .query_pairs()
+        .find(|(key, _)| key == "version")
+        .map(|(_, version)| version.into_owned())
+        .filter(|version| !version.is_empty() && version.bytes().all(|b| b.is_ascii_digit()));
+    let help = match (id, version) {
+        (Some(id), Some(version)) => format!(
+            "paste its download link, https://osf.io/download/{id}/?version={version}, or osf:{id} for the current version"
+        ),
+        _ => {
+            "paste the file's download link, which starts with https://osf.io/download/".to_owned()
+        }
+    };
+    Some(Err(Error::new(
+        Kind::ReferenceInvalid,
+        format!(
+            "{} asks for one version of an OSF file, which only its download link fetches",
+            net::Shown(url)
+        ),
+    )
+    .help(help)))
 }
 
 impl fmt::Display for Node {

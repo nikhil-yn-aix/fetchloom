@@ -377,6 +377,12 @@ fn link(text: &str) -> Result<Parsed, Error> {
             "copy the complete link from your browser, including https:// and the website name",
         ));
     }
+    if let Some(versioned) = osf::versioned(&url) {
+        return versioned.map(|url| Parsed {
+            reference: Reference::Url(url),
+            file: None,
+        });
+    }
     let routed = doi::Doi::from_link(&url)
         .map(|doi| (Reference::Doi(doi), None))
         .or_else(|| {
