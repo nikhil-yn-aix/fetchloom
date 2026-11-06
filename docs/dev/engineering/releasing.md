@@ -16,8 +16,8 @@ no release has been published yet. use [source installation](../../user/getting-
 
 | runner | target | linkage |
 |---|---|---|
-| `windows-latest` | `x86_64-pc-windows-msvc` | static C runtime, checked with dumpbin |
-| `windows-11-arm` | `aarch64-pc-windows-msvc` | static C runtime; dumpbin check is skipped with a notice if the arm64 image lacks it |
+| `windows-latest` | `x86_64-pc-windows-msvc` | static C runtime, checked by reading the dlls the executable imports, delay-loaded ones included, from its own import tables; the check fails when it cannot read them or finds no `kernel32.dll` |
+| `windows-11-arm` | `aarch64-pc-windows-msvc` | same static C runtime check on native arm64; it needs no visual studio tool, so the arm64 image cannot skip it |
 | `ubuntu-latest` | `x86_64-unknown-linux-musl` | static musl binary, native dependencies built with musl-gcc; checked with ldd |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | same static-musl checks on native arm64 |
 | `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |

@@ -161,27 +161,48 @@ jobs:
             echo "::error::$name needs macos $minimum, not $MACOSX_DEPLOYMENT_TARGET"
             exit 1
           fi
+      # reads the dlls fetchloom.exe imports straight from its import tables, so the check needs
+      # no visual studio tool and runs on the arm64 image too. a file it cannot read fails it, as
+      # does a list without kernel32.dll, which rust's standard library always imports
       - name: check that the windows binary carries its C runtime
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          $paths = @("$vs\VC\Tools\MSVC\*\bin\Hostx64\*\dumpbin.exe")
-          if ($env:RUNNER_ARCH -eq 'ARM64') {
-            $paths = @("$vs\VC\Tools\MSVC\*\bin\Hostarm64\*\dumpbin.exe") + $paths
-          }
-          $dumpbin = Get-ChildItem $paths -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $dumpbin) {
-            if ($env:RUNNER_ARCH -eq 'ARM64') {
-              # the arm image may omit dumpbin; the other binary and wheel checks still run
-              Write-Output '::notice::dumpbin is unavailable on this arm64 runner; skipping the C runtime check'
-              exit 0
+          $path = "target\${{ matrix.target }}\release\fetchloom.exe"
+          $bytes = [IO.File]::ReadAllBytes($path)
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550) { throw 'fetchloom.exe is not a PE file' }
+          $sectionCount = [BitConverter]::ToUInt16($bytes, $pe + 6)
+          $optional = $pe + 24
+          if ([BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b) { throw 'fetchloom.exe is not a 64-bit PE file' }
+          $sections = $optional + [BitConverter]::ToUInt16($bytes, $pe + 20)
+          function Get-Offset([uint32]$Rva) {
+            for ($i = 0; $i -lt $sectionCount; $i++) {
+              $header = $sections + 40 * $i
+              $start = [BitConverter]::ToUInt32($bytes, $header + 12)
+              $size = [Math]::Max([BitConverter]::ToUInt32($bytes, $header + 8), [BitConverter]::ToUInt32($bytes, $header + 16))
+              if ($Rva -ge $start -and $Rva -lt $start + $size) {
+                return [int]($Rva - $start + [BitConverter]::ToUInt32($bytes, $header + 20))
+              }
             }
-            throw 'could not find dumpbin to check the C runtime'
+            throw "fetchloom.exe has no section holding address $Rva"
           }
-          $dlls = & $dumpbin /nologo /dependents "target\${{ matrix.target }}\release\fetchloom.exe"
-          if ($LASTEXITCODE) { throw 'dumpbin could not inspect fetchloom.exe' }
+          # data directory 1 lists the imported dlls in 20-byte entries with the name at 12, and
+          # directory 13 the delay-loaded ones in 32-byte entries with the name at 4. each list
+          # ends with an entry whose name is 0
+          $dlls = foreach ($directory in @(@(1, 20, 12), @(13, 32, 4))) {
+            $index, $entrySize, $nameAt = $directory
+            $rva = [BitConverter]::ToUInt32($bytes, $optional + 112 + 8 * $index)
+            if (-not $rva) { continue }
+            for ($entry = Get-Offset $rva; ; $entry += $entrySize) {
+              $name = [BitConverter]::ToUInt32($bytes, $entry + $nameAt)
+              if (-not $name) { break }
+              $at = Get-Offset $name
+              [Text.Encoding]::ASCII.GetString($bytes, $at, [Array]::IndexOf($bytes, [byte]0, $at) - $at)
+            }
+          }
           $dlls
+          if (-not ($dlls -match '^kernel32\.dll$')) { throw 'could not read the dlls fetchloom.exe imports' }
           if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw 'fetchloom.exe loads the C runtime from a DLL' }
       # the same files pack into the same bytes: entries in a fixed order, every time set to the
       # commit's, owners as numbers and, for gzip, a header that holds no name or time
