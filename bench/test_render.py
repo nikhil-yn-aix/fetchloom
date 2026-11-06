@@ -20,6 +20,11 @@ class RenderTests(unittest.TestCase):
         mixed = render.summarize([{"status": "failed", "timeout": True}, {"status": "failed"}])
         self.assertEqual((render.no_bar(mixed), render.failures(mixed)), ("failed", "2/2"))
 
+    def test_archive_story_names_its_members(self):
+        import render
+        self.assertEqual(render.story("s4", 10000, 4096),
+                         "a zip of 10,000 files of 4 KiB each, downloaded, checked and unpacked")
+
     def test_renderer_rejects_mixed_smoke_and_full_conditions(self):
         import json
         from pathlib import Path

@@ -74,7 +74,7 @@ MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s2": "{files} of {size} each, downloaded and checked",
            "s3": "{files} of {size} each, downloaded and checked",
-           "s4": "a {size} zip, downloaded, checked and unpacked",
+           "s4": "a zip of {files} of {size} each, downloaded, checked and unpacked",
            "s5": "{files} already in the cache, placed into a new project",
            "s6": "{files} already in place, each tool confirms nothing changed",
            "s7": "a {size} download stopped at 10 s, then run again to finish"}
