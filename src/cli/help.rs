@@ -180,7 +180,7 @@ struct Described {
 
 #[derive(Serialize)]
 struct Argument {
-    /// `--select`, `-o`, or `<link>` for a positional argument
+    /// `--select`, `-C` for an option with no long spelling, or `<link>` for a positional argument
     name: String,
     short: Option<String>,
     value: Option<String>,
@@ -246,21 +246,23 @@ fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
             ) || arg
                 .get_num_args()
                 .is_some_and(|range| range.max_values() > 1);
+            let short = arg.get_short().map(|short| format!("-{short}"));
+            // an option without a long spelling, such as -C, is named by its short one
+            let name = if arg.is_positional() {
+                format!(
+                    "<{}>",
+                    value.clone().unwrap_or_else(|| arg.get_id().to_string())
+                )
+            } else {
+                arg.get_long()
+                    .map(|long| format!("--{long}"))
+                    .or_else(|| short.clone())
+                    .unwrap_or_else(|| arg.get_id().to_string())
+            };
             Argument {
-                name: arg.get_long().map_or_else(
-                    || {
-                        format!(
-                            "<{}>",
-                            value.clone().unwrap_or_else(|| arg.get_id().to_string())
-                        )
-                    },
-                    |long| format!("--{long}"),
-                ),
-                short: arg.get_short().map(|short| format!("-{short}")),
-                value: arg
-                    .get_long()
-                    .and(value.clone())
-                    .filter(|_| arg.get_action().takes_values()),
+                name,
+                short,
+                value: value.filter(|_| !arg.is_positional() && arg.get_action().takes_values()),
                 help: arg.get_help().map(ToString::to_string).unwrap_or_default(),
                 required: arg.is_required_set(),
                 repeats,
@@ -297,7 +299,32 @@ fn unknown(topic: &[String]) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{ENVIRONMENT, EXIT_CODES, TOPICS};
+    use clap::CommandFactory;
+
+    use super::{ENVIRONMENT, EXIT_CODES, TOPICS, args, arguments};
+
+    #[test]
+    fn a_short_only_option_keeps_its_spelling_and_its_value() {
+        let global = arguments(&args::Args::command(), true);
+        let directory = global
+            .iter()
+            .find(|option| option.short.as_deref() == Some("-C"))
+            .unwrap();
+        assert_eq!(directory.name, "-C");
+        assert_eq!(directory.value.as_deref(), Some("dir"));
+        let command = args::Args::command();
+        let get = command.find_subcommand("get").unwrap();
+        let own = arguments(get, false);
+        let output = own.iter().find(|option| option.name == "--output").unwrap();
+        assert_eq!(output.short.as_deref(), Some("-o"));
+        assert_eq!(output.value.as_deref(), Some("dir"));
+        let links = own
+            .iter()
+            .find(|argument| argument.name == "<link>")
+            .unwrap();
+        assert_eq!(links.short, None);
+        assert_eq!(links.value, None);
+    }
 
     /// the words in `text` shaped like fetchloom's own variables.
     fn variables(text: &str) -> std::collections::BTreeSet<&str> {
