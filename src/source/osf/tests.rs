@@ -7,7 +7,8 @@ use crate::error::Kind;
 use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 use crate::source::{Reference, Remote};
 
-const NODE: &str = "https://api.osf.io/v2/nodes/ezcuj/?embed=license&embed=identifiers";
+const NODE: &str =
+    "https://api.osf.io/v2/nodes/ezcuj/?embed=license&embed=identifiers&related_counts=children";
 const FILES: &str = "https://api.osf.io/v2/nodes/ezcuj/files/osfstorage/?page%5Bsize%5D=100";
 
 fn expected_file() -> Remote {
@@ -66,7 +67,7 @@ fn resolving_the_result_keeps_each_files_stated_version() {
 
 #[test]
 fn file_guids_resolve_to_one_versioned_file() {
-    let node = "https://api.osf.io/v2/nodes/sejcv/?embed=license&embed=identifiers";
+    let node = "https://api.osf.io/v2/nodes/sejcv/?embed=license&embed=identifiers&related_counts=children";
     let guid = "https://api.osf.io/v2/guids/sejcv/";
     let recorded = Recorded::default()
         .on(node, 404, fixture_bytes("osf/file-as-node.json"))
@@ -117,7 +118,7 @@ fn a_page_link_to_one_version_is_refused_rather_than_read_as_the_latest() {
 
 #[test]
 fn missing_projects_and_guids_are_unresolved() {
-    let node = "https://api.osf.io/v2/nodes/zzzzzzzzzzzz/?embed=license&embed=identifiers";
+    let node = "https://api.osf.io/v2/nodes/zzzzzzzzzzzz/?embed=license&embed=identifiers&related_counts=children";
     let guid = "https://api.osf.io/v2/guids/zzzzzzzzzzzz/";
     let recorded = Recorded::default()
         .on(node, 404, fixture_bytes("osf/missing.json"))
@@ -263,4 +264,49 @@ fn recorded_storage_expiry_is_distinct_from_an_auth_refusal() {
         .text()
         .replace("Request has expired.", "The request is not authorized.");
     assert!(!check(&denied));
+}
+
+/// what `run` logs, as a person running with `-vv` would read it.
+fn logged<T>(run: impl FnOnce() -> T) -> (T, String) {
+    #[derive(Clone, Default)]
+    struct Lines(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let lines = Lines::default();
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let value = tracing::subscriber::with_default(subscriber, run);
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    (value, text)
+}
+
+#[test]
+fn components_are_counted_in_the_node_request_and_told() {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("osf/embedded.json")).unwrap();
+    value["data"]["relationships"]["children"]["links"]["related"]["meta"]["count"] = 49.into();
+    let recorded = Recorded::default()
+        .on(NODE, 200, serde_json::to_vec(&value).unwrap())
+        .fixture(FILES, "osf/root.json");
+    let (listing, logs) = logged(|| block_on(Node::parse("ezcuj").unwrap().resolve(&recorded)));
+    assert_eq!(listing.unwrap().files, [expected_file()]);
+    assert!(logs.contains("WARN"), "{logs}");
+    assert!(logs.contains("49 components"), "{logs}");
+    assert_eq!(recorded.asked(), [NODE, FILES]);
+    let quiet = Recorded::default()
+        .fixture(NODE, "osf/embedded.json")
+        .fixture(FILES, "osf/root.json");
+    let (listing, logs) = logged(|| block_on(Node::parse("ezcuj").unwrap().resolve(&quiet)));
+    assert_eq!(listing.unwrap().files, [expected_file()]);
+    assert!(!logs.contains("component"), "{logs}");
 }

@@ -67,7 +67,8 @@ impl Node {
         let mut url = self.endpoint("nodes")?;
         url.query_pairs_mut()
             .append_pair("embed", "license")
-            .append_pair("embed", "identifiers");
+            .append_pair("embed", "identifiers")
+            .append_pair("related_counts", "children");
         let mut response = api.get(&url).await?;
         if response.status == 404 {
             // file GUIDs are not nodes; the GUID endpoint redirects to their file metadata.
@@ -86,6 +87,13 @@ impl Node {
                     .extend(["files", "osfstorage", ""]);
                 root.query_pairs_mut().append_pair("page[size]", "100");
                 let files = walk::files(self, api, root).await?;
+                let components = metadata.components();
+                if components > 0 {
+                    tracing::warn!(
+                        "{self} has {}, and their files are not listed with it. add a component as a dataset of its own, as osf:<its id>",
+                        crate::units::count(components, "component", "components")
+                    );
+                }
                 Ok(metadata.listing(self, files))
             }
             Resource::File(file) => file.listing(self),
@@ -126,6 +134,8 @@ struct Metadata {
     attributes: Attributes,
     #[serde(default)]
     embeds: Embeds,
+    #[serde(default)]
+    relationships: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -161,6 +171,15 @@ struct IdentifierValue {
 }
 
 impl Metadata {
+    /// the node's components, which `related_counts=children` counts. their files live in
+    /// storage of their own, which the walk does not reach.
+    fn components(&self) -> u64 {
+        self.relationships
+            .pointer("/children/links/related/meta/count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    }
+
     fn listing(self, node: &Node, files: Vec<Remote>) -> Listing {
         Listing {
             unavailable: Vec::new(),

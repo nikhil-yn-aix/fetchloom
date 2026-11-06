@@ -32,4 +32,6 @@ explicitly expired storage redirects can be refreshed. locked 404 or 410 downloa
 
 the folder walk covers osfstorage. source access rules and listing-size limits still apply. fetchloom does not grant account access or guarantee permanent hosting of the locked bytes.
 
+the walk does not enter a project's components, which keep their files in storage of their own. when a project has components, a warning in the logs (`-vv`) gives their number; add each component you need as its own dataset, by its id, as in `osf:<id>`.
+
 follow [offline preparation](../concepts.md#offline) before disconnecting.

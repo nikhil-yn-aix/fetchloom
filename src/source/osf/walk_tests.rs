@@ -3,7 +3,8 @@ use crate::error::Kind;
 use crate::source::Reference;
 use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
-const NODE: &str = "https://api.osf.io/v2/nodes/ytpuq/?embed=license&embed=identifiers";
+const NODE: &str =
+    "https://api.osf.io/v2/nodes/ytpuq/?embed=license&embed=identifiers&related_counts=children";
 const FIRST: &str = "https://api.osf.io/v2/nodes/ytpuq/files/osfstorage/?page%5Bsize%5D=100";
 const SECOND: &str = "https://api.osf.io/v2/nodes/ytpuq/files/osfstorage/?page=2&page%5Bsize%5D=2";
 const LAST: &str = "https://api.osf.io/v2/nodes/ytpuq/files/osfstorage/?page=3&page%5Bsize%5D=2";
