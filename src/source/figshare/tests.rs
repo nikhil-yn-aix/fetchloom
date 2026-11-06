@@ -142,13 +142,27 @@ fn folder_paths_are_kept() {
 }
 
 #[test]
-fn link_only_files_are_refused_by_name() {
-    let body = changed(|value| value["files"][0]["is_link_only"] = true.into());
+fn link_only_files_are_listed_as_unavailable() {
+    let body = changed(|value| {
+        value["files"][0]["is_link_only"] = true.into();
+        value["files"][0]["download_url"] = "https://example.org/elsewhere?id=1".into();
+        value["folder_structure"] = serde_json::json!({"70482987": "links"});
+    });
     let recorded = Recorded::default().on(ARTICLE, 200, body);
-    let error = block_on(Article::parse("34744689").unwrap().resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::SourceInvalid);
-    assert!(error.message.contains("labt_a_2743468_sm3772.docx"));
-    assert!(error.help.is_some());
+    let listing = block_on(Article::parse("34744689").unwrap().resolve(&recorded)).unwrap();
+    assert_eq!(
+        listing
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["labt_a_2743468_sm3771.docx"]
+    );
+    assert_eq!(listing.unavailable.len(), 1);
+    assert_eq!(
+        listing.unavailable[0].path,
+        "links/labt_a_2743468_sm3772.docx"
+    );
 }
 
 #[test]

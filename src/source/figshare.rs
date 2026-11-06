@@ -6,7 +6,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, malformed};
+use super::{Listing, Reference, Remote, Unavailable, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -100,18 +100,25 @@ impl Article {
         } else {
             resolved.files(api, 1000).await?
         };
-        let files = entries
-            .into_iter()
-            .map(|file| {
-                let folder = answer
-                    .folder_structure
-                    .get(&file.id.to_string())
-                    .map(String::as_str);
-                file.remote(&resolved, folder)
-            })
-            .collect::<Result<_, _>>()?;
+        let mut files = Vec::new();
+        let mut unavailable = Vec::new();
+        for file in entries {
+            let folder = answer
+                .folder_structure
+                .get(&file.id.to_string())
+                .map(String::as_str);
+            if file.is_link_only {
+                unavailable.push(Unavailable {
+                    path: file.path(folder),
+                    reason: "figshare lists it as a link to another site, not a stored file"
+                        .to_owned(),
+                });
+            } else {
+                files.push(file.remote(&resolved, folder)?);
+            }
+        }
         Ok(Listing {
-            unavailable: Vec::new(),
+            unavailable,
             resolved: Reference::Figshare(resolved),
             title: Some(answer.title),
             license: answer.license.map(|license| license.name),
@@ -203,17 +210,15 @@ struct File {
 }
 
 impl File {
-    fn remote(self, article: &Article, folder: Option<&str>) -> Result<Remote, Error> {
-        if self.is_link_only {
-            return Err(Error::new(
-                Kind::SourceInvalid,
-                format!(
-                    "{article} lists \"{}\" as a link rather than a stored file",
-                    self.name
-                ),
-            )
-            .help("pass the linked target to `fetchloom add` as its own dataset instead"));
+    /// where the file goes inside the dataset, below the folder figshare files it in.
+    fn path(&self, folder: Option<&str>) -> String {
+        match folder.filter(|folder| !folder.is_empty()) {
+            Some(folder) => format!("{folder}/{}", self.name),
+            None => self.name.clone(),
         }
+    }
+
+    fn remote(self, article: &Article, folder: Option<&str>) -> Result<Remote, Error> {
         let url = self.download(article)?;
         let md5 = self
             .computed_md5
@@ -226,12 +231,8 @@ impl File {
                 })
             })
             .transpose()?;
-        let path = match folder.filter(|folder| !folder.is_empty()) {
-            Some(folder) => format!("{folder}/{}", self.name),
-            None => self.name,
-        };
         Ok(Remote {
-            path,
+            path: self.path(folder),
             size: Some(self.size),
             sha256: None,
             md5,

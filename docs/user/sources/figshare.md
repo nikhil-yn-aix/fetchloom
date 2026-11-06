@@ -17,6 +17,8 @@ fetchloom get figshare:34744689@1
 
 use `--select` or `--exclude` with quoted [patterns](../reference/data-toml.md#patterns) to choose listed files. filters do not bypass access checks or listing-size limits.
 
+a file figshare lists as a link to another site has no stored bytes. it is listed as an entry fetchloom cannot download, so the rest of the article can still be fetched with `--exclude` for that path.
+
 ## pins
 
 `resolved` records the article id and version in `figshare:` form. each file keeps the API's download URL. downloads check stated MD5 and record SHA-256 and size.
