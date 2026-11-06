@@ -12,7 +12,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # links the C runtime into the windows binaries, for the C dependencies too, so they need no
-  # visual c++ redistributable
+  # visual c++ redistributable.
+  # never set RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS in this workflow: cargo then ignores every
+  # CARGO_TARGET_<triple>_RUSTFLAGS, so the windows binaries would quietly lose +crt-static and
+  # every binary its path remapping. add flags to the per-target variables instead
   CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
   CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
   # the oldest macos the binaries and wheels run on, the first that runs on apple silicon
@@ -88,6 +91,30 @@ jobs:
       # installs the version rust-toolchain.toml pins
       - run: rustup toolchain install
       - run: rustup target add ${{ matrix.target }}
+      # rustc writes the paths of the source files it compiles into the binary, in panic messages
+      # among other places. naming the cargo home /cargo and the checkout /src keeps the runner's
+      # paths out of the release. the flags join the target's own, so windows keeps +crt-static,
+      # and the wheel build below sees the same flags
+      - name: remap the build paths
+        run: |
+          cargo_home=${CARGO_HOME:-$HOME/.cargo}
+          workspace=$GITHUB_WORKSPACE
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo_home=$(cygpath -w "$cargo_home")
+            workspace=$(cygpath -w "$workspace")
+          fi
+          # cargo splits these flags at whitespace
+          case "$cargo_home$workspace" in
+            *[[:space:]]*)
+              echo "::error::cannot remap $cargo_home or $workspace, which hold whitespace"
+              exit 1
+              ;;
+          esac
+          variable=CARGO_TARGET_$(echo "${{ matrix.target }}" | tr 'a-z-' 'A-Z_')_RUSTFLAGS
+          flags="$(printenv "$variable" || true) --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$workspace=/src"
+          flags=${flags# }
+          echo "$variable=$flags"
+          echo "$variable=$flags" >> "$GITHUB_ENV"
       # the cc crate builds zstd, bzip2, liblzma and ring with musl-gcc for the musl target
       - name: install the musl C compiler
         if: runner.os == 'Linux'

@@ -25,6 +25,8 @@ no release has been published yet. use [source installation](../../user/getting-
 
 `MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it.
 
+rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. a comment beside the windows flags in release.yml says so.
+
 build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version` and verify that the python helper reports `project.invalid` outside a project.
 
 [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
