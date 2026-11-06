@@ -51,11 +51,14 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 |---|---|
 | 1,000,000 entries | files and folders exposed by the decoder |
 | 1 TiB unpacked | actual member bytes across one archive |
-| 200:1 expansion | output against compressed bytes read, after 4 MiB of output |
+| 200:1 expansion | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
-| 256 MiB xz decoder memory | what an xz header asks for, checked before decoding; zstd keeps libzstd's 128 MiB window limit |
+| 256 MiB xz decoder memory | what an xz header asks for, checked before decoding |
+| 128 MiB zstd window | what a zstd frame header asks for; frames past it, as `zstd --long=28` and above write them, are still detected as archives and refused |
+| 4,096-byte member paths | the path as the archive spells it and in NFC |
+| 256 MiB of names | every entry's path length, plus each folder or file name seen for the first time, its spelling in the archive when that is not NFC, and 64 bytes for keeping it |
 
-names become NFC, a unicode normalization form that gives canonically equivalent text one representation. leading `./` is removed; windows-made zip separators become `/`. absolute paths, traversal, controls, duplicate files, folded-name collisions and file/folder clashes fail. identical repeated tar folder declarations are allowed; duplicate zip folder names are rejected by the zip reader.
+names become NFC, a unicode normalization form that gives canonically equivalent text one representation. leading `./` is removed; windows-made zip separators become `/`. absolute paths, traversal, controls, duplicate files, folded-name collisions and file/folder clashes fail. names are kept as a tree of folded names, one node per folder or file, so memory grows with the bytes of the names rather than with every folder above each path. identical repeated tar folder declarations are allowed; duplicate zip folder names are rejected by the zip reader.
 
 links, devices, fifos, sparse tar entries, encrypted zip entries and unsupported zip compression methods fail. windows-specific name restrictions apply on windows. archive permissions and timestamps are not restored.
 
