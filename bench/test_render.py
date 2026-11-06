@@ -38,7 +38,7 @@ class RenderTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_renderer_joins_campaigns_on_separate_filesystems_only(self):
+    def test_renderer_joins_campaigns_that_measure_different_cases(self):
         import json
         from pathlib import Path
         import shutil
@@ -46,16 +46,19 @@ class RenderTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         try:
-            for fs in ("ext4", "xfs"):
-                (root / fs).mkdir()
-                record = dict(kind="lab", scenario="s1", profile="lan", filesystem=fs, tool="fetchloom",
+            for chunk, (fs, profile) in {"one": ("ext4", "lan"), "two": ("ext4", "home"), "three": ("xfs", "lan")}.items():
+                (root / chunk).mkdir()
+                record = dict(kind="lab", scenario="s1", profile=profile, filesystem=fs, tool="fetchloom",
                               quick=False, count=1, file_size=4, status="passed", wall_seconds=1)
-                (root / fs / "runs.jsonl").write_text(json.dumps(record))
-                (root / fs / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, filesystems={fs: fs})))
+                (root / chunk / "runs.jsonl").write_text(json.dumps(record))
+                case = dict(filesystem=fs, profile=profile, id="s1")
+                (root / chunk / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, cases=[case])))
             render.render(root, root / "report")
-            self.assertTrue((root / "report" / "docs" / "assets" / "bench" / "s1-lan-xfs.svg").exists())
-            (root / "xfs" / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, filesystems={"ext4": "ext4"})))
-            with self.assertRaisesRegex(ValueError, "overlap"):
+            for name in ("s1-lan-ext4", "s1-home-ext4", "s1-lan-xfs"):
+                self.assertTrue((root / "report" / "docs" / "assets" / "bench" / f"{name}.svg").exists())
+            twice = dict(kind="lab", quick=False, cases=[dict(filesystem="ext4", profile="lan", id="s1")])
+            (root / "two" / "meta.json").write_text(json.dumps(twice))
+            with self.assertRaisesRegex(ValueError, "twice"):
                 render.render(root, root / "report")
         finally:
             shutil.rmtree(root)
