@@ -9,6 +9,7 @@ use clap::{ArgMatches, CommandFactory};
 
 use super::{Context, args, finish, level};
 use crate::error::{Error, Kind};
+use crate::net;
 use crate::output::{ColorChoice, Level, Output, Style};
 
 /// help goes to stdout as clap writes it, even with `--json`, since it is for people. a mistake
@@ -72,12 +73,20 @@ fn nested(command: &str) -> Option<String> {
     })
 }
 
-/// the first value clap recorded for `kind`, if any.
+/// the first value clap recorded for `kind`, if any, a secret in it masked.
 fn context_value(err: &clap::Error, kind: ContextKind) -> Option<String> {
+    typed(err, kind)
+        .into_iter()
+        .next()
+        .map(|value| net::mask_query(&value).into_owned())
+}
+
+/// every value clap recorded for `kind`, as it was typed.
+fn typed(err: &clap::Error, kind: ContextKind) -> Vec<String> {
     match err.get(kind) {
-        Some(ContextValue::String(value)) => Some(value.clone()),
-        Some(ContextValue::Strings(values)) => values.first().cloned(),
-        _ => None,
+        Some(ContextValue::String(value)) => vec![value.clone()],
+        Some(ContextValue::Strings(values)) => values.clone(),
+        _ => Vec::new(),
     }
 }
 
@@ -258,7 +267,21 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
 fn first_line(err: &clap::Error) -> String {
     let text = err.to_string();
     let line = text.lines().next().unwrap_or_default();
-    line.strip_prefix("error: ").unwrap_or(line).to_owned()
+    let mut line = line.strip_prefix("error: ").unwrap_or(line).to_owned();
+    // clap quotes what was typed, which may be a link with a secret in its query
+    for kind in [
+        ContextKind::InvalidArg,
+        ContextKind::InvalidValue,
+        ContextKind::InvalidSubcommand,
+    ] {
+        for value in typed(err, kind) {
+            let masked = net::mask_query(&value);
+            if masked != value {
+                line = line.replace(&value, &masked);
+            }
+        }
+    }
+    line
 }
 
 #[cfg(test)]
@@ -322,6 +345,29 @@ mod tests {
                 .unwrap()
                 .contains("`fetchloom add \"fashion mnist\"`")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_secret_in_a_mistyped_link_stays_masked() -> Result<(), Box<dyn std::error::Error>> {
+        let link = "https://example.org/file?token=AUDIT_CANARY";
+        for arguments in [
+            &["fetchloom", "sync", link][..],
+            &["fetchloom", link],
+            &[
+                "fetchloom",
+                "get",
+                "https://example.org/x",
+                "--sha256",
+                link,
+            ],
+            &["fetchloom", "--color", link, "sync"],
+        ] {
+            let error = problem(arguments)?;
+            let shown = format!("{} {:?} {:?}", error.message, error.details, error.help);
+            assert!(!shown.contains("AUDIT_CANARY"), "{arguments:?}: {shown}");
+            assert!(shown.contains("token=***"), "{arguments:?}: {shown}");
+        }
         Ok(())
     }
 
