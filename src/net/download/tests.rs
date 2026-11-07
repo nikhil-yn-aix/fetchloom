@@ -252,6 +252,44 @@ fn a_refusal_page_reaches_the_divert_with_its_status() {
     assert_eq!(err.message, "/file 403 over quota");
 }
 
+/// a server nobody typed cannot send a download on to a cloud's metadata service, which oracle
+/// keeps at 192.0.0.192, or to a private address wrapped in IPv6.
+#[test]
+fn a_redirect_to_a_metadata_address_is_refused() {
+    for target in [
+        "http://192.0.0.192/opc/v2/instance/",
+        "http://[::169.254.169.254]/latest/",
+        "http://[2002:a9fe:a9fe::1]/latest/",
+    ] {
+        let (url, _) = serve(vec![reply("302 Found", &[("Location", target)], "")]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let net = net(&url);
+        let fetch = Fetch::new(url.join("file").unwrap());
+        let result = block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                net.download(&fetch, &cache, &|_| Ok(())),
+            )
+            .await
+        });
+        let Ok(Err(error)) = result else {
+            panic!("the redirect to {target} was followed");
+        };
+        assert_eq!(
+            error.kind,
+            Kind::NetworkRefused,
+            "{target}: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("private address"),
+            "{}",
+            error.message
+        );
+    }
+}
+
 #[test]
 fn an_html_file_the_server_names_is_the_file() {
     let (url, _) = serve(vec![reply(

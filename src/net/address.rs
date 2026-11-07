@@ -268,12 +268,16 @@ impl reqwest::dns::Resolve for Resolver {
     }
 }
 
-/// addresses that belong to this machine or its local network rather than the internet.
+/// addresses that belong to this machine or its local network rather than the internet. the
+/// fake addresses clash and mihomo hand out from 198.18.0.0/15 stay public: those tools answer
+/// every name with one, so refusing them would refuse every download.
 pub(crate) fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
-            let [first, second, ..] = ip.octets();
+            let [first, second, third, _] = ip.octets();
             let shared = first == 100 && (second & 0xc0) == 64;
+            // 192.0.0.0/24 holds oracle cloud's instance metadata at 192.0.0.192
+            let protocol = first == 192 && second == 0 && third == 0;
             ip.is_private()
                 || ip.is_loopback()
                 || ip.is_link_local()
@@ -282,6 +286,9 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_documentation()
                 || shared
+                || protocol
+                || first == 0
+                || first >= 240
         }
         IpAddr::V6(ip) => {
             ip.is_loopback()
@@ -289,13 +296,27 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
+                || site_local(ip)
                 || ip
-                    .to_ipv4_mapped()
+                    .to_ipv4()
                     .or_else(|| nat64(ip))
+                    .or_else(|| six_to_four(ip))
                     .is_some_and(|mapped| is_private(IpAddr::V4(mapped)))
                 || local_nat64(ip)
         }
     }
+}
+
+/// whether `ip` sits in `fec0::/10`, the site-local addresses IPv6 gave up but some networks
+/// still route.
+fn site_local(ip: Ipv6Addr) -> bool {
+    ip.segments()[0] & 0xffc0 == 0xfec0
+}
+
+/// the IPv4 address a 6to4 address in `2002::/16` carries in its next 32 bits.
+fn six_to_four(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let [_, _, a, b, c, d, ..] = ip.octets();
+    (ip.segments()[0] == 0x2002).then(|| Ipv4Addr::new(a, b, c, d))
 }
 
 /// the IPv4 address a NAT64 translator on the well-known prefix `64:ff9b::/96` reaches for `ip`.
@@ -352,6 +373,17 @@ mod tests {
             "fc00::1",
             "fe80::1",
             "::ffff:169.254.169.254",
+            // oracle cloud's instance metadata lives at 192.0.0.192
+            "192.0.0.192",
+            "0.1.2.3",
+            "240.0.0.1",
+            "255.255.255.254",
+            "::169.254.169.254",
+            "::10.0.0.1",
+            "2002:a9fe:a9fe::1",
+            "2002:c000:c0::1",
+            "fec0::1",
+            "feff::1",
         ] {
             assert!(is_private(ip(text)), "{text} is private");
         }
@@ -360,6 +392,10 @@ mod tests {
             "188.184.98.157",
             "2001:4860:4860::8888",
             "100.128.0.1",
+            "192.0.1.1",
+            // clash and mihomo answer every name with a fake address from 198.18.0.0/15
+            "198.18.0.1",
+            "2002:808:808::1",
         ] {
             assert!(!is_private(ip(text)), "{text} is public");
         }
