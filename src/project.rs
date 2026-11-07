@@ -445,6 +445,9 @@ impl Project {
             write_atomically(&folder.join(".gitignore"), b"*\n").map_err(|err| {
                 Error::io(format_args!("could not write {}", folder.display()), &err)
             })?;
+            sync_directory(&self.root).map_err(|err| {
+                Error::io("could not flush the new project metadata folder", &err)
+            })?;
         }
         Ok(folder)
     }
@@ -477,11 +480,45 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     };
     // std's rename hands windows a long path in its `\\?\` form. tempfile's persist does not,
     // and fails once a project's metadata passes 260 characters
-    let written = fill(file, bytes).and_then(|()| fs::rename(&temporary, path));
+    let written = fill(file, bytes)
+        .and_then(|()| fs::rename(&temporary, path))
+        .and_then(|()| {
+            let flushed = sync_directory(parent).and_then(|()| {
+                if folder == parent {
+                    Ok(())
+                } else {
+                    sync_directory(folder)
+                }
+            });
+            flushed.map_err(|err| {
+                io::Error::new(
+                    err.kind(),
+                    format!(
+                        "{} was replaced, but its directory changes could not be flushed: {err}",
+                        path.display()
+                    ),
+                )
+            })
+        });
     if written.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     written
+}
+
+/// flushes directory entries on unix, where flushing a file does not publish its name durably.
+fn sync_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        #[cfg(test)]
+        tests::syncing_directory(path)?;
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 /// writes `bytes` into a new file and flushes them to disk.
@@ -1176,5 +1213,74 @@ mod tests {
             Kind::ProjectInvalid
         );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    thread_local! {
+        static DIRECTORY_SYNCS: std::cell::RefCell<Vec<PathBuf>> = const {
+            std::cell::RefCell::new(Vec::new())
+        };
+        static DIRECTORY_SYNC_ERROR: std::cell::Cell<Option<io::ErrorKind>> = const {
+            std::cell::Cell::new(None)
+        };
+    }
+
+    #[cfg(unix)]
+    pub(super) fn syncing_directory(path: &Path) -> io::Result<()> {
+        DIRECTORY_SYNCS.with_borrow_mut(|synced| synced.push(path.to_path_buf()));
+        match DIRECTORY_SYNC_ERROR.take() {
+            Some(kind) => Err(kind.into()),
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_replacements_flush_both_changed_directories() {
+        for own in [false, true] {
+            let (_dir, project) = project(&[("data.lock", "before")]);
+            if own {
+                fs::create_dir(project.own_folder()).unwrap();
+            }
+            DIRECTORY_SYNCS.with_borrow_mut(Vec::clear);
+            project.write("data.lock", b"after").unwrap();
+            let mut expected = vec![project.root.clone()];
+            if own {
+                expected.push(project.own_folder());
+            }
+            assert_eq!(DIRECTORY_SYNCS.with_borrow_mut(std::mem::take), expected);
+            assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"after");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_flush_failure_reports_the_published_file() {
+        let (_dir, project) = project(&[("data.lock", "before")]);
+        DIRECTORY_SYNC_ERROR.set(Some(io::ErrorKind::Other));
+        let result = project.write("data.lock", b"after");
+        let unconsumed = DIRECTORY_SYNC_ERROR.take();
+        assert!(
+            unconsumed.is_none(),
+            "the containing directory was not flushed"
+        );
+        let error = result.unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(error.message.contains("was replaced"), "{error}");
+        assert!(error.message.contains("flush"), "{error}");
+        assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"after");
+        assert_eq!(fs::read_dir(&project.root).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_directory_creation_flushes_its_parent() {
+        let (_dir, project) = project(&[]);
+        DIRECTORY_SYNCS.with_borrow_mut(Vec::clear);
+        project.inner().unwrap();
+        assert_eq!(
+            DIRECTORY_SYNCS.with_borrow_mut(std::mem::take),
+            [project.own_folder(), project.root.clone()]
+        );
     }
 }
