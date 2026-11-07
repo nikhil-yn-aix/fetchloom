@@ -24,7 +24,7 @@ path = "measurements"
 |---|---|---|
 | `project.data_dir` | folder relative to the project root | `"data"` |
 | `ref` | a reference from [sources](../sources/README.md) | required, nonempty string |
-| `select` | keep files matching any of these patterns | all files |
+| `select` | keep files matching any of these patterns | all files; for a `ref` that links one file or folder inside a dataset, that file or everything below that folder |
 | `exclude` | drop files matching any of these patterns | none |
 | `extract` | unpack recognized archive names | `true` |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |

@@ -151,14 +151,17 @@ impl Reader<'_> {
             );
         }
         let mut select = self.patterns(table.get("select"), "select")?;
-        // a link to one file means that file, as `add` writes it, unless select says otherwise
+        // a link to one file or folder means that file or folder, as `add` writes it, unless
+        // select says otherwise
         if select.is_empty()
-            && let Some(file) = crate::source::Reference::parse(&reference)
-                .ok()
-                .and_then(|parsed| parsed.file)
-            && let Ok(only) = Glob::new(&crate::glob::escape(&file))
+            && let Ok(parsed) = crate::source::Reference::parse(&reference)
         {
-            select.push(only);
+            select.extend(
+                parsed
+                    .select()
+                    .iter()
+                    .filter_map(|pattern| Glob::new(pattern).ok()),
+            );
         }
         Ok(Entry {
             reference,
@@ -572,6 +575,24 @@ mod tests {
         };
         assert_eq!(select("one"), ["a[[]1].csv"]);
         assert_eq!(select("chosen"), ["*.json"]);
+    }
+
+    #[test]
+    fn a_link_to_one_folder_selects_that_folder_unless_select_is_given() {
+        let manifest = Manifest::parse(
+            "[datasets.folder]\nref = \"https://huggingface.co/datasets/acme/data/tree/main/sample/10BT\"\n\n[datasets.chosen]\nref = \"https://huggingface.co/datasets/acme/data/tree/main/sample\"\nselect = \"*.json\"\n\n[datasets.whole]\nref = \"https://huggingface.co/datasets/acme/data/tree/main\"\n",
+        )
+        .unwrap();
+        let select = |name: &str| {
+            manifest.datasets[name]
+                .select
+                .iter()
+                .map(|glob| glob.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(select("folder"), ["sample/10BT/**"]);
+        assert_eq!(select("chosen"), ["*.json"]);
+        assert_eq!(select("whole"), Vec::<String>::new());
     }
 
     #[test]
