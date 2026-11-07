@@ -103,5 +103,33 @@ class TimerTests(unittest.TestCase):
             self.assertIn(mock.call(signal.ITIMER_REAL, 1), timer.call_args_list)
 
 
+class ProvenanceTests(unittest.TestCase):
+    def test_metadata_identifies_bytes_at_a_reused_executable_path(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "owned.json").write_text("{}")
+            binary = root / "client"
+            args = SimpleNamespace(fs=[], seed=1729, quick=True, profiles=["lan"], fetchloom=binary)
+            adapter = SimpleNamespace(version=lambda: "same version")
+            records = []
+            with mock.patch.object(lab, "ROOT", root), \
+                 mock.patch.object(run, "native_versions", return_value=[]), \
+                 mock.patch.object(run, "python_packages", return_value=[]), \
+                 mock.patch.object(run, "repo_head", return_value="harness-head"), \
+                 mock.patch.object(run.subprocess, "check_output", return_value="ext4 example rw"):
+                for data in (b"first build", b"other build"):
+                    binary.write_bytes(data)
+                    meta = run.metadata(args, {"fetchloom": adapter})
+                    self.assertIn("fetchloom_binary", meta)
+                    identity = meta["fetchloom_binary"]
+                    self.assertEqual(identity["path"], str(binary.resolve()))
+                    self.assertEqual(identity["sha256"], hashlib.sha256(data).hexdigest())
+                    self.assertEqual(identity["size"], len(data))
+                    self.assertEqual(meta["repo_head"], "harness-head")
+                    records.append(identity)
+            self.assertNotEqual(records[0]["sha256"], records[1]["sha256"])
+
+
 if __name__ == "__main__":
     unittest.main()

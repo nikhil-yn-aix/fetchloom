@@ -257,6 +257,17 @@ def python_packages():
         return [f"python env unavailable: {error}"]
 
 
+def binary_identity(path):
+    path = Path(path).resolve(strict=True)
+    before = path.stat()
+    digest = fixtures.sha256(path)
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise RuntimeError(f"measured executable changed while recording its identity: {path}")
+    return dict(path=str(path), sha256=digest, size=after.st_size)
+
+
 def metadata(args, adapters):
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.machine())
@@ -271,6 +282,8 @@ def metadata(args, adapters):
                              for fs in args.fs},
                 tool_versions={name: tool.version() for name, tool in adapters.items()},
                 repo_head=repo_head(),
+                fetchloom_binary=binary_identity(args.fetchloom) if any(
+                    name == "fetchloom" or name.startswith("fetchloom+") for name in adapters) else None,
                 seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.PROFILES,
                 commands={}, orders=[], cases=[],
                 native_packages=native_versions(),
