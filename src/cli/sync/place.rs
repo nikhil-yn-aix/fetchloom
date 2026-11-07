@@ -2,7 +2,8 @@
 //! before when the lock moved on, remove what no dataset needs, and leave alone every file
 //! someone changed or added.
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod model_tests;
 mod put;
 mod tell;
@@ -774,11 +775,18 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use super::*;
     use crate::output::{Level, Style};
-    use crate::project::state::{State, nanos};
+    use crate::project::state::State;
+
+    fn surveyed(project: &Project) -> Survey {
+        Survey::read(
+            project,
+            "data",
+            crate::threads::Threads::default(),
+            &crate::exp::Experiments::default(),
+        )
+    }
 
     #[test]
     fn placements_are_checked_no_later_than_their_survey() {
@@ -835,25 +843,15 @@ mod tests {
         project
             .write_state(&state, &crate::exp::Experiments::default())
             .unwrap();
-        let before = nanos(SystemTime::now());
-        let survey = Survey::read(
-            &project,
-            "data",
-            crate::threads::Threads::default(),
-            &crate::exp::Experiments::default(),
-        );
-        let surveyed = nanos(SystemTime::now());
-        let started = survey.started;
-        assert!((before..=surveyed).contains(&started));
+        let mut survey = surveyed(&project);
+        let started = 42;
+        survey.started = started;
         let actions = vec![
             Action::Place,
             Action::Replace,
             Action::Adopt(survey.disk[&targets[2].path]),
             Action::Vouch(survey.disk[&targets[3].path]),
         ];
-        while nanos(SystemTime::now()) <= surveyed {
-            std::thread::yield_now();
-        }
         let manifest =
             Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
                 .unwrap();
@@ -883,10 +881,7 @@ mod tests {
         let (recorded, _) = project.state();
         for name in names {
             let checked = recorded.files[&format!("data/weather/{name}.csv")].checked;
-            assert!(
-                (before..=surveyed).contains(&checked),
-                "{name} was checked after its survey: {checked} > {surveyed}"
-            );
+
             assert_eq!(checked, started, "{name} did not record the survey's start");
         }
     }
@@ -929,12 +924,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let (project, manifest, leftover, own) = interrupted(dir.path());
-        let survey = Survey::read(
-            &project,
-            "data",
-            crate::threads::Threads::default(),
-            &crate::exp::Experiments::default(),
-        );
+        let survey = surveyed(&project);
         let placing = Placing {
             project: &project,
             manifest: &manifest,
@@ -956,12 +946,7 @@ mod tests {
     fn a_leftover_copy_keeps_a_settled_sync_from_skipping_its_sweep() {
         let dir = tempfile::tempdir().unwrap();
         let (project, manifest, _, _) = interrupted(dir.path());
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            crate::threads::Threads::default(),
-            &crate::exp::Experiments::default(),
-        );
+        let mut survey = surveyed(&project);
         let seen = Seen {
             manifest: crate::digest::sha256(b"data.toml"),
             lock: Some(crate::digest::sha256(b"data.lock")),

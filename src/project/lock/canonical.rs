@@ -371,12 +371,12 @@ mod tests {
                 dataset.title = Some("literal # and an escaped \" quote".to_owned());
             }
             let text = lock.render();
-            let commented = format!(
-                "# leading\n\n{}# trailing",
-                text.lines()
-                    .map(|line| format!("{line} # inline\n# between fields\n"))
-                    .collect::<String>()
-            );
+            let mut commented = String::from("# leading\n\n");
+            for line in text.lines() {
+                commented.push_str(line);
+                commented.push_str(" # inline\n# between fields\n");
+            }
+            commented.push_str("# trailing");
             assert_eq!(read(&commented, false), None);
             assert_eq!(read(&commented, true), Some(lock.clone()));
             for exp in [crate::exp::Experiments::default(), enabled.clone()] {

@@ -83,6 +83,10 @@ enum Ownership {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the model enumerates independent observed flags"
+)]
 struct Observation {
     exists: bool,
     ownership: Ownership,
@@ -109,14 +113,7 @@ fn reference(observed: Observation, copy: bool, force: bool) -> Choice {
                 Keep
             }
         }
-        Untracked if observed.wanted_bytes => {
-            if copy && !observed.writable {
-                Replace
-            } else {
-                Adopt
-            }
-        }
-        Edited if observed.wanted_bytes => {
+        Edited | Untracked if observed.wanted_bytes => {
             if copy && !observed.writable {
                 Replace
             } else {
@@ -178,7 +175,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
         if matches!(scenario, 5 | 6) {
             look.modified += 1;
         }
-        let previous_version = if matches!(scenario, 3 | 8 | 11) { 0 } else { 1 };
+        let previous_version = u8::from(!matches!(scenario, 3 | 8 | 11));
         survey.state.files.insert(
             PATH.to_owned(),
             Placed {
