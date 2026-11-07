@@ -156,7 +156,7 @@ fn string(text: &str) -> Option<(Cow<'_, str>, &str)> {
         let value = &body[..end];
         return (!value.contains(refused)).then_some((Cow::Borrowed(value), &body[end + 1..]));
     }
-    let mut value = String::with_capacity(body.len());
+    let mut value = String::with_capacity(end);
     let mut chars = body.char_indices();
     while let Some((at, c)) = chars.next() {
         match c {
@@ -313,6 +313,30 @@ mod tests {
         ] {
             assert_eq!(string(refused), None, "{refused}");
         }
+    }
+
+    #[test]
+    fn escaped_path_capacity_is_independent_of_following_fields() {
+        let path = format!("a\"{}.bin", "p".repeat(34));
+        let mut capacities = Vec::new();
+        for url_length in [96, 4096] {
+            let mut sample = samples().remove(1);
+            let mut entry = file(&path, 1);
+            let prefix = "https://example.org/";
+            entry.url = format!("{prefix}{}", "u".repeat(url_length - prefix.len()));
+            entry.size = 4096;
+            sample.datasets[0].files = vec![entry];
+            let read = read(&sample.render()).unwrap();
+            let got = &read.datasets[0].files[0].path;
+            assert_eq!(got, &path);
+            capacities.push((url_length, got.len(), got.capacity()));
+        }
+        assert!(
+            capacities
+                .iter()
+                .all(|(_, len, capacity)| *capacity <= 2 * len),
+            "URL length, path length, path capacity: {capacities:?}"
+        );
     }
 
     /// any text: the fast reader takes only what the TOML reader reads alike, and any lock read
