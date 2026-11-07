@@ -81,7 +81,7 @@ exclusive cache access fails on every lock error, so gc never treats failed excl
 
 archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation.
 
-`cache verify` rehashes all objects and marks damage without deleting it. those marks also tell project scans to check already placed hardlinks.
+`cache verify` rehashes all objects and marks damage without deleting it. if the OS refuses a verification worker, the caller completes that work instead. those marks also tell project scans to check already placed hardlinks.
 
 inspection, verification reads and cleanup retain each failed path with its I/O kind, OS error code when available, and original message. JSON `not_removed` and `unreadable` contain these failure records, not bare paths. warnings and error details retain the same causes; storage failures do not receive permission-only advice.
 

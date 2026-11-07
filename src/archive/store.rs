@@ -96,35 +96,41 @@ pub(super) fn store_all(
     let failed = AtomicBool::new(false);
     let sealed = Mutex::new(Vec::new());
     let trouble = Mutex::new(None);
-    let read = thread::scope(|scope| {
-        for _ in 0..threads {
-            scope.spawn(|| {
-                loop {
-                    let next = locked(&queue).recv();
-                    // the queue closes once the reading thread is done and every job is taken
-                    let Ok(job) = next else { return };
-                    // after a failure, dropping a job removes its temporary file
-                    if failed.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    match seal(&staging, job, flush_each) {
-                        Ok(done) => locked(&sealed).push(done),
-                        Err(err) => {
-                            failed.store(true, Ordering::Relaxed);
-                            locked(&trouble).get_or_insert(err);
-                        }
-                    }
+    let write = || {
+        loop {
+            let next = locked(&queue).recv();
+            let Ok(job) = next else { return };
+            if failed.load(Ordering::Relaxed) {
+                continue;
+            }
+            match seal(&staging, job, flush_each) {
+                Ok(done) => locked(&sealed).push(done),
+                Err(err) => {
+                    failed.store(true, Ordering::Relaxed);
+                    locked(&trouble).get_or_insert(err);
                 }
-            });
+            }
         }
+    };
+    let read = thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| crate::threads::scoped(scope, &write))
+            .collect();
+        let threaded = workers.iter().any(crate::threads::Scoped::is_threaded);
         let writers = Writers {
             staging: &staging,
-            jobs: (threads > 0).then_some(jobs),
+            jobs: threaded.then_some(jobs),
             sealed: &sealed,
             flush_each,
             failed: &failed,
         };
-        read(&writers)
+        // with no live consumer the reader stores inline; joining before closing would hang.
+        let result = read(&writers);
+        drop(writers);
+        for worker in workers {
+            worker.join();
+        }
+        result
     });
     let sealed = sealed.into_inner().unwrap_or_else(PoisonError::into_inner);
     let trouble = trouble.into_inner().unwrap_or_else(PoisonError::into_inner);
@@ -181,8 +187,11 @@ fn publish_all(
         publish();
     } else {
         thread::scope(|scope| {
-            for _ in 0..threads.min(count) {
-                scope.spawn(publish);
+            let workers: Vec<_> = (0..threads.min(count))
+                .map(|_| crate::threads::scoped(scope, &publish))
+                .collect();
+            for worker in workers {
+                worker.join();
             }
         });
     }

@@ -364,43 +364,47 @@ impl Cache {
             unreadable: scan.unreadable,
             ..Checked::default()
         });
-        std::thread::scope(|scope| {
-            for _ in 0..threads.max(1) {
-                scope.spawn(|| {
-                    while let Some(object) = objects.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        if stop.is_asked() {
-                            break;
-                        }
-                        let actual = hash(&object.path, stop);
-                        if stop.is_asked() {
-                            break;
-                        }
-                        progress(object.size);
-                        if stop.is_asked() {
-                            break;
-                        }
-                        match actual {
-                            Ok(actual) if actual == object.digest => continue,
-                            Err(err) => {
-                                checked
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                    .unreadable
-                                    .push(Failure::new(&object.path, &err));
-                                continue;
-                            }
-                            Ok(_) => {}
-                        }
-                        let marked = self.mark_changed(&object.digest).is_ok();
-                        let mut found = checked
+        let verify = || {
+            while let Some(object) = objects.get(next.fetch_add(1, Ordering::Relaxed)) {
+                if stop.is_asked() {
+                    break;
+                }
+                let actual = hash(&object.path, stop);
+                if stop.is_asked() {
+                    break;
+                }
+                progress(object.size);
+                if stop.is_asked() {
+                    break;
+                }
+                match actual {
+                    Ok(actual) if actual == object.digest => continue,
+                    Err(err) => {
+                        checked
                             .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        found.changed.push(object.digest);
-                        if !marked {
-                            found.stuck.push(object.digest);
-                        }
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .unreadable
+                            .push(Failure::new(&object.path, &err));
+                        continue;
                     }
-                });
+                    Ok(_) => {}
+                }
+                let marked = self.mark_changed(&object.digest).is_ok();
+                let mut found = checked
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                found.changed.push(object.digest);
+                if !marked {
+                    found.stuck.push(object.digest);
+                }
+            }
+        };
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads.max(1))
+                .map(|_| crate::threads::scoped(scope, &verify))
+                .collect();
+            for worker in workers {
+                worker.join();
             }
         });
         stop.check()?;
@@ -552,6 +556,19 @@ mod tests {
             assert_eq!(report["not_removed"][0]["message"], message, "{report}");
             assert_eq!(fs::read(path).unwrap(), b"good");
         }
+    }
+
+    #[test]
+    fn verification_runs_on_the_caller_when_workers_are_refused() {
+        let (_dir, cache) = cache();
+        store(&cache, b"good");
+        let caller = std::thread::current().id();
+        let _refusing = crate::threads::refuse_after(0);
+        let checked = cache.verify_all(2, &|_| assert_eq!(std::thread::current().id(), caller));
+        assert_eq!(checked.objects, 1);
+        assert_eq!(checked.bytes, 4);
+        assert_eq!(checked.changed, []);
+        assert_eq!(checked.unreadable, []);
     }
 
     #[test]

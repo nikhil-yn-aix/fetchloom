@@ -339,3 +339,18 @@ fn a_zip_of_one_file_wraps_only_that_file() {
     assert!(super::wraps(cache, &wrapped, "train.csv"));
     assert!(!super::wraps(cache, &wrapped, "test.csv"));
 }
+
+#[test]
+fn refused_archive_workers_keep_every_member_without_a_queue_wait() {
+    let _refusing = crate::threads::refuse_after(0);
+    for format in FAMILIES {
+        let bytes = archive(format, FILES);
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(format, &bytes).unwrap();
+        assert_eq!(unpacked.members.len(), FILES.len());
+        for member in &unpacked.members {
+            let (_, expected) = FILES.iter().find(|(path, _)| *path == member.path).unwrap();
+            scratch.assert_stored(member, expected);
+        }
+    }
+}

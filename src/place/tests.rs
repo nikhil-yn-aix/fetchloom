@@ -1079,3 +1079,21 @@ fn a_recorded_hardlink_keeps_its_flag_even_on_fat() {
     assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
     assert!(is_read_only(&destination));
 }
+
+#[test]
+fn refused_placement_workers_keep_borrowed_and_owned_results() {
+    let _refusing = crate::threads::refuse_after(0);
+    let caller = std::thread::current().id();
+    let items: Vec<_> = (0..1024).collect();
+    let expected: Vec<_> = items.iter().map(|value| value * 2).collect();
+    let borrowed = run_all(&items, Threads::default(), |value| {
+        assert_eq!(std::thread::current().id(), caller);
+        value * 2
+    });
+    assert_eq!(borrowed, expected);
+    let owned = run_owned(items, Threads::default(), |value| {
+        assert_eq!(std::thread::current().id(), caller);
+        value * 2
+    });
+    assert_eq!(owned, expected);
+}

@@ -515,7 +515,7 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
-                scope.spawn(|| {
+                crate::threads::scoped(scope, || {
                     let mut done = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
@@ -529,11 +529,7 @@ pub(crate) fn run_all<T: Sync, R: Send>(
             .collect();
         workers
             .into_iter()
-            .flat_map(|worker| {
-                worker
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
+            .flat_map(crate::threads::Scoped::join)
             .collect()
     });
     done.sort_unstable_by_key(|(index, _)| *index);
@@ -568,15 +564,18 @@ fn run_owned<T: Send, R: Send>(
     std::thread::scope(|scope| {
         let workers: Vec<_> = runs
             .into_iter()
-            .map(|run| scope.spawn(move || run.into_iter().map(job).collect::<Vec<_>>()))
+            .map(|mut run| {
+                crate::threads::scoped(scope, move || {
+                    std::mem::take(&mut run)
+                        .into_iter()
+                        .map(job)
+                        .collect::<Vec<_>>()
+                })
+            })
             .collect();
         workers
             .into_iter()
-            .flat_map(|worker| {
-                worker
-                    .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
+            .flat_map(crate::threads::Scoped::join)
             .collect()
     })
 }
