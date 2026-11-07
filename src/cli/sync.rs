@@ -6,7 +6,7 @@ mod draft;
 pub(super) mod place;
 pub(super) mod unpack;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
@@ -263,6 +263,37 @@ impl<'a> Loop<'a> {
         })
     }
 
+    /// finds damaged objects behind edited hardlinks without writing their change marks.
+    pub(super) fn damaged_objects(&self, survey: &Survey) -> Result<HashSet<Sha256>, Error> {
+        let mut checked = HashSet::new();
+        let mut damaged = HashSet::new();
+        for (path, placed) in &survey.state.files {
+            if placed.method != crate::place::Method::Hardlink
+                || !(survey.edited.contains(path)
+                    || survey
+                        .disk
+                        .get(path)
+                        .is_some_and(|seen| *seen != placed.look))
+                || !checked.insert(placed.sha256)
+            {
+                continue;
+            }
+            let object = self.cache.object_path(&placed.sha256);
+            let actual = crate::cache::read_unfollowed(&object).and_then(Sha256::of_reader);
+            match actual {
+                Ok(actual) if actual == placed.sha256 => {}
+                Ok(_) => {
+                    damaged.insert(placed.sha256);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    damaged.insert(placed.sha256);
+                }
+                Err(err) => return Err(place::local(&self.project.root.join(path), &err)),
+            }
+        }
+        Ok(damaged)
+    }
+
     /// what [`Loop::place`] would do, decided without downloading, unpacking or writing, given
     /// `jobs` relocking would download first. a download an offline run could not make stops the
     /// preview as it would stop the run.
@@ -273,13 +304,14 @@ impl<'a> Loop<'a> {
         force: bool,
         survey: Survey,
         mut jobs: Vec<Job>,
+        damaged: &HashSet<Sha256>,
     ) -> Result<Preview, Error> {
         let placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let mut unpack = Vec::new();
         for (dataset, file) in placing
             .unknown()
             .into_iter()
-            .chain(placing.missing_as_is(&self.cache)?)
+            .chain(placing.missing_as_is(&self.cache, damaged)?)
         {
             if file.unpacks_to.is_some() {
                 unpack.push(format!("{dataset}/{}", file.path));
@@ -290,8 +322,10 @@ impl<'a> Loop<'a> {
         jobs.retain(|job| seen.insert(job.label.clone()));
         let mut seen = BTreeSet::new();
         unpack.retain(|label| seen.insert(label.clone()));
-        jobs.retain(|job| !in_cache(&self.cache, &job.fetch));
-        self.refuse_offline(&jobs)?;
+        let available =
+            |job: &Job| in_cache_where(&self.cache, &job.fetch, |digest| !damaged.contains(digest));
+        jobs.retain(|job| !available(job));
+        self.refuse_offline_with(&jobs, available)?;
         let mut preview = placing.preview();
         preview.changes.download = jobs
             .into_iter()
@@ -431,12 +465,20 @@ impl<'a> Loop<'a> {
 
     /// refuses, when offline, the jobs whose bytes the cache lacks.
     fn refuse_offline(&self, jobs: &[Job]) -> Result<(), Error> {
+        self.refuse_offline_with(jobs, |job| in_cache(&self.cache, &job.fetch))
+    }
+
+    fn refuse_offline_with(
+        &self,
+        jobs: &[Job],
+        available: impl Fn(&Job) -> bool,
+    ) -> Result<(), Error> {
         if !self.net.offline().enabled() {
             return Ok(());
         }
         let missing: Vec<&str> = jobs
             .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch))
+            .filter(|job| !available(job))
             .map(|job| job.label.as_str())
             .collect();
         if missing.is_empty() {
@@ -445,7 +487,7 @@ impl<'a> Loop<'a> {
         // a new link has no fingerprint yet, so the cache cannot be asked for it
         let unknown = jobs
             .iter()
-            .any(|job| job.fetch.expect.sha256.is_none() && !in_cache(&self.cache, &job.fetch));
+            .any(|job| job.fetch.expect.sha256.is_none() && !available(job));
         if unknown {
             let mut error = Error::new(
                 Kind::OfflineMissing,
@@ -667,14 +709,19 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
 }
 
 fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
+    in_cache_where(cache, fetch, |_| true)
+}
+
+fn in_cache_where(cache: &Cache, fetch: &Fetch, usable: impl Fn(&Sha256) -> bool) -> bool {
     let expect = &fetch.expect;
     match (expect.sha256, expect.md5) {
-        (Some(digest), _) => cache.find(&digest, expect.size).is_some(),
+        (Some(digest), _) => usable(&digest) && cache.find(&digest, expect.size).is_some(),
         (None, Some(md5)) => {
             cache
                 .stated_md5(&md5, fetch.url.as_str())
                 .is_some_and(|(digest, size)| {
-                    expect.size.is_none_or(|expected| expected == size)
+                    usable(&digest)
+                        && expect.size.is_none_or(|expected| expected == size)
                         && cache.find(&digest, Some(size)).is_some()
                 })
         }
@@ -960,6 +1007,8 @@ mod tests {
             .save_stated_md5(&md5, url.as_str(), &stored.digest, 4)
             .unwrap();
         assert!(in_cache(&cache, &md5_only));
+        assert!(!in_cache_where(&cache, &md5_only, |digest| *digest != stored.digest));
+        assert!(!in_cache_where(&cache, &fetch(sha), |_| false));
         assert!(
             !in_cache(
                 &cache,

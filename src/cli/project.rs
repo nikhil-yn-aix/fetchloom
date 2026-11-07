@@ -1049,6 +1049,7 @@ async fn preview_all(
 ) -> Result<(bool, Preview), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
+    let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
     {
@@ -1068,7 +1069,7 @@ async fn preview_all(
     if changed {
         engine::tell_lock(output, &before, &lock, ("Would lock", "Would drop"), None);
     }
-    let preview = work.preview(manifest, &lock, force, survey, jobs)?;
+    let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged)?;
     for download in &preview.changes.download {
         let size = download
             .size

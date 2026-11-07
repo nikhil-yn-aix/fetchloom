@@ -467,3 +467,67 @@ fn cache_gc_dry_run_lists_the_marks_a_real_gc_removes() -> Result {
     assert_eq!(removed, expected, "the dry run lists what gc removes");
     Ok(())
 }
+
+#[test]
+fn a_dry_run_audits_damaged_read_only_hardlinks() -> Result {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let lock: toml::Value = toml::from_str(&fs::read_to_string(sandbox.work().join("data.lock"))?)?;
+    let digest = lock["dataset"][0]["files"][0]["sha256"]
+        .as_str()
+        .ok_or("missing digest")?;
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&digest[..2])
+        .join(&digest[2..]);
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    crate::support::delete(&placed)?;
+    fs::hard_link(&object, &placed)?;
+    crate::support::edit(&placed, IRIS)?;
+    let recorded = UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(recorded)?;
+    let state_path = sandbox.work().join(".fetchloom/state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+    let record = &mut state["files"]["data/iris/iris.csv"];
+    record["method"] = "hardlink".into();
+    record["look"]["modified"] =
+        u64::try_from(recorded.duration_since(UNIX_EPOCH)?.as_nanos())?.into();
+    fs::write(&state_path, serde_json::to_vec(&state)?)?;
+    let mut changed = IRIS.to_vec();
+    changed[0] = b'S';
+    crate::support::edit(&placed, &changed)?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(recorded + Duration::from_secs(10))?;
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&placed, permissions)?;
+    let before_project = tree(&sandbox.work())?;
+    let before_cache = tree(&sandbox.cache())?;
+
+    let dry = sandbox.run(&["--json", "--offline", "sync", "--force", "--dry-run"])?;
+    assert_eq!(tree(&sandbox.work())?, before_project);
+    assert_eq!(tree(&sandbox.cache())?, before_cache);
+    assert!(fs::metadata(&object)?.permissions().readonly());
+    let real = sandbox.run(&["--json", "--offline", "sync", "--force"])?;
+    assert_eq!(real.status.code(), Some(20), "{}", text(&real.stdout)?);
+    assert_eq!(dry.status.code(), Some(20), "{}", text(&dry.stdout)?);
+    assert_eq!(
+        json(&dry)?["errors"][0]["kind"],
+        json(&real)?["errors"][0]["kind"]
+    );
+    assert_eq!(fs::read(&placed)?, changed);
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

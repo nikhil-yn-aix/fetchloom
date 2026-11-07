@@ -200,8 +200,11 @@ impl<'a> Placing<'a> {
     pub(crate) fn missing_as_is(
         &self,
         cache: &Cache,
+        damaged: &HashSet<Sha256>,
     ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
-        self.lacking(|digest, size| Ok(cache.find(digest, Some(size)).is_some()))
+        self.lacking(|digest, size| {
+            Ok(!damaged.contains(digest) && cache.find(digest, Some(size)).is_some())
+        })
     }
 
     fn lacking(
