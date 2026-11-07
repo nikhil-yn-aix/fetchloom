@@ -221,6 +221,28 @@ fn search_json_carries_metadata_and_joins_words() -> Result {
 }
 
 #[test]
+fn zenodo_preserves_whitespace_in_quoted_words() -> Result {
+    let sandbox = Sandbox::new()?;
+    for words in ["fashion mnist", "fashion\t mnist", "fashion\u{a0}mnist"] {
+        let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+        let output = catalogs
+            .command(&sandbox, &["search", words, "--source", "zenodo", "--json"])
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        assert_eq!(json(&output)?["status"], "ok");
+        let requests = catalogs.zenodo.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].contains("q=title%3a%28fashion+and+mnist%29"),
+            "{words:?}: {requests:?}"
+        );
+        assert!(catalogs.hf.requests().is_empty());
+        assert!(catalogs.kaggle.requests().is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn zero_matches_explain_how_to_try_again() -> Result {
     let sandbox = Sandbox::new()?;
     for command in ["add", "get", "search"] {

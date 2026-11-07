@@ -290,7 +290,7 @@ struct Stats {
 async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
     let words: String = words
         .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '-' | '_'))
         .collect();
     // lowercase, so a word such as OR stays a word rather than an operator
     let words: Vec<String> = words.split_whitespace().map(str::to_lowercase).collect();

@@ -21,7 +21,7 @@ patterns match listed paths. listing limits and access checks apply before filte
 
 ## search
 
-`fetchloom search` asks zenodo for datasets whose titles hold every search word, most viewed first. when no title holds them all, it asks again for titles with any of the words.
+`fetchloom search` asks zenodo for datasets whose titles hold every search word, most viewed first. whitespace, including pasted nonbreaking spaces, separates words. when no title holds them all, it asks again for titles with any of the words.
 
 ## pins
 

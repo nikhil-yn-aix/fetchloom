@@ -294,6 +294,26 @@ fn a_limit_asks_each_catalog_for_that_many() {
 }
 
 #[test]
+fn zenodo_preserves_whitespace_between_words() {
+    let separated = "https://zenodo.org/api/records?q=title%3A%28iris+AND+flower%29&type=dataset&sort=mostviewed&size=3";
+    let joined = "https://zenodo.org/api/records?q=title%3A%28irisflower%29&type=dataset&sort=mostviewed&size=3";
+    for words in [
+        "Iris flower",
+        "Iris\tflower",
+        "Iris\nflower",
+        "Iris\u{a0}flower",
+        "Iris\u{2003}flower",
+    ] {
+        let api = Recorded::default()
+            .fixture(separated, "search/zenodo.json")
+            .fixture(joined, "search/zenodo.json");
+        let result = block_on(search(&api, words, &[Catalog::Zenodo], LIMIT)).unwrap();
+        assert_eq!(result.candidates.len(), 3);
+        assert_eq!(api.asked(), [separated], "{words:?}");
+    }
+}
+
+#[test]
 fn zenodo_titles_must_hold_every_word_before_any_will_do() {
     let every = "https://zenodo.org/api/records?q=title%3A%28iris+AND+flower%29&type=dataset&sort=mostviewed&size=3";
     let any = "https://zenodo.org/api/records?q=title%3A%28iris+OR+flower%29&type=dataset&sort=mostviewed&size=3";
