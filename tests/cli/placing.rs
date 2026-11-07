@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text, wait_until};
+use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -493,6 +493,10 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
         b"",
     );
     let (release, held) = std::sync::mpsc::channel();
+    let (requested, arrived) = std::sync::mpsc::channel();
+    slow.push(Part::Action(Box::new(move || {
+        let _ = requested.send(());
+    })));
     slow.push(Part::Wait(held));
     slow.push(Part::Bytes(V2.to_vec()));
     let iris = Server::start(
@@ -521,7 +525,7 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
         .env("FETCHLOOM_CACHE", sandbox.folder("empty-cache")?)
         .stderr(Stdio::piped())
         .spawn()?;
-    wait_until("the download request", || Ok(iris.requests().len() >= 3))?;
+    arrived.recv()?;
     let outdated = sandbox.work().join("data").join("iris").join("iris.csv");
     let unneeded = sandbox.work().join("data").join("cows").join("cows.csv");
     edit(&outdated, b"my notes on iris\n")?;
