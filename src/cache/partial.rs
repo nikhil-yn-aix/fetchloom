@@ -51,10 +51,10 @@ struct Record {
     received: u64,
     /// the SHA-256 of the first `received` bytes, which a resume checks before it trusts them.
     sha256: Sha256,
+    #[serde(deserialize_with = "Option::deserialize")]
     length: Option<u64>,
     validators: Validators,
     /// what the streams of a split download finished past the prefix.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ranges: Vec<Range>,
 }
 

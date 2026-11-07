@@ -72,7 +72,9 @@ pub(crate) struct Stored {
 /// how a server identified the bytes it sent, so a later request can ask whether they changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Validators {
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) etag: Option<String>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) last_modified: Option<String>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) date: Option<String>,
@@ -87,6 +89,7 @@ pub(crate) struct UrlRecord {
     pub(crate) sha256: Sha256,
     pub(crate) size: u64,
     /// the file name the server gave, when it gave one.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub(crate) name: Option<String>,
     pub(crate) validators: Validators,
 }
@@ -1141,6 +1144,33 @@ pub(crate) mod tests {
         fs::write(&marker, b"kept").unwrap();
         Cache::open(cache.root.clone()).unwrap();
         assert_eq!(fs::read(marker).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn cache_records_require_explicit_nullable_fields() {
+        let validators = serde_json::to_value(Validators::default()).unwrap();
+        for field in ["etag", "last_modified", "date"] {
+            let mut missing = validators.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<Validators>(missing).is_err(),
+                "missing {field}"
+            );
+        }
+        let record = UrlRecord {
+            url: "https://example.org/object".to_owned(),
+            sha256: digest::sha256(b"good"),
+            size: 4,
+            name: None,
+            validators: Validators::default(),
+        };
+        let mut stored = serde_json::to_value(&record).unwrap();
+        let mut read = serde_json::from_value::<UrlRecord>(stored.clone()).unwrap();
+        assert_eq!(read.url, url_identity(&record.url));
+        read.url.clone_from(&record.url);
+        assert_eq!(read, record);
+        stored.as_object_mut().unwrap().remove("name");
+        assert!(serde_json::from_value::<UrlRecord>(stored).is_err());
     }
 
     #[test]

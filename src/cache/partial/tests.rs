@@ -724,3 +724,24 @@ fn local_fsync_keeps_large_downloads_in_the_batch() {
         assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), bytes);
     }
 }
+
+#[test]
+fn partial_records_require_length_and_ranges() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/record-schema");
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.save().unwrap();
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&partial.record).unwrap()).unwrap();
+    assert_eq!(stored["length"], serde_json::Value::Null);
+    assert_eq!(stored["ranges"], serde_json::json!([]));
+    for field in ["length", "ranges"] {
+        let mut missing = stored.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        fs::write(&partial.record, serde_json::to_vec(&missing).unwrap()).unwrap();
+        assert!(partial.recorded().is_none(), "missing {field}");
+    }
+}

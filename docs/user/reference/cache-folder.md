@@ -45,7 +45,7 @@ the next unpack or gc removes a staging folder as soon as it can take that lock.
 
 where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule.
 
-random names use 16 hexadecimal digits. older loose `.new` files still use the age rule.
+random names use 16 hexadecimal digits. unclaimed loose `.new` files use the age rule.
 
 `tmp/` also holds atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
@@ -67,7 +67,7 @@ partial JSON records have `url`, `received`, `sha256`, `length` and the same `va
 
 lookup requires the matching fingerprint and restores the request URL only in memory. plaintext URL records are not accepted. cache bodies and other metadata are not sanitized output.
 
-a split download adds `ranges`, the pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; the field is absent when there are none.
+`ranges` lists pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; it is an empty array when there are none. every declared URL, validator and partial-record field is required. optional values are explicit nulls, not missing fields. incomplete records are discarded as hints; there is no record migration.
 
 progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 
