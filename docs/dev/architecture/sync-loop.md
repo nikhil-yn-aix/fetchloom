@@ -30,6 +30,8 @@ an entry's spec hash covers the manifest choices that affect its locked data. `r
 
 `Draft` prefers a usable source SHA-256, reusable old pins or a checked MD5-to-SHA-256 mapping. it downloads when those do not establish the pin. a new archive must be unpacked to learn its member tree. unchanged resolved data retain their old lock timestamp. `Draft::finish` refuses two files pinned on one path, as when kaggle sends a competition file as a zip of itself, which takes the name `<name>.zip`, beside a listed `<name>.zip`: such a `data.lock` could not be read again.
 
+`add` can match another spelling through an existing resolved reference only when that lock entry still records the current manifest reference. after a `ref` edit, its old resolved identity cannot stand for the new request.
+
 kept entries move from the old lock into the new one instead of being copied. `relock` returns the new lock with a `Before`, which holds the old entries it replaced or dropped and which of the new entries were kept, so `write_lock`, `tell_lock` and `tell_upgrades` compare with the old lock as it was.
 
 ### hash files a clock cannot distinguish

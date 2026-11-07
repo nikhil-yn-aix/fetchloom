@@ -391,9 +391,9 @@ fn present(
         .iter()
         .filter(|(name, entry)| {
             entry.reference == wanted.reference
-                || old
-                    .and_then(|old| old.get(name))
-                    .is_some_and(|locked| locked.resolved == resolved)
+                || old.and_then(|old| old.get(name)).is_some_and(|locked| {
+                    locked.reference == entry.reference && locked.resolved == resolved
+                })
         })
         .min_by_key(|(_, entry)| {
             (

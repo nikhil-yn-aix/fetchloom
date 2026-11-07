@@ -1370,3 +1370,38 @@ fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result 
     );
     Ok(())
 }
+
+#[test]
+fn adding_a_previous_source_does_not_match_an_edited_reference() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(
+        "/old.csv",
+        vec![
+            file(b"old\n", "\"old\""),
+            reply("304 Not Modified", &[("ETag", "\"old\"")], b""),
+        ],
+    )?;
+    let second = Server::start("/new.csv", vec![file(b"new\n", "\"new\"")])?;
+    let added = sandbox.run(&["add", &first.url, "--as", "existing"])?;
+    assert!(added.status.success(), "{}", text(&added.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        fs::read_to_string(&manifest)?.replace(&first.url, &second.url),
+    )?;
+
+    let output = sandbox.run(&["--json", "add", &first.url])?;
+    assert!(output.status.success(), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["result"]["datasets"], serde_json::json!(["old"]));
+    let updated = fs::read_to_string(&manifest)?;
+    assert!(updated.contains("[datasets.existing]"), "{updated}");
+    assert!(updated.contains("[datasets.old]"), "{updated}");
+    assert!(updated.contains(&first.url) && updated.contains(&second.url));
+    assert_eq!(fs::read(sandbox.work().join("data/old/old.csv"))?, b"old\n");
+    assert_eq!(
+        fs::read(sandbox.work().join("data/existing/new.csv"))?,
+        b"new\n"
+    );
+    Ok(())
+}
