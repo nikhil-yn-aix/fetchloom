@@ -1,6 +1,5 @@
 """Native workflows, with preparation kept outside the measured command."""
 import json
-import os
 from pathlib import Path
 import shlex
 import shutil
@@ -102,7 +101,7 @@ class Fetchloom(Tool):
     name = "fetchloom"
 
     def version(self):
-        return subprocess.check_output([self.fetchloom, "--version"], text=True).strip()
+        return subprocess.check_output([self.fetchloom, "--version"], env=lab.environment(), text=True).strip()
 
     def populate(self, scenario, workdir):
         for name in ("data.toml", "data.lock"):
@@ -161,7 +160,7 @@ class Curl(Tool):
     scenarios = Tool.scenarios - {"s5"}
 
     def command(self, scenario, workdir):
-        argv = ["curl", "--parallel", "--parallel-max", "4"]
+        argv = ["curl", "-q", "--parallel", "--parallel-max", "4"]
         for i, item in enumerate(scenario["files"]):
             if i:
                 argv.append("--next")
@@ -181,7 +180,7 @@ class Wget(Tool):
     def command(self, scenario, workdir):
         urls = workdir / "urls.txt"
         urls.write_text("".join(item["url"] + "\n" for item in scenario["files"]))
-        argv = ["wget", "-i", urls, "-P", "data"]
+        argv = ["wget", "--no-config", "-i", urls, "-P", "data"]
         if scenario["id"] == "s6":
             argv.append("-nc")
         if scenario["id"] == "s7":
@@ -210,7 +209,7 @@ class Pooch(Tool):
 
     def version(self):
         return subprocess.check_output([str(lab.VENV / "bin" / "python"), "-c",
-                                        "import pooch; print(pooch.__version__)"], text=True).strip()
+                                        "import pooch; print(pooch.__version__)"], env=lab.environment(), text=True).strip()
 
     def command(self, scenario, workdir):
         registry = workdir / "registry.json"

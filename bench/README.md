@@ -103,6 +103,8 @@ datahugger uses an explicit dataverse landing URL and an identified User-Agent b
 
 the full dataverse TSV/TAB representation difference is reported as a content mismatch; the quick shared file has identical bytes.
 
+client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc, and wget uses `--no-config`. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
+
 ## measurement island
 
 on linux, set `FL_BENCH_CPUS=0-7` or pass `--cpus 0-7` to `run.py` or `live.py`. the runner validates the list against its available CPUs, pins nginx's master and worker threads to it, and gives every measured command the mask before it can execute. children inherit it. `lab.py setup --cpus 0-7` also starts nginx on that mask. every run records the effective command and nginx masks. an unset or empty setting uses the runner's available CPUs, including when resetting a server left pinned by an earlier run.

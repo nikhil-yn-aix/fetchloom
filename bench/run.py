@@ -250,7 +250,7 @@ def python_packages():
             [str(lab.VENV / "bin" / "python"), "-c",
              "import importlib.metadata as m\n"
              "print('\\n'.join(sorted(f'{d.name}=={d.version}' for d in m.distributions())))"],
-            text=True).splitlines()
+            env=lab.environment(), text=True).splitlines()
     except FileNotFoundError:
         return ["no python env"]
     except (OSError, subprocess.CalledProcessError) as error:
@@ -323,7 +323,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         row["environment"] = {key: value for key, value in tool.env(workdir).items()
                               if key.startswith("FETCHLOOM_") or key in (
                                   "HOME", "XDG_CACHE_HOME", "POOCH_CACHE", "TMPDIR", "REQUESTS_CA_BUNDLE",
-                                  "SSL_CERT_FILE", "DVC_NO_ANALYTICS", "DVC_SITE_CACHE_DIR")}
+                                  "SSL_CERT_FILE", "DVC_NO_ANALYTICS", "DVC_SITE_CACHE_DIR", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL")}
         if cold:
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))

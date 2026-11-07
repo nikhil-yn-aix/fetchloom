@@ -21,8 +21,8 @@ BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
 HOST_LINE = "10.77.0.2 lab.flb # fl-bench\n"
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
-INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE)_"
-                       r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS)$")
+INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
+                       r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|WGETRC|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
 PROFILES = {
     "lan": (0, 0, None, 1024 * 1024 * 1024, 1000),
     "home": (20, 0, 100, 256 * 1024 * 1024, 1000),
@@ -149,6 +149,7 @@ def environment():
     env.update(REQUESTS_CA_BUNDLE=BUNDLE, SSL_CERT_FILE=BUNDLE,
                TMPDIR=str(ROOT / "scratch"), HOME=str(ROOT / "home"),
                XDG_CACHE_HOME=str(ROOT / "cache"), DVC_NO_ANALYTICS="true",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
                GIT_AUTHOR_NAME="benchmark", GIT_AUTHOR_EMAIL="bench@localhost",
                GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost")
     env["PATH"] = str(VENV / "bin") + os.pathsep + env["PATH"]

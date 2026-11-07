@@ -1,0 +1,57 @@
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+from unittest import mock
+
+import lab
+import tools
+
+
+class EnvironmentTests(unittest.TestCase):
+    def test_external_client_configuration_is_not_inherited(self):
+        inherited = dict(PATH="/usr/bin:/bin", CURL_HOME="/foreign", CURL_CA_BUNDLE="/foreign/ca",
+                         WGETRC="/foreign/wgetrc", GIT_DIR="/foreign/git", GIT_CONFIG_COUNT="1",
+                         PYTHONPATH="/foreign/modules", PYTHONHOME="/foreign/python",
+                         PYTHONUSERBASE="/foreign/user", PYTHONPYCACHEPREFIX="/foreign/bytecode",
+                         DATALAD_RUNTIME_MAX_ANNEX_JOBS="1", DVC_CACHE_DIR="/foreign/dvc", POOCH_CACHE="/foreign/pooch")
+        with mock.patch.dict(lab.os.environ, inherited, clear=True):
+            env = lab.environment()
+        for name in inherited.keys() - {"PATH"}:
+            self.assertNotIn(name, env)
+        self.assertEqual(env["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertEqual(env["GIT_CONFIG_GLOBAL"], "/dev/null")
+
+    @unittest.skipUnless(shutil.which("curl"), "requires curl")
+    def test_curl_does_not_read_an_external_config_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            foreign = root / "foreign"
+            foreign.mkdir()
+            (foreign / ".curlrc").write_text('write-out = "foreign-config-read"\n')
+            source = root / "source.bin"
+            source.write_bytes(b"abc")
+            case = dict(id="s1", files=[dict(name="input.bin", url=source.as_uri(),
+                        sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")])
+            tool = tools.Curl("unused")
+            work = root / "work"
+            with mock.patch.dict(lab.os.environ, {"CURL_HOME": str(foreign)}):
+                tool.prepare(case, work)
+                result = subprocess.run(tool.command(case, work), cwd=work, env=tool.env(work),
+                                        capture_output=True, text=True, check=True)
+            self.assertNotIn("foreign-config-read", result.stdout)
+            self.assertEqual((work / "project" / "data" / "input.bin").read_bytes(), b"abc")
+
+    def test_native_config_disable_flags_are_in_recorded_commands(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            case = dict(id="s1", files=[])
+            tools.Curl("unused").command(case, root)
+            self.assertIn("curl -q --parallel", (root / "command.sh").read_text())
+            tools.Wget("unused").command(case, root)
+            self.assertIn("wget --no-config", (root / "command.sh").read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
