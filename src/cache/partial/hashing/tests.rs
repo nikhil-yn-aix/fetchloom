@@ -7,7 +7,7 @@ use crate::cache::partial::{Claim, PartialWriter};
 fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
     let (sender, receiver) = mpsc::sync_channel(QUEUED);
     let (release, paused) = mpsc::sync_channel(1);
-    let file = writer.file.try_clone().unwrap();
+    let file = Arc::clone(&writer.file);
     let worker = thread::spawn(move || {
         paused.recv().unwrap();
         hash(&file, Hasher::default(), 0, &receiver)
@@ -209,4 +209,27 @@ fn a_small_download_hashes_on_the_writers_thread_with_the_same_result() {
         .unwrap();
     writer.save().unwrap();
     assert_eq!(writer.finish().unwrap().digest, crate::digest::sha256(body));
+}
+
+#[test]
+fn inline_hashing_shares_the_original_writer_handle() {
+    let (_dir, cache) = crate::cache::tests::cache();
+    let Claim::Owned(partial) = cache.claim("https://example.org/shared-handle").unwrap() else {
+        panic!("the test owns the download");
+    };
+    let mut writer = partial
+        .writer(0, Some(4), Validators::default(), true, false)
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &writer.file,
+        &writer.hasher.inline.as_ref().unwrap().file
+    ));
+    writer.write_chunk(2, &Bytes::from_static(b"cd")).unwrap();
+    writer.write_chunk(0, &Bytes::from_static(b"ab")).unwrap();
+    let stored = writer.finish().unwrap();
+    assert_eq!(stored.digest, crate::digest::sha256(b"abcd"));
+    assert_eq!(
+        std::fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"abcd"
+    );
 }

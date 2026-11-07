@@ -166,7 +166,7 @@ impl Partial {
         md5: bool,
         keep: bool,
     ) -> io::Result<PartialWriter> {
-        let file = self.open(offset, keep)?;
+        let file = Arc::new(self.open(offset, keep)?);
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -192,9 +192,9 @@ impl Partial {
         // a small download hashes faster than a thread starts, so it hashes on the writer's own
         let small = length.is_some_and(|length| length <= SMALL);
         let hasher = if small {
-            HashPipe::inline(hasher, file.try_clone()?, offset)
+            HashPipe::inline(hasher, Arc::clone(&file), offset)
         } else {
-            HashPipe::new(hasher, file.try_clone()?, offset)?
+            HashPipe::new(hasher, Arc::clone(&file), offset)?
         };
         let mut writer = PartialWriter {
             cache: self.cache.clone(),
@@ -356,7 +356,7 @@ fn continuable(metadata: &Metadata) -> bool {
 /// keeps the download claimed while its writer and hash worker still use the unfinished file.
 pub(crate) struct PartialWriter {
     cache: Cache,
-    file: File,
+    file: Arc<File>,
     hasher: HashPipe,
     // the worker must stop before another writer can claim the download.
     _lock: Option<Arc<File>>,

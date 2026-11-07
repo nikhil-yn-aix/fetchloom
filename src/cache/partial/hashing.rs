@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
@@ -39,13 +40,13 @@ pub(super) struct HashPipe {
 }
 
 struct Inline {
-    file: File,
+    file: Arc<File>,
     hasher: Hasher,
     received: u64,
 }
 
 impl HashPipe {
-    pub(super) fn new(hasher: Hasher, file: File, received: u64) -> io::Result<Self> {
+    pub(super) fn new(hasher: Hasher, file: Arc<File>, received: u64) -> io::Result<Self> {
         let (sender, inbox) = mpsc::sync_channel(QUEUED);
         let worker = thread::Builder::new()
             .name("fetchloom-hash".to_owned())
@@ -60,7 +61,7 @@ impl HashPipe {
     }
 
     /// hashes on the caller's thread, for downloads too small to be worth a worker.
-    pub(super) fn inline(hasher: Hasher, file: File, received: u64) -> Self {
+    pub(super) fn inline(hasher: Hasher, file: Arc<File>, received: u64) -> Self {
         Self {
             sender: None,
             worker: None,

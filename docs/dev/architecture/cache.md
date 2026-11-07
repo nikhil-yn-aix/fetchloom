@@ -71,7 +71,7 @@ a download joins a group flush only when its writing handle belongs to the files
 
 an early publication for another download of the same URL uses the original batch flush handle and the same publication lock. a failed batch flush prevents early publication too. discarding a partial waits for that publication before its path can be reused.
 
-`HashPipe` drains before its claim is released. see the [download pipeline](network.md#download-pipeline) for prefix barriers and final flush ordering.
+`HashPipe` shares the writer's original file handle through `Arc<File>` instead of duplicating an OS handle per download. positioned reads and writes leave the shared file cursor unused. it drains before the handle is flushed or its claim is released; a new download has one write-open and one final close. see the [download pipeline](network.md#download-pipeline) for prefix barriers and final flush ordering.
 
 ### retention and cleanup
 

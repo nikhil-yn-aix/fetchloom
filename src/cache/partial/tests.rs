@@ -428,7 +428,7 @@ fn pipelined_write_errors_preserve_the_last_checkpoint() {
             .unwrap();
         writer.write_all(b"abc").unwrap();
         writer.save().unwrap();
-        writer.file = File::open(&partial.bytes).unwrap();
+        writer.file = Arc::new(File::open(&partial.bytes).unwrap());
         let refused = write_all_at(&writer.file, 3, b"x").unwrap_err();
         let chunk = Bytes::from(vec![b'x'; size]);
         let error = writer
@@ -480,7 +480,7 @@ fn pipelined_writes_preserve_full_disk_errors() {
     let mut writer = partial
         .writer(0, None, Validators::default(), false, false)
         .unwrap();
-    writer.file = OpenOptions::new().write(true).open("/dev/full").unwrap();
+    writer.file = Arc::new(OpenOptions::new().write(true).open("/dev/full").unwrap());
     let error = writer
         .write_chunk(0, &Bytes::from(vec![0; BUFFER]))
         .unwrap_err();
