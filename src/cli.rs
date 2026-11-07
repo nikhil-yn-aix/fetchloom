@@ -701,9 +701,10 @@ fn finish<T: Serialize>(
         Some(line) => error.naming(&line),
         None => error,
     });
-    context
+    let printed = context
         .output
         .document(command, outcome.as_ref(), counts, elapsed);
+    let outcome = outcome.and_then(|result| printed.map(|()| result));
     if let Err(error) = &outcome {
         context.output.error(error);
         if let Some(need) = &error.need

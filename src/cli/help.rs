@@ -139,16 +139,16 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
                 started,
             );
         }
-        crate::output::help(text, args::color());
-        return ExitCode::SUCCESS;
+        let outcome = crate::output::help(text, args::color());
+        return finish(context, None, outcome, started);
     }
     let line = std::iter::once("fetchloom")
         .chain(topic.iter().map(String::as_str))
         .chain(std::iter::once("--help"));
     match args::command().try_get_matches_from(line) {
         Err(help) if help.kind() == ErrorKind::DisplayHelp => {
-            crate::output::help(&help.render().to_string(), args::color());
-            ExitCode::SUCCESS
+            let outcome = crate::output::help(&help.render().to_string(), args::color());
+            finish(context, None, outcome, started)
         }
         _ => finish::<()>(context, None, Err(unknown(topic)), started),
     }

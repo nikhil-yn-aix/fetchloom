@@ -42,6 +42,7 @@ pub(crate) struct Output {
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
     warnings: Mutex<Vec<String>>,
+    failed: Mutex<Option<Error>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
     hints: bool,
 }
@@ -137,6 +138,7 @@ impl Output {
             held: Mutex::new(None),
             question: Mutex::new(()),
             warnings: Mutex::new(Vec::new()),
+            failed: Mutex::new(None),
             hints: true,
         };
         if !unread.is_empty() {
@@ -338,8 +340,13 @@ impl Output {
 
     /// the answer on stdout, such as a path a script will read.
     pub(crate) fn answer(&self, text: &str) {
-        if !self.json {
-            let _ = writeln!(std::io::stdout().lock(), "{text}");
+        if !self.json
+            && let Err(error) = stdout(|out| writeln!(out, "{text}"))
+        {
+            self.failed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert(error);
         }
     }
 
@@ -583,15 +590,23 @@ impl Output {
     }
 
     /// prints the `--json` document for a run, whatever its outcome.
+    ///
+    /// # Errors
+    /// reports an unencodable result or a failed stdout write, including earlier text answers.
     pub(crate) fn document<T: Serialize>(
         &self,
         command: Option<&str>,
         outcome: Result<&T, &Error>,
         counts: Counts,
         elapsed: Duration,
-    ) {
+    ) -> Result<(), Error> {
         if !self.json {
-            return;
+            return self
+                .failed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+                .map_or(Ok(()), Err);
         }
         let errors = match outcome {
             Ok(_) => Vec::new(),
@@ -621,10 +636,33 @@ impl Output {
                 elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
             },
         };
-        let mut out = std::io::stdout().lock();
-        if serde_json::to_writer(&mut out, &document).is_ok() {
-            let _ = writeln!(out);
-        }
+        // encoding can fail on a non-unicode path; stdout cannot retract a partial document.
+        let bytes = match serde_json::to_vec(&document) {
+            Ok(bytes) => bytes,
+            Err(cause) => {
+                let error = Error::new(
+                    crate::error::Kind::LocalIo,
+                    format!("could not encode the JSON report: {cause}"),
+                )
+                .help("use UTF-8 paths for JSON output, or run without --json");
+                {
+                    let mut warnings = self.warnings.lock().unwrap_or_else(PoisonError::into_inner);
+                    let mut previous = document.warnings;
+                    previous.append(&mut warnings);
+                    *warnings = previous;
+                }
+                self.document::<()>(command, Err(&error), counts, elapsed)?;
+                return Err(error);
+            }
+        };
+        stdout(|out| {
+            out.write_all(&bytes)?;
+            out.write_all(b"\n")
+        })
+        .inspect_err(|error| {
+            // stdout is unusable, so its failure can only be reported on stderr.
+            self.line(&error_text(error, self.level, self.style.color));
+        })
     }
 
     fn tells(&self, level: Level) -> bool {
@@ -704,7 +742,11 @@ pub(super) fn shown(text: &str, unicode: bool) -> Cow<'_, str> {
     )
 }
 
-pub(crate) fn help(text: &str, choice: ColorChoice) {
+/// prints help with the chosen palette and terminal width.
+///
+/// # Errors
+/// returns stdout failures other than a reader closing its pipe.
+pub(crate) fn help(text: &str, choice: ColorChoice) -> Result<(), Error> {
     let width = if std::io::stdout().is_terminal() {
         console::Term::stdout()
             .size_checked()
@@ -714,7 +756,23 @@ pub(crate) fn help(text: &str, choice: ColorChoice) {
     };
     let wrapped = wrap_help(text.trim_end_matches('\n'), width.clamp(40, 100));
     let shown = help_text(&wrapped, Style::stdout_color(choice));
-    let _ = writeln!(std::io::stdout().lock(), "{shown}");
+    stdout(|out| writeln!(out, "{shown}"))
+}
+
+fn stdout(write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>) -> Result<(), Error> {
+    write_answer(&mut std::io::stdout().lock(), write)
+}
+
+fn write_answer(
+    out: &mut dyn Write,
+    write: impl FnOnce(&mut dyn Write) -> std::io::Result<()>,
+) -> Result<(), Error> {
+    match write(out).and_then(|()| out.flush()) {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            Err(Error::io("could not print the answer", &error))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// help as wide as `width`: a row of a table wraps under its own description column, prose
@@ -1074,9 +1132,56 @@ fn plain(text: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use anstyle::Style as Paint;
 
-    use super::{Level, Output, Style, accented, masked, plain, subject};
+    use super::{Level, Output, Style, accented, masked, plain, subject, write_answer};
+
+    #[test]
+    fn answer_writes_and_flushes_propagate_failures_except_broken_pipes() {
+        struct Sink {
+            kind: std::io::ErrorKind,
+            fail_write: bool,
+            flushed: bool,
+        }
+        impl Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail_write {
+                    Err(self.kind.into())
+                } else {
+                    Ok(bytes.len())
+                }
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                self.flushed = true;
+                Err(self.kind.into())
+            }
+        }
+        for kind in [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::StorageFull,
+        ] {
+            for fail_write in [false, true] {
+                let mut sink = Sink {
+                    kind,
+                    fail_write,
+                    flushed: false,
+                };
+                let result = write_answer(&mut sink, |out| out.write_all(b"answer\n"));
+                assert_eq!(sink.flushed, !fail_write);
+                if kind == std::io::ErrorKind::BrokenPipe {
+                    assert!(result.is_ok());
+                } else {
+                    assert_eq!(result.unwrap_err().kind, crate::error::Kind::LocalIo);
+                }
+            }
+        }
+        let mut bytes = Vec::new();
+        write_answer(&mut bytes, |out| out.write_all(b"answer\n")).unwrap();
+        assert_eq!(bytes, b"answer\n");
+    }
 
     #[test]
     fn help_wraps_rows_under_their_column_and_keeps_examples_whole() {

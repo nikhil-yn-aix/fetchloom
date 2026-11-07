@@ -65,7 +65,7 @@ bars and questions need terminal stderr outside CI, outside `TERM=dumb` and outs
 
 ### reports and counters
 
-JSON is one completed document, not a stream of progress events. it holds schema, command, status, result, warnings, errors and work. an error can carry a partial result and per-file failures. warning collection remains independent of whether human warnings are visible.
+JSON is one completed document, not a stream of progress events. it holds schema, command, status, result, warnings, errors and work. an error can carry a partial result and per-file failures. warning collection remains independent of whether human warnings are visible. encoding finishes in a byte buffer before stdout is written, so an unsupported path produces a complete error envelope instead of a successful truncated prefix. text answers retain write failures until command completion; help returns them directly. a broken pipe is successful, while other stdout failures make a successful command fail with `local.io`.
 
 `Counts` snapshots atomic counters for requests, downloaded bytes, retries, resumes, object writes, cache hits, reflinks, hardlinks and copies. [JSON output](../../user/reference/json-output.md) defines the fields and counting contract. elapsed time is reported, but tests use deterministic counts rather than wall-time assertions.
 

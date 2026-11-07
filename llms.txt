@@ -28,7 +28,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [public cloud buckets](docs/user/sources/buckets.md): anonymous `s3://` and `gs://` prefixes, listing, pins and the public-only rule
 - [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, secret-URL rejection and credential-safe diagnostic citations
 - [data.lock](docs/user/reference/data-lock.md): lock fields, source records and hash encodings
-- [JSON output](docs/user/reference/json-output.md): schema, command results, partial cache failures and work counters
+- [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
 - [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior
 - [cache folder](docs/user/reference/cache-folder.md): shared cache layout, durable records, URL fingerprints and unreadable change-mark errors

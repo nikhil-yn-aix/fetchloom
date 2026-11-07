@@ -593,3 +593,82 @@ fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn cli_output_non_unicode_paths_return_error_documents() -> Result {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let sandbox = Sandbox::new()?;
+    let project = sandbox
+        .work()
+        .join(OsString::from_vec(b"project-\xff".to_vec()));
+    std::fs::create_dir(&project)?;
+    std::fs::write(project.join("data.toml"), "[datasets]\n")?;
+    let cache = sandbox
+        .work()
+        .join(OsString::from_vec(b"cache-\xff".to_vec()));
+    let commands = [sandbox.command_in(&project, &["--json", "status"]), {
+        let mut command = sandbox.command(&["--json", "cache"]);
+        command.env("FETCHLOOM_CACHE", cache);
+        command
+    }];
+    for mut command in commands {
+        let output = command.env("FETCHLOOM_COLORS", "done=teal").output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        assert!(output.stderr.is_empty(), "{}", text(&output.stderr)?);
+        let document: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(document["status"], "error");
+        assert_eq!(document["result"], Value::Null);
+        assert_eq!(document["errors"][0]["kind"], "local.io");
+        assert!(
+            document["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("UTF-8"))
+        );
+        assert!(
+            document["warnings"]
+                .as_array()
+                .is_some_and(|warnings| warnings.iter().any(|warning| warning
+                    .as_str()
+                    .is_some_and(|text| text.contains("done=teal"))))
+        );
+    }
+    let version = sandbox
+        .command_in(&project, &["--json", "--version"])
+        .output()?;
+    assert!(version.status.success());
+    serde_json::from_slice::<Value>(&version.stdout)?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
+    let sandbox = Sandbox::new()?;
+    for args in [
+        &["--version"][..],
+        &["--json", "--version"],
+        &["--help"],
+        &["get", "--help"],
+        &["help", "get"],
+        &["help", "concepts"],
+        &["completions", "bash"],
+    ] {
+        let full = std::fs::OpenOptions::new().write(true).open("/dev/full")?;
+        let output = sandbox.command(args).stdout(full).output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        assert!(
+            text(&output.stderr)?.contains("could not print"),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    Ok(())
+}

@@ -18,9 +18,9 @@ use crate::output::{ColorChoice, Level, Output, Style};
 pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         let color = args::color();
-        let _output = Output::new(Style::detect(color), Level::Normal, false, false);
-        crate::output::help(&err.render().to_string(), color);
-        return ExitCode::SUCCESS;
+        let output = Output::new(Style::detect(color), Level::Normal, false, false);
+        let outcome = crate::output::help(&err.render().to_string(), color);
+        return finish(&Context::new(output), None, outcome, started);
     }
     let read = args::Args::command()
         .ignore_errors(true)
