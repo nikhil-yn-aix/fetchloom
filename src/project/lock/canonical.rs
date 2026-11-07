@@ -1,7 +1,5 @@
-//! a fast reader for data.lock exactly as fetchloom writes it. building a whole TOML document
-//! first costs ten times the time and hundreds of megabytes for a lock of 100,000 files. anything
-//! else, such as a lock edited by hand, gets none here, and the TOML reader takes over with its
-//! exact errors.
+//! a fast reader for data.lock’s writer shape, optionally accepting comments around it.
+//! other TOML returns none, so the general reader retains its validation and exact errors.
 
 use std::borrow::Cow;
 
@@ -10,15 +8,25 @@ use crate::digest::{Md5, Sha256};
 use crate::name;
 
 /// the lock `text` holds, when it is in the exact form [`Lock::render`] writes, with either line
-/// ending.
-pub(super) fn read(text: &str) -> Option<Lock> {
-    let mut lines = Lines { rest: text };
+/// ending. `comments` additionally accepts blank lines and valid TOML comments around it.
+pub(super) fn read(text: &str, comments: bool) -> Option<Lock> {
+    let mut lines = Lines {
+        rest: text,
+        comments,
+    };
     if lines.next()? != format!("version = {VERSION}") {
         return None;
     }
     let mut datasets: Vec<Locked> = Vec::new();
-    while !lines.rest.is_empty() {
-        if !lines.next()?.is_empty() || lines.next()? != "[[dataset]]" {
+    loop {
+        lines.skip_comments()?;
+        if lines.rest.is_empty() {
+            break;
+        }
+        if !comments && !lines.next()?.is_empty() {
+            return None;
+        }
+        if lines.next()? != "[[dataset]]" {
             return None;
         }
         let dataset = dataset(&mut lines)?;
@@ -36,13 +44,43 @@ pub(super) fn read(text: &str) -> Option<Lock> {
 /// the lines of a text that ends every line with `\n` or `\r\n`.
 struct Lines<'a> {
     rest: &'a str,
+    comments: bool,
 }
 
 impl<'a> Lines<'a> {
+    fn line(&self) -> Option<(&'a str, &'a str)> {
+        match self.rest.split_once('\n') {
+            Some((line, rest)) => Some((line.strip_suffix('\r').unwrap_or(line), rest)),
+            None => (self.comments && !self.rest.is_empty()).then_some((self.rest, "")),
+        }
+    }
+
+    fn skip_comments(&mut self) -> Option<()> {
+        if self.comments {
+            while let Some((line, rest)) = self.line() {
+                let content = line.trim_start_matches([' ', '\t']);
+                if let Some(comment) = content.strip_prefix('#') {
+                    if comment.contains(refused) {
+                        return None;
+                    }
+                } else if !content.is_empty() {
+                    break;
+                }
+                self.rest = rest;
+            }
+        }
+        Some(())
+    }
+
     fn next(&mut self) -> Option<&'a str> {
-        let (line, rest) = self.rest.split_once('\n')?;
+        self.skip_comments()?;
+        let (line, rest) = self.line()?;
         self.rest = rest;
-        Some(line.strip_suffix('\r').unwrap_or(line))
+        if self.comments {
+            uncommented(line)
+        } else {
+            Some(line)
+        }
     }
 
     /// the string of a line `key = "value"`, when the next line is one.
@@ -53,11 +91,38 @@ impl<'a> Lines<'a> {
     }
 
     /// whether the next line sets `key`, leaving it unread.
-    fn sets(&self, key: &str) -> bool {
+    fn sets(&mut self, key: &str) -> bool {
+        if self.skip_comments().is_none() {
+            return false;
+        }
         self.rest
             .strip_prefix(key)
             .is_some_and(|rest| rest.starts_with(" = "))
     }
+}
+
+/// removes only comments outside basic strings; escaped quotes keep their string boundary.
+fn uncommented(line: &str) -> Option<&str> {
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in line.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if quoted => escaped = true,
+            b'"' => quoted = !quoted,
+            b'#' if !quoted => {
+                if line[index + 1..].contains(refused) {
+                    return None;
+                }
+                return Some(line[..index].trim_end_matches([' ', '\t']));
+            }
+            _ => {}
+        }
+    }
+    Some(line.trim_end_matches([' ', '\t']))
 }
 
 fn dataset(lines: &mut Lines) -> Option<Locked> {
@@ -251,19 +316,27 @@ mod tests {
     /// the lock as the TOML reader reads it: a comment at the end is something only a person
     /// writes, so the fast reader steps aside.
     fn full(text: &str) -> Lock {
-        Lock::parse(&format!("{text}# a comment\n")).unwrap()
+        Lock::parse(
+            &format!("{text}# a comment\n"),
+            &crate::exp::Experiments::default(),
+        )
+        .unwrap()
     }
 
     #[test]
     fn the_writers_form_reads_as_the_toml_reader_reads_it() {
         for lock in samples() {
             let text = lock.render();
-            assert_eq!(read(&text), Some(full(&text)), "{text}");
-            assert_eq!(read(&text), Some(lock.clone()));
-            assert_eq!(read(&text.replace('\n', "\r\n")), Some(lock));
+            assert_eq!(read(&text, false), Some(full(&text)), "{text}");
+            assert_eq!(read(&text, false), Some(lock.clone()));
+            assert_eq!(read(&text.replace('\n', "\r\n"), false), Some(lock));
         }
         let text = samples()[1].render().replacen("\\t", "\t", 1);
-        assert_eq!(read(&text), Some(full(&text)), "a tab as it is reads alike");
+        assert_eq!(
+            read(&text, false),
+            Some(full(&text)),
+            "a tab as it is reads alike"
+        );
     }
 
     #[test]
@@ -286,7 +359,42 @@ mod tests {
             format!("{text}\n"),
         ];
         for text in unusual {
-            assert_eq!(read(&text), None, "{text}");
+            assert_eq!(read(&text, false), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn commented_writer_output_uses_the_fast_reader_when_enabled() {
+        let enabled = crate::exp::Experiments::default().with("PROJECT_LOCK_COMMENTS", "1");
+        for mut lock in samples() {
+            if let Some(dataset) = lock.datasets.first_mut() {
+                dataset.title = Some("literal # and an escaped \" quote".to_owned());
+            }
+            let text = lock.render();
+            let commented = format!(
+                "# leading\n\n{}# trailing",
+                text.lines()
+                    .map(|line| format!("{line} # inline\n# between fields\n"))
+                    .collect::<String>()
+            );
+            assert_eq!(read(&commented, false), None);
+            assert_eq!(read(&commented, true), Some(lock.clone()));
+            for exp in [crate::exp::Experiments::default(), enabled.clone()] {
+                assert_eq!(Lock::parse(&commented, &exp).unwrap(), lock);
+                assert_eq!(
+                    Lock::parse(&commented.replace('\n', "\r\n"), &exp).unwrap(),
+                    lock
+                );
+                for invalid in [
+                    format!("{commented}\0"),
+                    format!("{commented}\n#bad\u{7f}"),
+                    format!("{commented}\r"),
+                    format!("{commented}\n[[broken]]"),
+                ] {
+                    assert!(read(&invalid, true).is_none());
+                    assert!(Lock::parse(&invalid, &exp).is_err());
+                }
+            }
         }
     }
 
@@ -326,7 +434,7 @@ mod tests {
             entry.url = format!("{prefix}{}", "u".repeat(url_length - prefix.len()));
             entry.size = 4096;
             sample.datasets[0].files = vec![entry];
-            let read = read(&sample.render()).unwrap();
+            let read = read(&sample.render(), false).unwrap();
             let got = &read.datasets[0].files[0].path;
             assert_eq!(got, &path);
             capacities.push((url_length, got.len(), got.capacity()));
@@ -347,17 +455,30 @@ mod tests {
             let Ok(text) = std::str::from_utf8(bytes) else {
                 return;
             };
-            if let Some(lock) = read(text) {
+            if let Some(lock) = read(text, false) {
                 assert_eq!(
-                    Lock::parse(&format!("{text}# a comment\n")).ok().as_ref(),
+                    Lock::parse(
+                        &format!("{text}# a comment\n"),
+                        &crate::exp::Experiments::default()
+                    )
+                    .ok()
+                    .as_ref(),
                     Some(&lock),
                     "{text:?}"
                 );
-                assert_eq!(read(&lock.render()).as_ref(), Some(&lock), "{text:?}");
+                assert_eq!(
+                    read(&lock.render(), false).as_ref(),
+                    Some(&lock),
+                    "{text:?}"
+                );
             }
-            if let Ok(lock) = Lock::parse(text) {
+            if let Ok(lock) = Lock::parse(text, &crate::exp::Experiments::default()) {
                 let written = lock.render();
-                assert_eq!(Lock::parse(&written).ok(), Some(lock), "{written:?}");
+                assert_eq!(
+                    Lock::parse(&written, &crate::exp::Experiments::default()).ok(),
+                    Some(lock),
+                    "{written:?}"
+                );
             }
         });
     }

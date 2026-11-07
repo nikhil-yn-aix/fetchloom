@@ -94,21 +94,33 @@ fn generated(bytes: &[u8]) -> Lock {
 fn compare(lock: &Lock) {
     let rendered = lock.render();
     assert_eq!(
-        canonical::read(&rendered).as_ref(),
+        canonical::read(&rendered, false).as_ref(),
         Some(lock),
         "{rendered}"
     );
-    let generic = Lock::parse(&format!("# force the TOML reader\n{rendered}")).unwrap();
+    let generic = Lock::parse(
+        &format!("# force the TOML reader\n{rendered}"),
+        &crate::exp::Experiments::default(),
+    )
+    .unwrap();
     assert_eq!(&generic, lock, "{rendered}");
-    assert_eq!(Lock::parse(&rendered).as_ref().unwrap(), lock);
     assert_eq!(
-        canonical::read(&rendered.replace('\n', "\r\n")).as_ref(),
+        Lock::parse(&rendered, &crate::exp::Experiments::default())
+            .as_ref()
+            .unwrap(),
+        lock
+    );
+    assert_eq!(
+        canonical::read(&rendered.replace('\n', "\r\n"), false).as_ref(),
         Some(lock)
     );
     assert_eq!(
-        Lock::parse(&format!("\u{feff}{rendered}"))
-            .as_ref()
-            .unwrap(),
+        Lock::parse(
+            &format!("\u{feff}{rendered}"),
+            &crate::exp::Experiments::default()
+        )
+        .as_ref()
+        .unwrap(),
         lock
     );
     assert_eq!(generic.render(), rendered);
@@ -145,10 +157,16 @@ fn lock_reader_mutations_agree() {
             format!("{text}# comment\n"),
         ];
         for changed in variants {
-            let generic = Lock::parse(&format!("# force fallback\n{changed}"));
-            let normal = Lock::parse(&changed);
+            let generic = Lock::parse(
+                &format!("# force fallback\n{changed}"),
+                &crate::exp::Experiments::default(),
+            );
+            let normal = Lock::parse(&changed, &crate::exp::Experiments::default());
+            let enabled = crate::exp::Experiments::default().with("PROJECT_LOCK_COMMENTS", "1");
+            let commented = Lock::parse(&changed, &enabled);
+            assert_eq!(commented.as_ref().ok(), generic.as_ref().ok(), "{changed}");
             assert_eq!(normal.as_ref().ok(), generic.as_ref().ok(), "{changed}");
-            if let Some(fast) = canonical::read(&changed) {
+            if let Some(fast) = canonical::read(&changed, false) {
                 assert_eq!(generic.as_ref().ok(), Some(&fast), "{changed}");
             }
             if let Ok(lock) = normal {

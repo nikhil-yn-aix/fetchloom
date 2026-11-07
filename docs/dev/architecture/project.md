@@ -46,6 +46,10 @@ before a new add changes metadata, it saves exact recovery copies with exclusive
 
 payload durability belongs to [placement](placing.md#copy-durability). writing state only after copied bytes are flushed is part of the sync contract, not something `write_state` can enforce by itself.
 
+## commented lock reader experiment
+
+`FETCHLOOM_EXP_PROJECT_LOCK_COMMENTS=1` lets the canonical reader skip blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser. off keeps the original narrow reader.
+
 ## invariants and traps
 
 - commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.

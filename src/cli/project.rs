@@ -132,7 +132,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         open_cache()?
     };
     let mut addition = resolve_add(context, &net, &args, &parsed).await?;
-    let (old, lock_text) = project.lock_and_text()?.unzip();
+    let (old, lock_text) = project.lock_and_text(&context.exp)?.unzip();
     let lock_seen = lock_text
         .as_deref()
         .map(|text| digest::sha256(text.as_bytes()));
@@ -553,7 +553,7 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
 }
 
 fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {
-    let lock = work.project.lock()?.unwrap_or_default();
+    let lock = work.project.lock(&work.context.exp)?.unwrap_or_default();
     Ok(plan::from_cache(manifest, &lock, &work.cache)?
         .targets
         .iter()
@@ -572,7 +572,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     known(&manifest, &args.name, "remove")?;
     let updated = manifest::without_dataset(&text, &args.name)?;
     let new_manifest = Manifest::parse(&updated)?;
-    let mut lock = project.lock()?.unwrap_or_default();
+    let mut lock = project.lock(&context.exp)?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
     let cache = if dry_run {
         peek_cache()?
@@ -624,7 +624,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Some(hold(context, &project, "sync").await?)
     };
     let (text, manifest) = project.manifest()?;
-    let read = project.lock_and_text()?;
+    let read = project.lock_and_text(&context.exp)?;
     if args.locked {
         let Some((lock, _)) = &read else {
             return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
@@ -749,7 +749,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         Some(hold(context, &project, "lock").await?)
     };
     let (_, manifest) = project.manifest()?;
-    let old = project.lock()?;
+    let old = project.lock(&context.exp)?;
     if args.check {
         return check(&project, &manifest, old.as_ref());
     }
@@ -836,7 +836,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
-    let lock = project.lock()?;
+    let lock = project.lock(&context.exp)?;
     let mut cache = None;
     let path = if let Some(path) = ready_path(
         context,
@@ -854,7 +854,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         let held = hold(context, &project, "path").await?;
         let (text, manifest) = project.manifest()?;
         known(&manifest, name, "path")?;
-        let read = project.lock_and_text()?;
+        let read = project.lock_and_text(&context.exp)?;
         if let Some(path) = ready_path(
             context,
             &project,
@@ -888,7 +888,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             )
             .await?;
             drop(held);
-            let lock = project.lock()?.unwrap_or_default();
+            let lock = project.lock(&context.exp)?.unwrap_or_default();
             let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
             planned_path(&project, &manifest, &planned, name, file)?
         }
@@ -1673,6 +1673,6 @@ mod tests {
             old.render(),
             "data.lock lists a path twice"
         );
-        assert!(Lock::parse(&old.render()).is_ok());
+        assert!(Lock::parse(&old.render(), &crate::exp::Experiments::default()).is_ok());
     }
 }

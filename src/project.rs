@@ -16,6 +16,7 @@ use self::lock::Lock;
 use self::manifest::Manifest;
 use self::state::{Look, State};
 use crate::error::{Error, Kind};
+use crate::exp::Experiments;
 
 const FOLDER: &str = ".fetchloom";
 
@@ -211,17 +212,17 @@ impl Project {
     }
 
     /// data.lock, or nothing when the project has none yet.
-    pub(crate) fn lock(&self) -> Result<Option<Lock>, Error> {
-        Ok(self.lock_and_text()?.map(|(lock, _)| lock))
+    pub(crate) fn lock(&self, exp: &Experiments) -> Result<Option<Lock>, Error> {
+        Ok(self.lock_and_text(exp)?.map(|(lock, _)| lock))
     }
 
     /// data.lock with the text it was read from, or nothing when the project has none yet.
-    pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
+    pub(crate) fn lock_and_text(&self, exp: &Experiments) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                Ok(Some((Lock::parse(&text)?, text)))
+                Ok(Some((Lock::parse(&text, exp)?, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
@@ -1120,7 +1121,7 @@ mod tests {
         assert_eq!(manifest.kind, Kind::ProjectInvalid);
         assert!(manifest.message.contains("UTF-8"));
         assert!(manifest.help.unwrap().contains("UTF-8"));
-        let lock = project.lock_and_text().unwrap_err();
+        let lock = project.lock_and_text(&Experiments::default()).unwrap_err();
         assert_eq!(lock.kind, Kind::ProjectInvalid);
         assert!(lock.message.contains("UTF-8"));
         assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
@@ -1130,11 +1131,14 @@ mod tests {
     fn missing_and_unreadable_metadata_are_not_treated_as_parse_errors() {
         let (_dir, project) = project(&[]);
         assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
-        assert_eq!(project.lock().unwrap(), None);
+        assert_eq!(project.lock(&Experiments::default()).unwrap(), None);
         fs::create_dir(project.root.join(manifest::FILE)).unwrap();
         fs::create_dir(project.root.join(lock::FILE)).unwrap();
         assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
-        assert_eq!(project.lock().unwrap_err().kind, Kind::LocalIo);
+        assert_eq!(
+            project.lock(&Experiments::default()).unwrap_err().kind,
+            Kind::LocalIo
+        );
     }
 
     #[test]

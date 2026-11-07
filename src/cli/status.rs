@@ -82,7 +82,7 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 /// compares the data folder with data.lock, reading only what the disk says about each file.
 fn check(project: &Project, threads: Threads, exp: &Experiments) -> Result<Status, Error> {
     let (_, manifest) = project.manifest()?;
-    let lock = project.lock()?.unwrap_or_default();
+    let lock = project.lock(exp)?.unwrap_or_default();
     let mut status = Status {
         project: project.root.clone(),
         ..Status::default()

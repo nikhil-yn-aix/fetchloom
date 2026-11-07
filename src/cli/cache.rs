@@ -508,7 +508,7 @@ fn needed_with(
                 ));
             }
         }
-        let lock = project.lock().map_err(|err| {
+        let lock = project.lock(cache.experiments()).map_err(|err| {
             // a broken lock is fixed in its own project, which is not where gc runs
             let help = match err.help.as_deref() {
                 Some(lock::BROKEN) => format!("in that project, {}", lock::BROKEN),
