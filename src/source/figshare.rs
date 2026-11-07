@@ -39,11 +39,7 @@ impl Article {
 
     /// a pasted article link, from figshare.com or an institution's figshare portal.
     pub(super) fn from_link(url: &Url) -> Option<Article> {
-        let host = url.host_str()?;
-        let figshare = host == "figshare.com"
-            || (host.ends_with(".figshare.com")
-                && !matches!(host, "ndownloader.figshare.com" | "api.figshare.com"));
-        if !figshare {
+        if !is_portal(url.host_str()?) {
             return None;
         }
         let parts: Vec<&str> = url
@@ -192,6 +188,13 @@ impl Article {
         )
         .help("check the article on figshare.com and report the invalid listing to its owner")
     }
+}
+
+/// whether a host serves figshare portal pages rather than the API or file downloads.
+pub(super) fn is_portal(host: &str) -> bool {
+    host == "figshare.com"
+        || (host.ends_with(".figshare.com")
+            && !matches!(host, "ndownloader.figshare.com" | "api.figshare.com"))
 }
 
 #[derive(Deserialize)]

@@ -504,7 +504,7 @@ fn raw_link(url: &Url) -> Option<Url> {
 fn known_host(url: &Url) -> Option<&'static str> {
     Some(match url.host_str()? {
         "zenodo.org" | "www.zenodo.org" => "zenodo",
-        "figshare.com" => "figshare",
+        host if figshare::is_portal(host) && !url.path().starts_with("/ndownloader/") => "figshare",
         "osf.io" | "www.osf.io" => "osf",
         "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
         "kaggle.com" | "www.kaggle.com" => "kaggle",

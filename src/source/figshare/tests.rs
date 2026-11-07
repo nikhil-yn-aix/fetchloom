@@ -365,3 +365,50 @@ fn parsed_versions_request_only_the_named_article_version() {
         assert_eq!(recorded.asked(), [endpoint]);
     }
 }
+
+#[test]
+fn figshare_portal_pages_are_not_downloads() {
+    for host in ["tandf.figshare.com", "www.figshare.com", "figshare.com"] {
+        for path in [
+            "/collections/example/12345",
+            "/account/settings",
+            "/articles/dataset/title/not-an-id",
+        ] {
+            let url = format!("https://{host}{path}");
+            let error = Reference::parse(&url).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{url}");
+            assert!(error.message.contains("figshare"), "{url}");
+        }
+    }
+}
+
+#[test]
+fn figshare_portal_downloads_stay_plain_links() {
+    for url in [
+        "https://ndownloader.figshare.com/files/70482987",
+        "https://api.figshare.com/v2/articles/34744689",
+        "https://tandf.figshare.com/ndownloader/files/70482987",
+        "https://figshare.com/ndownloader/files/70482987",
+        "https://figshare.com.example.org/data.csv",
+        "https://notfigshare.com/data.csv",
+    ] {
+        let parsed = Reference::parse(url).unwrap();
+        assert_eq!(parsed.reference, Reference::Url(Url::parse(url).unwrap()));
+    }
+}
+
+#[test]
+fn figshare_portal_dois_do_not_fetch_unsupported_pages() {
+    let handle = "https://doi.org/api/handles/10.6084%2Fm9.figshare.34744689.v1";
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("doi/figshare.json")).unwrap();
+    body["values"][1]["data"]["value"] =
+        "https://tandf.figshare.com/collections/example/12345".into();
+    let recorded = Recorded::default().on(handle, 200, serde_json::to_vec(&body).unwrap());
+    let reference = Reference::parse("doi:10.6084/m9.figshare.34744689.v1")
+        .unwrap()
+        .reference;
+    let error = block_on(reference.resolve(&recorded)).unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert_eq!(recorded.asked(), [handle]);
+}
