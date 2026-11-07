@@ -511,6 +511,13 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 ///
 /// # Errors
 /// returns an error when the directory cannot be opened or flushed.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "unix directory flush errors share this platform-independent interface"
+    )
+)]
 pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {

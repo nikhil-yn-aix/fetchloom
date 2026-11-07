@@ -144,7 +144,7 @@ fn sha256(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut text = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
-        write!(text, "{byte:02x}").unwrap();
+        let _ = write!(text, "{byte:02x}");
     }
     text
 }
@@ -180,7 +180,7 @@ fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result
             let claimed = claimed.clone();
             let (release, held) = std::sync::mpsc::channel();
             response.push(Part::Action(Box::new(move || {
-                claimed.send(index).unwrap();
+                let _ = claimed.send(index);
             })));
             response.push(Part::Wait(held));
             releases.push(release);

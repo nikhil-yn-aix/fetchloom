@@ -194,7 +194,7 @@ fn hash(
     while let Ok(message) = inbox.recv() {
         match message {
             #[cfg(test)]
-            Message::Pause { ready, release } => tests::wait_for_release(ready, release),
+            Message::Pause { ready, release } => tests::wait_for_release(&ready, &release),
             Message::Chunks(chunks) => {
                 for bytes in chunks {
                     hasher.update(&bytes);

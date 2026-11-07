@@ -398,10 +398,10 @@ mod tests {
                 "{error}"
             );
             assert_eq!(found, None);
-            if mode != Some(0o111) {
-                assert!(kept.is_err(), "{kept:?}");
-            } else {
+            if mode == Some(0o111) {
                 assert!(!kept.unwrap());
+            } else {
+                assert!(kept.is_err(), "{kept:?}");
             }
         }
     }

@@ -4,7 +4,7 @@ use super::*;
 use crate::cache::Validators;
 use crate::cache::partial::{Claim, PartialWriter};
 
-pub(super) fn wait_for_release(ready: SyncSender<()>, release: Receiver<()>) {
+pub(super) fn wait_for_release(ready: &SyncSender<()>, release: &Receiver<()>) {
     ready.send(()).unwrap();
     release.recv().unwrap();
 }
@@ -132,7 +132,7 @@ fn dropping_a_writer_joins_hashing_before_releasing_its_claim() {
     let mut writer = partial
         .writer(0, None, Validators::default(), false, false)
         .unwrap();
-    let claim = Arc::downgrade(writer._lock.as_ref().unwrap());
+    let claim = Arc::downgrade(partial.lock.as_ref().unwrap());
     let (sender, inbox) = mpsc::sync_channel(QUEUED);
     let (closed, closing) = mpsc::sync_channel(1);
     let (release, paused) = mpsc::sync_channel(1);

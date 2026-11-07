@@ -135,10 +135,10 @@ impl Batch {
     }
 
     pub(super) fn supports_local_fsync(&self) -> io::Result<bool> {
-        let kind = rustix::fs::fstatfs(&self.file)?.f_type;
         // linux/magic.h; rustix exposes statfs but names only a subset of its filesystem kinds.
         const EXT4: rustix::fs::FsWord = 0xef53;
         const XFS: rustix::fs::FsWord = 0x5846_5342;
+        let kind = rustix::fs::fstatfs(&self.file)?.f_type;
         Ok(matches!(kind, EXT4 | XFS))
     }
 
