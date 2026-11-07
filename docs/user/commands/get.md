@@ -75,7 +75,7 @@ an interruption, a refused question about the total size or a cache that cannot 
 fetchloom get -i - < links.txt
 ```
 
-a list always runs as several links, even when it holds one, so `-o` names the folder that holds each link's folder. a line of search words, or a list with no links, is a usage error before anything downloads.
+a list always runs as several links, even when it holds one, so `-o` names the folder that holds each link's folder. a line of search words, or a list with no links, is a usage error before anything downloads. ctrl-c while reading the list exits 130 without waiting for its producer to close the pipe.
 
 ## checking a hash
 

@@ -35,6 +35,7 @@ use crate::project::lock::LockedFile;
 use crate::project::manifest::{self, Manifest};
 use crate::source::search::is_search;
 use crate::source::{Listing, Parsed, Reference, Remote};
+use crate::stop::Stop;
 use crate::units;
 
 /// what `get` did, as `--json` prints it.
@@ -140,7 +141,7 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         )
         .help("give -o a folder name, then read the files there; `fetchloom get` prints the folder's path"));
     }
-    let links = links(&args)?;
+    let links = links(context, &args).await?;
     if args.sha256.is_some() && links.len() != 1 {
         return Err(Error::new(
             Kind::Usage,
@@ -162,7 +163,8 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
 
 /// the links to fetch: those on the command line, then those `--input-file` lists. several links
 /// download together, so each names what it fetches, and only a link alone may be search words.
-fn links(args: &Get) -> Result<Vec<String>, Error> {
+async fn links(context: &Context, args: &Get) -> Result<Vec<String>, Error> {
+    context.stop.check()?;
     let mut links = args.links.clone();
     let several = links.len() > 1 || args.input_file.is_some();
     if several && let Some(word) = links.iter().find(|link| is_search(link)) {
@@ -188,9 +190,10 @@ fn links(args: &Get) -> Result<Vec<String>, Error> {
     let Some(path) = &args.input_file else {
         return Ok(links);
     };
-    let (name, text) = read_list(path)?;
+    let (name, text) = read_list(path, &context.stop).await?;
     let before = links.len();
     for (number, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
+        context.stop.check()?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -218,7 +221,21 @@ fn links(args: &Get) -> Result<Vec<String>, Error> {
 }
 
 /// the text of the list `--input-file` names, and the name messages give it.
-fn read_list(path: &Path) -> Result<(String, String), Error> {
+async fn read_list(path: &Path, stop: &Stop) -> Result<(String, String), Error> {
+    stop.check()?;
+    let path = path.to_path_buf();
+    let reading = tokio::task::spawn_blocking(move || read_list_text(&path));
+    tokio::select! {
+        biased;
+        () = stop.asked() => Err(Error::new(Kind::Interrupted, "stopped at your request")),
+        outcome = reading => outcome.map_err(|err| Error::new(
+            Kind::LocalIo,
+            format!("could not read the link list: {err}"),
+        ))?,
+    }
+}
+
+fn read_list_text(path: &Path) -> Result<(String, String), Error> {
     let mut text = String::new();
     if path == Path::new("-") {
         std::io::stdin()

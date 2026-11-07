@@ -49,6 +49,8 @@ network clients are created only where commands need them. `Net` delays TLS root
 
 `add` keeps its mutation lock in `AddProject` through discovery, validation, resolution, manifest writing, sync and rendering. `discover_add`, `validate_add`, `resolve_add`, `sync_add` and `render_add` name those phases; the manifest write sits inline in `add` between resolution and sync, and `--dry-run` stops there in `preview_add` instead. `sync_add` invokes `restore` on a sync failure; rendering errors do not roll back an already completed sync.
 
+`get -i` reads its input on a blocking task while the command awaits either the result or cancellation. shutdown does not wait for an interrupted input reader whose producer keeps the pipe open.
+
 plain-word `add` and `get` call `search::pick` before source resolution. an interactive choice returns a canonical reference; without one, the error carries candidate details and a JSON partial result. [catalog search](../../user/commands/search.md) owns user-facing selection rules.
 
 `fetch::all` queues only the allowed number of downloads. it shares progress and counters across them. a locked 404 or 410 may re-resolve its recorded source once per batch; replacement URLs must still produce the old pinned bytes.
