@@ -792,16 +792,24 @@ mod tests {
             &Needed::default(),
             SystemTime::now() + GRACE + Duration::from_secs(60),
         );
-        let super::super::Claim::Owned(_owner) = cache.claim(url).unwrap() else {
-            panic!("nothing else holds the download");
-        };
-        assert!(
-            matches!(
-                super::super::partial::take_lock(&lock, opened),
-                Err(std::fs::TryLockError::WouldBlock)
+        // fat and exfat keep a removed file's name until its last handle closes, so there the
+        // new claim is refused instead; either way no two runs own the download
+        let claimed = cache.claim(url);
+        let old = super::super::partial::take_lock(&lock, opened);
+        match claimed {
+            Ok(super::super::Claim::Owned(_owner)) => assert!(
+                matches!(
+                    old,
+                    Err(std::fs::TryLockError::WouldBlock | std::fs::TryLockError::Error(_))
+                ),
+                "a second run owns the same download"
             ),
-            "a second run owns the same download"
-        );
+            Ok(super::super::Claim::Busy) => {}
+            Err(err) => assert!(
+                cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied,
+                "{err}"
+            ),
+        }
     }
 
     #[test]
