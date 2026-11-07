@@ -53,6 +53,10 @@ new objects normally publish by hardlinking a sealed file to the digest name, wh
 
 repairs use atomic rename on hardlink-capable volumes. when windows refuses a read-only destination, the cache clears its flag through an unfollowed handle, replaces the name and restores the old file's flag through that handle, including placed hardlinks. on volumes without hardlinks, refused replacement may remove the old object before renaming, so that fallback is not atomic.
 
+### url identities
+
+URL records and partial checkpoints serialize the original URL as `sha256:<digest>`, while their live structs keep the URL needed for requests and deferred publication. lookup requires the matching fingerprint, rejects records copied from another URL, and restores the original string only in memory. reads do not alter validators, prefix hashes or range hashes. see the [cache-folder reference](../../user/reference/cache-folder.md#url-and-partial-records).
+
 ### partial ownership and checkpoints
 
 partials use a separate OS lock file so windows' mandatory locks do not prevent reads through the final object name. a competing process waits. if locking is unavailable, the writer uses private files under `tmp` and loses cross-run resumption. gc removes the lock files nobody holds while holding each one, so `partial/` does not keep one file per URL ever fetched. a claimer that opened a lock file before gc removed it would lock a file with no name, so `claim` checks after locking that the path still names the locked file, by device and inode on unix and by volume serial and file index on windows, and opens the path again when it does not.

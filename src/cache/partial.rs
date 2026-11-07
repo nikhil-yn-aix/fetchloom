@@ -45,6 +45,8 @@ pub(crate) struct Partial {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Record {
+    // deferred publication still needs the original URL in memory.
+    #[serde(serialize_with = "super::serialize_url")]
     url: String,
     received: u64,
     /// the SHA-256 of the first `received` bytes, which a resume checks before it trusts them.
@@ -269,8 +271,12 @@ impl Partial {
 
     fn recorded(&self) -> Option<Record> {
         let text = fs::read(&self.record).ok()?;
-        let record: Record = serde_json::from_slice(&text).ok()?;
-        (record.url == self.url).then_some(record)
+        let mut record: Record = serde_json::from_slice(&text).ok()?;
+        if !super::recorded_url_matches(&record.url, &self.url) {
+            return None;
+        }
+        record.url.clone_from(&self.url);
+        Some(record)
     }
 }
 

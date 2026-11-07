@@ -405,6 +405,23 @@ fn wave1_fragment_secrets_stay_out_of_each_output_surface() -> Result {
 }
 
 #[test]
+fn wave1_signed_urls_leave_no_secret_in_cache_url_records() -> Result {
+    let mut failures = Vec::new();
+    for suffix in [
+        format!("?token={LINK_SECRET}"),
+        format!("#access_token={LINK_SECRET}"),
+    ] {
+        for (name, bytes) in secret_link_surfaces(&suffix, &["--json", "-vv"])? {
+            if name.starts_with("cache/") {
+                scan_secrets(&name, &bytes, &[LINK_SECRET], &mut failures);
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
 fn wave1_project_references_refuse_secret_fragments_without_persisting_them() -> Result {
     let mut failures = Vec::new();
     for mode in MODES {

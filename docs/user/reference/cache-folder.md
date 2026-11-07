@@ -55,7 +55,7 @@ random names use 16 hexadecimal digits. older loose `.new` files still use the a
 
 | field | value |
 |---|---|
-| `url` | original download URL, also the UTF-8 input to the filename hash |
+| `url` | `sha256:` followed by the SHA-256 of the original URL's UTF-8 bytes; the same digest names the file |
 | `sha256` | full object hash |
 | `size` | total bytes |
 | `name` | server-supplied file name, or null |
@@ -63,7 +63,9 @@ random names use 16 hexadecimal digits. older loose `.new` files still use the a
 | `validators.last_modified` | `Last-Modified` string, or null |
 | `validators.date` | response `Date` string, or null; required in every record |
 
-partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
+partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `url` uses the same fingerprint, so signed-link credentials stay out of records. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
+
+lookup requires the matching fingerprint and restores the request URL only in memory. plaintext URL records are not accepted. cache bodies and other metadata are not sanitized output.
 
 a split download adds `ranges`, the pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; the field is absent when there are none.
 

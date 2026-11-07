@@ -101,7 +101,7 @@ shown URLs mask userinfo and recognized credential fields in both queries and fr
 - keep byte processing off async workers and queues bounded. a queue size is not a bound on total project memory.
 - hold the partial claim until the writer and hash worker stop using its file.
 - range support without version proof is insufficient for joining bytes.
-- masking is explicit. local URL records can retain raw signed URLs and must not be shared as sanitized output.
+- masking is explicit. URL and partial records store only URL fingerprints. cache bodies and other metadata are not sanitized output.
 - a shared writable cache trusts its writers; address checks do not isolate cache users.
 
 ## tests

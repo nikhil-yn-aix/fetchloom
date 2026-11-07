@@ -77,12 +77,26 @@ pub(crate) struct Validators {
 /// what a URL served the last time it was downloaded.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct UrlRecord {
+    /// the live URL; its on-disk value is a fingerprint so credentials do not enter the index.
+    #[serde(serialize_with = "serialize_url")]
     pub(crate) url: String,
     pub(crate) sha256: Sha256,
     pub(crate) size: u64,
     /// the file name the server gave, when it gave one.
     pub(crate) name: Option<String>,
     pub(crate) validators: Validators,
+}
+
+fn url_identity(url: &str) -> String {
+    format!("sha256:{}", digest::sha256(url.as_bytes()).hex())
+}
+
+fn serialize_url<S: serde::Serializer>(url: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&url_identity(url))
+}
+
+fn recorded_url_matches(recorded: &str, url: &str) -> bool {
+    recorded == url_identity(url)
 }
 
 impl Cache {
@@ -255,8 +269,12 @@ impl Cache {
 
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
         let text = fs::read(self.url_record_path(url)).ok()?;
-        let record: UrlRecord = serde_json::from_slice(&text).ok()?;
-        (record.url == url).then_some(record)
+        let mut record: UrlRecord = serde_json::from_slice(&text).ok()?;
+        if !recorded_url_matches(&record.url, url) {
+            return None;
+        }
+        record.url = url.to_owned();
+        Some(record)
     }
 
     pub(crate) fn save_url_record(&self, record: &UrlRecord) -> io::Result<()> {
@@ -1081,3 +1099,6 @@ pub(crate) mod tests {
         assert_eq!(mode & 0o777, 0o700);
     }
 }
+
+#[cfg(test)]
+mod privacy;
