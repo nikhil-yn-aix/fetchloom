@@ -108,15 +108,11 @@ impl Held {
                 Err(err) => return Err(err),
             };
             let owner = serde_json::from_slice::<Owner>(&bytes).ok();
-            let stale = if bytes.is_empty() {
-                now.duration_since(modified)
-                    .is_ok_and(|age| age > Duration::from_secs(10))
-            } else {
-                self.lock.is_some()
-                    && owner
-                        .as_ref()
-                        .is_some_and(|owner| owner.os == std::env::consts::OS)
-            };
+            // an empty reservation may belong to a paused writer on another OS.
+            let stale = self.lock.is_some()
+                && owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.os == std::env::consts::OS);
             if stale {
                 remove_stale_owner(path, &bytes, modified)?;
                 continue;
@@ -792,16 +788,32 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_owner_older_than_ten_seconds_is_stale() {
+    fn an_active_empty_reservation_does_not_expire() {
         let (_dir, project) = project(&[(".fetchloom/owner", "")]);
         let path = project.own_folder().join("owner");
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        let now = modified + std::time::Duration::from_secs(11);
-        let Hold::Held(_held) = waiting(&project, "sync", now) else {
-            panic!("an old empty owner is stale")
+        let started = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(started)
+            .unwrap();
+        let first = Held {
+            lock: None,
+            owner: Some(path.clone()),
         };
-        let owner: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(owner["command"], "sync");
+        for lock in [None, Some(File::open(&path).unwrap())] {
+            let second = Held { lock, owner: None }
+                .claim(&path, "remove", started + Duration::from_secs(12))
+                .unwrap();
+            assert!(
+                matches!(second, Hold::Owner(_)),
+                "an active empty reservation was stolen"
+            );
+            assert_eq!(fs::read(&path).unwrap(), b"");
+        }
+        drop(first);
+        assert!(!path.exists());
     }
 
     #[test]

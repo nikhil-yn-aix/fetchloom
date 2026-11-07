@@ -36,11 +36,11 @@ when hardlinks fail for another reason, fetchloom falls back to exclusive creati
 
 dropping the command's guard removes `owner` before releasing the OS lock, including when the command returns an error.
 
-an existing owner is stale when its `os` matches this process and this process holds the OS lock, or when the file is empty and its modification time is more than ten seconds old. without a working OS lock, a same-os record is not stale.
+an existing owner is stale only when its `os` matches this process and this process holds the OS lock. without a working OS lock, a same-os record is not stale.
 
 before removing a stale record, fetchloom reads it again and requires the same bytes and modification time.
 
-any other record, including nonempty invalid JSON, makes the command wait. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. an `owner` that is a link, a special file or larger than 64 KiB is refused with an error rather than read. a `state` that is a link or a special file is never read and counts as no state.
+any other record, including an empty reservation or invalid JSON, makes the command wait. an empty reservation can belong to a paused writer on another OS, so age cannot prove that it is abandoned. the waiting message identifies the holder when readable and gives the exact `owner` path to delete if that process is gone. an `owner` that is a link, a special file or larger than 64 KiB is refused with an error rather than read. a `state` that is a link or a special file is never read and counts as no state.
 
 a record from another os is never reclaimed by its age or pid. delete it only after that process has ended.
 

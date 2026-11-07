@@ -34,7 +34,7 @@
 
 mutating commands acquire the OS file lock on `.fetchloom/lock`, then publish `.fetchloom/owner`. the owner record matters when windows and WSL share a project but cannot see each other's OS locks. `Held` removes its owner record before releasing the OS lock, including on an error path.
 
-waiting commands poll every 200 ms, report the holder once and remain cancellable. a same-OS owner can be reclaimed after the OS lock is acquired; an owner from another OS needs conservative handling. an empty reservation becomes stale only after 10 s. stale removal rereads the owner before deleting it.
+waiting commands poll every 200 ms, report the holder once and remain cancellable. a same-OS owner can be reclaimed after the OS lock is acquired; an owner from another OS needs conservative handling. an empty reservation never expires automatically: its writer may be paused on another OS, whose lock this process cannot observe. stale removal rereads the owner before deleting it.
 
 `status`, `list`, a ready `path` and `lock --check` need no mutation hold. a `path` that waits must reread the manifest and check readiness again because the preceding command may have completed the work.
 
