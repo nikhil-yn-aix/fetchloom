@@ -143,10 +143,12 @@ mod tests {
         child.wait_for("pipe child ready")?;
         let output = child.finish()?;
         assert!(output.status.success());
-        assert_eq!(
-            output.stdout.iter().filter(|byte| **byte == b'~').count(),
-            BYTES
-        );
+        let block = output
+            .stdout
+            .split(|byte| *byte != b'~')
+            .max_by_key(|part| part.len())
+            .unwrap_or_default();
+        assert_eq!(block.len(), BYTES);
         assert!(String::from_utf8_lossy(&output.stderr).contains("pipe child ready"));
         Ok(())
     }
