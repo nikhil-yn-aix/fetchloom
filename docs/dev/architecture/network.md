@@ -106,6 +106,7 @@ experiment settings come from the run's `Experiments` value and are off by defau
 
 | switch | behavior |
 |---|---|
+| `FETCHLOOM_EXP_NET_SPLIT_LINK_RATE=1` | an eligible uncapped body with a strong range validator starts four ranges immediately. after all start, 250 ms aggregate-rate windows add streams only while each addition improves throughput by 15%, capped at eight. this raises the initial-host request cap to eight, still bounded by jobs. the first error, including 429, stops the other streams and retries as one stream with its original retry delay. missing validators, small bodies, explicit split disable and rate caps retain the ordinary policy. |
 | `FETCHLOOM_EXP_NET_BODY_CONNECTIONS=1` | file bodies use the pooled HTTP/1.1 client, so concurrent bodies have separate TCP connections. metadata retains protocol negotiation and HTTP/2 multiplexing. the four-request host cap, overall job cap, cookies, redirect checks, credential scope, retries and byte-rate cap are unchanged. |
 
 ## invariants and traps

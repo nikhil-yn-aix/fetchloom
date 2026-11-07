@@ -37,6 +37,7 @@ const IDLE: Duration = Duration::from_secs(30);
 const REDIRECTS: usize = 10;
 /// requests running at once to one host, so no server sees fetchloom as a flood.
 const PER_HOST: usize = 4;
+const LINK_STREAMS: usize = 8;
 /// whether the logs already said a key cannot be sent, which they say once a run.
 static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -366,6 +367,16 @@ impl Net {
         self.send_on(Lane::Shared, url, shape).await
     }
 
+    fn link_ranges(&self) -> bool {
+        self.exp().on("NET_SPLIT_LINK_RATE")
+            && self.split.when != Splitting::Never
+            && self.rate.is_none()
+    }
+
+    fn eager_split(&self, validators: &crate::cache::Validators) -> bool {
+        self.link_ranges() && headers::if_range(validators).is_some()
+    }
+
     fn body_lane(&self) -> Lane {
         if self.exp().on("NET_BODY_CONNECTIONS") {
             Lane::Apart
@@ -539,7 +550,14 @@ impl Net {
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
             .entry(host(url).to_ascii_lowercase())
-            .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
+            .or_insert_with(|| {
+                let cap = if self.link_ranges() {
+                    LINK_STREAMS
+                } else {
+                    PER_HOST
+                };
+                Arc::new(Semaphore::new(cap))
+            })
             .clone()
     }
 }

@@ -911,3 +911,29 @@ fn a_body_transport_setting_uses_the_selected_pool() {
         assert_eq!(asked.lock().unwrap().len(), 1);
     }
 }
+
+#[test]
+fn early_splitting_needs_a_validator_and_respects_disabled_or_capped_runs() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let mut net = net(&url);
+    net.split.when = Splitting::WhenSlow;
+    let strong = Validators {
+        etag: Some("\"v1\"".to_owned()),
+        ..Validators::default()
+    };
+    assert!(!net.eager_split(&strong));
+    net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+    assert!(net.eager_split(&strong));
+    assert!(!net.eager_split(&Validators::default()));
+    for tag in ["v1", "W/\"v1\""] {
+        assert!(!net.eager_split(&Validators {
+            etag: Some(tag.to_owned()),
+            ..Validators::default()
+        }));
+    }
+    net.split.when = Splitting::Never;
+    assert!(!net.eager_split(&strong));
+    net.split.when = Splitting::Always;
+    net.rate = crate::net::rate::Rate::read(&|_| Some("1".into())).unwrap();
+    assert!(!net.eager_split(&strong));
+}

@@ -783,3 +783,123 @@ fn terminal_stream_failures_win_in_either_arrival_order() {
         assert!(matches!(outcome, Some(Failure::Final(error)) if error.kind == Kind::AuthRequired));
     }
 }
+
+#[test]
+fn initial_ranges_reserve_disjoint_work_and_obey_the_cap() {
+    for enabled in [false, true] {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let mut net = net(&url, 16);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            ..Validators::default()
+        };
+        let policy = Policy::for_run(&net, &validators);
+        let (sender, _receiver) = tokio::sync::mpsc::channel(16);
+        let streams = Streams {
+            job: Job {
+                from: &url,
+                key: &url,
+                validators: &validators,
+                pinned: false,
+                total: 128 * MIB,
+                on: &|_| Ok(()),
+                slow: None,
+            },
+            board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
+            sender,
+        };
+        let _first = net.try_permit(&url).unwrap();
+        let mut held = net.initial_ranges(&streams, policy);
+        assert_eq!(held.len(), if enabled { 3 } else { 0 });
+        let mut shares: Vec<_> = streams
+            .board()
+            .shares
+            .iter()
+            .flatten()
+            .map(|share| (share.next, share.end))
+            .collect();
+        shares.sort_unstable();
+        assert_eq!(shares.first().unwrap().0, 0);
+        assert_eq!(shares.last().unwrap().1, 128 * MIB);
+        assert!(shares.windows(2).all(|pair| pair[0].1 == pair[1].0));
+        while let Some(stream) = net.add_stream(&streams, policy.maximum) {
+            held.push(stream);
+        }
+        assert_eq!(held.len() + 1, if enabled { 8 } else { 4 });
+        assert!(net.add_stream(&streams, policy.maximum).is_none());
+    }
+}
+
+#[test]
+fn an_initial_batch_is_measured_only_after_its_streams_start() {
+    let start = Instant::now();
+    let window = Duration::from_millis(250);
+    let mut probe = Probe::Initial;
+    assert_eq!(probe.step(start, MIB, false, false, window), None);
+    assert!(matches!(probe, Probe::Initial));
+    assert_eq!(probe.step(start, MIB, true, false, window), None);
+    assert_eq!(
+        probe.step(start + window / 2, 2 * MIB, true, false, window),
+        None
+    );
+    assert_eq!(
+        probe.step(start + window, 2 * MIB, true, false, window),
+        Some(4_194_304.0)
+    );
+}
+
+#[test]
+fn adaptive_ranges_back_off_on_the_first_error_or_quota_refusal() {
+    for enabled in [false, true] {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let mut net = net(&url, 8);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            ..Validators::default()
+        };
+        let policy = Policy::for_run(&net, &validators);
+        let mut headers = header::HeaderMap::new();
+        headers.insert(header::RETRY_AFTER, "60".parse().unwrap());
+        for failure in [
+            failure::transient("broken stream".to_owned()),
+            failure::refusal(&url, StatusCode::TOO_MANY_REQUESTS, &headers),
+        ] {
+            assert_eq!(policy.stop_after_failure(1, &failure), enabled);
+            assert!(policy.stop_after_failure(3, &failure));
+        }
+    }
+}
+
+#[test]
+fn early_range_downloads_preserve_bytes_with_either_setting() {
+    for enabled in [false, true] {
+        let bytes = body(2 * MIB);
+        let server = serve(
+            bytes.clone(),
+            Serving {
+                rate: u64::MAX,
+                ..SERVING
+            },
+        );
+        let mut net = net(&server.url, 8);
+        net.split.when = Splitting::WhenSlow;
+        net.split.slow = 0;
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let (_folder, cache) = cache();
+        let fetched = download(&net, &cache, &server.url, Expect::default());
+        assert_eq!(fetched.digest, sha256(&bytes));
+        assert_eq!(
+            fs::read(cache.object_path(&fetched.digest)).unwrap(),
+            *bytes
+        );
+        assert_eq!(!parts(&server).is_empty(), enabled);
+    }
+}

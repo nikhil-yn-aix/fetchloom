@@ -489,10 +489,9 @@ impl Net {
         on: Listener<'_>,
         split: &mut bool,
     ) -> Result<Answer, Failure> {
-        let pinned = fetch.expect.proves();
         let earlier = partial
             .resumable()
-            .filter(|(_, validators)| pinned || if_range(validators).is_some());
+            .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
         Work::add(&self.work.requests, 1);
         let shape = conditions(earlier.as_ref(), known);
         let response = self.send_body(from, shape).await?;
@@ -514,7 +513,7 @@ impl Net {
         let total = headers::total_length(&head, status);
         let name = describe_response(&response, &fetch.url, on)?;
         refuse_other_length(fetch, total)?;
-        let proven = pinned || if_range(&validators).is_some();
+        let proven = fetch.expect.proves() || if_range(&validators).is_some();
         let splits = *split && self.may_split(total, status, &head, proven);
         tracing::debug!(
             splits,
@@ -543,7 +542,8 @@ impl Net {
             Work::add(&self.work.resumes, 1);
         }
         // ranges kept past the prefix leave gaps that only the split path fills
-        let at_once = self.split.when == Splitting::Always || kept > 0;
+        let at_once =
+            self.split.when == Splitting::Always || kept > 0 || self.eager_split(&validators);
         let watch = total.filter(|_| splits);
         // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
         let monitor = watch.filter(|_| self.rate.is_none());
