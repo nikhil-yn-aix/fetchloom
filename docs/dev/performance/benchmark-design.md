@@ -98,7 +98,7 @@ ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the publi
 |---|---|
 | linux x86_64 | ext4 for every scenario; xfs for s5 and s6 on lan; each uses a dedicated loop-mounted image |
 
-the harness does not produce windows numbers. namespaces, `tc`, loop mounts and `wait4` require linux; WSL results describe its linux filesystem, not NTFS or defender. a windows comparison needs a separate native runner.
+the harness does not produce windows numbers. namespaces, `tc`, loop mounts and `wait4` require linux; WSL results describe its linux filesystem, not NTFS or defender. [the native comparison](native.md) measures windows, macos and other filesystems on the machine itself.
 
 ## metrics
 

@@ -2,6 +2,8 @@
 
 this suite measures time to checked files, cache reuse, no-op work and interrupted downloads. [the design](../docs/dev/performance/benchmark-design.md) defines the cases and fairness rules.
 
+to compare two fetchloom builds on windows, macos or any other filesystem without this lab, use `native.py` ([native comparison](../docs/dev/performance/native.md)).
+
 ## requirements
 
 use linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. the client and nginx share a kernel but use separate network namespaces. all measured files, caches and logs live under `FL_BENCH_ROOT` (default `/srv/fl-bench`), not a windows mount. leave at least 30 GiB free. do not run other benchmarks at the same time: dropping page caches affects the whole machine.

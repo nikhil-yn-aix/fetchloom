@@ -30,6 +30,7 @@ elapsed time is not a CI assertion. work counters catch extra requests, download
 | [measurements](measurements.md) | commits, conditions, counts, medians, ranges and rejected experiments |
 | [windows defender](windows-defender.md) | why random small-file writes can be expensive on windows |
 | [benchmark design](benchmark-design.md) | implemented scenarios, fairness rules and checking boundaries |
+| [native comparison](native.md) | two builds on windows, macos or any filesystem, without the lab |
 | [running benchmarks](../engineering/benchmarks.md) | setup, smoke runs, full comparisons and retained results |
 | [profiling](../engineering/profiling.md) | timelines, CPU samples and allocation investigations |
 | [network](../architecture/network.md) | queues, hashing and adaptive splitting |
