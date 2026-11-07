@@ -87,14 +87,17 @@ pub(super) fn put_all(
     folder: &Path,
     targets: &[Target],
 ) -> Result<Vec<Outcome>, Error> {
+    context.stop.check()?;
     // an archive that holds nothing still leaves the folder get answers with
     fs::create_dir_all(folder).map_err(|err| local(folder, &err))?;
     let mut placer = Placer::in_named_folder(folder)
         .with_experiments(cache.experiments().clone())
-        .with_threads(context.threads);
+        .with_threads(context.threads)
+        .with_stop(std::sync::Arc::clone(&context.stop));
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut orders = Vec::new();
     for (index, target) in targets.iter().enumerate() {
+        context.stop.check()?;
         let destination = folder.join(&target.path);
         match clear(cache, &mut placer, target, &destination)? {
             Cleared::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
@@ -115,8 +118,15 @@ pub(super) fn put_all(
         },
         |_| (),
     );
+    let mut failure = None;
     for ((index, _, destination, replaced), result) in orders.iter().zip(results) {
-        let (method, ()) = result.map_err(|err| local(destination, &err))?;
+        let (method, ()) = match result {
+            Ok(done) => done,
+            Err(err) => {
+                failure.get_or_insert_with(|| local(destination, &err));
+                continue;
+            }
+        };
         let counter = match method {
             Method::Reflink => &context.work.reflinks,
             Method::Hardlink => &context.work.hardlinks,
@@ -128,6 +138,10 @@ pub(super) fn put_all(
         } else {
             Outcome::Placed(method)
         };
+    }
+    context.stop.check()?;
+    if let Some(error) = failure {
+        return Err(error);
     }
     placer
         .flush_copies()
@@ -446,5 +460,51 @@ mod tests {
             full.help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
+    }
+
+    #[test]
+    fn a_stop_asked_before_placement_places_no_files() {
+        use crate::cache::tests::store;
+        use crate::output::{Level, Output, Style};
+        use crate::project::lock::LockedFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = store(&cache, b"pinned");
+        let locked = LockedFile {
+            path: "file".to_owned(),
+            size: 6,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/file".to_owned(),
+            unpacks_to: None,
+        };
+        let targets: Vec<_> = (0..512)
+            .map(|index| Target {
+                dataset: "set",
+                path: format!("{index}.csv"),
+                sha256: stored.digest,
+                size: 6,
+                copy: false,
+                locked: &locked,
+            })
+            .collect();
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.stop.ask();
+        let result = put_all(&context, &cache, &dir.path().join("got"), &targets);
+        let counts = context.work.counts();
+        assert_eq!(counts.hardlinks + counts.reflinks + counts.copies, 0);
+        assert!(matches!(result, Err(error) if error.kind == Kind::Interrupted));
     }
 }

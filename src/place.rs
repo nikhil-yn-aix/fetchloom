@@ -4,17 +4,17 @@ mod synced;
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata, Permissions};
-use std::io;
-#[cfg(not(target_os = "linux"))]
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use crate::cache::read_unfollowed;
 use crate::exp::Experiments;
+use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::volume::{Volume, crosses_volumes, is_plain, refuses_links};
 
@@ -44,6 +44,7 @@ pub(crate) enum Method {
 pub(crate) struct Placer {
     exp: Experiments,
     threads: Threads,
+    stop: Arc<Stop>,
     root: PathBuf,
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
     /// someone named for `get` may be a link to one.
@@ -152,6 +153,7 @@ impl Placer {
             volume: Volume::new(root.clone()),
             threads: Threads::default(),
             exp: Experiments::default(),
+            stop: Arc::default(),
             root,
             checks_root: true,
             folders: HashSet::new(),
@@ -184,6 +186,15 @@ impl Placer {
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
         self.threads = threads;
         self
+    }
+
+    pub(crate) fn with_stop(mut self, stop: Arc<Stop>) -> Placer {
+        self.stop = stop;
+        self
+    }
+
+    pub(crate) fn stop(&self) -> &Stop {
+        &self.stop
     }
 
     /// why files were copied rather than linked, as far as the filesystem told.
@@ -227,6 +238,10 @@ impl Placer {
     ) -> Vec<io::Result<(Method, T)>> {
         let mut results = Vec::with_capacity(count);
         let ready = spread((0..count).filter_map(|index| {
+            if let Err(err) = check_stop(&self.stop) {
+                results.push((index, Err(err)));
+                return None;
+            }
             let order = order(index);
             match self.check_folders(&order.destination, true) {
                 Ok(()) => Some((index, order)),
@@ -279,6 +294,7 @@ impl Placer {
             || this.flush_copies(),
             this.threads,
             &seen,
+            &this.stop,
         ));
         results.sort_unstable_by_key(|(index, _)| *index);
         results.into_iter().map(|(_, result)| result).collect()
@@ -293,6 +309,7 @@ impl Placer {
         writable: bool,
         batch: bool,
     ) -> io::Result<Put<()>> {
+        check_stop(&self.stop)?;
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
             match reflink(object, destination, writable) {
@@ -313,10 +330,17 @@ impl Placer {
         }
         let flush = !self.batches_copies();
         let put = if batch {
-            let (staged, _) = stage_copy(object, destination, writable, self.threads)?;
+            let (staged, _) = stage_copy(object, destination, writable, self.threads, &self.stop)?;
             Put::Waiting(staged)
         } else {
-            copy(object, destination, writable, self.threads, flush)?;
+            copy(
+                object,
+                destination,
+                writable,
+                self.threads,
+                flush,
+                &self.stop,
+            )?;
             Put::Placed(Method::Copy, ())
         };
         #[cfg(target_os = "linux")]
@@ -372,6 +396,7 @@ impl Placer {
     /// inside the data folder can never send a file elsewhere. with `make`, missing folders are
     /// made one at a time. each folder is checked once.
     pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
+        check_stop(&self.stop)?;
         let (_, parent) = self.within(path)?;
         if self.folders.contains(&parent) {
             return Ok(());
@@ -411,6 +436,7 @@ impl Placer {
         prune: bool,
         placed: Option<Method>,
     ) -> io::Result<()> {
+        check_stop(&self.stop)?;
         let (path, parent) = self.within(path)?;
         let mut folder = self.root.clone();
         if self.checks_root {
@@ -685,11 +711,13 @@ fn copy(
     writable: bool,
     threads: Threads,
     flush: bool,
+    stop: &Stop,
 ) -> io::Result<()> {
-    let (staged, file) = stage_copy(object, destination, writable, threads)?;
+    let (staged, file) = stage_copy(object, destination, writable, threads, stop)?;
     if flush {
         file.sync_all()?;
     }
+    check_stop(stop)?;
     staged.publish()?;
     #[cfg(windows)]
     undo_on_error(set_file_writable(&file, writable), destination)?;
@@ -702,10 +730,12 @@ fn stage_copy(
     destination: &Path,
     writable: bool,
     threads: Threads,
+    stop: &Stop,
 ) -> io::Result<(Staged, File)> {
+    check_stop(stop)?;
     let (staged, file) = Staged::claim(destination, crate::volume::create_hidden)?;
     // publishing clears windows attributes, so seal through the claimed handle afterward.
-    fill(object, &file, cfg!(windows) || writable, threads)?;
+    fill(object, &file, cfg!(windows) || writable, threads, stop)?;
     Ok((staged, file))
 }
 
@@ -776,11 +806,12 @@ fn publish_flushed<T: Send>(
     flush: impl FnOnce() -> io::Result<()>,
     threads: Threads,
     seen: &(impl Fn(&Metadata) -> T + Sync),
+    stop: &Stop,
 ) -> Vec<(usize, io::Result<(Method, T)>)> {
     if waiting.is_empty() {
         return Vec::new();
     }
-    if let Err(err) = flush() {
+    if let Err(err) = check_stop(stop).and_then(|()| flush()) {
         return waiting
             .into_iter()
             .map(|(index, _)| {
@@ -791,8 +822,8 @@ fn publish_flushed<T: Send>(
     }
     let publish = &|(index, staged): (usize, Staged)| {
         let destination = staged.destination.clone();
-        let named = staged
-            .publish()
+        let named = check_stop(stop)
+            .and_then(|()| staged.publish())
             .and_then(|()| Ok((Method::Copy, seen(&fs::symlink_metadata(&destination)?))));
         (index, named)
     };
@@ -883,14 +914,21 @@ pub(crate) fn is_copy_temporary(name: &str) -> bool {
 
 /// copies the bytes of `object` into `output` and seals it as asked, all through the handle, so
 /// a link swapped in for the name `output` claimed is never written through.
-fn fill(object: &Path, mut output: &File, writable: bool, threads: Threads) -> io::Result<()> {
+fn fill(
+    object: &Path,
+    mut output: &File,
+    writable: bool,
+    threads: Threads,
+    stop: &Stop,
+) -> io::Result<()> {
     let mut input = read_unfollowed(object)?;
     if threads.is_limited() {
         // a reader per copy would multiply the placement worker cap.
-        io::copy(&mut input, &mut output)?;
+        copy_stoppable(&mut input, &mut output, stop)?;
     } else {
-        transfer(input, output)?;
+        transfer(input, output, stop)?;
     }
+    check_stop(stop)?;
     set_file_writable(output, writable)
 }
 
@@ -906,32 +944,51 @@ fn set_file_writable(output: &File, writable: bool) -> io::Result<()> {
 /// linux copies from file to file inside the kernel, with `copy_file_range`, which a network
 /// filesystem can even run on the server.
 #[cfg(target_os = "linux")]
-fn transfer(mut input: File, mut output: &File) -> io::Result<()> {
-    io::copy(&mut input, &mut output).map(drop)
+fn transfer(input: File, output: &File, stop: &Stop) -> io::Result<()> {
+    copy_stoppable(input, output, stop)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn transfer(mut input: File, mut output: &File) -> io::Result<()> {
+fn transfer(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
+    check_stop(stop)?;
     match usize::try_from(input.metadata()?.len()) {
         Ok(size) if size <= BLOCK => {
             let mut bytes = Vec::with_capacity(size);
             input.read_to_end(&mut bytes)?;
             output.write_all(&bytes)
         }
-        _ => overlapped(input, output),
+        _ => overlapped(input, output, stop),
     }
 }
 
-/// how much a large copy reads at a time.
-#[cfg(not(target_os = "linux"))]
+/// bounds each `io::copy` operation so a stop is checked between blocks.
 const BLOCK: usize = 1 << 20;
+
+fn check_stop(stop: &Stop) -> io::Result<()> {
+    if stop.is_asked() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "stopped at your request",
+        ));
+    }
+    Ok(())
+}
+
+fn copy_stoppable(mut input: impl Read, mut output: impl Write, stop: &Stop) -> io::Result<()> {
+    loop {
+        check_stop(stop)?;
+        if io::copy(&mut input.by_ref().take(BLOCK as u64), &mut output)? == 0 {
+            return Ok(());
+        }
+    }
+}
 
 /// copies `input` into `output` a block at a time, reading the next block on another thread
 /// while this one writes the last. with the disk never waiting on the other side, a copy keeps
 /// pace with the operating system's own: 1 GiB took 0.62 s against 0.99 s one block at a time
 /// on an nvme laptop.
 #[cfg(not(target_os = "linux"))]
-fn overlapped(mut input: File, mut output: &File) -> io::Result<()> {
+fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
     let (full, filled) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(2);
     let (empty, spare) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
     for _ in 0..3 {
@@ -941,7 +998,7 @@ fn overlapped(mut input: File, mut output: &File) -> io::Result<()> {
         scope.spawn(move || {
             while let Ok(mut block) = spare.recv() {
                 block.resize(BLOCK, 0);
-                let read = input.read(&mut block);
+                let read = check_stop(stop).and_then(|()| input.read(&mut block));
                 let sent = match read {
                     Ok(0) => return,
                     Ok(read) => {
@@ -958,6 +1015,7 @@ fn overlapped(mut input: File, mut output: &File) -> io::Result<()> {
         let mut written = Ok(());
         while let Ok(block) = filled.recv() {
             written = block.and_then(|block| {
+                check_stop(stop)?;
                 output.write_all(&block)?;
                 let _ = empty.send(block);
                 Ok(())

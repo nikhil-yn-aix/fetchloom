@@ -244,7 +244,14 @@ fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     fs::rename(&destination, folder.path().join("claimed.csv")).unwrap();
     fs::hard_link(&outside, &destination).unwrap();
 
-    fill(&object, &claimed, false, Threads::default()).unwrap();
+    fill(
+        &object,
+        &claimed,
+        false,
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
 
     assert_eq!(fs::read_to_string(&outside).unwrap(), "someone else's file");
     assert!(!is_read_only(&outside));
@@ -269,7 +276,7 @@ fn a_writable_copy_needs_no_permission_change() {
         .open(&destination)
         .unwrap();
 
-    let result = fill(&object, &output, true, Threads::default());
+    let result = fill(&object, &output, true, Threads::default(), &Stop::default());
 
     assert!(
         result.is_ok(),
@@ -278,7 +285,13 @@ fn a_writable_copy_needs_no_permission_change() {
     assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     assert!(!is_read_only(&destination));
     let readonly = undo_on_error(
-        fill(&object, &output, false, Threads::default()),
+        fill(
+            &object,
+            &output,
+            false,
+            Threads::default(),
+            &Stop::default(),
+        ),
         &destination,
     );
     assert!(
@@ -307,13 +320,31 @@ fn a_writable_copy_works_where_the_mount_refuses_chmod() {
     fs::remove_file(&probe).unwrap();
     let destination = destination_folder.path().join("placed.csv");
 
-    copy(&object, &destination, true, Threads::default(), true).unwrap();
+    copy(
+        &object,
+        &destination,
+        true,
+        Threads::default(),
+        true,
+        &Stop::default(),
+    )
+    .unwrap();
 
     assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     assert!(!is_read_only(&destination));
     assert!(is_read_only(&object));
     let readonly = destination_folder.path().join("readonly.csv");
-    assert!(copy(&object, &readonly, false, Threads::default(), true).is_err());
+    assert!(
+        copy(
+            &object,
+            &readonly,
+            false,
+            Threads::default(),
+            true,
+            &Stop::default()
+        )
+        .is_err()
+    );
     assert!(!readonly.exists());
 }
 
@@ -331,6 +362,7 @@ fn an_interrupted_copy_never_leaves_partial_bytes_at_its_name() {
             false,
             Threads::default(),
             true,
+            &Stop::default(),
         )
         .unwrap();
         return;
@@ -394,7 +426,15 @@ fn a_copy_can_be_published_beyond_the_windows_path_limit() {
     fs::create_dir_all(&parent).unwrap();
     let destination = parent.join("placed.csv");
 
-    copy(&object, &destination, false, Threads::default(), true).unwrap();
+    copy(
+        &object,
+        &destination,
+        false,
+        Threads::default(),
+        true,
+        &Stop::default(),
+    )
+    .unwrap();
 
     assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
     assert!(is_read_only(&destination));
@@ -414,7 +454,15 @@ fn a_copy_never_reads_an_object_swapped_for_a_symlink() {
 
     for threads in [Threads::default(), capped] {
         for writable in [false, true] {
-            let error = copy(&object, &destination, writable, threads, true).unwrap_err();
+            let error = copy(
+                &object,
+                &destination,
+                writable,
+                threads,
+                true,
+                &Stop::default(),
+            )
+            .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
             assert!(error.to_string().contains(&object.display().to_string()));
             assert!(!destination.exists());
@@ -454,7 +502,17 @@ fn a_failed_copy_leaves_no_staging_file() {
     let missing = folder.path().join("missing");
     let destination = folder.path().join("placed.csv");
 
-    assert!(copy(&missing, &destination, false, Threads::default(), true).is_err());
+    assert!(
+        copy(
+            &missing,
+            &destination,
+            false,
+            Threads::default(),
+            true,
+            &Stop::default()
+        )
+        .is_err()
+    );
 
     assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 0);
 }
@@ -469,7 +527,15 @@ fn a_file_of_many_blocks_is_copied_byte_for_byte() {
     fs::write(&object, &bytes).unwrap();
     let destination = folder.path().join("placed.bin");
 
-    copy(&object, &destination, false, Threads::default(), true).unwrap();
+    copy(
+        &object,
+        &destination,
+        false,
+        Threads::default(),
+        true,
+        &Stop::default(),
+    )
+    .unwrap();
 
     assert_eq!(fs::read(&destination).unwrap(), bytes);
     assert!(is_read_only(&destination));
@@ -572,7 +638,14 @@ fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Sta
         .iter()
         .enumerate()
         .map(|(index, destination)| {
-            let (staged, _) = stage_copy(object, destination, true, Threads::default()).unwrap();
+            let (staged, _) = stage_copy(
+                object,
+                destination,
+                true,
+                Threads::default(),
+                &Stop::default(),
+            )
+            .unwrap();
             (index, staged)
         })
         .collect();
@@ -593,6 +666,7 @@ fn batched_copies_are_named_only_after_the_flush() {
         },
         Threads::default(),
         &|metadata: &Metadata| metadata.len(),
+        &Stop::default(),
     );
 
     assert_eq!(
@@ -619,6 +693,7 @@ fn a_failed_flush_names_no_batched_copy() {
         || Err(io::Error::other("write-back failed")),
         Threads::default(),
         &|_: &Metadata| (),
+        &Stop::default(),
     );
 
     assert_eq!(results.len(), 3);
@@ -1096,4 +1171,92 @@ fn refused_placement_workers_keep_borrowed_and_owned_results() {
         value * 2
     });
     assert_eq!(owned, expected);
+}
+
+#[test]
+fn a_stop_after_the_first_placement_starts_no_later_file() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let stop = Arc::new(Stop::default());
+    let mut placer =
+        Placer::starting_at(root.clone(), Method::Hardlink, None).with_stop(Arc::clone(&stop));
+    let seen = AtomicUsize::new(0);
+    let results = placer.place_all(
+        512,
+        |index| Order {
+            object: object.clone(),
+            destination: root.join(format!("{index}.csv")),
+            writable: false,
+        },
+        |_| {
+            seen.fetch_add(1, Ordering::Relaxed);
+            stop.ask();
+        },
+    );
+    assert_eq!(seen.load(Ordering::Relaxed), 1);
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(fs::read_dir(root).unwrap().count(), 1);
+}
+
+#[test]
+fn a_copy_checks_for_a_stop_between_blocks() {
+    struct Input<'a> {
+        left: usize,
+        stop: &'a Stop,
+    }
+    impl Read for Input<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            let count = bytes.len().min(self.left);
+            bytes[..count].fill(42);
+            self.left -= count;
+            self.stop.ask();
+            Ok(count)
+        }
+    }
+    let stop = Stop::default();
+    let mut input = Input {
+        left: 3 * BLOCK,
+        stop: &stop,
+    };
+    let error = copy_stoppable(&mut input, io::sink(), &stop).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert!(input.left >= 2 * BLOCK);
+}
+
+#[test]
+fn a_stopped_copy_batch_publishes_nothing_and_drops_staging() {
+    let (folder, object) = cache(true);
+    let (destinations, staged) = staged_copies(folder.path(), &object);
+    let stop = Stop::default();
+    stop.ask();
+    let results = publish_flushed(
+        staged,
+        || panic!("a cancelled batch needs no flush"),
+        Threads::default(),
+        &|_: &Metadata| (),
+        &stop,
+    );
+    assert!(results.iter().all(|(_, result)| result.is_err()));
+    assert!(destinations.iter().all(|path| !path.exists()));
+    assert_eq!(placed_names(folder.path()), Vec::<String>::new());
+}
+
+#[test]
+fn a_stop_during_copy_publication_keeps_only_completed_files() {
+    let (folder, object) = cache(true);
+    let (destinations, staged) = staged_copies(folder.path(), &object);
+    let stop = Stop::default();
+    let results = publish_flushed(
+        staged,
+        || Ok(()),
+        Threads::default(),
+        &|_: &Metadata| stop.ask(),
+        &stop,
+    );
+    assert_eq!(
+        results.iter().filter(|(_, result)| result.is_ok()).count(),
+        1
+    );
+    assert_eq!(destinations.iter().filter(|path| path.exists()).count(), 1);
+    assert_eq!(placed_names(folder.path()), ["0.csv"]);
 }

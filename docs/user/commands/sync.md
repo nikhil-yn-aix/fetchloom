@@ -88,3 +88,7 @@ each file it would download is listed with its size, or `size unknown` when only
 | offline sync needs resolution | the manifest changed or pins are missing | prepare the project online before disconnecting |
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
+
+## stopping placement
+
+the first ctrl-c stops starting new placements and removals. an operation already in the filesystem may finish. completed files stay recorded; unfinished copies never take their final names. run sync again to finish.

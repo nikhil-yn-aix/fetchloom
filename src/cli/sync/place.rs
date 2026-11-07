@@ -335,7 +335,9 @@ impl<'a> Placing<'a> {
         cache: &Cache,
         synced: Option<Synced>,
         told: Option<&str>,
+        stop: &std::sync::Arc<crate::stop::Stop>,
     ) -> Result<Placement, Error> {
+        stop.check()?;
         let _span = tracing::debug_span!("place").entered();
         let Placing {
             project,
@@ -350,7 +352,8 @@ impl<'a> Placing<'a> {
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir, &project.own_folder())
             .with_experiments(cache.experiments().clone())
-            .with_threads(survey.threads);
+            .with_threads(survey.threads)
+            .with_stop(std::sync::Arc::clone(stop));
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
@@ -375,17 +378,23 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
-        // the state written next vouches for these files, so their bytes reach the disk first
-        placer
-            .flush_copies()
-            .map_err(|err| Error::io("could not flush the copied files to disk", &err))?;
-        let complete = failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
+        // place_all has flushed published copies; a stop discards its unfinished batch.
+        if !stop.is_asked() {
+            placer
+                .flush_copies()
+                .map_err(|err| Error::io("could not flush the copied files to disk", &err))?;
+        }
+        let complete = !stop.is_asked()
+            && failure.is_none()
+            && placement.kept.is_empty()
+            && unknown.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;
         state.synced = synced;
         if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
             project.write_state(state, cache.experiments())?;
         }
+        stop.check()?;
         if let Some(error) = failure {
             return Err(error);
         }
@@ -499,6 +508,7 @@ fn settle<'t, 'a>(
     let mut todo = Vec::new();
     let mut adopted = false;
     for (target, action) in targets.iter().zip(actions) {
+        placer.stop().check()?;
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Adopt(seen) => {
@@ -638,6 +648,7 @@ fn remove_unwanted(
     let unwanted = unwanted(survey, wanted, unknown);
     let changed = !unwanted.is_empty();
     for (path, fate) in unwanted {
+        placer.stop().check()?;
         let Some(before) = survey.state.files.remove(&path) else {
             continue;
         };
@@ -673,6 +684,9 @@ fn remove_unwanted(
 /// the scan, or that cannot be deleted, stays for a later sync.
 fn sweep(project: &Project, placer: &mut Placer, survey: &Survey, wanted: &HashSet<&str>) {
     for path in survey.leftovers() {
+        if placer.stop().is_asked() {
+            break;
+        }
         let file = project.root.join(path);
         if !wanted.contains(path.as_str())
             && now(&file).is_some_and(|look| survey.disk.get(path) == Some(&look))
@@ -863,20 +877,15 @@ mod tests {
             actions,
             survey,
         };
-        let output = Output::new(
-            Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-            },
-            Level::Quiet,
-            false,
-            false,
-        );
         placing
-            .apply(&output, &Work::default(), &cache, None, None)
+            .apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            )
             .unwrap();
         let (recorded, _) = project.state();
         for name in names {
@@ -935,7 +944,14 @@ mod tests {
         };
 
         placing
-            .apply(&quiet(), &Work::default(), &cache, None, None)
+            .apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            )
             .unwrap();
 
         assert!(!leftover.exists());

@@ -126,6 +126,7 @@ impl<'a> Loop<'a> {
             &self.cache,
             synced,
             self.told.as_deref(),
+            &self.context.stop,
         )
     }
 

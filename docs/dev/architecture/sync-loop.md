@@ -69,7 +69,7 @@ a run that leaves files out, preserves edits or encounters a placement failure r
 
 the plan checked before writing data.lock is retained for placement, rather than reading cached member records and validating the same paths again. unknown archive trees must be learned before destination planning can finish; only then is the plan rebuilt. after that, `missing` checks only objects needed by place or replace actions, deduplicates them and verifies doubtful cache entries. already correct destinations need no download just to refill the cache.
 
-placement rechecks files before destructive work, flushes copied payloads, then writes state. the state captures each file's metadata immediately after placement and the start of the scan, so edits or cache marks arriving during later work remain visible.
+placement rechecks files before destructive work, flushes copied payloads, then writes state. the command stop signal is checked between placement mutations and copy blocks; completed placements are recorded as incomplete when interrupted. the state captures each file's metadata immediately after placement and the start of the scan, so edits or cache marks arriving during later work remain visible.
 
 ### dry run
 

@@ -65,7 +65,7 @@ error: 1 of 2 links could not be fetched
   help: check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml
 ```
 
-an interruption, a refused question about the total size or a cache that cannot open still stops the whole run.
+an interruption, a refused question about the total size or a cache that cannot open still stops the whole run. during placement, ctrl-c stops new files and checks between copy blocks. completed files stay; unfinished copies never take their final names.
 
 ## link lists
 
