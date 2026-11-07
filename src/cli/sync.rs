@@ -110,11 +110,15 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
-        let jobs = files
-            .into_iter()
-            .map(|(dataset, file)| job(lock, &dataset, file))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.download(jobs).await?;
+        if self.context.exp.on("PROJECT_LAZY_JOBS") {
+            self.download_prepared(lock, &files).await?;
+        } else {
+            let jobs = files
+                .into_iter()
+                .map(|(dataset, file)| job(lock, &dataset, file))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.download(jobs).await?;
+        }
         self.unpack_locked(lock, &archives).await?;
         placing.apply(
             &self.context.output,
@@ -444,6 +448,70 @@ impl<'a> Loop<'a> {
         )?;
         let started = Instant::now();
         let fetched = fetch::all(self.context, &self.net, &self.cache, jobs).await?;
+        self.tell_downloaded(&fetched, started);
+        Ok(fetched)
+    }
+
+    async fn download_prepared(
+        &self,
+        lock: &Lock,
+        files: &[(String, &LockedFile)],
+    ) -> Result<Vec<Fetched>, Error> {
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut descriptions = Vec::with_capacity(files.len());
+        let mut urls = Vec::with_capacity(files.len());
+        let interleave = self.context.exp.on("NET_INTERLEAVE_HOSTS");
+        for (dataset, file) in files {
+            let (description, url) =
+                fetch::Description::take(job(lock, dataset, file)?, interleave);
+            descriptions.push(description);
+            urls.push(url);
+        }
+        let available =
+            |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_some();
+        if self.net.offline().enabled() {
+            let missing: Vec<_> = files
+                .iter()
+                .zip(&descriptions)
+                .filter(|((_, file), _)| !available(file))
+                .map(|(_, description)| description.label.as_str())
+                .collect();
+            if !missing.is_empty() {
+                return Err(self.offline_missing(&missing));
+            }
+        }
+        let size = files
+            .iter()
+            .zip(&descriptions)
+            .filter(|((_, file), _)| !available(file))
+            .filter_map(|(_, description)| description.size)
+            .fold(0, u64::saturating_add);
+        super::confirm(
+            &self.context.output,
+            self.context.yes,
+            &units::count(files.len() as u64, "file", "files"),
+            size,
+        )?;
+        let started = Instant::now();
+        let fetched = fetch::prepared(
+            self.context,
+            &self.net,
+            &self.cache,
+            descriptions,
+            urls,
+            |index, url| {
+                let (dataset, file) = &files[index];
+                make_job(lock, dataset, file, &url)
+            },
+        )
+        .await?;
+        self.tell_downloaded(&fetched, started);
+        Ok(fetched)
+    }
+
+    fn tell_downloaded(&self, fetched: &[Fetched], started: Instant) {
         let downloaded: Vec<&Fetched> = fetched
             .iter()
             .filter(|fetched| fetched.origin == Origin::Network)
@@ -462,7 +530,6 @@ impl<'a> Loop<'a> {
             }
             self.context.output.step("Downloaded", &text);
         }
-        Ok(fetched)
     }
 
     /// refuses, when offline, the jobs whose bytes the cache lacks.
@@ -501,6 +568,10 @@ impl<'a> Loop<'a> {
                 self.net.offline().retry()
             )));
         }
+        Err(self.offline_missing(&missing))
+    }
+
+    fn offline_missing(&self, missing: &[&str]) -> Error {
         let mut error = Error::new(
             Kind::OfflineMissing,
             format!(
@@ -509,8 +580,8 @@ impl<'a> Loop<'a> {
                 if missing.len() == 1 { "is" } else { "are" }
             ),
         );
-        error = shown_five(error, &missing);
-        Err(error.help(format!("{} to download them", self.net.offline().retry())))
+        error = shown_five(error, missing);
+        error.help(format!("{} to download them", self.net.offline().retry()))
     }
 }
 
@@ -687,9 +758,13 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
         // `fetchloom lock` keeps a dataset whose entry did not change, link and all
         .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
     })?;
+    Ok(make_job(lock, dataset, file, &url))
+}
+
+fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url) -> Job {
     let pinned = lock.get(dataset);
 
-    Ok(Job {
+    Job {
         fetch: Fetch {
             expect: Expect {
                 sha256: Some(file.sha256),
@@ -698,7 +773,7 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
             },
             revalidate: false,
             unpack: false,
-            ..source::fetch_plan(&url)
+            ..source::fetch_plan(url)
         },
         label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
@@ -707,7 +782,7 @@ fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
             path: file.path.clone(),
             alone: locked.files.len() == 1,
         }),
-    })
+    }
 }
 
 fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {

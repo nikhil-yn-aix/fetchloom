@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tokio::task::JoinSet;
+use url::Url;
 
 pub(super) use self::again::Again;
 use super::Context;
@@ -29,6 +30,28 @@ pub(super) struct Job {
     pub(super) dataset: Option<String>,
     /// where to ask again when the file is pinned and its recorded link is dead.
     pub(super) again: Option<Again>,
+}
+
+/// the batch facts retained while a validated job waits for an admission slot.
+pub(super) struct Description {
+    pub(super) label: String,
+    pub(super) size: Option<u64>,
+    host: Option<String>,
+}
+
+impl Description {
+    /// drops the fetch and recovery copies, keeping one parsed URL for infallible reconstruction.
+    pub(super) fn take(job: Job, interleave: bool) -> (Self, Url) {
+        let host = interleave.then(|| crate::net::host(&job.fetch.from).to_ascii_lowercase());
+        (
+            Self {
+                label: job.label,
+                size: job.fetch.expect.size,
+                host,
+            },
+            job.fetch.url,
+        )
+    }
 }
 
 /// builds a listed download, revalidating unpinned links on later runs. cached members can stand
@@ -73,13 +96,35 @@ struct Overall {
 
 impl Overall {
     fn new(context: &Context, jobs: &[Job]) -> Overall {
-        let count = jobs.len();
-        let sizes = || jobs.iter().map(|job| job.fetch.expect.size);
+        let what = match jobs {
+            [only] => only.label.clone(),
+            _ => units::count(jobs.len() as u64, "file", "files"),
+        };
+        Self::from_sizes(context, jobs.len(), what, || {
+            jobs.iter().map(|job| job.fetch.expect.size)
+        })
+    }
+
+    fn described(context: &Context, descriptions: &[Description]) -> Overall {
+        let what = match descriptions {
+            [only] => only.label.clone(),
+            _ => units::count(descriptions.len() as u64, "file", "files"),
+        };
+        Self::from_sizes(context, descriptions.len(), what, || {
+            descriptions.iter().map(|job| job.size)
+        })
+    }
+
+    fn from_sizes<I: Iterator<Item = Option<u64>>>(
+        context: &Context,
+        count: usize,
+        what: String,
+        sizes: impl Fn() -> I,
+    ) -> Overall {
         let bar = (count > 1).then(|| {
             let bar = context
                 .output
                 .bar("Downloading", units::count(count as u64, "file", "files"));
-            // what the sources told now, and each server's size as its download starts
             let known: Vec<u64> = sizes().flatten().collect();
             bar.start(
                 (!known.is_empty()).then(|| known.iter().copied().fold(0, u64::saturating_add)),
@@ -88,10 +133,6 @@ impl Overall {
             bar
         });
         let length = std::sync::Mutex::new(sizes().flatten().fold(0, u64::saturating_add));
-        let what = match jobs {
-            [only] => only.label.clone(),
-            _ => units::count(count as u64, "file", "files"),
-        };
         let ticker = context.output.ticker("Downloading", what, sizes());
         Overall {
             bar,
@@ -273,6 +314,42 @@ pub(super) async fn all(
     let batched = cache.defer_downloads().unwrap_or(false);
     let results = each(context, net, cache, jobs, false).await;
     let published = publish(cache, batched);
+    collected(results, published, &labels)
+}
+
+/// admits validated pinned jobs without keeping their full fetch and recovery values in memory.
+pub(super) async fn prepared(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    mut descriptions: Vec<Description>,
+    urls: Vec<Url>,
+    make: impl Fn(usize, Url) -> Job,
+) -> Result<Vec<Fetched>, Error> {
+    let count = descriptions.len();
+    let batched = cache.defer_downloads().unwrap_or(false);
+    let overall = Arc::new(Overall::described(context, &descriptions));
+    let queue = Queue::grouped(urls, context.exp.on("NET_INTERLEAVE_HOSTS"), |index, _| {
+        descriptions[index].host.clone().unwrap_or_default()
+    });
+    for description in &mut descriptions {
+        description.host = None;
+    }
+    let jobs = queue.map(|(index, url)| (index, make(index, url)));
+    let results = run_each(context, net, cache, count, overall, jobs, false).await;
+    let published = publish(cache, batched);
+    let labels: Vec<_> = descriptions
+        .into_iter()
+        .map(|description| description.label)
+        .collect();
+    collected(results, published, &labels)
+}
+
+fn collected(
+    results: Result<Vec<Result<Fetched, Error>>, Error>,
+    published: Result<(), Error>,
+    labels: &[String],
+) -> Result<Vec<Fetched>, Error> {
     let mut fetched = Vec::with_capacity(labels.len());
     let mut failed = Vec::new();
     for (index, result) in results?.into_iter().enumerate() {
@@ -283,7 +360,7 @@ pub(super) async fn all(
     }
     // a cache that could not take the downloads in matters more than which of them failed
     published?;
-    if let Some(error) = together(&labels, failed) {
+    if let Some(error) = together(labels, failed) {
         return Err(error);
     }
     Ok(fetched)
@@ -316,19 +393,27 @@ fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
     }
 }
 
-struct Queue {
-    original: std::iter::Enumerate<std::vec::IntoIter<Job>>,
-    hosts: VecDeque<VecDeque<(usize, Job)>>,
+struct Queue<T> {
+    original: std::iter::Enumerate<std::vec::IntoIter<T>>,
+    hosts: VecDeque<VecDeque<(usize, T)>>,
 }
 
-impl Queue {
+impl Queue<Job> {
     fn new(jobs: Vec<Job>, interleave: bool) -> Self {
-        let mut original = jobs.into_iter().enumerate();
+        Self::grouped(jobs, interleave, |_, job| {
+            crate::net::host(&job.fetch.from).to_ascii_lowercase()
+        })
+    }
+}
+
+impl<T> Queue<T> {
+    fn grouped(items: Vec<T>, interleave: bool, host: impl Fn(usize, &T) -> String) -> Self {
+        let mut original = items.into_iter().enumerate();
         let mut hosts = VecDeque::<VecDeque<_>>::new();
         if interleave {
             let mut by_host = HashMap::new();
             for (index, job) in original.by_ref() {
-                let host = crate::net::host(&job.fetch.from).to_ascii_lowercase();
+                let host = host(index, &job);
                 let next = hosts.len();
                 let group = *by_host.entry(host).or_insert(next);
                 if group == hosts.len() {
@@ -341,8 +426,8 @@ impl Queue {
     }
 }
 
-impl Iterator for Queue {
-    type Item = (usize, Job);
+impl<T> Iterator for Queue<T> {
+    type Item = (usize, T);
 
     fn next(&mut self) -> Option<Self::Item> {
         let Some(mut host) = self.hosts.pop_front() else {
@@ -366,12 +451,24 @@ async fn each(
     apart: bool,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
-    let alone = count == 1;
     let overall = Arc::new(Overall::new(context, &jobs));
+    let queue = Queue::new(jobs, context.exp.on("NET_INTERLEAVE_HOSTS"));
+    run_each(context, net, cache, count, overall, queue, apart).await
+}
+
+async fn run_each(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    count: usize,
+    overall: Arc<Overall>,
+    mut queue: impl Iterator<Item = (usize, Job)>,
+    apart: bool,
+) -> Result<Vec<Result<Fetched, Error>>, Error> {
+    let alone = count == 1;
     let mut results: Vec<Option<Result<Fetched, Error>>> =
         std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
-    let mut queue = Queue::new(jobs, context.exp.on("NET_INTERLEAVE_HOSTS"));
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.jobs * 2;
     let mut done = 0;
@@ -615,6 +712,117 @@ mod tests {
                 .collect();
             assert_eq!(indexes, expected);
         }
+    }
+
+    #[test]
+    fn prepared_descriptions_keep_initial_hosts_sizes_and_input_indexes() {
+        for (interleave, expected) in [(false, vec![0, 1, 2, 3]), (true, vec![0, 2, 1, 3])] {
+            let exp = if interleave {
+                crate::exp::Experiments::default()
+                    .with("PROJECT_LAZY_JOBS", "1")
+                    .with("NET_INTERLEAVE_HOSTS", "1")
+            } else {
+                crate::exp::Experiments::default().with("PROJECT_LAZY_JOBS", "1")
+            };
+            let (descriptions, urls): (Vec<_>, Vec<_>) = [
+                "slow.example",
+                "SLOW.example:8443",
+                "fast.example",
+                "fast.example",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, host)| {
+                let mut fetch =
+                    Fetch::new(Url::parse(&format!("https://storage.example/{index}")).unwrap());
+                fetch.from = Url::parse(&format!("https://{host}/{index}")).unwrap();
+                fetch.expect.size = (index != 0).then_some(0);
+                Description::take(
+                    Job {
+                        fetch,
+                        label: index.to_string(),
+                        dataset: None,
+                        again: None,
+                    },
+                    exp.on("NET_INTERLEAVE_HOSTS"),
+                )
+            })
+            .unzip();
+            assert_eq!(descriptions[0].size, None);
+            assert_eq!(descriptions[1].size, Some(0));
+            let queue = Queue::grouped(urls, exp.on("NET_INTERLEAVE_HOSTS"), |index, _| {
+                descriptions[index].host.clone().unwrap_or_default()
+            });
+            let got: Vec<_> = queue
+                .map(|(index, url)| {
+                    assert_eq!(descriptions[index].label, index.to_string());
+                    assert_eq!(url.as_str(), format!("https://storage.example/{index}"));
+                    index
+                })
+                .collect();
+            assert_eq!(got, expected);
+        }
+    }
+
+    #[test]
+    fn prepared_job_construction_stays_within_scheduler_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.jobs = 2;
+        context.exp = crate::exp::Experiments::default().with("PROJECT_LAZY_JOBS", "1");
+        context.offline = crate::net::Offline::Flag;
+        let net = Arc::new(context.net());
+        let (descriptions, urls): (Vec<_>, Vec<_>) = (0..32)
+            .map(|index| {
+                Description::take(
+                    Job {
+                        fetch: Fetch::new(
+                            Url::parse(&format!("https://example.org/{index}")).unwrap(),
+                        ),
+                        label: index.to_string(),
+                        dataset: None,
+                        again: None,
+                    },
+                    false,
+                )
+            })
+            .unzip();
+        let made = std::cell::Cell::new(0);
+        let result = crate::source::recorded::block_on(prepared(
+            &context,
+            &net,
+            &cache,
+            descriptions,
+            urls,
+            |index, url| {
+                made.set(made.get() + 1);
+                Job {
+                    fetch: Fetch::new(url),
+                    label: index.to_string(),
+                    dataset: None,
+                    again: None,
+                }
+            },
+        ));
+        assert_eq!(result.unwrap_err().kind, Kind::OfflineMissing);
+        assert!(
+            made.get() <= context.jobs * 2,
+            "{} jobs were admitted",
+            made.get()
+        );
+        assert_eq!(context.work.counts().requests, 0);
     }
 
     #[test]

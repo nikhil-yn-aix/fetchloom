@@ -1597,3 +1597,95 @@ fn sync_reuses_its_validated_plan() -> Result {
     assert_eq!(json(&output)?["work"]["requests"], 0);
     Ok(())
 }
+
+#[test]
+fn prepared_downloads_keep_pins_and_shared_object_claims() -> Result {
+    for enabled in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+        added(&sandbox, &server)?;
+        let project = clone(&sandbox, "prepared")?;
+        let path = project.join("data.lock");
+        let lock = fs::read_to_string(&path)?;
+        let row = lock
+            .lines()
+            .find(|line| line.starts_with("  { path = "))
+            .ok_or("no locked file")?;
+        let second = row.replacen("iris.csv", "z.csv", 1);
+        fs::write(&path, lock.replace(row, &format!("{row}\n{second}")))?;
+        let parsed: toml::Value = toml::from_str(&lock)?;
+        let digest = parsed["dataset"][0]["files"][0]["sha256"]
+            .as_str()
+            .ok_or("no digest")?;
+        delete(
+            &sandbox
+                .cache()
+                .join("objects")
+                .join(&digest[..2])
+                .join(&digest[2..]),
+        )?;
+        let output = sandbox
+            .command_in(&project, &["--json", "sync"])
+            .env(
+                "FETCHLOOM_EXP_PROJECT_LAZY_JOBS",
+                if enabled { "1" } else { "0" },
+            )
+            .env("FETCHLOOM_EXP_NET_INTERLEAVE_HOSTS", "1")
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        assert_eq!(document["work"]["requests"], 1);
+        assert_eq!(document["work"]["bytes_down"], IRIS.len());
+        assert_eq!(document["result"]["placement"]["placed"], 2);
+        for file in ["iris.csv", "z.csv"] {
+            assert_eq!(fs::read(project.join("data/iris").join(file))?, IRIS);
+        }
+        assert_eq!(server.requests().len(), 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn prepared_downloads_validate_late_links_before_any_transfer() -> Result {
+    for enabled in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+        added(&sandbox, &server)?;
+        let project = clone(&sandbox, "invalid-prepared")?;
+        let path = project.join("data.lock");
+        let lock = fs::read_to_string(&path)?;
+        let row = lock
+            .lines()
+            .find(|line| line.starts_with("  { path = "))
+            .ok_or("no locked file")?;
+        let parsed: toml::Value = toml::from_str(&lock)?;
+        let digest = parsed["dataset"][0]["files"][0]["sha256"]
+            .as_str()
+            .ok_or("no digest")?;
+        let invalid = row
+            .replacen("iris.csv", "z.csv", 1)
+            .replace(&server.url, "not a URL")
+            .replace(digest, &"0".repeat(64));
+        fs::write(&path, lock.replace(row, &format!("{row}\n{invalid}")))?;
+        delete(
+            &sandbox
+                .cache()
+                .join("objects")
+                .join(&digest[..2])
+                .join(&digest[2..]),
+        )?;
+        let output = sandbox
+            .command_in(&project, &["--json", "sync"])
+            .env(
+                "FETCHLOOM_EXP_PROJECT_LAZY_JOBS",
+                if enabled { "1" } else { "0" },
+            )
+            .output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        assert_eq!(json(&output)?["errors"][0]["kind"], "project.invalid");
+        assert_eq!(json(&output)?["work"]["requests"], 0);
+        assert!(!project.join("data").exists());
+        assert_eq!(server.requests().len(), 1);
+    }
+    Ok(())
+}
