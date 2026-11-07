@@ -149,11 +149,30 @@ fn sha256(bytes: &[u8]) -> String {
     text
 }
 
+fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
+    for switches in [
+        &[][..],
+        &[
+            "CACHE_LEAN_PARTIAL",
+            "CACHE_LOCAL_FSYNC",
+            "CACHE_RENAME_NOREPLACE",
+        ][..],
+    ] {
+        check_shared_cache_syncs(processes, overlapping, warm, switches)?;
+    }
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one fixture owns the gated servers, children, and byte checks"
 )]
-fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
+fn check_shared_cache_syncs(
+    processes: usize,
+    overlapping: bool,
+    warm: bool,
+    switches: &[&str],
+) -> Result {
     use std::fmt::Write as _;
 
     let sandbox = Sandbox::new()?;
@@ -236,13 +255,15 @@ fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result
         }
         fs::write(project.join("data.toml"), manifest)?;
         fs::write(project.join("data.lock"), lock)?;
-        syncing.push(Syncing::start(
-            sandbox
-                .command_in(&project, &["--json", "sync"])
-                .env("FETCHLOOM_JOBS", "1")
-                .env("FETCHLOOM_THREADS", "1")
-                .env("FETCHLOOM_CACHE", &cache),
-        )?);
+        let mut command = sandbox.command_in(&project, &["--json", "sync"]);
+        command
+            .env("FETCHLOOM_JOBS", "1")
+            .env("FETCHLOOM_THREADS", "1")
+            .env("FETCHLOOM_CACHE", &cache);
+        for switch in switches {
+            command.env(format!("FETCHLOOM_EXP_{switch}"), "1");
+        }
+        syncing.push(Syncing::start(&mut command)?);
         projects.push((project, order));
     }
     if !warm {

@@ -111,7 +111,7 @@ inspection, verification reads and cleanup retain each failed path with its I/O 
 
 deferred-publication tests inject a real failed `syncfs` through an `O_PATH` descriptor. they check that failed or latched flushes publish no names and that discarding one duplicate changes digest tracking only after its last pending copy is gone.
 
-shared-cache CLI tests gate real requests with channels before releasing cold downloads. two and eight processes use identical or overlapping URL sets, both cold and warm. every process must complete, every placement and cached object must match, and warm runs must make no body requests. pipe readers drain output concurrently; a watchdog kills a stuck cohort without using elapsed time as a correctness assertion.
+shared-cache CLI tests gate real requests with channels before releasing cold downloads. two and eight processes use identical or overlapping URL sets, both cold and warm, with cache experiments off and with lean partials, local fsync and no-replace publication enabled together. every process must complete, every placement and cached object must match, and warm runs must make no body requests. pipe readers drain output concurrently; a watchdog kills a stuck cohort without using elapsed time as a correctness assertion.
 
 cache-lock tests keep conflicting guards alive while checking wait and stop behavior. they check clone lifetime through weak handles: after the last guard drops, a forked test helper may still hold an inherited file descriptor until exec, so immediate lock reacquisition is not a deterministic assertion about that guard.
 
