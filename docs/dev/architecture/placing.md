@@ -123,3 +123,9 @@ the saved 10,000-file single-folder grid uses 1.005 cpu s at four ext4 workers v
 ## small-copy experiment
 
 on linux, `FETCHLOOM_EXP_PLACE_SMALL_COPY_BYTES` sets a maximum file size for buffered copies after this placer has successfully made a reflink. zero or an unset value preserves the method order. an initial unsupported reflink still falls back to hardlinks. later small files use independent bytes, not hardlinks, and keep hidden staging, read-only mode and flush-before-publication. buffered reads and writes deliberately avoid `copy_file_range`, which can clone extents on xfs; interrupted reads retry, and cancellation is checked between blocks. the comparison uses `4096`, not a new default.
+
+## parent-handle experiment
+
+`FETCHLOOM_EXP_PLACE_PARENT_FD=1` retains up to 128 verified parent handles on unix. both settings use the same anchored resolver; enabling reuse skips repeated parent opens and identity reads during placement. removal and pruning still reopen parents without following links, and eviction bounds the open-handle budget. queued copies retain the root and parent identity, not a handle per copy. windows already holds directory handles to prevent replacement and does not use this unix cache.
+
+the per-file `canonicalize` call is absent in both settings: containment removed its repeated `readlink` walk. cached handles continue to refer to the original directory if another process renames it; they never follow the replacement link.

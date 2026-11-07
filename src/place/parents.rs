@@ -115,6 +115,14 @@ impl Parents {
             name: name.to_owned(),
         })
     }
+    #[cfg(test)]
+    pub(super) fn cached(&self) -> usize {
+        self.retained
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
     pub(super) fn forget(&self, relative: &Path) {
         self.retained
             .lock()

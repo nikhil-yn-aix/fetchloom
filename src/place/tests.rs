@@ -1276,21 +1276,24 @@ fn a_parent_component_cannot_escape_the_placement_root() {
 
 #[cfg(unix)]
 fn swapped_parent(first: Method) {
-    let (folder, object) = cache(true);
-    let root = folder.path().join("data");
-    let parent = root.join("set");
-    let outside = folder.path().join("outside");
-    fs::create_dir(&outside).unwrap();
-    let destination = parent.join("file.csv");
-    let mut placer = Placer::starting_at(root.clone(), first, None);
-    placer.check_folders(&destination, true).unwrap();
-    fs::rename(&parent, root.join("saved")).unwrap();
-    std::os::unix::fs::symlink(&outside, &parent).unwrap();
-    let _ = placer.place(&object, &destination, false);
-    assert!(
-        !outside.join("file.csv").exists(),
-        "{first:?} followed a swapped parent"
-    );
+    for value in ["0", "1"] {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let parent = root.join("set");
+        let outside = folder.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let destination = parent.join("file.csv");
+        let mut placer = Placer::starting_at(root.clone(), first, None)
+            .with_experiments(Experiments::default().with("PLACE_PARENT_FD", value));
+        placer.check_folders(&destination, true).unwrap();
+        fs::rename(&parent, root.join("saved")).unwrap();
+        std::os::unix::fs::symlink(&outside, &parent).unwrap();
+        let _ = placer.place(&object, &destination, false);
+        assert!(
+            !outside.join("file.csv").exists(),
+            "{first:?} followed a swapped parent"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1464,4 +1467,23 @@ fn a_buffered_copy_retries_interrupted_reads() {
     let mut output = Vec::new();
     copy_buffered(input, &mut output, &Stop::default()).unwrap();
     assert_eq!(output, b"complete");
+}
+
+#[test]
+fn parent_handle_experiment_preserves_placement_and_removal() {
+    for value in ["0", "1"] {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let mut placer = Placer::new(&root)
+            .with_experiments(Experiments::default().with("PLACE_PARENT_FD", value));
+        for name in ["set/a", "set/b"] {
+            let path = root.join(name);
+            let method = placer.place(&object, &path, false).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), CONTENTS);
+            placer.remove(&path, false, Some(method)).unwrap();
+            assert!(!path.exists());
+        }
+        #[cfg(unix)]
+        assert_eq!(placer.parents.cached() != 0, value == "1");
+    }
 }

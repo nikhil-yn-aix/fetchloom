@@ -304,7 +304,7 @@ impl Placer {
         let grouped = folders.map(|folders| {
             let serial = !ready.is_empty()
                 && *this.serial.get_or_init(|| {
-                    this.location(&this.root.join(".filesystem"), false)
+                    this.location(&this.root.join(".filesystem"), false, true)
                         .is_ok_and(|location| location.serializes())
                 });
             folders.finish(serial)
@@ -368,7 +368,7 @@ impl Placer {
         batch: bool,
     ) -> io::Result<Put<Metadata>> {
         check_stop(&self.stop)?;
-        let location = Arc::new(self.location(destination, false)?);
+        let location = Arc::new(self.location(destination, false, true)?);
         let mut buffered = false;
         if self.can_reflink.load(Ordering::Relaxed) {
             let metadata = check_object(object)?;
@@ -440,7 +440,7 @@ impl Placer {
                 let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
                 crate::cache::syncfs_reports_errors(&release)
                     .then(|| {
-                        self.location(&self.root.join(".batch"), false)
+                        self.location(&self.root.join(".batch"), false, true)
                             .and_then(|location| location.flush_handle())
                             .ok()
                     })
@@ -485,7 +485,7 @@ impl Placer {
         check_stop(&self.stop)?;
         let (_, parent) = self.within(path)?;
         if !self.folders.contains(&parent) {
-            if let Err(error) = self.location(path, make) {
+            if let Err(error) = self.location(path, make, true) {
                 if let Ok(metadata) = fs::symlink_metadata(&parent) {
                     found_folder(&parent, &metadata, FolderUse::Place { make: false })?;
                 }
@@ -509,7 +509,7 @@ impl Placer {
     ) -> io::Result<()> {
         check_stop(&self.stop)?;
         let (path, parent) = self.within(path)?;
-        let location = self.location(&path, false)?;
+        let location = self.location(&path, false, false)?;
         #[cfg(unix)]
         {
             let _ = placed;
@@ -531,7 +531,7 @@ impl Placer {
             }
             check_stop(&self.stop)?;
             let removed = self
-                .location(current, false)
+                .location(current, false, false)
                 .and_then(|location| location.remove_dir());
             if removed.is_err() {
                 break;
@@ -546,17 +546,22 @@ impl Placer {
         Ok(())
     }
 
-    fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
+    fn location(&self, destination: &Path, make: bool, reuse: bool) -> io::Result<Location> {
         let (destination, _) = self.within(destination)?;
-        self.parents
-            .locate(&self.root, &destination, self.checks_root, make, false)
+        self.parents.locate(
+            &self.root,
+            &destination,
+            self.checks_root,
+            make,
+            reuse && cfg!(unix) && self.experiments().on("PLACE_PARENT_FD"),
+        )
     }
 
     fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
         }
-        let location = self.location(&self.root.join(".probe"), false).ok()?;
+        let location = self.location(&self.root.join(".probe"), false, true).ok()?;
         let links = location.can_hardlink()?;
         Some(*self.links.get_or_init(|| links))
     }
