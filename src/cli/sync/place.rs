@@ -350,7 +350,7 @@ impl<'a> Placing<'a> {
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder())
+        let mut placer = Placer::new(&data_dir)
             .with_experiments(cache.experiments().clone())
             .with_threads(survey.threads)
             .with_stop(std::sync::Arc::clone(stop));
@@ -416,7 +416,7 @@ impl<'a> Placing<'a> {
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder())
+        let mut placer = Placer::new(&data_dir)
             .with_experiments(cache.experiments().clone())
             .with_threads(survey.threads);
         let removed = remove_unwanted(
@@ -956,6 +956,33 @@ mod tests {
 
         assert!(!leftover.exists());
         assert_eq!(fs::read(&own).unwrap(), b"mine");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_swapped_folder_cannot_redirect_a_staging_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, _, leftover, _) = interrupted(dir.path());
+        let fixed = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(42);
+        fs::File::open(&leftover)
+            .unwrap()
+            .set_modified(fixed)
+            .unwrap();
+        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let root = project.root.join("data");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let foreign = outside.join(leftover.file_name().unwrap());
+        fs::write(&foreign, b"foreign!").unwrap();
+        fs::File::open(&foreign)
+            .unwrap()
+            .set_modified(fixed)
+            .unwrap();
+        fs::rename(root.join("weather"), root.join("saved")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("weather")).unwrap();
+        let mut placer = Placer::new(&root);
+        sweep(&project, &mut placer, &survey, &HashSet::new());
+        assert_eq!(fs::read(&foreign).unwrap(), b"foreign!");
     }
 
     #[test]

@@ -1,14 +1,21 @@
 //! putting cached objects where a project expects them, by reflink, else hardlink, else copy.
 
+#[cfg(unix)]
+mod parents;
+#[cfg(windows)]
+#[path = "place/parents_windows.rs"]
+mod parents;
 mod synced;
+
+use parents::{Location, Parents, Staged};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata, Permissions};
 use std::io::{self, Read, Write};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +23,9 @@ use crate::cache::read_unfollowed;
 use crate::exp::Experiments;
 use crate::stop::Stop;
 use crate::threads::Threads;
-use crate::volume::{Volume, crosses_volumes, is_plain, refuses_links};
+#[cfg(windows)]
+use crate::volume::Volume;
+use crate::volume::{crosses_volumes, is_plain, refuses_links};
 
 /// the most threads that place files or look up objects at once. creating a link or opening a
 /// file waits on the disk and, on windows, on the antivirus scanner, so a few threads hide each
@@ -56,7 +65,10 @@ pub(crate) struct Placer {
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
     /// the volume under the root, which may refuse to remove a read-only file.
+    #[cfg(windows)]
     volume: Volume,
+    parents: Parents,
+    links: OnceLock<bool>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -122,19 +134,14 @@ impl Unlinked {
 
 impl Placer {
     /// prepares placement under `root`, which must be a real folder, and notes whether `root`
-    /// sits inside a folder a sync client owns. `scratch` is a folder of fetchloom's own on the
-    /// same volume, such as the project's `.fetchloom`, where a removal may test whether the
-    /// volume can hardlink.
-    pub(crate) fn new(root: &Path, scratch: &Path) -> Placer {
+    /// sits inside a folder a sync client owns. capability probes use the opened root too.
+    pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let synced = synced::client(&root, &|name| std::env::var_os(name));
         if let Some(client) = synced {
             tracing::debug!(root = %root.display(), client, "inside a synced folder, so no hardlinks");
         }
-        Placer {
-            volume: Volume::new(scratch.to_path_buf()),
-            ..Placer::starting_at(root, Method::Reflink, synced)
-        }
+        Placer::starting_at(root, Method::Reflink, synced)
     }
 
     /// prepares placement under a folder someone named, which may be a link to a folder. the
@@ -143,14 +150,17 @@ impl Placer {
     pub(crate) fn in_named_folder(root: &Path) -> Placer {
         Placer {
             checks_root: false,
-            ..Placer::new(root, root)
+            ..Placer::new(root)
         }
     }
 
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
+            #[cfg(windows)]
             volume: Volume::new(root.clone()),
+            parents: Parents::default(),
+            links: OnceLock::new(),
             threads: Threads::default(),
             exp: Experiments::default(),
             stop: Arc::default(),
@@ -220,8 +230,8 @@ impl Placer {
     ) -> io::Result<Method> {
         self.check_folders(destination, true)?;
         match self.put(object, destination, writable, false)? {
-            Put::Placed(method, ()) => Ok(method),
-            Put::Waiting(staged) => staged.publish().map(|()| Method::Copy),
+            Put::Placed(method, _) => Ok(method),
+            Put::Waiting(staged) => staged.publish().map(|_| Method::Copy),
         }
     }
 
@@ -258,13 +268,9 @@ impl Placer {
             let order = order(*index);
             let placed = this
                 .put(&order.object, &order.destination, order.writable, batch)
-                .and_then(|put| {
-                    Ok(match put {
-                        Put::Placed(method, ()) => {
-                            Put::Placed(method, seen(&fs::symlink_metadata(&order.destination)?))
-                        }
-                        Put::Waiting(staged) => Put::Waiting(staged),
-                    })
+                .map(|put| match put {
+                    Put::Placed(method, metadata) => Put::Placed(method, seen(&metadata)),
+                    Put::Waiting(staged) => Put::Waiting(staged),
                 });
             (*index, placed)
         };
@@ -308,14 +314,14 @@ impl Placer {
         destination: &Path,
         writable: bool,
         batch: bool,
-    ) -> io::Result<Put<()>> {
+    ) -> io::Result<Put<Metadata>> {
         check_stop(&self.stop)?;
+        let location = Arc::new(self.location(destination, false)?);
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
-            match reflink(object, destination, writable) {
+            match reflink(object, &location, writable) {
                 Ok(sealed) => {
-                    sealed?;
-                    return Ok(Put::Placed(Method::Reflink, ()));
+                    return Ok(Put::Placed(Method::Reflink, sealed?));
                 }
                 Err(error) => self.learn(Method::Reflink, error)?,
             }
@@ -323,25 +329,21 @@ impl Placer {
         // sync clients break hardlinks or upload every link as a full file.
         if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
             check_object(object)?;
-            match fs::hard_link(object, destination) {
-                Ok(()) => return Ok(Put::Placed(Method::Hardlink, ())),
+            match location.hard_link(object) {
+                Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
+        // a nested mount is not covered by the root filesystem's batch flush.
         let flush = !self.batches_copies();
-        let put = if batch {
-            let (staged, _) = stage_copy(object, destination, writable, self.threads, &self.stop)?;
+        #[cfg(unix)]
+        let flush = flush || location.other_device();
+        let put = if batch && !flush {
+            let (staged, _) = stage_copy_at(object, &location, writable, self.threads, &self.stop)?;
             Put::Waiting(staged)
         } else {
-            copy(
-                object,
-                destination,
-                writable,
-                self.threads,
-                flush,
-                &self.stop,
-            )?;
-            Put::Placed(Method::Copy, ())
+            let metadata = copy_at(object, &location, writable, self.threads, flush, &self.stop)?;
+            Put::Placed(Method::Copy, metadata)
         };
         #[cfg(target_os = "linux")]
         if !flush {
@@ -357,7 +359,11 @@ impl Placer {
             .get_or_init(|| {
                 let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
                 crate::cache::syncfs_reports_errors(&release)
-                    .then(|| File::open(&self.root).ok())
+                    .then(|| {
+                        self.location(&self.root.join(".batch"), false)
+                            .and_then(|location| location.flush_handle())
+                            .ok()
+                    })
                     .flatten()
             })
             .is_some()
@@ -398,29 +404,14 @@ impl Placer {
     pub(crate) fn check_folders(&mut self, path: &Path, make: bool) -> io::Result<()> {
         check_stop(&self.stop)?;
         let (_, parent) = self.within(path)?;
-        if self.folders.contains(&parent) {
-            return Ok(());
-        }
-        if !self.folders.contains(&self.root) {
-            if make {
-                fs::create_dir_all(&self.root)?;
+        if !self.folders.contains(&parent) {
+            if let Err(error) = self.location(path, make) {
+                if let Ok(metadata) = fs::symlink_metadata(&parent) {
+                    found_folder(&parent, &metadata, FolderUse::Place { make: false })?;
+                }
+                return Err(error);
             }
-            if self.checks_root {
-                real_folder(&self.root, FolderUse::Place { make: false })?;
-            }
-            self.folders.insert(self.root.clone());
-        }
-        let mut folder = self.root.clone();
-        for part in parent
-            .strip_prefix(&self.root)
-            .unwrap_or(&parent)
-            .components()
-        {
-            folder.push(part);
-            if !self.folders.contains(&folder) {
-                real_folder(&folder, FolderUse::Place { make })?;
-                self.folders.insert(folder.clone());
-            }
+            self.folders.insert(parent);
         }
         Ok(())
     }
@@ -438,32 +429,56 @@ impl Placer {
     ) -> io::Result<()> {
         check_stop(&self.stop)?;
         let (path, parent) = self.within(path)?;
-        let mut folder = self.root.clone();
-        if self.checks_root {
-            real_folder(&folder, FolderUse::Place { make: false })?;
-        }
-        for part in parent
-            .strip_prefix(&self.root)
-            .unwrap_or(&parent)
-            .components()
+        let location = self.location(&path, false)?;
+        #[cfg(unix)]
         {
-            folder.push(part);
-            real_folder(&folder, FolderUse::Place { make: false })?;
+            let _ = placed;
+            location.remove_file()?;
         }
+        #[cfg(windows)]
+        self.volume.set_scratch(location.root_path());
+        #[cfg(windows)]
         if placed == Some(Method::Hardlink) {
-            self.volume.remove_hardlink(&path)?;
+            self.volume.remove_hardlink(location.path())?;
         } else {
-            self.volume.remove(&path)?;
+            self.volume.remove(location.path())?;
         }
-        let mut folder = path.parent();
+        drop(location);
+        let mut folder = Some(parent.as_path());
         while prune && let Some(current) = folder {
-            if current == self.root || fs::remove_dir(current).is_err() {
+            if current == self.root {
+                break;
+            }
+            check_stop(&self.stop)?;
+            let removed = self
+                .location(current, false)
+                .and_then(|location| location.remove_dir());
+            if removed.is_err() {
                 break;
             }
             self.folders.remove(current);
+            #[cfg(unix)]
+            if let Ok(relative) = current.strip_prefix(&self.root) {
+                self.parents.forget(relative);
+            }
             folder = current.parent();
         }
         Ok(())
+    }
+
+    fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
+        let (destination, _) = self.within(destination)?;
+        self.parents
+            .locate(&self.root, &destination, self.checks_root, make, false)
+    }
+
+    fn can_hardlink(&self) -> Option<bool> {
+        if let Some(links) = self.links.get() {
+            return Some(*links);
+        }
+        let location = self.location(&self.root.join(".probe"), false).ok()?;
+        let links = location.can_hardlink()?;
+        Some(*self.links.get_or_init(|| links))
     }
 
     /// `path` made absolute, and its folder, which must be the root or inside it.
@@ -498,7 +513,7 @@ impl Placer {
         if error.kind() == io::ErrorKind::AlreadyExists {
             return Err(error);
         }
-        let links_nothing = || self.volume.can_hardlink() == Some(false);
+        let links_nothing = || self.can_hardlink() == Some(false);
         tracing::debug!(?method, %error, "placing failed, trying the next method");
         match method {
             Method::Reflink if refuses_links(&error) || crosses_volumes(&error) => {
@@ -714,6 +729,45 @@ fn check_object(object: &Path) -> io::Result<()> {
 
 /// copies `object` to `destination`, failing when `destination` exists, and makes the copy
 /// writable or read-only as asked.
+fn copy_at(
+    object: &Path,
+    location: &Arc<Location>,
+    writable: bool,
+    threads: Threads,
+    flush: bool,
+    stop: &Stop,
+) -> io::Result<Metadata> {
+    let (staged, file) = stage_copy_at(object, location, writable, threads, stop)?;
+    if flush {
+        file.sync_all()?;
+    }
+    check_stop(stop)?;
+    staged.publish()?;
+    #[cfg(windows)]
+    {
+        if let Err(error) = set_file_writable(&file, writable) {
+            let _ = fs::remove_file(location.path());
+            return Err(error);
+        }
+    }
+    file.metadata()
+}
+
+fn stage_copy_at(
+    object: &Path,
+    location: &Arc<Location>,
+    writable: bool,
+    threads: Threads,
+    stop: &Stop,
+) -> io::Result<(Staged, File)> {
+    check_stop(stop)?;
+    let (staged, file) = location.create(0o666, false)?;
+    // publishing clears windows attributes, so seal through the claimed handle afterward.
+    fill(object, &file, cfg!(windows) || writable, threads, stop)?;
+    Ok((staged, file))
+}
+
+#[cfg(test)]
 fn copy(
     object: &Path,
     destination: &Path,
@@ -722,18 +776,11 @@ fn copy(
     flush: bool,
     stop: &Stop,
 ) -> io::Result<()> {
-    let (staged, file) = stage_copy(object, destination, writable, threads, stop)?;
-    if flush {
-        file.sync_all()?;
-    }
-    check_stop(stop)?;
-    staged.publish()?;
-    #[cfg(windows)]
-    undo_on_error(set_file_writable(&file, writable), destination)?;
-    Ok(())
+    let location = Arc::new(Location::standalone(destination)?);
+    copy_at(object, &location, writable, threads, flush, stop).map(drop)
 }
 
-/// copies `object` into a new hidden file beside `destination`, to be published once complete.
+#[cfg(test)]
 fn stage_copy(
     object: &Path,
     destination: &Path,
@@ -741,70 +788,25 @@ fn stage_copy(
     threads: Threads,
     stop: &Stop,
 ) -> io::Result<(Staged, File)> {
-    check_stop(stop)?;
-    let (staged, file) = Staged::claim(destination, crate::volume::create_hidden)?;
-    // publishing clears windows attributes, so seal through the claimed handle afterward.
-    fill(object, &file, cfg!(windows) || writable, threads, stop)?;
-    Ok((staged, file))
+    stage_copy_at(
+        object,
+        &Arc::new(Location::standalone(destination)?),
+        writable,
+        threads,
+        stop,
+    )
 }
 
-/// a new file under a hidden name in its destination's folder, which takes the destination's
-/// name only once complete, so an interrupted placement never leaves part of a file where the
-/// project expects one. a hidden file an interrupted process leaves is swept by the next sync.
-struct Staged {
-    temporary: tempfile::TempPath,
-    destination: PathBuf,
-}
-
-impl Staged {
-    /// makes a file with `create` under a fresh hidden name beside `destination`. `create` must
-    /// fail with `AlreadyExists` when the name is taken, and remove what it made when it fails.
-    fn claim(
-        destination: &Path,
-        create: impl Fn(&Path) -> io::Result<File>,
-    ) -> io::Result<(Staged, File)> {
-        let destination = std::path::absolute(destination)?;
-        let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
-        let destination = parent.join(destination.file_name().unwrap_or_default());
-        loop {
-            let temporary = parent.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..)));
-            match create(&temporary) {
-                Ok(file) => {
-                    let temporary = tempfile::TempPath::try_from_path(temporary)?;
-                    return Ok((
-                        Staged {
-                            temporary,
-                            destination,
-                        },
-                        file,
-                    ));
-                }
-                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
-    /// gives the file its destination's name, failing when that name exists.
-    fn publish(self) -> io::Result<()> {
-        self.temporary
-            .persist_noclobber(&self.destination)
-            .map_err(|error| error.error)
-    }
-}
-
-/// makes a file with `create` under a hidden name beside `destination`, fills it with `write`,
-/// and only then gives it the destination's name, failing when that name exists.
-#[cfg(any(target_os = "linux", windows, test))]
+/// creates and fills a hidden file through its parent handle before giving it a final name.
+#[cfg(any(target_os = "linux", test))]
 fn publish_new(
-    destination: &Path,
-    create: impl Fn(&Path) -> io::Result<File>,
+    location: &Arc<Location>,
+    mode: u32,
     write: impl FnOnce(&File) -> io::Result<()>,
-) -> io::Result<File> {
-    let (staged, file) = Staged::claim(destination, create)?;
+) -> io::Result<Metadata> {
+    let (staged, file) = location.create(mode, true)?;
     write(&file)?;
-    staged.publish()?;
-    Ok(file)
+    staged.publish()
 }
 
 /// names the copies `waiting` holds once `flush` has put their bytes on disk, so no name ever
@@ -830,10 +832,9 @@ fn publish_flushed<T: Send>(
             .collect();
     }
     let publish = &|(index, staged): (usize, Staged)| {
-        let destination = staged.destination.clone();
         let named = check_stop(stop)
             .and_then(|()| staged.publish())
-            .and_then(|()| Ok((Method::Copy, seen(&fs::symlink_metadata(&destination)?))));
+            .map(|metadata| (Method::Copy, seen(&metadata)));
         (index, named)
     };
     let mut waiting = waiting.into_iter();
@@ -847,69 +848,40 @@ fn publish_flushed<T: Send>(
 /// the clone is made under a hidden name with its final mode and named only once complete, as a
 /// copy is, since an interrupted clone would leave an empty file where the project expects one.
 #[cfg(target_os = "linux")]
-fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
+fn reflink(
+    object: &Path,
+    location: &Arc<Location>,
+    writable: bool,
+) -> io::Result<io::Result<Metadata>> {
+    use std::os::unix::fs::PermissionsExt;
     let source = read_unfollowed(object)?;
     let mode = writable_as(source.metadata()?.permissions(), writable).mode() & 0o7777;
-    let create = |temporary: &Path| {
-        fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
-            .open(temporary)
-    };
-    let cloned = publish_new(destination, create, |file| {
-        // the umask may have cleared bits of the mode asked for
+    let metadata = publish_new(location, mode, |file| {
         if file.metadata()?.permissions().mode() & 0o7777 != mode {
             file.set_permissions(Permissions::from_mode(mode))?;
         }
         rustix::fs::ioctl_ficlone(file, &source).map_err(io::Error::from)
     })?;
-    Ok(undo_on_error(
-        set_file_writable(&cloned, writable),
-        destination,
-    ))
+    Ok(Ok(metadata))
 }
 
-/// clones `object` to `destination` on a volume that clones, as refs does, failing when
-/// `destination` exists. the outer result says whether the clone was made, the inner whether it
-/// was then made writable or read-only as asked. the clone is made under a hidden name and named
-/// only once complete, as a copy is, since an interrupted clone would leave a file of zeros where
-/// the project expects one.
+#[cfg(target_os = "macos")]
+fn reflink(
+    object: &Path,
+    location: &Arc<Location>,
+    writable: bool,
+) -> io::Result<io::Result<Metadata>> {
+    let source = read_unfollowed(object)?;
+    location.clone_file(&source, writable).map(Ok)
+}
+
 #[cfg(windows)]
-fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_READ_ATTRIBUTES: u32 = 0x80;
-    const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-
-    // reflink-copy clones only into a file it creates itself
-    let create = |temporary: &Path| {
-        reflink_copy::reflink(object, temporary)?;
-        fs::OpenOptions::new()
-            .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .open(temporary)
-            .inspect_err(|_| {
-                let _ = fs::remove_file(temporary);
-            })
-    };
-    let cloned = publish_new(destination, create, |_| Ok(()))?;
-    // publishing clears windows attributes, so seal through the handle afterward
-    Ok(undo_on_error(
-        set_file_writable(&cloned, writable),
-        destination,
-    ))
-}
-
-/// clones `object` to `destination`, failing when `destination` exists. the outer result says
-/// whether the clone was made, the inner whether it was then made writable or read-only as asked.
-/// macos makes an apfs clone in one call, which never leaves a partial file.
-#[cfg(not(any(target_os = "linux", windows)))]
-fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
-    reflink_copy::reflink(object, destination)?;
-    Ok(seal(destination, writable))
+fn reflink(
+    object: &Path,
+    location: &Arc<Location>,
+    writable: bool,
+) -> io::Result<io::Result<Metadata>> {
+    location.clone_file(object, writable).map(Ok)
 }
 
 /// whether a file has the reserved name of a copy or clone placement left unfinished.
@@ -1040,19 +1012,6 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
     })
 }
 
-/// makes a new reflink at `destination` writable or read-only, as asked. a hardlink is never
-/// sealed, because its flag is the object's.
-#[cfg(not(any(target_os = "linux", windows)))]
-fn seal(destination: &Path, writable: bool) -> io::Result<()> {
-    undo_on_error(set_writable(destination, writable), destination)
-}
-
-#[cfg(not(any(target_os = "linux", windows)))]
-fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
-    let permissions = writable_as(fs::metadata(path)?.permissions(), writable);
-    fs::set_permissions(path, permissions)
-}
-
 /// `permissions` changed to let the file's owner write it, or no one.
 #[cfg(unix)]
 fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
@@ -1071,15 +1030,6 @@ fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
 fn writable_as(mut permissions: Permissions, writable: bool) -> Permissions {
     permissions.set_readonly(!writable);
     permissions
-}
-
-/// removes the file just made at `destination` when a later step failed, so placing it again
-/// starts clean.
-fn undo_on_error<T>(result: io::Result<T>, destination: &Path) -> io::Result<T> {
-    if result.is_err() {
-        let _ = fs::remove_file(destination);
-    }
-    result
 }
 
 #[cfg(test)]

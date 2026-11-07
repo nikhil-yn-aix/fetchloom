@@ -24,7 +24,7 @@ fn cache(read_only: bool) -> (TempDir, PathBuf) {
 fn experiments_default_to_empty_in_placer_constructors() {
     let folder = TempDir::new().unwrap();
     for placer in [
-        Placer::new(folder.path(), folder.path()),
+        Placer::new(folder.path()),
         Placer::in_named_folder(folder.path()),
         Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None),
     ] {
@@ -35,8 +35,8 @@ fn experiments_default_to_empty_in_placer_constructors() {
 #[test]
 fn experiments_round_trip_through_a_placer() {
     let folder = TempDir::new().unwrap();
-    let placer = Placer::new(folder.path(), folder.path())
-        .with_experiments(Experiments::default().with("DEMO", " 7 "));
+    let placer =
+        Placer::new(folder.path()).with_experiments(Experiments::default().with("DEMO", " 7 "));
     assert!(placer.experiments().on("DEMO"));
     assert_eq!(placer.experiments().number("DEMO"), Some(7));
 }
@@ -575,8 +575,8 @@ fn a_clone_is_made_under_a_hidden_name_and_named_only_once_complete() {
     let mut named_while_filled = None;
 
     let published = publish_new(
-        &destination,
-        |temporary| File::create_new(temporary),
+        &Arc::new(Location::standalone(&destination).unwrap()),
+        0o666,
         |mut file| {
             named_while_filled = Some(fs::symlink_metadata(&destination).is_ok());
             file.write_all(CONTENTS.as_bytes())
@@ -584,7 +584,7 @@ fn a_clone_is_made_under_a_hidden_name_and_named_only_once_complete() {
     )
     .unwrap();
 
-    drop(published);
+    assert_eq!(published.len(), CONTENTS.len() as u64);
     assert_eq!(
         named_while_filled,
         Some(false),
@@ -600,8 +600,8 @@ fn a_clone_never_replaces_a_file_that_took_its_name() {
     let destination = folder.path().join("placed.csv");
 
     let error = publish_new(
-        &destination,
-        |temporary| File::create_new(temporary),
+        &Arc::new(Location::standalone(&destination).unwrap()),
+        0o666,
         |_| fs::write(&destination, "edited by hand"),
     )
     .unwrap_err();
@@ -738,7 +738,7 @@ fn a_method_the_filesystem_refuses_is_not_tried_again() {
         let (folder, object) = cache(true);
         let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
         // a volume whose own probe agrees that it links nothing
-        placer.volume = Volume::refusing(folder.path().to_path_buf(), false);
+        placer.links = OnceLock::from(false);
         let described = refusal.to_string();
 
         placer.learn(Method::Hardlink, refusal).unwrap();
@@ -800,7 +800,7 @@ fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
     let linking = placer(None);
     assert_eq!(linking.unlinked(), None);
     let mut no_links = placer(None);
-    no_links.volume = Volume::refusing(folder.path().to_path_buf(), false);
+    no_links.links = OnceLock::from(false);
     no_links.learn(Method::Reflink, refused()).unwrap();
     no_links.learn(Method::Hardlink, refused()).unwrap();
     assert_eq!(no_links.unlinked(), Some(Unlinked::NoLinks));
@@ -825,7 +825,7 @@ fn a_drive_that_refuses_every_link_is_told_from_a_cache_elsewhere() {
 fn a_cache_elsewhere_is_not_blamed_for_a_drive_that_links_nothing() {
     let folder = TempDir::new().unwrap();
     let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
-    placer.volume = Volume::refusing(folder.path().to_path_buf(), false);
+    placer.links = OnceLock::from(false);
 
     placer
         .learn(Method::Reflink, io::ErrorKind::CrossesDevices.into())
@@ -1025,7 +1025,7 @@ fn a_link_at_the_root_is_never_followed() {
     if !link_folder(&outside, &root) {
         return;
     }
-    let mut placer = Placer::new(&root, folder.path());
+    let mut placer = Placer::new(&root);
 
     let error = placer
         .place(&object, &root.join("placed.csv"), false)
@@ -1046,7 +1046,7 @@ fn a_link_inside_the_root_is_never_followed() {
     if !link_folder(&outside, &link) {
         return;
     }
-    let mut placer = Placer::new(&root, folder.path());
+    let mut placer = Placer::new(&root);
 
     let error = placer
         .place(&object, &link.join("placed.csv"), false)
@@ -1075,7 +1075,7 @@ pub(super) fn link_folder(target: &Path, link: &Path) -> bool {
 fn a_folder_emptied_by_a_removal_is_made_again_for_the_next_file() {
     let (folder, object) = cache(true);
     let root = folder.path().join("data");
-    let mut placer = Placer::new(&root, folder.path());
+    let mut placer = Placer::new(&root);
     let first = root.join("set").join("inner").join("a.csv");
     let method = placer.place(&object, &first, false).unwrap();
 
@@ -1090,6 +1090,7 @@ fn a_folder_emptied_by_a_removal_is_made_again_for_the_next_file() {
 
 /// a placer that copies into `root` as if `root` sat on FAT32 or exFAT, with `scratch` as
 /// fetchloom's own folder there.
+#[cfg(windows)]
 fn on_fat(root: &Path, scratch: &Path) -> Placer {
     let mut placer = Placer::starting_at(root.to_path_buf(), Method::Copy, None);
     placer.volume = Volume::refusing(scratch.to_path_buf(), false);
@@ -1097,6 +1098,7 @@ fn on_fat(root: &Path, scratch: &Path) -> Placer {
 }
 
 #[test]
+#[cfg(windows)]
 fn a_placed_read_only_file_is_removed_on_fat() {
     for recorded in [Some(Method::Copy), Some(Method::Reflink), None] {
         let (folder, object) = cache(true);
@@ -1120,6 +1122,7 @@ fn a_placed_read_only_file_is_removed_on_fat() {
 }
 
 #[test]
+#[cfg(windows)]
 fn a_removal_on_fat_leaves_nothing_else_in_a_named_folder() {
     let (folder, object) = cache(true);
     let root = folder.path().join("fetched");
@@ -1140,6 +1143,7 @@ fn a_removal_on_fat_leaves_nothing_else_in_a_named_folder() {
 }
 
 #[test]
+#[cfg(windows)]
 fn a_recorded_hardlink_keeps_its_flag_even_on_fat() {
     let (folder, object) = cache(true);
     let root = folder.path().join("data");
@@ -1265,9 +1269,71 @@ fn a_stop_during_copy_publication_keeps_only_completed_files() {
 fn a_parent_component_cannot_escape_the_placement_root() {
     let (folder, object) = cache(true);
     let root = folder.path().join("data");
-    let mut placer = Placer::new(&root, folder.path());
+    let mut placer = Placer::new(&root);
     let escaped = root.join("../escaped.csv");
     let result = placer.place(&object, &escaped, false);
     assert!(result.is_err());
     assert!(!folder.path().join("escaped.csv").exists());
+}
+
+#[cfg(unix)]
+fn swapped_parent(first: Method) {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let parent = root.join("set");
+    let outside = folder.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    let destination = parent.join("file.csv");
+    let mut placer = Placer::starting_at(root.clone(), first, None);
+    placer.check_folders(&destination, true).unwrap();
+    fs::rename(&parent, root.join("saved")).unwrap();
+    std::os::unix::fs::symlink(&outside, &parent).unwrap();
+    let _ = placer.place(&object, &destination, false);
+    assert!(
+        !outside.join("file.csv").exists(),
+        "{first:?} followed a swapped parent"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_parent_cannot_redirect_a_reflink() {
+    swapped_parent(Method::Reflink);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_parent_cannot_redirect_a_hardlink() {
+    swapped_parent(Method::Hardlink);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_parent_cannot_redirect_a_copy() {
+    swapped_parent(Method::Copy);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_swapped_parent_cannot_redirect_removal() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let destination = root.join("set/file.csv");
+    let outside = folder.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("file.csv"), b"keep outside").unwrap();
+    let mut placer = Placer::new(&root);
+    let method = placer.place(&object, &destination, false).unwrap();
+    fs::rename(root.join("set"), root.join("saved")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("set")).unwrap();
+    assert!(placer.remove(&destination, true, Some(method)).is_err());
+    assert_eq!(fs::read(outside.join("file.csv")).unwrap(), b"keep outside");
+}
+
+#[cfg(windows)]
+fn undo_on_error<T>(result: io::Result<T>, destination: &Path) -> io::Result<T> {
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
 }

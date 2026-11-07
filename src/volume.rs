@@ -48,6 +48,12 @@ impl Volume {
         self
     }
 
+    /// uses the already pinned folder for capability probes, not a path alias that may move.
+    #[cfg(windows)]
+    pub(crate) fn set_scratch(&mut self, scratch: &Path) {
+        self.scratch = scratch.to_path_buf();
+    }
+
     /// a volume for a dry run: it links, renames and removes nothing, and records each existing
     /// path a removal names, so the code deciding what to remove runs as it would for real.
     pub(crate) fn pretend(scratch: PathBuf) -> Volume {
@@ -173,6 +179,7 @@ impl Volume {
 
     /// removes the file at `path`, which fetchloom recorded as a hardlink of a cached object. its
     /// read-only flag is the object's too, so it is never cleared, whatever the volume.
+    #[cfg(windows)]
     pub(crate) fn remove_hardlink(&self, path: &Path) -> io::Result<()> {
         if self.pretended.is_some() {
             return self.pretend_removal(path);
