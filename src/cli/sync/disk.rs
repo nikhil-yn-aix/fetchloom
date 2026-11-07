@@ -938,9 +938,10 @@ mod tests {
             dir.path().join("data/file-link"),
         )
         .unwrap();
-        let files = scan(dir.path(), "data");
+        let (files, leftovers) = scan(dir.path(), "data");
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
-        assert_eq!(scan(dir.path(), "missing").len(), 0);
+        assert_eq!(leftovers, Vec::<String>::new());
+        assert_eq!(scan(dir.path(), "missing").0.len(), 0);
     }
 }
