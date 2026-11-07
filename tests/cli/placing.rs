@@ -599,7 +599,12 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let plans = |events: &str| events.contains("\"name\":\"plan\"");
 
     let (_, first) = sync("first.json")?;
-    assert!(plans(&first), "{first}");
+    // add records data.toml and data.lock as it leaves them, so this sync plans only when a
+    // coarse clock left the placed file as new as the state
+    assert!(
+        !plans(&first) || first.contains("\"name\":\"hash_racy\""),
+        "{first}"
+    );
     let (said, second) = sync("second.json")?;
     assert!(said.contains("nothing to do"), "{said}");
     assert!(!plans(&second), "{second}");
@@ -642,12 +647,54 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     Ok(())
 }
 
+/// `add`, and a `path` that has to sync, record data.toml and data.lock as they leave them, so
+/// the next sync can tell nothing changed without planning.
+#[test]
+fn add_and_a_syncing_path_leave_the_project_settled() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let state = sandbox.work().join(".fetchloom").join("state");
+    let settled = || -> Result<bool> {
+        let recorded: serde_json::Value = serde_json::from_slice(&fs::read(&state)?)?;
+        Ok(recorded["synced"]["complete"] == serde_json::json!(true))
+    };
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert!(settled()?, "{}", fs::read_to_string(&state)?);
+
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    fs::remove_file(&placed)?;
+    let path = sandbox.run(&["path", "iris"])?;
+    assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
+    assert!(placed.is_file());
+    assert!(settled()?, "{}", fs::read_to_string(&state)?);
+
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    let trace = sandbox.folder("traces")?.join("sync.json");
+    let output = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let events = fs::read_to_string(&trace)?;
+    // a coarse clock can leave the placed file as new as the state, which a sync hashes and
+    // records again the long way
+    if !events.contains("\"name\":\"hash_racy\"") {
+        assert!(stderr.contains("nothing to do"), "{stderr}");
+        assert!(!events.contains("\"name\":\"plan\""), "{events}");
+    }
+    Ok(())
+}
+
 #[test]
 fn a_trace_shows_each_phase_of_a_sync() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // a missing file sends the sync through every phase
+    fs::remove_file(sandbox.work().join("data").join("iris").join("iris.csv"))?;
     let trace = sandbox.folder("traces")?.join("sync.json");
     let output = sandbox
         .command(&["sync"])

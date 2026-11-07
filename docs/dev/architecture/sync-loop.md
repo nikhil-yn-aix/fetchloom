@@ -57,7 +57,7 @@ settling writes newer state so later runs need not hash the same intact files. `
 
 `Synced` stores the SHA-256 of the exact manifest and lock text plus a completion flag. `untouched` requires matching inputs, complete state, matching recorded files and no unsettled scan work. it skips relocking, archive-member records and planning, but still registers the project with the cache. `sync_all` hashes the lock text `write_lock` wrote, so the lock is rendered once.
 
-a run that leaves files out, preserves edits or encounters a placement failure records incomplete state. commands that change placement without a full sync clear the settled record. whitespace changes to inputs invalidate the byte-hash shortcut even if their parsed meaning is unchanged.
+a run that leaves files out, preserves edits or encounters a placement failure records incomplete state. `add` records data.toml as it wrote it and `path`, when it has to sync, data.toml and data.lock as it read them under the project lock, so the sync after either can take the shortcut. they plan even so, through `Read::Planned`, since they answer from what planning learns, such as the files an archive whose record is gone holds. `remove`, which places nothing, clears the settled record. whitespace changes to inputs invalidate the byte-hash shortcut even if their parsed meaning is unchanged.
 
 ### plan before fetching
 

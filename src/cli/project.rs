@@ -85,10 +85,17 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     };
     let mut addition = resolve_add(context, &net, &args, &parsed).await?;
     let (old, lock_text) = project.lock_and_text()?.unzip();
+    let lock_seen = lock_text
+        .as_deref()
+        .map(|text| digest::sha256(text.as_bytes()));
     if args.name.is_none()
         && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
     {
         let work = Loop::new(context, project, net, cache);
+        let seen = Seen {
+            manifest: digest::sha256(adding.text.as_deref().unwrap_or_default().as_bytes()),
+            lock: lock_seen,
+        };
         return again(
             &work,
             manifest,
@@ -97,6 +104,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
             &addition.entry,
             &addition.listing,
             dry_run,
+            &seen,
         )
         .await;
     }
@@ -125,8 +133,21 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     }
     project.write(manifest::FILE, updated.as_bytes())?;
     let before = (adding.text.as_deref(), lock_text.as_deref());
-    let (lock_changed, placement) =
-        sync_add(&work, &new_manifest, old, before, &name, addition.listing).await?;
+    // data.toml as just written and data.lock as read, for the state to record as synced
+    let seen = Seen {
+        manifest: digest::sha256(updated.as_bytes()),
+        lock: lock_seen,
+    };
+    let (lock_changed, placement) = sync_add(
+        &work,
+        &new_manifest,
+        old,
+        before,
+        &seen,
+        &name,
+        addition.listing,
+    )
+    .await?;
     render_add(&work, &new_manifest, &name)?;
     Ok(Report {
         project: adding.project.root,
@@ -268,6 +289,7 @@ async fn sync_add(
     manifest: &Manifest,
     old: Option<Lock>,
     before: (Option<&str>, Option<&str>),
+    seen: &Seen,
     name: &str,
     listing: Listing,
 ) -> Result<(bool, Placement), Error> {
@@ -278,7 +300,7 @@ async fn sync_add(
         &Upgrade::Nothing,
         false,
         Some((name.to_owned(), listing)),
-        None,
+        Read::Planned(seen),
     )
     .await
     .map_err(|error| restore(work.project, before, name, error))
@@ -385,7 +407,12 @@ fn present(
 }
 
 /// `add` of a dataset data.toml already has. with the same settings nothing changes, so running
-/// the same `add` twice is safe; other settings need a choice only the person can make.
+/// the same `add` twice is safe; other settings need a choice only the person can make. `seen`
+/// holds data.toml and data.lock as read.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the add it continues has resolved each of them already"
+)]
 async fn again(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -394,6 +421,7 @@ async fn again(
     entry: &manifest::Entry,
     listing: &Listing,
     dry_run: bool,
+    seen: &Seen,
 ) -> Result<Report, Error> {
     let existing = &manifest.datasets[name];
     let differs = if existing.select != entry.select || existing.exclude != entry.exclude {
@@ -429,8 +457,16 @@ async fn again(
             preview,
         ));
     }
-    let (lock_changed, placement) =
-        sync_all(work, manifest, old, &Upgrade::Nothing, false, None, None).await?;
+    let (lock_changed, placement) = sync_all(
+        work,
+        manifest,
+        old,
+        &Upgrade::Nothing,
+        false,
+        None,
+        Read::Planned(seen),
+    )
+    .await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest)?;
     let contents = if has_files(work, manifest, name)? {
@@ -571,7 +607,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         &Upgrade::Nothing,
         args.force,
         None,
-        Some(&seen),
+        Read::Settled(&seen),
     )
     .await?;
     if !lock_changed
@@ -755,7 +791,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         let _held = hold(context, &project, "path").await?;
         // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
         // done once they hold the lock, so they answer without syncing in turn
-        manifest = project.manifest()?.1;
+        let (text, reread) = project.manifest()?;
+        manifest = reread;
         known(&manifest, name, "path")?;
         check_member(&project, &manifest, name, file)?;
         if !ready(context, &project, &manifest, name)? {
@@ -765,14 +802,21 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                 Arc::new(net(context, &manifest)),
                 open_cache()?,
             );
+            let read = project.lock_and_text()?;
+            let seen = Seen {
+                manifest: digest::sha256(text.as_bytes()),
+                lock: read
+                    .as_ref()
+                    .map(|(_, text)| digest::sha256(text.as_bytes())),
+            };
             sync_all(
                 &work,
                 &manifest,
-                project.lock()?,
+                read.map(|(lock, _)| lock),
                 &Upgrade::Nothing,
                 false,
                 None,
-                None,
+                Read::Planned(&seen),
             )
             .await?;
         }
@@ -931,9 +975,18 @@ fn ready(
         }))
 }
 
-/// the lock, the cache and the data folder brought in line, in that order. given data.toml and
-/// data.lock as `seen` before the run, a data folder still as a complete sync left them needs no
-/// plan, and the state records them as this run leaves them.
+/// data.toml and data.lock as a run read them, which the state records as the run leaves them.
+#[derive(Clone, Copy)]
+enum Read<'a> {
+    /// a data folder still as a complete sync left them needs no plan, as `sync` finds.
+    Settled(&'a Seen),
+    /// the run plans even so, as `add` and `path` must, since they answer from what planning
+    /// learns, such as what an archive holds.
+    Planned(&'a Seen),
+}
+
+/// the lock, the cache and the data folder brought in line, in that order, and the state left
+/// recording data.toml and data.lock as `read` and as this run leaves them.
 async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -941,17 +994,22 @@ async fn sync_all(
     upgrade: &Upgrade,
     force: bool,
     given: Option<(String, Listing)>,
-    seen: Option<&Seen>,
+    read: Read<'_>,
 ) -> Result<(bool, Placement), Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     disk::audit(work.project, &survey, &work.cache)?;
-    if let Some(seen) = seen
-        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
-    {
-        register(work);
-        return Ok((false, placement));
-    }
+    let seen = match read {
+        Read::Settled(seen) => {
+            if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
+            {
+                register(work);
+                return Ok((false, placement));
+            }
+            seen
+        }
+        Read::Planned(seen) => seen,
+    };
     let (lock, before) = work
         .relock(manifest, old, upgrade, given)
         .instrument(tracing::debug_span!("relock"))
@@ -961,16 +1019,14 @@ async fn sync_all(
     plan::from_cache(manifest, &lock, &work.cache)?;
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
-    let synced = seen.and_then(|seen| {
-        let lock = match &written {
-            Some(text) => digest::sha256(text.as_bytes()),
-            None => seen.lock?,
-        };
-        Some(Synced {
-            manifest: seen.manifest,
-            lock,
-            complete: false,
-        })
+    let written = match &written {
+        Some(text) => Some(digest::sha256(text.as_bytes())),
+        None => seen.lock,
+    };
+    let synced = written.map(|lock| Synced {
+        manifest: seen.manifest,
+        lock,
+        complete: false,
     });
     let placement = work.place(manifest, &lock, force, survey, synced).await?;
     work.drop_unpacked(&lock);
@@ -1434,6 +1490,14 @@ mod tests {
         }
     }
 
+    /// data.toml and data.lock as a test pretends to have read them.
+    fn unread() -> Seen {
+        Seen {
+            manifest: digest::sha256(b"data.toml"),
+            lock: None,
+        }
+    }
+
     fn pinned_file(path: &str, url: &str, bytes: &[u8]) -> lock::LockedFile {
         lock::LockedFile {
             path: path.to_owned(),
@@ -1480,7 +1544,7 @@ mod tests {
             &Upgrade::Nothing,
             false,
             Some(given),
-            None,
+            Read::Planned(&unread()),
         ))
         .unwrap_err();
 
@@ -1536,7 +1600,7 @@ mod tests {
             &Upgrade::Nothing,
             false,
             Some(given),
-            None,
+            Read::Planned(&unread()),
         ))
         .unwrap_err();
 
