@@ -54,6 +54,10 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 `FETCHLOOM_EXP_PROJECT_STREAM_STATE=1` serializes state through a 256 KiB buffer into the existing staged metadata file. the buffer and file are flushed before rename; a write failure keeps the previous state and removes the staging file. off retains the complete in-memory JSON buffer. both modes write identical bytes and preserve the metadata publication rules.
 
+## ready waiter experiment
+
+`FETCHLOOM_EXP_PROJECT_WAIT_READY=1` lets a waiting `path` notice a changed state file and run the normal read-only readiness check before trying the mutation hold again. waiters whose files are now ready can finish together instead of handing the owner record from reader to reader. the state stamp only triggers a recheck: fresh state alone never vouches for missing, changed or doubtful files. unchanged stamps and failed readiness checks keep the normal hold-and-reread path. off retains the original lock handover.
+
 ## invariants and traps
 
 - commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.

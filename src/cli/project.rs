@@ -23,7 +23,7 @@ use crate::output::Output;
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
-use crate::project::state::Synced;
+use crate::project::state::{Look, Synced};
 use crate::project::{Held, Hold, Project};
 use crate::source::{Listing, Parsed, Reference};
 use crate::units;
@@ -830,6 +830,11 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
     let project = find(&context.output)?;
+    let before = context
+        .exp
+        .on("PROJECT_WAIT_READY")
+        .then(|| state_stamp(&project))
+        .flatten();
     let (_, manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
@@ -851,46 +856,51 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     } else {
         drop(lock);
         drop(manifest);
-        let held = hold(context, &project, "path").await?;
-        let (text, manifest) = project.manifest()?;
-        known(&manifest, name, "path")?;
-        let read = project.lock_and_text(&context.exp)?;
-        if let Some(path) = ready_path(
-            context,
-            &project,
-            &manifest,
-            read.as_ref().map(|(lock, _)| lock),
-            &mut cache,
-            name,
-            file,
-        )? {
-            path
-        } else {
-            let cache = match cache {
-                Some(cache) => cache,
-                None => open_cache()?,
-            };
-            let work = Loop::new(context, &project, Arc::new(net(context, &manifest)), cache);
-            let seen = Seen {
-                manifest: digest::sha256(text.as_bytes()),
-                lock: read
-                    .as_ref()
-                    .map(|(_, text)| digest::sha256(text.as_bytes())),
-            };
-            sync_all(
-                &work,
-                &manifest,
-                read.map(|(lock, _)| lock),
-                &Upgrade::Nothing,
-                false,
-                None,
-                Read::Planned(&seen),
-            )
-            .await?;
-            drop(held);
-            let lock = project.lock(&context.exp)?.unwrap_or_default();
-            let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
-            planned_path(&project, &manifest, &planned, name, file)?
+        match hold_path(context, &project, &mut cache, name, file, before).await? {
+            Waited::Ready(path) => path,
+            Waited::Held(held) => {
+                let (text, manifest) = project.manifest()?;
+                known(&manifest, name, "path")?;
+                let read = project.lock_and_text(&context.exp)?;
+                if let Some(path) = ready_path(
+                    context,
+                    &project,
+                    &manifest,
+                    read.as_ref().map(|(lock, _)| lock),
+                    &mut cache,
+                    name,
+                    file,
+                )? {
+                    path
+                } else {
+                    let cache = match cache {
+                        Some(cache) => cache,
+                        None => open_cache()?,
+                    };
+                    let work =
+                        Loop::new(context, &project, Arc::new(net(context, &manifest)), cache);
+                    let seen = Seen {
+                        manifest: digest::sha256(text.as_bytes()),
+                        lock: read
+                            .as_ref()
+                            .map(|(_, text)| digest::sha256(text.as_bytes())),
+                    };
+                    sync_all(
+                        &work,
+                        &manifest,
+                        read.map(|(lock, _)| lock),
+                        &Upgrade::Nothing,
+                        false,
+                        None,
+                        Read::Planned(&seen),
+                    )
+                    .await?;
+                    drop(held);
+                    let lock = project.lock(&context.exp)?.unwrap_or_default();
+                    let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
+                    planned_path(&project, &manifest, &planned, name, file)?
+                }
+            }
         }
     };
     context.output.answer(&path.display().to_string());
@@ -1183,7 +1193,66 @@ pub(super) fn find(output: &Output) -> Result<Project, Error> {
 }
 
 /// takes the project lock, waiting while another fetchloom changes the project.
+enum Waited<T> {
+    Held(Held),
+    Ready(T),
+}
+
 async fn hold(context: &Context, project: &Project, command: &str) -> Result<Held, Error> {
+    match hold_until(context, project, command, || {
+        Ok(None::<std::convert::Infallible>)
+    })
+    .await?
+    {
+        Waited::Held(held) => Ok(held),
+        Waited::Ready(never) => match never {},
+    }
+}
+
+fn state_stamp(project: &Project) -> Option<Look> {
+    let metadata = std::fs::symlink_metadata(project.own_folder().join("state")).ok()?;
+    metadata.is_file().then(|| Look::of(&metadata))
+}
+
+async fn hold_path(
+    context: &Context,
+    project: &Project,
+    cache: &mut Option<Cache>,
+    name: &str,
+    file: Option<&str>,
+    mut before: Option<Look>,
+) -> Result<Waited<PathBuf>, Error> {
+    if !context.exp.on("PROJECT_WAIT_READY") {
+        return hold(context, project, "path").await.map(Waited::Held);
+    }
+    hold_until(context, project, "path", || {
+        let current = state_stamp(project);
+        if current == before {
+            return Ok(None);
+        }
+        before = current;
+        let (_, manifest) = project.manifest()?;
+        known(&manifest, name, "path")?;
+        let lock = project.lock(&context.exp)?;
+        ready_path(
+            context,
+            project,
+            &manifest,
+            lock.as_ref(),
+            cache,
+            name,
+            file,
+        )
+    })
+    .await
+}
+
+async fn hold_until<T>(
+    context: &Context,
+    project: &Project,
+    command: &str,
+    mut ready: impl FnMut() -> Result<Option<T>, Error>,
+) -> Result<Waited<T>, Error> {
     let mut told = false;
     let mut told_owner = false;
     loop {
@@ -1193,8 +1262,11 @@ async fn hold(context: &Context, project: &Project, command: &str) -> Result<Hel
                 "stopped while waiting for another fetchloom",
             ));
         }
+        if told && let Some(answer) = ready()? {
+            return Ok(Waited::Ready(answer));
+        }
         match project.hold(command)? {
-            Hold::Held(held) => return Ok(held),
+            Hold::Held(held) => return Ok(Waited::Held(held)),
             Hold::Busy if !told => {
                 context
                     .output
@@ -1448,11 +1520,11 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         block_on(async {
             let mut waiting = Box::pin(hold(&context, &project, "remove"));
-            assert!(
-                tokio::time::timeout(Duration::from_millis(20), &mut waiting)
-                    .await
-                    .is_err()
-            );
+            std::future::poll_fn(|task| {
+                assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
             context.stop.ask();
             let Err(error) = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
                 .await
@@ -1478,11 +1550,11 @@ mod tests {
         let path = project.own_folder().join("owner");
         block_on(async {
             let mut waiting = Box::pin(hold(&context, &project, "remove"));
-            assert!(
-                tokio::time::timeout(Duration::from_millis(20), &mut waiting)
-                    .await
-                    .is_err()
-            );
+            std::future::poll_fn(|task| {
+                assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
             std::fs::remove_file(&path).unwrap();
             let held = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
                 .await
@@ -1494,6 +1566,133 @@ mod tests {
             drop(held);
         });
         assert!(!path.exists());
+    }
+
+    fn waiter_state(
+        project: &Project,
+        stamp: std::time::SystemTime,
+    ) -> crate::project::state::State {
+        use crate::project::state::{Placed, State};
+        let text = "[datasets.a]\nref = 'https://example.org/a'\n";
+        project.write(manifest::FILE, text.as_bytes()).unwrap();
+        let manifest = Manifest::parse(text).unwrap();
+        let digest = digest::sha256(b"data");
+        let lock = Lock {
+            datasets: vec![pinned(
+                "a",
+                lock::spec(&manifest.datasets["a"]),
+                vec![lock::LockedFile {
+                    path: "x".to_owned(),
+                    size: 4,
+                    sha256: digest,
+                    md5: None,
+                    url: "https://example.org/a".to_owned(),
+                    unpacks_to: None,
+                }],
+            )],
+        };
+        project.write(lock::FILE, lock.render().as_bytes()).unwrap();
+        let mut state = State::default();
+        state.files.insert(
+            "data/a/x".to_owned(),
+            Placed {
+                dataset: "a".to_owned(),
+                sha256: digest,
+                method: crate::place::Method::Copy,
+                look: Look {
+                    size: 4,
+                    modified: crate::project::state::nanos(stamp),
+                },
+                writable: true,
+                checked: 1,
+            },
+        );
+        state.synced = Some(Synced {
+            manifest: digest::sha256(text.as_bytes()),
+            lock: digest::sha256(lock.render().as_bytes()),
+            complete: true,
+        });
+        state
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn path_waiters_recheck_changed_state_without_claiming_the_owner() {
+        for enabled in [false, true] {
+            let (dir, project, mut context) = waiting_project();
+            if enabled {
+                context.exp = crate::exp::Experiments::default().with("PROJECT_WAIT_READY", "1");
+            }
+            let owner = project.own_folder().join("owner");
+            let owner_before = std::fs::read(&owner).unwrap();
+            let stamp = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+            let state = waiter_state(&project, stamp);
+            let mut cache = Some(Cache::open(dir.path().join("cache")).unwrap());
+            let mut waiting = Box::pin(hold_path(
+                &context,
+                &project,
+                &mut cache,
+                "a",
+                Some("x"),
+                None,
+            ));
+            std::future::poll_fn(|task| {
+                assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            let state_path = project.own_folder().join("state");
+            project.write_state(&state, &context.exp).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&state_path)
+                .unwrap()
+                .set_modified(stamp + Duration::from_secs(5))
+                .unwrap();
+            tokio::time::advance(Duration::from_millis(200)).await;
+            std::future::poll_fn(|task| {
+                assert!(
+                    std::future::Future::poll(waiting.as_mut(), task).is_pending(),
+                    "state alone cannot vouch for a missing file"
+                );
+                std::task::Poll::Ready(())
+            })
+            .await;
+            let target = project.root.join("data/a/x");
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(&target, b"data").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&target)
+                .unwrap()
+                .set_modified(stamp)
+                .unwrap();
+            project.write_state(&state, &context.exp).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&state_path)
+                .unwrap()
+                .set_modified(stamp + Duration::from_secs(6))
+                .unwrap();
+            tokio::time::advance(Duration::from_millis(200)).await;
+            if enabled {
+                let Waited::Ready(answer) = waiting.await.unwrap() else {
+                    panic!("a ready reader must not claim the owner");
+                };
+                assert_eq!(answer, target);
+            } else {
+                std::future::poll_fn(|task| {
+                    assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
+                    std::task::Poll::Ready(())
+                })
+                .await;
+                context.stop.ask();
+                let Err(error) = waiting.await else {
+                    panic!("the unchanged path must wait for its owner");
+                };
+                assert_eq!(error.kind, Kind::Interrupted);
+            }
+            assert_eq!(std::fs::read(owner).unwrap(), owner_before);
+        }
     }
 
     fn offline_context() -> Context {
