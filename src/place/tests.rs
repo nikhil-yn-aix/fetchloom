@@ -542,6 +542,73 @@ fn a_reflink_the_volume_refuses_leaves_no_hidden_file() {
     assert!(!is_read_only(&root.join("placed.csv")));
 }
 
+/// three copies of the cached object staged in `folder`, writable and not yet named.
+fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Staged)>) {
+    let destinations: Vec<PathBuf> = (0..3)
+        .map(|index| folder.join(format!("{index}.csv")))
+        .collect();
+    let staged = destinations
+        .iter()
+        .enumerate()
+        .map(|(index, destination)| {
+            let (staged, _) = stage_copy(object, destination, true, Threads::default()).unwrap();
+            (index, staged)
+        })
+        .collect();
+    (destinations, staged)
+}
+
+#[test]
+fn batched_copies_are_named_only_after_the_flush() {
+    let (folder, object) = cache(true);
+    let (destinations, staged) = staged_copies(folder.path(), &object);
+    let mut named_before_flush = None;
+
+    let results = publish_flushed(
+        staged,
+        || {
+            named_before_flush = Some(destinations.iter().filter(|path| path.exists()).count());
+            Ok(())
+        },
+        Threads::default(),
+        &|metadata: &Metadata| metadata.len(),
+    );
+
+    assert_eq!(
+        named_before_flush,
+        Some(0),
+        "a crash could empty named copies"
+    );
+    assert_eq!(results.len(), 3);
+    for (index, result) in results {
+        let (method, size) = result.unwrap();
+        assert_eq!((method, size), (Method::Copy, CONTENTS.len() as u64));
+        assert_eq!(fs::read_to_string(&destinations[index]).unwrap(), CONTENTS);
+    }
+    assert_eq!(placed_names(folder.path()), ["0.csv", "1.csv", "2.csv"]);
+}
+
+#[test]
+fn a_failed_flush_names_no_batched_copy() {
+    let (folder, object) = cache(true);
+    let (destinations, staged) = staged_copies(folder.path(), &object);
+
+    let results = publish_flushed(
+        staged,
+        || Err(io::Error::other("write-back failed")),
+        Threads::default(),
+        &|_: &Metadata| (),
+    );
+
+    assert_eq!(results.len(), 3);
+    for (_, result) in results {
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("write-back failed"), "{error}");
+    }
+    assert!(destinations.iter().all(|path| !path.exists()));
+    assert_eq!(placed_names(folder.path()), Vec::<String>::new());
+}
+
 #[test]
 fn the_whole_ladder_never_copies_within_one_volume() {
     let (folder, object) = cache(true);
@@ -737,6 +804,44 @@ fn many_files_are_placed_on_several_threads_and_reported_in_order() {
 }
 
 #[test]
+fn many_copies_are_placed_and_named_whole() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
+    let destinations: Vec<PathBuf> = (0..300)
+        .map(|index| {
+            root.join(format!("{}", index % 7))
+                .join(format!("{index}.csv"))
+        })
+        .collect();
+
+    let results = placer.place_all(
+        destinations.len(),
+        |index| Order {
+            object: object.clone(),
+            destination: destinations[index].clone(),
+            writable: false,
+        },
+        Metadata::len,
+    );
+
+    assert_eq!(results.len(), 300);
+    for (result, destination) in results.into_iter().zip(&destinations) {
+        assert_eq!(result.unwrap(), (Method::Copy, CONTENTS.len() as u64));
+        assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        assert!(is_read_only(destination));
+    }
+    for folder in 0..7 {
+        let names = placed_names(&root.join(format!("{folder}")));
+        assert!(
+            names.iter().all(|name| !is_copy_temporary(name)),
+            "{names:?}"
+        );
+    }
+    placer.flush_copies().unwrap();
+}
+
+#[test]
 fn neighbouring_orders_go_to_different_folders() {
     let object = Path::new("object");
     let paths: Vec<PathBuf> = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"]
@@ -767,6 +872,14 @@ fn work_spread_over_threads_comes_back_in_order() {
     );
     assert_eq!(
         run_all(&Vec::<u64>::new(), Threads::default(), |item| *item),
+        Vec::<u64>::new()
+    );
+    assert_eq!(
+        run_owned(items.clone(), Threads::default(), |item| item * 2),
+        doubled
+    );
+    assert_eq!(
+        run_owned(Vec::<u64>::new(), Threads::default(), |item| item),
         Vec::<u64>::new()
     );
 }

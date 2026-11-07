@@ -70,6 +70,23 @@ pub(crate) struct Order {
     pub(crate) writable: bool,
 }
 
+/// what putting one file in place did.
+enum Put<T> {
+    /// placed it by a method, with what was kept of its metadata.
+    Placed(Method, T),
+    /// copied it under a hidden name, which it trades for its own once the batch is flushed.
+    Waiting(Staged),
+}
+
+impl<T> Put<T> {
+    fn method(&self) -> Method {
+        match self {
+            Put::Placed(method, _) => *method,
+            Put::Waiting(_) => Method::Copy,
+        }
+    }
+}
+
 /// why a placer copied files it would rather have linked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unlinked {
@@ -172,14 +189,17 @@ impl Placer {
         writable: bool,
     ) -> io::Result<Method> {
         self.check_folders(destination, true)?;
-        self.put(object, destination, writable)
+        match self.put(object, destination, writable, false)? {
+            Put::Placed(method, ()) => Ok(method),
+            Put::Waiting(staged) => staged.publish().map(|()| Method::Copy),
+        }
     }
 
     /// places every order and says how each went, in order, with what `seen` keeps of the metadata
     /// of each placed file, read right after it was placed, so a later edit is never taken for the
     /// placed file. the first goes alone, so it learns which methods the filesystem allows before
     /// the rest go several at once. orders are rebuilt for checks and placement so only active
-    /// workers keep their paths.
+    /// workers keep their paths. copies flushed as a batch take their names only after the flush.
     pub(crate) fn place_all<T: Send>(
         &mut self,
         count: usize,
@@ -198,38 +218,68 @@ impl Placer {
             }
         }));
         let this = &*self;
+        let batch = this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
             let order = order(*index);
             let placed = this
-                .put(&order.object, &order.destination, order.writable)
-                .and_then(|method| Ok((method, seen(&fs::symlink_metadata(&order.destination)?))));
+                .put(&order.object, &order.destination, order.writable, batch)
+                .and_then(|put| {
+                    Ok(match put {
+                        Put::Placed(method, ()) => {
+                            Put::Placed(method, seen(&fs::symlink_metadata(&order.destination)?))
+                        }
+                        Put::Waiting(staged) => Put::Waiting(staged),
+                    })
+                });
             (*index, placed)
         };
+        let mut done = Vec::with_capacity(ready.len());
         if let Some((first, rest)) = ready.split_first() {
             let placed = put(first);
-            if let (_, Ok((method, _))) = &placed {
+            if let (_, Ok(placed)) = &placed {
                 tracing::debug!(
-                    ?method,
+                    method = ?placed.method(),
                     files = ready.len(),
                     "placed the first file, the rest try the same methods"
                 );
             }
-            results.push(placed);
-            results.extend(run_all(rest, self.threads, put));
+            done.push(placed);
+            done.extend(run_all(rest, self.threads, put));
         }
+        let mut waiting = Vec::new();
+        for (index, placed) in done {
+            match placed {
+                Ok(Put::Placed(method, seen)) => results.push((index, Ok((method, seen)))),
+                Ok(Put::Waiting(staged)) => waiting.push((index, staged)),
+                Err(err) => results.push((index, Err(err))),
+            }
+        }
+        results.extend(publish_flushed(
+            waiting,
+            || this.flush_copies(),
+            this.threads,
+            &seen,
+        ));
         results.sort_unstable_by_key(|(index, _)| *index);
         results.into_iter().map(|(_, result)| result).collect()
     }
 
-    /// tries each method the filesystem may allow, best first.
-    fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
+    /// tries each method the filesystem may allow, best first. with `batch`, a copy is left
+    /// under its hidden name until [`Placer::flush_copies`] has flushed it.
+    fn put(
+        &self,
+        object: &Path,
+        destination: &Path,
+        writable: bool,
+        batch: bool,
+    ) -> io::Result<Put<()>> {
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
             match reflink(object, destination, writable) {
                 Ok(sealed) => {
                     sealed?;
-                    return Ok(Method::Reflink);
+                    return Ok(Put::Placed(Method::Reflink, ()));
                 }
                 Err(error) => self.learn(Method::Reflink, error)?,
             }
@@ -238,17 +288,23 @@ impl Placer {
         if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
             check_object(object)?;
             match fs::hard_link(object, destination) {
-                Ok(()) => return Ok(Method::Hardlink),
+                Ok(()) => return Ok(Put::Placed(Method::Hardlink, ())),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
         let flush = !self.batches_copies();
-        copy(object, destination, writable, self.threads, flush)?;
+        let put = if batch {
+            let (staged, _) = stage_copy(object, destination, writable, self.threads)?;
+            Put::Waiting(staged)
+        } else {
+            copy(object, destination, writable, self.threads, flush)?;
+            Put::Placed(Method::Copy, ())
+        };
         #[cfg(target_os = "linux")]
         if !flush {
             self.unflushed.store(true, Ordering::Relaxed);
         }
-        Ok(Method::Copy)
+        Ok(put)
     }
 
     /// whether copies may skip their own flush, because [`Placer::flush_copies`] flushes them all.
@@ -278,6 +334,7 @@ impl Placer {
             && let Some(Some(root)) = self.batch.get()
         {
             rustix::fs::syncfs(root)?;
+            self.unflushed.store(false, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -431,8 +488,7 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     cap: Threads,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
-    let threads = cap.limit(threads.min(THREADS).min(items.len() / PER_THREAD));
+    let threads = workers(items.len(), cap);
     if threads < 2 {
         return items.iter().map(job).collect();
     }
@@ -463,6 +519,47 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     });
     done.sort_unstable_by_key(|(index, _)| *index);
     done.into_iter().map(|(_, result)| result).collect()
+}
+
+/// how many threads share `items` items of work.
+fn workers(items: usize, cap: Threads) -> usize {
+    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    cap.limit(threads.min(THREADS).min(items / PER_THREAD))
+}
+
+/// runs `job` on every item as [`run_all`] does, for jobs that take their item. each thread
+/// takes a run of neighbouring items.
+fn run_owned<T: Send, R: Send>(
+    mut items: Vec<T>,
+    cap: Threads,
+    job: impl Fn(T) -> R + Sync,
+) -> Vec<R> {
+    let threads = workers(items.len(), cap);
+    if threads < 2 {
+        return items.into_iter().map(job).collect();
+    }
+    let size = items.len().div_ceil(threads);
+    let mut runs = Vec::with_capacity(threads);
+    while items.len() > size {
+        let rest = items.split_off(size);
+        runs.push(std::mem::replace(&mut items, rest));
+    }
+    runs.push(items);
+    let job = &job;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = runs
+            .into_iter()
+            .map(|run| scope.spawn(move || run.into_iter().map(job).collect::<Vec<_>>()))
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
 }
 
 /// the orders reordered so that neighbours go to different folders. links made into one folder
@@ -651,6 +748,40 @@ fn publish_new(
     write(&file)?;
     staged.publish()?;
     Ok(file)
+}
+
+/// names the copies `waiting` holds once `flush` has put their bytes on disk, so no name ever
+/// holds bytes a crash could still lose, and reads what `seen` keeps of each. the first is named
+/// alone, as in placing. when the flush fails none is named, and their hidden files go.
+fn publish_flushed<T: Send>(
+    waiting: Vec<(usize, Staged)>,
+    flush: impl FnOnce() -> io::Result<()>,
+    threads: Threads,
+    seen: &(impl Fn(&Metadata) -> T + Sync),
+) -> Vec<(usize, io::Result<(Method, T)>)> {
+    if waiting.is_empty() {
+        return Vec::new();
+    }
+    if let Err(err) = flush() {
+        return waiting
+            .into_iter()
+            .map(|(index, _)| {
+                let message = format!("could not flush the copied files to disk: {err}");
+                (index, Err(io::Error::new(err.kind(), message)))
+            })
+            .collect();
+    }
+    let publish = &|(index, staged): (usize, Staged)| {
+        let destination = staged.destination.clone();
+        let named = staged
+            .publish()
+            .and_then(|()| Ok((Method::Copy, seen(&fs::symlink_metadata(&destination)?))));
+        (index, named)
+    };
+    let mut waiting = waiting.into_iter();
+    let first = waiting.next().map(publish);
+    let rest = run_owned(waiting.collect(), threads, publish);
+    first.into_iter().chain(rest).collect()
 }
 
 /// clones `object` to `destination`, failing when `destination` exists. the outer result says
