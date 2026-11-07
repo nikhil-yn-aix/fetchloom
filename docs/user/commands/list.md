@@ -28,4 +28,4 @@ JSON returns `result.datasets`, an array of `name`, `ref`, `resolved`, `files`, 
 
 ## exit codes
 
-0 means the listing completed, including an empty project. missing or invalid project files use the [shared exit codes](../reference/exit-codes.md).
+0 means the listing completed, including an empty project. ctrl-c interrupts a listing with exit 130, including while its lock is being read or its answer is being built. missing or invalid project files use the [shared exit codes](../reference/exit-codes.md).

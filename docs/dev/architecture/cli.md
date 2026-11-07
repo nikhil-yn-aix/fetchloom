@@ -44,7 +44,7 @@ network clients are created only where commands need them. `Net` delays TLS root
 | `path` | answer directly when the dataset is ready; otherwise hold, reread and sync before answering |
 | `get` | share download, archive and placement machinery without writing project metadata; a lone link prechecks its known folder, while batches check final names and collision suffixes after downloading |
 | `status` | inspect local state without taking the mutation lock |
-| `list` | read manifest and lock without scanning placements or taking the mutation lock |
+| `list` | read manifest and lock on a cancellable blocking task, without scanning placements or taking the mutation lock |
 | `search` | query public catalogs concurrently; return canonical references without downloading datasets |
 
 `add` keeps its mutation lock in `AddProject` through discovery, validation, resolution, manifest writing, sync and rendering. `discover_add`, `validate_add`, `resolve_add`, `sync_add` and `render_add` name those phases; the manifest write sits inline in `add` between resolution and sync, and `--dry-run` stops there in `preview_add` instead. `sync_add` invokes `restore` on a sync failure; rendering errors do not roll back an already completed sync.

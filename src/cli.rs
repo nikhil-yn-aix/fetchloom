@@ -503,7 +503,9 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::List(args) => {
-            let outcome = list::run(context, args.name.as_deref());
+            let outcome = blocking(context, move |context| {
+                list::run(context, args.name.as_deref())
+            });
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {
@@ -1019,5 +1021,50 @@ mod tests {
         for other in ["", "2", "yes", " 1"] {
             assert_eq!(splits(Some(other.into())), WhenSlow, "{other:?}");
         }
+    }
+
+    #[test]
+    fn list_obeys_an_existing_stop() {
+        const CHILD: &str = "FETCHLOOM_TEST_CLI_STOPPED_LIST";
+        if let Some(root) = std::env::var_os(CHILD) {
+            std::env::set_current_dir(root).unwrap();
+            let context = Arc::new(Context::new(Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                },
+                Level::Quiet,
+                true,
+                false,
+            )));
+            let runtime = command_runtime(&context).unwrap();
+            let entered = runtime.enter();
+            context.stop.ask();
+            let code = dispatch(
+                &context,
+                args::Command::List(args::List { name: None }),
+                Instant::now(),
+            );
+            assert_eq!(code, ExitCode::from(130));
+            drop(entered);
+            runtime.shutdown_background();
+            return;
+        }
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("data.toml"), "[datasets]\n").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "cli::tests::list_obeys_an_existing_stop"])
+            .env(CHILD, folder.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
