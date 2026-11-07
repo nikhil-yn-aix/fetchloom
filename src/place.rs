@@ -63,6 +63,8 @@ pub(crate) struct Placer {
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
     can_reflink: AtomicBool,
+    cloned: AtomicBool,
+    small_copies: Option<u64>,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
     /// the volume under the root, which may refuse to remove a read-only file.
@@ -179,6 +181,8 @@ impl Placer {
             folders: HashSet::new(),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
+            cloned: AtomicBool::new(false),
+            small_copies: None,
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
             #[cfg(target_os = "linux")]
@@ -191,6 +195,10 @@ impl Placer {
     /// uses the cache's experiment settings for this placement.
     pub(crate) fn with_experiments(mut self, exp: Experiments) -> Placer {
         self.exp = exp;
+        self.small_copies = self
+            .experiments()
+            .number("PLACE_SMALL_COPY_BYTES")
+            .filter(|&bytes| cfg!(target_os = "linux") && bytes > 0);
         self
     }
 
@@ -361,17 +369,30 @@ impl Placer {
     ) -> io::Result<Put<Metadata>> {
         check_stop(&self.stop)?;
         let location = Arc::new(self.location(destination, false)?);
+        let mut buffered = false;
         if self.can_reflink.load(Ordering::Relaxed) {
-            check_object(object)?;
-            match reflink(object, &location, writable) {
-                Ok(sealed) => {
-                    return Ok(Put::Placed(Method::Reflink, sealed?));
+            let metadata = check_object(object)?;
+            buffered = self.cloned.load(Ordering::Relaxed)
+                && self
+                    .small_copies
+                    .is_some_and(|limit| metadata.len() <= limit);
+            if !buffered {
+                match reflink(object, &location, writable) {
+                    Ok(sealed) => {
+                        let metadata = sealed?;
+                        self.cloned.store(true, Ordering::Relaxed);
+                        return Ok(Put::Placed(Method::Reflink, metadata));
+                    }
+                    Err(error) => self.learn(Method::Reflink, error)?,
                 }
-                Err(error) => self.learn(Method::Reflink, error)?,
             }
         }
         // sync clients break hardlinks or upload every link as a full file.
-        if self.can_hardlink.load(Ordering::Relaxed) && !writable && self.synced.is_none() {
+        if !buffered
+            && self.can_hardlink.load(Ordering::Relaxed)
+            && !writable
+            && self.synced.is_none()
+        {
             check_object(object)?;
             match location.hard_link(object) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
@@ -383,10 +404,25 @@ impl Placer {
         #[cfg(unix)]
         let flush = flush || location.other_device();
         let put = if batch && !flush {
-            let (staged, _) = stage_copy_at(object, &location, writable, self.threads, &self.stop)?;
+            let (staged, _) = stage_copy_at(
+                object,
+                &location,
+                writable,
+                self.threads,
+                &self.stop,
+                buffered,
+            )?;
             Put::Waiting(staged)
         } else {
-            let metadata = copy_at(object, &location, writable, self.threads, flush, &self.stop)?;
+            let metadata = copy_at(
+                object,
+                &location,
+                writable,
+                self.threads,
+                flush,
+                &self.stop,
+                buffered,
+            )?;
             Put::Placed(Method::Copy, metadata)
         };
         #[cfg(target_os = "linux")]
@@ -757,9 +793,10 @@ pub(crate) fn found_folder(
     Err(io::Error::new(kind, message))
 }
 
-fn check_object(object: &Path) -> io::Result<()> {
-    if is_plain(&fs::symlink_metadata(object)?) {
-        return Ok(());
+fn check_object(object: &Path) -> io::Result<Metadata> {
+    let metadata = fs::symlink_metadata(object)?;
+    if is_plain(&metadata) {
+        return Ok(metadata);
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
@@ -779,8 +816,9 @@ fn copy_at(
     threads: Threads,
     flush: bool,
     stop: &Stop,
+    buffered: bool,
 ) -> io::Result<Metadata> {
-    let (staged, file) = stage_copy_at(object, location, writable, threads, stop)?;
+    let (staged, file) = stage_copy_at(object, location, writable, threads, stop, buffered)?;
     if flush {
         file.sync_all()?;
     }
@@ -802,11 +840,19 @@ fn stage_copy_at(
     writable: bool,
     threads: Threads,
     stop: &Stop,
+    buffered: bool,
 ) -> io::Result<(Staged, File)> {
     check_stop(stop)?;
     let (staged, file) = location.create(0o666, false)?;
     // publishing clears windows attributes, so seal through the claimed handle afterward.
-    fill(object, &file, cfg!(windows) || writable, threads, stop)?;
+    fill(
+        object,
+        &file,
+        cfg!(windows) || writable,
+        threads,
+        stop,
+        buffered,
+    )?;
     Ok((staged, file))
 }
 
@@ -820,7 +866,7 @@ fn copy(
     stop: &Stop,
 ) -> io::Result<()> {
     let location = Arc::new(Location::standalone(destination)?);
-    copy_at(object, &location, writable, threads, flush, stop).map(drop)
+    copy_at(object, &location, writable, threads, flush, stop, false).map(drop)
 }
 
 #[cfg(test)]
@@ -837,6 +883,7 @@ fn stage_copy(
         writable,
         threads,
         stop,
+        false,
     )
 }
 
@@ -946,9 +993,12 @@ fn fill(
     writable: bool,
     threads: Threads,
     stop: &Stop,
+    buffered: bool,
 ) -> io::Result<()> {
     let mut input = read_unfollowed(object)?;
-    if threads.is_limited() {
+    if buffered {
+        copy_buffered(&mut input, &mut output, stop)?;
+    } else if threads.is_limited() {
         // a reader per copy would multiply the placement worker cap.
         copy_stoppable(&mut input, &mut output, stop)?;
     } else {
@@ -998,6 +1048,21 @@ fn check_stop(stop: &Stop) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+fn copy_buffered(mut input: impl Read, mut output: impl Write, stop: &Stop) -> io::Result<()> {
+    // copy_file_range may clone again on xfs; this experiment needs independent writes.
+    let mut bytes = [0; 8 * 1024];
+    loop {
+        check_stop(stop)?;
+        let count = match input.read(&mut bytes) {
+            Ok(0) => return Ok(()),
+            Ok(count) => count,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        };
+        output.write_all(&bytes[..count])?;
+    }
 }
 
 fn copy_stoppable(mut input: impl Read, mut output: impl Write, stop: &Stop) -> io::Result<()> {
