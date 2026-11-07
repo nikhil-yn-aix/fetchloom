@@ -41,6 +41,7 @@ impl Cache {
                 Access::Exclusive => file.try_lock(),
             },
             || std::thread::sleep(RETRY),
+            open_lock,
         )
     }
 
@@ -51,9 +52,17 @@ impl Cache {
         waiting: &dyn Fn(),
         take: impl Fn(&File, Access) -> Result<(), TryLockError>,
         retry: impl Fn(),
+        open: impl FnOnce(&Path) -> io::Result<Option<File>>,
     ) -> io::Result<Cache> {
-        let Some(file) = open_lock(&self.root.join(LOCK))? else {
-            return Ok(self);
+        let Some(file) = open(&self.root.join(LOCK))? else {
+            return if access == Access::Shared {
+                Ok(self)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::ReadOnlyFilesystem,
+                    "cannot collect the cache without an exclusive cache lock on its read-only root",
+                ))
+            };
         };
         let mut told = false;
         loop {
@@ -88,8 +97,8 @@ impl Cache {
     }
 }
 
-/// the lock file at `path`, made the first time. none on a read-only disk, where no run can
-/// remove an object either.
+/// the lock file at `path`, made the first time. a read-only root can serve shared readers
+/// without creating it, but cannot authorize collection of writable child mounts.
 fn open_lock(path: &Path) -> io::Result<Option<File>> {
     match open_unfollowed(path, true) {
         Ok(file) => Ok(Some(file)),
@@ -200,6 +209,7 @@ mod tests {
                         Err(TryLockError::Error(io::Error::new(kind, "lock refused")))
                     },
                     || panic!("a lock error must not be retried"),
+                    open_lock,
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), kind);
@@ -218,6 +228,7 @@ mod tests {
                     &|| panic!("a lock error is not contention"),
                     |_, _| Err(TryLockError::Error(io::Error::new(kind, "lock refused"))),
                     || panic!("a lock error must not be retried"),
+                    open_lock,
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), kind);
@@ -235,6 +246,7 @@ mod tests {
                 &|| panic!("unsupported locking is not contention"),
                 |_, _| Err(TryLockError::Error(io::ErrorKind::Unsupported.into())),
                 || panic!("unsupported locking must not be retried"),
+                open_lock,
             )
             .unwrap();
         assert!(held.held.is_none());
@@ -260,11 +272,35 @@ mod tests {
                     }
                 },
                 || retries.set(retries.get() + 1),
+                open_lock,
             )
             .unwrap();
         assert!(held.held.is_some());
         assert_eq!(attempts.get(), 3);
         assert_eq!(waits.get(), 1);
         assert_eq!(retries.get(), 2);
+    }
+
+    #[test]
+    fn gc_requires_a_lock_even_when_the_root_is_read_only() {
+        for access in [Access::Shared, Access::Exclusive] {
+            let (_dir, cache) = cache();
+            let held = cache.hold_with(
+                access,
+                &Stop::default(),
+                &|| panic!("no lock is not contention"),
+                |_, _| panic!("there is no file to lock"),
+                || panic!("a read-only root is not retried"),
+                |_| Ok(None),
+            );
+            match access {
+                Access::Shared => assert!(held.unwrap().held.is_none()),
+                Access::Exclusive => {
+                    let error = held.unwrap_err();
+                    assert_eq!(error.kind(), io::ErrorKind::ReadOnlyFilesystem);
+                    assert!(error.to_string().contains("exclusive cache lock"));
+                }
+            }
+        }
     }
 }
