@@ -12,9 +12,9 @@ use crate::error::{Error, Kind};
 use crate::net;
 use crate::output::{ColorChoice, Level, Output, Style};
 
-/// help goes to stdout as clap writes it, even with `--json`, since it is for people. a mistake
-/// on the command line becomes one of our own errors, printed like every other failure: in the
-/// document `--json` asks for, or with the detail and colors the options clap read ask for.
+/// text help goes to stdout as clap writes it; argument reading routes JSON help separately.
+/// a command-line mistake becomes one of our own errors, in the document `--json` asks for,
+/// or with the detail and colors the options clap read ask for.
 pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         crate::output::help(&err.render().to_string(), args::color());

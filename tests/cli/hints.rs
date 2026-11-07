@@ -287,3 +287,26 @@ fn normalized_account_typos_never_echo_link_secrets() -> Result {
     }
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn errors_messages_json_help_survives_non_unicode_arguments() -> Result {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+    let sandbox = Sandbox::new()?;
+    for before in [&["--help"][..], &["get"], &["get", "--help"]] {
+        let output = sandbox
+            .command(before)
+            .arg(OsString::from_vec(vec![0xff]))
+            .args(["--help", "--json"])
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let document = crate::support::json(&output)?;
+        assert_eq!(document["schema"], 1);
+        assert_eq!(document["command"], "help");
+    }
+    let after_separator = sandbox.run(&["--help", "--", "--json"])?;
+    assert!(after_separator.status.success());
+    assert!(serde_json::from_slice::<serde_json::Value>(&after_separator.stdout).is_err());
+    Ok(())
+}

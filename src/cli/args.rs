@@ -232,7 +232,6 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
     let json = line
         .iter()
         .skip(1)
-        .map_while(|word| word.to_str())
         .take_while(|word| *word != "--")
         .any(|word| word == "--json");
     if !json {
@@ -244,13 +243,12 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
 /// the command a line asking for `-h` or `--help` is about, as `help` takes it, or nothing when
 /// it asks for no help.
 fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
-    let words: Vec<&str> = line
+    let words: Vec<_> = line
         .iter()
         .skip(1)
-        .map_while(|word| word.to_str())
         .take_while(|word| *word != "--")
         .collect();
-    if !words.iter().any(|word| matches!(*word, "--help" | "-h")) {
+    if !words.iter().any(|word| *word == "--help" || *word == "-h") {
         return None;
     }
     let mut topic = Vec::new();
@@ -271,7 +269,7 @@ fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Ve
         })
     };
     let mut value_next = false;
-    for word in &words {
+    for word in words.into_iter().map_while(|word| word.to_str()) {
         if std::mem::take(&mut value_next) {
             continue;
         }
