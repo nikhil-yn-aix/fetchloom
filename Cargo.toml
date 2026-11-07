@@ -87,6 +87,8 @@ mimalloc = { version = "0.1.52", default-features = false }
 [target.'cfg(windows)'.dependencies]
 anstyle-query = "1.1"
 winapi-util = "0.1"
+# safe volume filesystem names for the optional placement worker policy
+sysinfo = { version = "0.37", default-features = false, features = ["disk"] }
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }

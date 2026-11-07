@@ -43,6 +43,11 @@ impl Threads {
         self.0.map_or(requested, |cap| requested.min(cap.get()))
     }
 
+    /// derives a local ceiling while preserving a smaller command-wide limit.
+    pub(crate) fn at_most(self, requested: usize) -> Threads {
+        Threads(NonZeroUsize::new(self.limit(requested).max(1)))
+    }
+
     /// shares the archive budget between readers and their writers. zero writers means the
     /// reader stores members itself, so a cap of one never needs a second thread to drain a queue.
     pub(crate) fn archives(self, requested: usize) -> (usize, Option<usize>) {

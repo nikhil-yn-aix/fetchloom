@@ -5,6 +5,7 @@ mod parents;
 #[cfg(windows)]
 #[path = "place/parents_windows.rs"]
 mod parents;
+mod schedule;
 mod synced;
 
 use parents::{Location, Parents, Staged};
@@ -69,6 +70,7 @@ pub(crate) struct Placer {
     volume: Volume,
     parents: Parents,
     links: OnceLock<bool>,
+    serial: OnceLock<bool>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -161,6 +163,7 @@ impl Placer {
             volume: Volume::new(root.clone()),
             parents: Parents::default(),
             links: OnceLock::new(),
+            serial: OnceLock::new(),
             threads: Threads::default(),
             exp: Experiments::default(),
             stop: Arc::default(),
@@ -185,10 +188,6 @@ impl Placer {
     }
 
     /// the experiment settings supplied for this placement.
-    #[allow(
-        dead_code,
-        reason = "placement switch consumers arrive during the a/b period"
-    )]
     pub(crate) fn experiments(&self) -> &Experiments {
         &self.exp
     }
@@ -247,6 +246,10 @@ impl Placer {
         seen: impl Fn(&Metadata) -> T + Sync,
     ) -> Vec<io::Result<(Method, T)>> {
         let mut results = Vec::with_capacity(count);
+        let mut folders = self
+            .experiments()
+            .on("PLACE_DIR_THREADS")
+            .then(|| schedule::Folders::new(count));
         let ready = spread((0..count).filter_map(|index| {
             if let Err(err) = check_stop(&self.stop) {
                 results.push((index, Err(err)));
@@ -254,7 +257,12 @@ impl Placer {
             }
             let order = order(index);
             match self.check_folders(&order.destination, true) {
-                Ok(()) => Some((index, order)),
+                Ok(()) => {
+                    if let Some(folders) = &mut folders {
+                        folders.record(index, &order.destination);
+                    }
+                    Some((index, order))
+                }
                 Err(err) => {
                     results.push((index, Err(err)));
                     None
@@ -262,9 +270,21 @@ impl Placer {
             }
         }));
         let this = &*self;
+        let grouped = folders.map(|folders| {
+            let serial = !ready.is_empty()
+                && *this.serial.get_or_init(|| {
+                    this.location(&this.root.join(".filesystem"), false)
+                        .is_ok_and(|location| location.serializes())
+                });
+            folders.finish(serial)
+        });
+        let threads = grouped
+            .as_ref()
+            .map_or(this.threads, |work| work.threads(this.threads));
         let batch = this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
+            let _permit = grouped.as_ref().and_then(|work| work.enter(*index));
             let order = order(*index);
             let placed = this
                 .put(&order.object, &order.destination, order.writable, batch)
@@ -285,7 +305,7 @@ impl Placer {
                 );
             }
             done.push(placed);
-            done.extend(run_all(rest, self.threads, put));
+            done.extend(run_all(rest, threads, put));
         }
         let mut waiting = Vec::new();
         for (index, placed) in done {
@@ -298,9 +318,10 @@ impl Placer {
         results.extend(publish_flushed(
             waiting,
             || this.flush_copies(),
-            this.threads,
+            threads,
             &seen,
             &this.stop,
+            grouped.as_ref(),
         ));
         results.sort_unstable_by_key(|(index, _)| *index);
         results.into_iter().map(|(_, result)| result).collect()
@@ -818,6 +839,7 @@ fn publish_flushed<T: Send>(
     threads: Threads,
     seen: &(impl Fn(&Metadata) -> T + Sync),
     stop: &Stop,
+    grouped: Option<&schedule::Work>,
 ) -> Vec<(usize, io::Result<(Method, T)>)> {
     if waiting.is_empty() {
         return Vec::new();
@@ -832,6 +854,7 @@ fn publish_flushed<T: Send>(
             .collect();
     }
     let publish = &|(index, staged): (usize, Staged)| {
+        let _permit = grouped.and_then(|work| work.enter(index));
         let named = check_stop(stop)
             .and_then(|()| staged.publish())
             .map(|metadata| (Method::Copy, seen(&metadata)));

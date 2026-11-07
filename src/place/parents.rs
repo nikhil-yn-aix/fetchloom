@@ -198,6 +198,26 @@ impl Location {
         .map_err(Into::into)
     }
 
+    pub(super) fn serializes(&self) -> bool {
+        let Ok(stat) = native::fstatfs(&self.root) else {
+            return false;
+        };
+        #[cfg(target_os = "linux")]
+        {
+            super::schedule::serializes_magic(i128::from(stat.f_type))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let name: Vec<u8> = stat
+                .f_fstypename
+                .iter()
+                .take_while(|&&byte| byte != 0)
+                .map(|byte| byte.cast_unsigned())
+                .collect();
+            super::schedule::serializes_name(&String::from_utf8_lossy(&name))
+        }
+    }
+
     pub(super) fn other_device(&self) -> bool {
         self.parent.identity.device != self.root_device
     }
