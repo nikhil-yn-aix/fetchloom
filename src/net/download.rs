@@ -58,6 +58,13 @@ impl Expect {
     pub(crate) fn proves(&self) -> bool {
         self.sha256.is_some() || self.md5.is_some()
     }
+
+    /// whether the hashes alone decide whether the bytes are the file: a pinned SHA-256, or a
+    /// stated MD5 with the size. no answer's validator then matters, since the check at the end
+    /// catches bytes from another version.
+    pub(crate) fn pins(&self) -> bool {
+        self.sha256.is_some() || (self.md5.is_some() && self.size.is_some())
+    }
 }
 
 pub(crate) struct Fetch {
@@ -551,6 +558,7 @@ impl Net {
             from,
             key: &fetch.from,
             validators: &validators,
+            pinned: fetch.expect.pins(),
             total,
             on,
             slow,

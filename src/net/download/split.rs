@@ -46,6 +46,9 @@ pub(super) struct Job<'a> {
     /// the URL whose host the download's slots belong to.
     pub(super) key: &'a Url,
     pub(super) validators: &'a Validators,
+    /// the file's hash pins it, so a part another server labels differently is kept and the
+    /// check at the end decides, instead of the download starting over.
+    pub(super) pinned: bool,
     pub(super) total: u64,
     pub(super) on: Listener<'a>,
     /// the rate of the one stream that proved slow before it handed over, in bytes a second.
@@ -447,7 +450,8 @@ impl Net {
     }
 
     /// asks for bytes `start` up to `end` of the file, for stream `id`, with `If-Range` so that
-    /// a server holding another version sends the whole file instead.
+    /// a server holding another version sends the whole file instead. a pinned file asks without
+    /// it, since servers behind one name may label the same bytes differently.
     async fn part(
         &self,
         shared: &Streams<'_>,
@@ -456,7 +460,11 @@ impl Net {
         end: u64,
     ) -> Result<reqwest::Response, Ended> {
         let job = &shared.job;
-        let check = if_range(job.validators).map(str::to_owned);
+        let check = if job.pinned {
+            None
+        } else {
+            if_range(job.validators).map(str::to_owned)
+        };
         let shape = |request: reqwest::RequestBuilder| {
             let request = request.header(header::RANGE, format!("bytes={start}-{}", end - 1));
             match &check {
@@ -472,7 +480,7 @@ impl Net {
         let status = response.status();
         let head = response.headers();
         tracing::debug!(url = %Shown(job.from), status = status.as_u16(), start, end, "part");
-        let changed = headers::changed(job.validators, &headers::validators(head));
+        let changed = !job.pinned && headers::changed(job.validators, &headers::validators(head));
         match status {
             StatusCode::PARTIAL_CONTENT
                 if changed || headers::total_length(head, status) != Some(job.total) =>

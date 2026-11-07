@@ -22,6 +22,9 @@ const MIB: u64 = 1024 * KIB;
 #[derive(Clone, Copy)]
 struct Serving {
     etag: Option<&'static str>,
+    /// the `ETag` every answer after the first gives, as another server behind the same name
+    /// may label the same bytes.
+    drift: Option<&'static str>,
     /// says `Accept-Ranges: bytes` and answers a range with 206.
     ranges: bool,
     /// answers a request for a closed range with the whole file.
@@ -34,6 +37,7 @@ struct Serving {
 
 const SERVING: Serving = Serving {
     etag: Some("\"v1\""),
+    drift: None,
     ranges: true,
     whole_for_parts: false,
     rate: 2 * MIB,
@@ -108,16 +112,25 @@ fn serve(body: Arc<Vec<u8>>, serving: Serving) -> Server {
 /// only between chunks.
 fn answer(mut stream: TcpStream, site: &Site) {
     let head = read_head(&mut stream).to_ascii_lowercase();
-    site.heads.lock().unwrap().push(head.clone());
+    let index = {
+        let mut heads = site.heads.lock().unwrap();
+        heads.push(head.clone());
+        heads.len() - 1
+    };
     std::thread::sleep(Duration::from_millis(50));
     let now = site.active.fetch_add(1, Ordering::SeqCst) + 1;
     site.most.fetch_max(now, Ordering::SeqCst);
-    respond(&mut stream, &head, site);
+    respond(&mut stream, &head, site, index);
     site.active.fetch_sub(1, Ordering::SeqCst);
 }
 
-fn respond(stream: &mut TcpStream, head: &str, site: &Site) {
+fn respond(stream: &mut TcpStream, head: &str, site: &Site, index: usize) {
     let (body, serving) = (site.body.as_slice(), site.serving);
+    let etag = if index > 0 {
+        serving.drift.or(serving.etag)
+    } else {
+        serving.etag
+    };
     let asked = head
         .lines()
         .find_map(|line| line.strip_prefix("range: bytes="))
@@ -135,11 +148,7 @@ fn respond(stream: &mut TcpStream, head: &str, site: &Site) {
     let current = head
         .lines()
         .find_map(|line| line.strip_prefix("if-range: "))
-        .is_none_or(|tag| {
-            serving
-                .etag
-                .is_some_and(|etag| etag.eq_ignore_ascii_case(tag.trim()))
-        });
+        .is_none_or(|tag| etag.is_some_and(|etag| etag.eq_ignore_ascii_case(tag.trim())));
     let part = asked.filter(|(_, end)| {
         serving.ranges && current && !(serving.whole_for_parts && end.is_some())
     });
@@ -170,7 +179,7 @@ fn respond(stream: &mut TcpStream, head: &str, site: &Site) {
     if serving.ranges {
         text.push_str("Accept-Ranges: bytes\r\n");
     }
-    if let Some(etag) = serving.etag {
+    if let Some(etag) = etag {
         write!(text, "ETag: {etag}\r\n").unwrap();
     }
     text.push_str("\r\n");
@@ -362,6 +371,67 @@ fn a_pinned_file_splits_without_validators() {
     assert_eq!(fetched.digest, sha256(&body));
     assert_ne!(parts(&server), Vec::<String>::new());
     assert!(server.heads().iter().all(|head| !head.contains("if-range")));
+}
+
+/// the requests that asked for the file from its first byte, so a count above one is a start
+/// over.
+fn from_the_start(server: &Server) -> usize {
+    server
+        .heads()
+        .iter()
+        .filter(|head| !head.contains("range:"))
+        .count()
+}
+
+/// servers behind one name may label the same bytes with other validators. a file pinned by its
+/// hash keeps the parts it has and lets the hash decide, while an unpinned one starts over.
+#[test]
+fn a_pinned_file_keeps_its_parts_when_another_server_labels_them_differently() {
+    let body = body(4 * MIB);
+    let (sha256_pin, md5) = {
+        let mut hasher = crate::digest::Hasher::with_md5();
+        hasher.update(&body);
+        hasher.finish()
+    };
+    let drifting = Serving {
+        drift: Some("\"v2\""),
+        ..SERVING
+    };
+    for (expect, why) in [
+        (
+            Expect {
+                sha256: Some(sha256_pin),
+                ..Expect::default()
+            },
+            "a pinned sha256",
+        ),
+        (
+            Expect {
+                md5,
+                size: Some(4 * MIB),
+                ..Expect::default()
+            },
+            "a stated md5 and size",
+        ),
+    ] {
+        let server = serve(body.clone(), drifting);
+        let net = net(&server.url, 8);
+        let (_folder, cache) = cache();
+        let fetched = download(&net, &cache, &server.url, expect);
+        assert_eq!(fetched.digest, sha256_pin, "{why}");
+        assert_ne!(parts(&server), Vec::<String>::new(), "{why}");
+        assert_eq!(from_the_start(&server), 1, "{why}: started over");
+    }
+    let server = serve(body.clone(), drifting);
+    let net = net(&server.url, 8);
+    let (_folder, cache) = cache();
+    let fetched = download(&net, &cache, &server.url, Expect::default());
+    assert_eq!(fetched.digest, sha256_pin);
+    assert_eq!(
+        from_the_start(&server),
+        2,
+        "nothing proves the unpinned parts"
+    );
 }
 
 #[test]
