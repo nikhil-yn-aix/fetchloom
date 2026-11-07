@@ -67,6 +67,8 @@ linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLO
 
 ## tests
 
+hash-pipeline tests pause the actual worker with channel messages, check queue capacity with `try_send`, and observe claim lifetimes through weak handles while the worker is known to be draining. timeouts only bound failed tests; they are not evidence that an operation waited.
+
 CLI resource-cap tests check accepted settings, configuration errors and complete output bytes. they do not infer token accounting or worker counts from elapsed time, which also includes scheduling and filesystem waits.
 
 | files | cargo filter |

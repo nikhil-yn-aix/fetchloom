@@ -114,15 +114,17 @@ fn a_long_batch_keeps_only_its_latest_downloads_claimed() {
         .iter()
         .map(|url| finished(&cache, url, url.as_bytes()))
         .collect();
-    // each claimed download holds a file open, of which a process may have only so many
-    let claimed = urls
-        .iter()
-        .filter(|url| matches!(cache.claim(url).unwrap(), Claim::Busy))
-        .count();
-    assert!(
-        claimed < GROUP,
-        "{claimed} finished downloads still hold their claims"
+    assert_eq!(
+        lock(&cache.deferred.pending)
+            .as_ref()
+            .unwrap()
+            .finished
+            .len(),
+        10
     );
+    for stored in &stored[..GROUP] {
+        assert!(cache.object_path(&stored.digest).is_file());
+    }
     cache.publish_downloads().unwrap();
     for (url, stored) in urls.iter().zip(&stored) {
         assert_eq!(
@@ -183,6 +185,12 @@ fn a_batch_names_its_downloads_only_after_one_flush() {
     assert!(cache.defer_downloads().unwrap());
     let first = finished(&cache, "https://example.org/first", b"first");
     let second = finished(&cache, "https://example.org/second", b"second");
+    let claim = Arc::downgrade(
+        lock(&cache.deferred.pending).as_ref().unwrap().finished[0]
+            .lock
+            .as_ref()
+            .unwrap(),
+    );
     assert_eq!(first.digest, digest::sha256(b"first"));
     assert!(first.new, "the cache did not hold these bytes");
     for stored in [&first, &second] {
@@ -202,10 +210,7 @@ fn a_batch_names_its_downloads_only_after_one_flush() {
     for (stored, bytes) in [(&first, &b"first"[..]), (&second, &b"second"[..])] {
         assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), bytes);
     }
-    assert!(matches!(
-        cache.claim("https://example.org/first").unwrap(),
-        Claim::Owned(_)
-    ));
+    assert!(claim.upgrade().is_none());
     let later = finished(&cache, "https://example.org/later", b"later");
     assert!(
         cache.object_path(&later.digest).is_file(),
@@ -258,6 +263,12 @@ fn a_second_download_of_the_same_link_puts_the_first_in_place_instead_of_waiting
     assert!(cache.defer_downloads().unwrap());
     let url = "https://example.org/twice";
     let stored = finished(&cache, url, b"twice");
+    let claim = Arc::downgrade(
+        lock(&cache.deferred.pending).as_ref().unwrap().finished[0]
+            .lock
+            .as_ref()
+            .unwrap(),
+    );
     assert!(
         !cache
             .publish_download_of("https://example.org/other")
@@ -265,7 +276,7 @@ fn a_second_download_of_the_same_link_puts_the_first_in_place_instead_of_waiting
     );
     assert!(cache.publish_download_of(url).unwrap());
     assert!(cache.object_path(&stored.digest).is_file());
-    assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+    assert!(claim.upgrade().is_none());
     cache.publish_downloads().unwrap();
 }
 

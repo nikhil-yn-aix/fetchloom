@@ -786,11 +786,11 @@ mod tests {
     fn a_sweep_keeps_the_lock_of_a_download_in_progress_and_drops_finished_ones() {
         let (_dir, cache) = cache();
         let running = cache.claim("https://example.org/running").unwrap();
-        drop(cache.claim("https://example.org/finished").unwrap());
         let lock = |url: &str| {
             let key = digest::sha256(url.as_bytes()).hex();
             cache.root.join("partial").join(format!("{key}.lock"))
         };
+        fs::write(lock("https://example.org/finished"), b"").unwrap();
         let freed = cache.sweep(&Needed::default(), SystemTime::now());
         assert_eq!(freed.leftovers, 0, "a lock file frees nothing");
         assert!(lock("https://example.org/running").exists());
@@ -849,7 +849,6 @@ mod tests {
     fn a_run_that_opened_a_lock_before_a_sweep_removed_it_never_owns_the_download_twice() {
         let (_dir, cache) = cache();
         let url = "https://example.org/raced";
-        drop(cache.claim(url).unwrap());
         let key = digest::sha256(url.as_bytes()).hex();
         let lock = cache.root.join("partial").join(format!("{key}.lock"));
         // a run waiting for the download opens the lock, gc sweeps, then the run takes the lock

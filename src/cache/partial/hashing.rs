@@ -18,6 +18,11 @@ const QUEUED: usize = 16;
 const BATCH: usize = 1024 * 1024;
 
 enum Message {
+    #[cfg(test)]
+    Pause {
+        ready: SyncSender<()>,
+        release: Receiver<()>,
+    },
     Chunks(Vec<Bytes>),
     Range {
         start: u64,
@@ -188,6 +193,8 @@ fn hash(
 ) -> io::Result<(Hasher, u64)> {
     while let Ok(message) = inbox.recv() {
         match message {
+            #[cfg(test)]
+            Message::Pause { ready, release } => tests::wait_for_release(ready, release),
             Message::Chunks(chunks) => {
                 for bytes in chunks {
                     hasher.update(&bytes);

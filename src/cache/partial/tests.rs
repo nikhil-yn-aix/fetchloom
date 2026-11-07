@@ -95,9 +95,6 @@ fn a_sealed_download_is_dropped_and_its_object_stays_read_only() {
     // object it was publishing
     fs::remove_file(&partial.bytes).unwrap();
     fs::hard_link(cache.object_path(&object.digest), &partial.bytes).unwrap();
-    drop(partial);
-
-    let partial = owned(&cache, url);
     assert!(partial.resumable().is_none());
     let mut writer = partial
         .writer(0, None, Validators::default(), false, false)
@@ -129,9 +126,6 @@ fn a_sealed_download_is_dropped_on_fat() {
     drop(writer);
     // a run that died while publishing leaves its record and the bytes it sealed
     seal(&partial.bytes);
-    drop(partial);
-
-    let partial = owned(&cache, url);
     assert!(partial.resumable().is_none());
     let mut writer = partial
         .writer(0, None, Validators::default(), false, false)
@@ -153,8 +147,9 @@ fn a_download_belongs_to_one_process_at_a_time() {
         cache.claim("https://example.org/other").unwrap(),
         Claim::Owned(_)
     ));
+    let held = Arc::downgrade(first.lock.as_ref().unwrap());
     drop(first);
-    assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+    assert!(held.upgrade().is_none());
 }
 
 #[test]
@@ -165,11 +160,12 @@ fn a_writer_keeps_its_download_claimed_until_it_stops() {
     let writer = partial
         .writer(0, None, Validators::default(), false, false)
         .unwrap();
+    let held = Arc::downgrade(partial.lock.as_ref().unwrap());
     // a stopped run drops its claim while a writer thread may still be writing
     drop(partial);
     assert!(matches!(cache.claim(url).unwrap(), Claim::Busy));
     drop(writer);
-    assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+    assert!(held.upgrade().is_none());
 }
 
 #[test]

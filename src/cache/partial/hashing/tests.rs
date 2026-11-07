@@ -4,26 +4,32 @@ use super::*;
 use crate::cache::Validators;
 use crate::cache::partial::{Claim, PartialWriter};
 
+pub(super) fn wait_for_release(ready: SyncSender<()>, release: Receiver<()>) {
+    ready.send(()).unwrap();
+    release.recv().unwrap();
+}
+
 fn pause_hashing(writer: &mut PartialWriter) -> SyncSender<()> {
-    let (sender, receiver) = mpsc::sync_channel(QUEUED);
     let (release, paused) = mpsc::sync_channel(1);
-    let file = Arc::clone(&writer.file);
-    let worker = thread::spawn(move || {
-        paused.recv().unwrap();
-        hash(&file, Hasher::default(), 0, &receiver)
-    });
-    writer.hasher = HashPipe {
-        sender: Some(sender),
-        worker: Some(worker),
-        gathered: Vec::new(),
-        gathered_bytes: 0,
-        inline: None,
-    };
+    let (ready, entered) = mpsc::sync_channel(1);
+    assert!(
+        writer
+            .hasher
+            .sender
+            .as_ref()
+            .unwrap()
+            .send(Message::Pause {
+                ready,
+                release: paused
+            })
+            .is_ok()
+    );
+    entered.recv_timeout(Duration::from_secs(5)).unwrap();
     release
 }
 
 #[test]
-fn writing_can_run_ahead_of_hashing_but_a_checkpoint_waits() {
+fn writing_can_run_ahead_of_hashing_and_checkpoints_keep_the_digest() {
     let (_dir, cache) = crate::cache::tests::cache();
     let Claim::Owned(partial) = cache.claim("https://example.org/overlap").unwrap() else {
         panic!("nothing else holds the download");
@@ -34,27 +40,11 @@ fn writing_can_run_ahead_of_hashing_but_a_checkpoint_waits() {
     let release = pause_hashing(&mut writer);
     let chunk = Bytes::from(vec![b'x'; super::super::BUFFER]);
     let expected = crate::digest::sha256(&chunk);
-    let (written, write_done) = mpsc::sync_channel(1);
-    let (saved, save_done) = mpsc::sync_channel(1);
-    let background = thread::spawn(move || {
-        let result = writer.write_chunk(0, &chunk);
-        written.send(result).unwrap();
-        let result = writer.save();
-        saved.send(result).unwrap();
-        writer
-    });
-    let written = write_done.recv_timeout(Duration::from_secs(5));
-    let before_hashing = save_done.recv_timeout(Duration::from_millis(100));
+    writer.write_chunk(0, &chunk).unwrap();
     let bytes = std::fs::read(&partial.bytes).unwrap();
-    release.send(()).unwrap();
-    let writer = background.join().unwrap();
-    written.unwrap().unwrap();
-    assert!(matches!(
-        before_hashing,
-        Err(mpsc::RecvTimeoutError::Timeout)
-    ));
-    save_done.recv().unwrap().unwrap();
     assert_eq!(crate::digest::sha256(&bytes), expected);
+    release.send(()).unwrap();
+    writer.save().unwrap();
     let record = partial.recorded().unwrap();
     assert_eq!(record.received, u64::try_from(bytes.len()).unwrap());
     assert_eq!(record.sha256, expected);
@@ -115,69 +105,62 @@ fn a_slow_hasher_bounds_the_number_of_in_flight_chunks() {
         .writer(0, None, Validators::default(), false, false)
         .unwrap();
     let release = pause_hashing(&mut writer);
-    let (progress, received) = mpsc::sync_channel(QUEUED + 1);
-    // each chunk fills a whole batch, so each one is a message to the paused worker
     let chunk = Bytes::from(vec![b'x'; BATCH]);
-    let background = thread::spawn(move || {
-        for _ in 0..=QUEUED {
-            let result = writer.write_chunk(writer.written(), &chunk);
-            progress.send(result).unwrap();
-        }
-        writer
-    });
-    let mut first = Vec::new();
     for _ in 0..QUEUED {
-        let result = received.recv_timeout(Duration::from_secs(5));
-        let failed = !matches!(result, Ok(Ok(())));
-        first.push(result);
-        if failed {
-            break;
-        }
+        writer.write_chunk(writer.written(), &chunk).unwrap();
     }
-    let excess = received.recv_timeout(Duration::from_millis(100));
+    let excess = writer
+        .hasher
+        .sender
+        .as_ref()
+        .unwrap()
+        .try_send(Message::Chunks(vec![chunk]));
     release.send(()).unwrap();
-    let writer = background.join().unwrap();
-    assert_eq!(first.len(), QUEUED);
-    for result in first {
-        result.unwrap().unwrap();
-    }
-    assert!(matches!(excess, Err(mpsc::RecvTimeoutError::Timeout)));
-    received.recv().unwrap().unwrap();
+    assert!(matches!(excess, Err(mpsc::TrySendError::Full(_))));
     assert_eq!(
         writer.finish().unwrap().digest,
-        crate::digest::sha256(&vec![b'x'; (QUEUED + 1) * BATCH])
+        crate::digest::sha256(&vec![b'x'; QUEUED * BATCH])
     );
 }
 
 #[test]
 fn dropping_a_writer_joins_hashing_before_releasing_its_claim() {
     let (_dir, cache) = crate::cache::tests::cache();
-    let url = "https://example.org/join";
-    let Claim::Owned(partial) = cache.claim(url).unwrap() else {
+    let Claim::Owned(partial) = cache.claim("https://example.org/join").unwrap() else {
         panic!("nothing else holds the download");
     };
     let mut writer = partial
         .writer(0, None, Validators::default(), false, false)
         .unwrap();
-    let release = pause_hashing(&mut writer);
-    writer.write_chunk(0, &Bytes::from_static(b"abc")).unwrap();
-    drop(partial);
-    let (done, ended) = mpsc::sync_channel(1);
-    let dropping = thread::spawn(move || {
-        drop(writer);
-        done.send(()).unwrap();
+    let claim = Arc::downgrade(writer._lock.as_ref().unwrap());
+    let (sender, inbox) = mpsc::sync_channel(QUEUED);
+    let (closed, closing) = mpsc::sync_channel(1);
+    let (release, paused) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        while inbox.recv().is_ok() {}
+        closed.send(()).unwrap();
+        paused.recv().unwrap();
+        Ok((Hasher::default(), 0))
     });
-    let before_hashing = ended.recv_timeout(Duration::from_millis(100));
-    let held = matches!(cache.claim(url).unwrap(), Claim::Busy);
+    writer.hasher = HashPipe {
+        sender: Some(sender),
+        worker: Some(worker),
+        gathered: Vec::new(),
+        gathered_bytes: 0,
+        inline: None,
+    };
+    drop(partial);
+    let dropping = thread::spawn(move || drop(writer));
+    let closed = closing.recv_timeout(Duration::from_secs(5));
+    let held = claim.upgrade().is_some();
     release.send(()).unwrap();
     dropping.join().unwrap();
-    assert!(matches!(
-        before_hashing,
-        Err(mpsc::RecvTimeoutError::Timeout)
-    ));
-    assert!(held);
-    ended.recv().unwrap();
-    assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
+    closed.unwrap();
+    assert!(
+        held,
+        "the hash worker was still draining when the claim was released"
+    );
+    assert!(claim.upgrade().is_none());
 }
 
 #[test]

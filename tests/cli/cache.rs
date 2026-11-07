@@ -338,7 +338,7 @@ fn sync_warns_when_gc_registration_fails() -> Result {
 fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     let sandbox = Sandbox::new()?;
     let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
@@ -368,6 +368,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
         .spawn()?;
     let stderr = child.stderr.take().ok_or("missing child stderr")?;
     let (sender, receiver) = std::sync::mpsc::channel();
+    let (done, ended) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         let mut report = String::new();
         for line in BufReader::new(stderr)
@@ -380,6 +381,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
             report.push_str(&line);
             report.push('\n');
         }
+        let _ = done.send(());
         report
     });
     if receiver.recv_timeout(Duration::from_secs(10)).is_err() {
@@ -392,19 +394,13 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
         .args(["-INT", &child.id().to_string()])
         .status()?;
     assert!(signal.success());
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
-            return Err("verification ignored ctrl-c while hashing".into());
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    if ended.recv_timeout(Duration::from_secs(10)).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err("verification ignored ctrl-c while hashing".into());
+    }
+    let status = child.wait()?;
     let report = reader.join().unwrap();
     assert_eq!(status.code(), Some(130), "{report}");
     assert!(report.contains("stopped"), "{report}");
