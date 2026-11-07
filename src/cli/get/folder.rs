@@ -87,14 +87,21 @@ pub(super) fn put_all(
     cache: &Cache,
     folder: &Path,
     targets: &[Target],
+    named: bool,
 ) -> Result<Vec<Outcome>, Error> {
     context.stop.check()?;
-    // an archive that holds nothing still leaves the folder get answers with
-    fs::create_dir_all(folder).map_err(|err| local(folder, &err))?;
-    let mut placer = Placer::in_named_folder(folder)
-        .with_experiments(cache.experiments().clone())
-        .with_threads(context.threads)
-        .with_stop(std::sync::Arc::clone(&context.stop));
+    let mut placer = if named {
+        Placer::in_named_folder(folder)
+    } else {
+        Placer::new(folder)
+    }
+    .with_experiments(cache.experiments().clone())
+    .with_threads(context.threads)
+    .with_stop(std::sync::Arc::clone(&context.stop));
+    // an empty archive still leaves the output folder, bound before later path changes.
+    placer
+        .check_folders(&folder.join(".fetchloom-root"), true)
+        .map_err(|error| local(folder, &error))?;
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut orders = Vec::new();
     for (index, target) in targets.iter().enumerate() {
@@ -452,7 +459,7 @@ mod tests {
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
 
-        let outcomes = put_all(&context, &cache, &folder, &targets).unwrap();
+        let outcomes = put_all(&context, &cache, &folder, &targets, true).unwrap();
 
         assert!(matches!(
             outcomes.as_slice(),
@@ -522,7 +529,7 @@ mod tests {
             false,
             false,
         ));
-        let result = put_all(&context, &cache, &folder, &targets);
+        let result = put_all(&context, &cache, &folder, &targets, true);
         assert!(matches!(result, Err(error) if error.kind == Kind::LocalIo));
         assert_eq!(fs::read(folder.join("a")).unwrap(), b"old");
         assert!(!folder.join("b").exists());
@@ -580,9 +587,55 @@ mod tests {
             false,
         ));
         context.stop.ask();
-        let result = put_all(&context, &cache, &dir.path().join("got"), &targets);
+        let result = put_all(&context, &cache, &dir.path().join("got"), &targets, true);
         let counts = context.work.counts();
         assert_eq!(counts.hardlinks + counts.reflinks + counts.copies, 0);
         assert!(matches!(result, Err(error) if error.kind == Kind::Interrupted));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn generated_roots_cannot_follow_a_link_at_placement_time() {
+        use crate::output::{Level, Output, Style};
+        use crate::project::lock::LockedFile;
+        for named in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let stored = crate::cache::tests::store(&cache, b"pinned");
+            let outside = dir.path().join("outside");
+            fs::create_dir(&outside).unwrap();
+            let folder = dir.path().join("result");
+            std::os::unix::fs::symlink(&outside, &folder).unwrap();
+            let locked = LockedFile {
+                path: "file".into(),
+                size: stored.size,
+                sha256: stored.digest,
+                md5: None,
+                url: "https://example.org/file".into(),
+                unpacks_to: None,
+            };
+            let targets = [Target {
+                dataset: "set",
+                path: "file".into(),
+                size: stored.size,
+                sha256: stored.digest,
+                copy: false,
+                locked: &locked,
+            }];
+            let context = Context::new(Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                },
+                Level::Quiet,
+                false,
+                false,
+            ));
+            let result = put_all(&context, &cache, &folder, &targets, named);
+            assert_eq!(result.is_ok(), named);
+            assert_eq!(outside.join("file").exists(), named);
+        }
     }
 }

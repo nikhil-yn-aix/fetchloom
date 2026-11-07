@@ -616,7 +616,7 @@ async fn finish(
         .map(|target| target.path.clone())
         .collect();
     check(&folder, Some(&placed))?;
-    let outcomes = put_all(context, cache, &folder, &planned.targets)?;
+    let outcomes = put_all(context, cache, &folder, &planned.targets, chosen.is_some())?;
     unpacking::drop_archives(cache, &unpacked, None);
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     let origins: HashMap<&str, Origin> = locked
