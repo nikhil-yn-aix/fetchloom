@@ -565,7 +565,8 @@ impl PartialWriter {
         // read-back must finish before resizing could hide a short read.
         let (digest, md5) = hasher.finish(prefix)?;
         // bytes past the prefix are not in the hash, such as the end of an earlier version
-        if file.metadata()?.len() != prefix {
+        let metadata = file.metadata()?;
+        if metadata.len() != prefix {
             file.set_len(prefix)?;
         }
         // sealed through the handle that wrote it: by name, a link swapped in since would be
@@ -583,7 +584,7 @@ impl PartialWriter {
             lock,
         };
         // in a batch, one flush covers every download before any takes its name
-        match cache.defer(finished) {
+        match cache.defer(finished, &metadata) {
             Ok(stored) => Ok(stored),
             Err(finished) => {
                 file.sync_all()?;

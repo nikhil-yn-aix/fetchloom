@@ -159,11 +159,21 @@ impl Cache {
     /// keeps a finished download for the batch flush, answering as if it were in place, or
     /// hands it back when no batch is open. once a group of downloads waits, they are flushed and
     /// put in place before this one returns.
-    pub(super) fn defer(&self, finished: Finished) -> Result<Stored, Box<Finished>> {
+    pub(super) fn defer(
+        &self,
+        finished: Finished,
+        metadata: &fs::Metadata,
+    ) -> Result<Stored, Box<Finished>> {
         let mut pending = lock(&self.deferred.pending);
         let Some(batch) = pending.as_mut() else {
             return Err(Box::new(finished));
         };
+        #[cfg(target_os = "linux")]
+        if !batch.batch.covers(metadata) {
+            return Err(Box::new(finished));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = metadata;
         // the same bytes from another link in this batch are stored once
         let waiting = !batch.digests.insert(finished.digest);
         let stored = Stored {

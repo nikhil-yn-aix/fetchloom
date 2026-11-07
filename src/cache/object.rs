@@ -57,7 +57,7 @@ impl Cache {
         if !syncfs_reports_errors(&release) {
             return Ok(None);
         }
-        Ok(Some(Batch(File::open(self.root.join("tmp"))?)))
+        Ok(Some(Batch::open(&self.root.join("tmp"))?))
     }
 
     /// on macos fsync only hands a file to the drive, and only `F_FULLFSYNC` empties the drive's
@@ -105,14 +105,31 @@ impl Cache {
 /// new objects written since the batch began, flushed together.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
-pub(crate) struct Batch(File);
+pub(crate) struct Batch {
+    file: File,
+    device: u64,
+}
 
 #[cfg(target_os = "linux")]
 impl Batch {
+    pub(super) fn open(folder: &Path) -> io::Result<Batch> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let file = File::open(folder)?;
+        let device = file.metadata()?.dev();
+        Ok(Batch { file, device })
+    }
+
+    pub(super) fn covers(&self, metadata: &std::fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        self.device == metadata.dev()
+    }
+
     /// flushes everything written to the cache's filesystem. each call reports a write-back
     /// error since the one before, so a batch may flush more than once.
     pub(crate) fn flush(&self) -> io::Result<()> {
-        rustix::fs::syncfs(&self.0)?;
+        rustix::fs::syncfs(&self.file)?;
         Ok(())
     }
 }

@@ -230,3 +230,34 @@ fn flushing_waiting_claims_keeps_the_batch_open() {
     cache.publish_downloads().unwrap();
     assert_eq!(fs::read(cache.object_path(&next.digest)).unwrap(), b"next");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_download_outside_the_batch_filesystem_flushes_itself() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    assert_ne!(
+        fs::metadata("/proc").unwrap().dev(),
+        fs::metadata(cache.root()).unwrap().dev()
+    );
+    lock(&cache.deferred.pending).as_mut().unwrap().batch =
+        Arc::new(super::super::object::Batch::open(Path::new("/proc")).unwrap());
+
+    let stored = finished(
+        &cache,
+        "https://example.org/another-filesystem",
+        b"own flush",
+    );
+
+    assert!(
+        cache.object_path(&stored.digest).is_file(),
+        "a different filesystem cannot wait for this batch's flush"
+    );
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"own flush"
+    );
+    cache.publish_downloads().unwrap();
+}
