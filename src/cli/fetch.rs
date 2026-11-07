@@ -4,7 +4,7 @@
 
 mod again;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -316,6 +316,46 @@ fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
     }
 }
 
+struct Queue {
+    original: std::iter::Enumerate<std::vec::IntoIter<Job>>,
+    hosts: VecDeque<VecDeque<(usize, Job)>>,
+}
+
+impl Queue {
+    fn new(jobs: Vec<Job>, interleave: bool) -> Self {
+        let mut original = jobs.into_iter().enumerate();
+        let mut hosts = VecDeque::<VecDeque<_>>::new();
+        if interleave {
+            let mut by_host = HashMap::new();
+            for (index, job) in original.by_ref() {
+                let host = crate::net::host(&job.fetch.from).to_ascii_lowercase();
+                let next = hosts.len();
+                let group = *by_host.entry(host).or_insert(next);
+                if group == hosts.len() {
+                    hosts.push_back(VecDeque::new());
+                }
+                hosts[group].push_back((index, job));
+            }
+        }
+        Self { original, hosts }
+    }
+}
+
+impl Iterator for Queue {
+    type Item = (usize, Job);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some(mut host) = self.hosts.pop_front() else {
+            return self.original.next();
+        };
+        let job = host.pop_front();
+        if !host.is_empty() {
+            self.hosts.push_back(host);
+        }
+        job
+    }
+}
+
 /// what each job fetched, or why it failed on its own, in the jobs' order. `apart` keeps every
 /// failure but an interruption with its job.
 async fn each(
@@ -331,7 +371,7 @@ async fn each(
     let mut results: Vec<Option<Result<Fetched, Error>>> =
         std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
-    let mut queue = jobs.into_iter().enumerate();
+    let mut queue = Queue::new(jobs, context.exp.on("NET_INTERLEAVE_HOSTS"));
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.jobs * 2;
     let mut done = 0;
@@ -537,6 +577,45 @@ mod tests {
 
     use super::*;
     use crate::output::{Level, Style};
+
+    #[test]
+    fn host_interleaving_keeps_job_identity_and_per_host_order() {
+        for (enabled, expected) in [
+            (false, vec![0, 1, 2, 3, 4, 5]),
+            (true, vec![0, 3, 5, 1, 4, 2]),
+        ] {
+            let jobs: Vec<_> = [
+                "slow.example",
+                "SLOW.example:8443",
+                "slow.example",
+                "fast.example",
+                "fast.example",
+                "other.example",
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, host)| Job {
+                fetch: Fetch::new(Url::parse(&format!("https://{host}/{index}")).unwrap()),
+                label: index.to_string(),
+                dataset: None,
+                again: None,
+            })
+            .collect();
+            let exp = if enabled {
+                crate::exp::Experiments::default().with("NET_INTERLEAVE_HOSTS", "1")
+            } else {
+                crate::exp::Experiments::default()
+            };
+            let queue = Queue::new(jobs, exp.on("NET_INTERLEAVE_HOSTS"));
+            let indexes: Vec<_> = queue
+                .map(|(index, job)| {
+                    assert_eq!(job.label, index.to_string());
+                    index
+                })
+                .collect();
+            assert_eq!(indexes, expected);
+        }
+    }
 
     #[test]
     fn a_download_of_unknown_length_asks_once_it_passes_the_limit() {
