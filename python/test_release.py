@@ -73,3 +73,28 @@ class ReleaseChecks(unittest.TestCase):
 
     def test_malformed_checksum_rows_are_refused(self):
         self.check_all(lambda assets, names, lines: lines.append("not a checksum"), False)
+
+
+class GateDocumentation(unittest.TestCase):
+    def test_local_gate_lists_the_linux_release_and_python_checks(self):
+        required = [
+            "cargo clippy --release --locked -- -D warnings",
+            "python3 -m unittest discover -s python",
+            "python3 -m unittest discover -s bench",
+        ]
+        cases = [
+            (".github/pull_request_template.md", "", None),
+            ("docs/dev/engineering/README.md", "run the full gate:", "## commands"),
+            ("docs/dev/engineering/building-and-testing.md", "## WSL gate", "## xfs loop mount"),
+        ]
+        for path, start, end in cases:
+            text = (ROOT / path).read_text(encoding="utf-8")
+            if start:
+                text = text.split(start, 1)[1]
+            if end:
+                text = text.split(end, 1)[0]
+            for command in required:
+                with self.subTest(path=path, command=command):
+                    self.assertTrue(command in text, f"{path} lacks {command}")
+        ci = (ROOT / "docs/dev/engineering/ci.md").read_text(encoding="utf-8")
+        self.assertTrue(required[0] in ci, "the CI table omits release clippy")

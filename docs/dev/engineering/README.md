@@ -19,7 +19,10 @@ at a milestone, before merging, or after changes across command boundaries, run 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --release --locked -- -D warnings
 cargo test --locked
+python3 -m unittest discover -s python
+python3 -m unittest discover -s bench
 ```
 
 ## commands
@@ -35,9 +38,11 @@ cargo test --locked
 | `cargo test --locked --doc` | runnable rust documentation examples |
 | `cargo fmt --all -- --check` | formatting gate |
 | `cargo clippy --all-targets --locked -- -D warnings` | warnings and configured rust/clippy lints |
+| `cargo clippy --release --locked -- -D warnings` | release-only code and dead-code checks |
 | `cargo test --locked` | full rust gate, including short fuzz runs |
 | `cargo deny --locked check advisories licenses bans sources` | dependency changes and the CI dependency policy |
 | `python3 -m unittest discover -s python` | python wrapper arguments and report handling; use `py -3` on windows |
+| `python3 -m unittest discover -s bench` | benchmark runner, checks and report rendering |
 | `cargo test --locked -- --ignored` | live service checks; [details](building-and-testing.md#python-and-live-tests) |
 | `cargo test --locked --lib fuzz_` | parser fuzz properties in their ordinary test mode |
 

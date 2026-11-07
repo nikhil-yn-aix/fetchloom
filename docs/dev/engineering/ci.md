@@ -24,6 +24,7 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 |---|---|---|
 | `cargo fmt --check` | x86_64 linux | one formatting result for platform-independent source |
 | `cargo clippy --all-targets --locked -- -D warnings` | all five | every target and test must satisfy configured lints |
+| `cargo clippy --release --locked -- -D warnings` | x86_64 linux | release-only code and items used only by debug builds must satisfy the lints |
 | `cargo check --locked --release --target x86_64-apple-darwin` | macos | the x86_64 macos release target, C dependencies included, which the arm64 runner otherwise never compiles; `MACOSX_DEPLOYMENT_TARGET` is 11.0 as in the release |
 | `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |

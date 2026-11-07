@@ -101,7 +101,10 @@ cd ~/fetchloom-gate
 export CARGO_TARGET_DIR="$HOME/fetchloom-target"
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
+cargo clippy --release --locked -- -D warnings
 cargo test --locked
+python3 -m unittest discover -s python
+python3 -m unittest discover -s bench
 ```
 
 keep build output on the linux filesystem. the separate worktree lets windows and linux checks avoid rewriting the same build files. once finished, leave the worktree and remove it with `git -C ~/fetchloom worktree remove ~/fetchloom-gate`.
