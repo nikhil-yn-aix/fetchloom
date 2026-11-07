@@ -307,6 +307,9 @@ fn stand_in(what: &str) -> Sha256 {
 /// source states.
 fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
     let (sha256, size) = cache.stated_md5(&remote.md5?, remote.url.as_str())?;
+    if remote.sha256.is_some_and(|stated| stated != sha256) {
+        return None;
+    }
     remote
         .size
         .is_none_or(|stated| stated == size)
@@ -748,6 +751,70 @@ mod tests {
             carried(&by_url, &remote).is_some(),
             "a stated SHA-256 vouches for the pinned bytes"
         );
+    }
+
+    #[test]
+    fn a_stated_sha256_outweighs_an_md5_hint_without_a_size() {
+        use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+
+        let mut body: serde_json::Value =
+            serde_json::from_slice(&fixture_bytes("osf/root.json")).unwrap();
+        let size = body["data"][0]["attributes"]["size"].as_u64().unwrap();
+        body["data"][0]["attributes"]["size"] = serde_json::Value::Null;
+        let recorded = Recorded::default()
+            .fixture(
+                "https://api.osf.io/v2/nodes/ezcuj/?embed=license&embed=identifiers&related_counts=children",
+                "osf/embedded.json",
+            )
+            .on(
+                "https://api.osf.io/v2/nodes/ezcuj/files/osfstorage/?page%5Bsize%5D=100",
+                200,
+                serde_json::to_vec(&body).unwrap(),
+            );
+        let reference = Reference::parse("osf:ezcuj").unwrap().reference;
+        let listing = block_on(reference.resolve(&recorded)).unwrap();
+        let remote = &listing.files[0];
+        assert_eq!(remote.size, None);
+        let previous = remote.sha256.unwrap();
+        let md5 = remote.md5.unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        cache
+            .save_stated_md5(&md5, remote.url.as_str(), &previous, size)
+            .unwrap();
+        let manifest = Manifest::parse("[datasets.d]\nref = \"osf:ezcuj\"\n").unwrap();
+        let changed = digest::sha256(b"changed bytes");
+        for (sha256, listed_size, known) in [
+            (Some(previous), None, Some((previous, size))),
+            (None, None, Some((previous, size))),
+            (Some(changed), Some(13), Some((changed, 13))),
+            (Some(changed), None, None),
+            (None, Some(13), None),
+        ] {
+            for upgrading in [false, true] {
+                let mut listing = listing.clone();
+                listing.files[0].sha256 = sha256;
+                listing.files[0].size = listed_size;
+                let draft = Draft::new(
+                    "d",
+                    &manifest.datasets["d"],
+                    listing,
+                    None,
+                    upgrading,
+                    &cache,
+                )
+                .unwrap();
+                assert_eq!(draft.files[0].known, known, "{sha256:?}, {listed_size:?}");
+                let jobs = draft.jobs(&cache);
+                assert_eq!(jobs.len(), usize::from(known.is_none()));
+                if let Some((_, job)) = jobs.first() {
+                    assert_eq!(job.fetch.expect.sha256, sha256);
+                    assert_eq!(job.fetch.expect.md5, Some(md5));
+                    assert_eq!(job.fetch.expect.size, listed_size);
+                }
+            }
+        }
+        assert_eq!(recorded.asked().len(), 2);
     }
 
     #[test]

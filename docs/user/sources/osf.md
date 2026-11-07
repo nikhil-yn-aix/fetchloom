@@ -21,7 +21,7 @@ selection patterns match the listed paths before downloading. [pattern rules](..
 
 ## pins
 
-`resolved` keeps the OSF node or file id. each file URL includes its version, and SHA-256 and size pin its bytes.
+`resolved` keeps the OSF node or file id. each file URL includes its version, and SHA-256 and size pin its bytes. when OSF omits a size, its stated SHA-256 still pins the bytes; a remembered MD5 mapping cannot replace that hash.
 
 an OSF node is not an immutable snapshot. resolving the node again, including after a filter change, can select newer file versions. review the lock diff before committing it.
 
