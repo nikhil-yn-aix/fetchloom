@@ -70,6 +70,43 @@ impl Survey {
         survey
     }
 
+    /// [`Survey::read`] for the files under `folder` alone, a folder inside the data folder, as a
+    /// question about one dataset needs. a link on the way from the data folder to `folder`
+    /// leaves nothing listed, as the whole scan never follows one.
+    pub(crate) fn read_within(
+        project: &Project,
+        data_dir: &str,
+        folder: &str,
+        threads: Threads,
+    ) -> Survey {
+        let started = nanos(SystemTime::now());
+        let (mut state, written) = project.state();
+        let prefix = format!("{folder}/");
+        state.files.retain(|path, _| path.starts_with(&prefix));
+        let (disk, temporaries) = if real_below(&project.root, data_dir, folder) {
+            scan(&project.root, folder)
+        } else {
+            (HashMap::new(), Vec::new())
+        };
+        let mut survey = Survey {
+            threads,
+            started,
+            state,
+            disk,
+            listed: HashMap::new(),
+            elsewhere: HashSet::new(),
+            vouched: HashSet::new(),
+            edited: HashSet::new(),
+            needs_writing: false,
+            temporaries,
+        };
+        let other_device = !survey.state.files.is_empty()
+            && apart(&project.root.join(data_dir), &project.own_folder());
+        survey.hash_racy(&project.root, written, other_device);
+        survey.look_through_links(&project.root);
+        survey
+    }
+
     /// on windows, a folder's listing keeps a hardlinked file's size and time as they were when
     /// this link last opened it, so an edit made through another project's link does not show.
     /// opening the file reads them as they are, for the files placed as hardlinks only.
@@ -393,6 +430,21 @@ fn apart(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// whether every folder from the data folder down to `folder` inside it is a real folder.
+fn real_below(root: &Path, data_dir: &str, folder: &str) -> bool {
+    let Some(inner) = folder
+        .strip_prefix(data_dir)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return false;
+    };
+    let mut path = root.join(data_dir);
+    inner.split('/').all(|part| {
+        path.push(part);
+        fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_dir())
+    })
+}
+
 /// every file under the data folder and how it looks, by its path in the project, and the paths
 /// of those under the hidden names placement stages files in. links are neither followed nor
 /// touched.
@@ -535,6 +587,49 @@ mod tests {
         assert_eq!(survey.state.files["data/changed"].look.size, u64::MAX);
         assert_eq!(survey.state.files["data/intact"].look.size, 8);
         assert_eq!(fs::read(path).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn a_survey_within_one_folder_holds_only_that_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let paths = ["data/a/x.csv", "data/a/deep/y.csv", "data/b/z.csv"];
+        for path in paths {
+            fs::create_dir_all(project.root.join(path).parent().unwrap()).unwrap();
+            fs::write(project.root.join(path), path).unwrap();
+        }
+        let mut state = State::default();
+        for path in paths {
+            state.files.insert(
+                path.to_owned(),
+                record(&project.root, path, path.as_bytes(), Method::Copy),
+            );
+        }
+        project.write_state(&state).unwrap();
+        let whole = Survey::read(&project, "data", Threads::default());
+
+        let within = Survey::read_within(&project, "data", "data/a", Threads::default());
+
+        let mut listed: Vec<&String> = within.disk.keys().collect();
+        listed.sort();
+        assert_eq!(listed, ["data/a/deep/y.csv", "data/a/x.csv"]);
+        for path in listed {
+            assert_eq!(within.disk[path], whole.disk[path]);
+            assert_eq!(within.state.files[path], whole.state.files[path]);
+        }
+        assert_eq!(within.state.files.len(), 2);
+        assert_eq!(within.edited, whole.edited);
+        let missing = Survey::read_within(&project, "data", "data/c", Threads::default());
+        assert!(missing.disk.is_empty() && missing.state.files.is_empty());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(project.root.join("data/a"), project.root.join("data/l"))
+                .unwrap();
+            let linked = Survey::read_within(&project, "data", "data/l", Threads::default());
+            assert!(linked.disk.is_empty());
+        }
     }
 
     #[test]

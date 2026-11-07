@@ -51,6 +51,8 @@ pub(crate) struct Cache {
     deferred: Arc<deferred::Deferred>,
     /// the cache-wide lock this run holds, let go when the last clone is dropped.
     held: Option<Arc<File>>,
+    /// staged archive members spread over this many subfolders (`FETCHLOOM_EXP_STAGE_SHARDS`).
+    pub(crate) stage_shards: usize,
 }
 
 #[derive(Debug)]
@@ -134,6 +136,9 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            stage_shards: crate::exp::number("STAGE_SHARDS")
+                .and_then(|shards| usize::try_from(shards.min(256)).ok())
+                .unwrap_or(0),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -170,6 +175,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            stage_shards: 0,
         })
     }
 

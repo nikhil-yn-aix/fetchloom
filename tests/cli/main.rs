@@ -9,6 +9,7 @@ mod caps;
 mod completions;
 mod concurrent;
 mod dry_run;
+mod experiments;
 mod get;
 mod hints;
 mod moved;

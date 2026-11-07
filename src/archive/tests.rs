@@ -183,6 +183,52 @@ fn a_stop_part_way_publishes_nothing() {
 }
 
 #[test]
+fn staging_spread_over_subfolders_stores_the_same_members() {
+    // past one MiB a member is written by the reading thread rather than a writer
+    let mut random = fastrand::Rng::with_seed(7);
+    let large: Vec<u8> = (0..(1 << 20) + 5).map(|_| random.u8(..)).collect();
+    let mut files: Vec<(String, Vec<u8>)> = (0..200)
+        .map(|index| (format!("m/{index}.csv"), format!("{index}\n").into_bytes()))
+        .collect();
+    files.push(("large.bin".to_owned(), large));
+    let files: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        .collect();
+    for format in FAMILIES {
+        let packed = archive(format, &files);
+        let flat = Scratch::new().unpack(format, &packed).unwrap();
+        let mut scratch = Scratch::new();
+        scratch.cache.stage_shards = 16;
+
+        let sharded = scratch.unpack(format, &packed).unwrap();
+
+        assert_eq!(sharded.members, flat.members);
+        assert_eq!(sharded.tree, flat.tree);
+        assert_eq!(sharded.written, flat.written);
+        for member in &sharded.members {
+            let (_, bytes) = files.iter().find(|(path, _)| *path == member.path).unwrap();
+            scratch.assert_stored(member, bytes);
+        }
+        let tmp = scratch.cache.root().join("tmp");
+        assert_eq!(std::fs::read_dir(&tmp).unwrap().count(), 0);
+
+        let mut refused = Scratch::new();
+        refused.cache.stage_shards = 16;
+        let limits = Limits {
+            bytes: 100,
+            ..Limits::default()
+        };
+        assert!(
+            refused
+                .unpack_with(format, &packed, &limits, &|_| false)
+                .is_err()
+        );
+        refused.assert_empty();
+    }
+}
+
+#[test]
 fn names_unpack_in_nfc() {
     for format in FAMILIES {
         let unpacked = Scratch::new()

@@ -48,6 +48,8 @@ pub(crate) struct Placer {
     checks_root: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
+    /// at most this many workers create files in one folder at once (`FETCHLOOM_EXP_FOLDER_CAP`).
+    pub(crate) folder_cap: Option<NonZero<usize>>,
     synced: Option<&'static str>,
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
@@ -152,6 +154,8 @@ impl Placer {
             root,
             checks_root: true,
             folders: HashSet::new(),
+            folder_cap: crate::exp::number("FOLDER_CAP")
+                .and_then(|cap| NonZero::new(usize::try_from(cap).ok()?)),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
@@ -246,7 +250,18 @@ impl Placer {
                 );
             }
             done.push(placed);
-            done.extend(run_all(rest, self.threads, put));
+            if let Some(cap) = self.folder_cap {
+                let folder = |index: usize| {
+                    order(index)
+                        .destination
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_default()
+                };
+                done.extend(run_lanes(&lanes(rest, folder, cap), self.threads, put));
+            } else {
+                done.extend(run_all(rest, self.threads, put));
+            }
         }
         let mut waiting = Vec::new();
         for (index, placed) in done {
@@ -580,6 +595,67 @@ fn spread(orders: impl IntoIterator<Item = (usize, Order)>) -> Vec<usize> {
         .collect();
     ranked.sort_by_key(|(rank, _)| *rank);
     ranked.into_iter().map(|(_, index)| index).collect()
+}
+
+/// `items` split into lanes by the folder each goes to, at most `cap` lanes per folder, longest
+/// first. a lane runs on one thread at a time, so at most `cap` threads create entries in one
+/// folder at once.
+fn lanes(
+    items: &[usize],
+    folder: impl Fn(usize) -> PathBuf,
+    cap: NonZero<usize>,
+) -> Vec<Vec<usize>> {
+    let mut groups: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+    for &index in items {
+        groups.entry(folder(index)).or_default().push(index);
+    }
+    let mut lanes = Vec::new();
+    for group in groups.into_values() {
+        let count = cap.get().min(group.len());
+        let mut split = vec![Vec::new(); count];
+        for (at, index) in group.into_iter().enumerate() {
+            split[at % count].push(index);
+        }
+        lanes.extend(split);
+    }
+    lanes.sort_by_key(|lane| (std::cmp::Reverse(lane.len()), lane.first().copied()));
+    lanes
+}
+
+/// runs `job` on every item of every lane, each thread taking a whole lane at a time. results
+/// come back in no particular order.
+fn run_lanes<R: Send>(
+    lanes: &[Vec<usize>],
+    cap: Threads,
+    job: impl Fn(&usize) -> R + Sync,
+) -> Vec<R> {
+    let items = lanes.iter().map(Vec::len).sum();
+    let threads = workers(items, cap).min(lanes.len());
+    if threads < 2 {
+        return lanes.iter().flatten().map(job).collect();
+    }
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    while let Some(lane) = lanes.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        done.extend(lane.iter().map(&job));
+                    }
+                    done
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| {
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
 }
 
 /// how a caller creates missing folders and reports invalid ones.

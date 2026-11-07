@@ -78,9 +78,20 @@ pub(super) fn put_all(
     let mut placer = Placer::in_named_folder(folder).with_threads(context.threads);
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut orders = Vec::new();
+    let mut looked = context.exp.get_parallel.then(|| {
+        crate::place::run_all(targets, context.threads, |target| {
+            let object = cache.find(&target.sha256, Some(target.size));
+            (
+                object,
+                fs::symlink_metadata(folder.join(&target.path)).is_ok(),
+            )
+        })
+        .into_iter()
+    });
     for (index, target) in targets.iter().enumerate() {
         let destination = folder.join(&target.path);
-        match clear(cache, &mut placer, target, &destination)? {
+        let found = looked.as_mut().and_then(Iterator::next);
+        match clear(cache, &mut placer, target, &destination, found)? {
             Cleared::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
             Cleared::Free { object, replaced } => {
                 // told once placed below
@@ -131,16 +142,21 @@ enum Cleared {
 }
 
 /// keeps a file that already holds the target's bytes, and removes an earlier version the cache
-/// still holds, so the target can be placed.
+/// still holds, so the target can be placed. `found` is the cached object and whether the
+/// destination exists, when they were looked up already.
 fn clear(
     cache: &Cache,
     placer: &mut Placer,
     target: &Target,
     destination: &Path,
+    found: Option<(Option<PathBuf>, bool)>,
 ) -> Result<Cleared, Error> {
-    let object = cache.find(&target.sha256, Some(target.size));
+    let (object, exists) = found.unwrap_or_else(|| {
+        let object = cache.find(&target.sha256, Some(target.size));
+        (object, fs::symlink_metadata(destination).is_ok())
+    });
     let mut replaced = false;
-    if fs::symlink_metadata(destination).is_ok() {
+    if exists {
         if holds(destination, object.as_deref(), target)? {
             return Ok(Cleared::AlreadyThere);
         }
@@ -417,6 +433,74 @@ mod tests {
                 let name = entry.unwrap().file_name().to_string_lossy().into_owned();
                 assert!(!crate::place::is_copy_temporary(&name), "{name}");
             }
+        }
+    }
+
+    #[test]
+    fn lookups_on_several_threads_place_and_tell_the_same() {
+        use crate::cache::tests::store;
+        use crate::output::{Level, Output, Style};
+        use crate::project::lock::LockedFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let contents: Vec<Vec<u8>> = (0..300).map(|n| format!("{n}\n").into_bytes()).collect();
+        for bytes in &contents {
+            store(&cache, bytes);
+        }
+        store(&cache, b"old");
+        let locked: Vec<LockedFile> = contents
+            .iter()
+            .enumerate()
+            .map(|(n, bytes)| LockedFile {
+                path: format!("{}/{n}.csv", n % 3),
+                size: bytes.len() as u64,
+                sha256: crate::digest::sha256(bytes),
+                md5: None,
+                url: format!("https://example.org/{n}.csv"),
+                unpacks_to: None,
+            })
+            .collect();
+        let targets: Vec<Target> = locked
+            .iter()
+            .map(|file| Target {
+                dataset: "got",
+                path: file.path.clone(),
+                sha256: file.sha256,
+                size: file.size,
+                copy: false,
+                locked: file,
+            })
+            .collect();
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        for get_parallel in [false, true] {
+            let folder = dir.path().join(format!("got-{get_parallel}"));
+            fs::create_dir_all(folder.join("0")).unwrap();
+            fs::write(within(&folder, &targets[0].path), b"old").unwrap();
+            fs::write(within(&folder, &targets[3].path), &contents[3]).unwrap();
+            let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
+            context.exp.get_parallel = get_parallel;
+
+            let outcomes = put_all(&context, &cache, &folder, &targets).unwrap();
+
+            for (n, outcome) in outcomes.iter().enumerate() {
+                match n {
+                    0 => assert!(matches!(outcome, Outcome::Replaced(_))),
+                    3 => assert!(matches!(outcome, Outcome::AlreadyThere)),
+                    _ => assert!(matches!(outcome, Outcome::Placed(_)), "{n}"),
+                }
+            }
+            for (target, bytes) in targets.iter().zip(&contents) {
+                assert_eq!(&fs::read(within(&folder, &target.path)).unwrap(), bytes);
+            }
+            let counts = context.work.counts();
+            assert_eq!(counts.reflinks + counts.hardlinks + counts.copies, 299);
         }
     }
 

@@ -842,6 +842,116 @@ fn many_copies_are_placed_and_named_whole() {
 }
 
 #[test]
+fn a_folder_cap_places_the_same_files_and_errors() {
+    let (folder, object) = cache(true);
+    let expected = if makes_hardlinks(folder.path()) {
+        Method::Hardlink
+    } else {
+        Method::Copy
+    };
+    let root = folder.path().join("data");
+    let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
+    placer.folder_cap = NonZero::new(2);
+    // most files share one folder, as an unpacked archive's do
+    let mut destinations: Vec<PathBuf> = (0..300)
+        .map(|index| {
+            let folder = if index % 10 == 0 { "few" } else { "many" };
+            root.join(folder).join(format!("{index}.csv"))
+        })
+        .collect();
+    let taken = root.join("many").join("taken.csv");
+    fs::create_dir_all(taken.parent().unwrap()).unwrap();
+    fs::write(&taken, "mine").unwrap();
+    destinations.insert(150, taken.clone());
+
+    let results = placer.place_all(
+        destinations.len(),
+        |index| Order {
+            object: object.clone(),
+            destination: destinations[index].clone(),
+            writable: false,
+        },
+        Metadata::len,
+    );
+
+    assert_eq!(results.len(), 301);
+    for (index, result) in results.iter().enumerate() {
+        match index {
+            150 => assert_eq!(
+                result.as_ref().unwrap_err().kind(),
+                io::ErrorKind::AlreadyExists
+            ),
+            _ => assert_eq!(
+                *result.as_ref().unwrap(),
+                (expected, CONTENTS.len() as u64),
+                "{index}"
+            ),
+        }
+    }
+    for (index, destination) in destinations.iter().enumerate() {
+        let expected = if index == 150 { "mine" } else { CONTENTS };
+        assert_eq!(fs::read_to_string(destination).unwrap(), expected);
+        assert!(index == 150 || is_read_only(destination));
+    }
+    for folder in ["few", "many"] {
+        let names = placed_names(&root.join(folder));
+        assert!(
+            names.iter().all(|name| !is_copy_temporary(name)),
+            "{names:?}"
+        );
+    }
+}
+
+#[test]
+fn lanes_hold_every_item_once_and_one_folder_each() {
+    let folder_of = |index: usize| PathBuf::from(format!("{}", index % 3));
+    let items: Vec<usize> = (0..100).collect();
+    for cap in [1, 2, 5, 64] {
+        let lanes = lanes(&items, folder_of, NonZero::new(cap).unwrap());
+        let mut seen: Vec<usize> = lanes.iter().flatten().copied().collect();
+        seen.sort_unstable();
+        assert_eq!(seen, items);
+        let mut per_folder = HashMap::new();
+        for lane in &lanes {
+            let folder = folder_of(lane[0]);
+            assert!(lane.iter().all(|index| folder_of(*index) == folder));
+            *per_folder.entry(folder).or_insert(0) += 1;
+        }
+        assert!(per_folder.values().all(|count| *count <= cap), "{cap}");
+        assert!(lanes.windows(2).all(|pair| pair[0].len() >= pair[1].len()));
+    }
+}
+
+#[test]
+fn lanes_keep_each_folder_to_the_cap_at_once() {
+    use std::sync::Mutex;
+
+    let folder_of = |index: usize| index % 2;
+    let items: Vec<usize> = (0..520).collect();
+    let cap = 2;
+    let lanes = lanes(
+        &items,
+        |index| PathBuf::from(folder_of(index).to_string()),
+        NonZero::new(cap).unwrap(),
+    );
+    let active = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    let most = Mutex::new(0);
+    let mut done = run_lanes(&lanes, Threads::default(), |index| {
+        let now = active[folder_of(*index)].fetch_add(1, Ordering::SeqCst) + 1;
+        {
+            let mut most = most.lock().unwrap();
+            *most = (*most).max(now);
+        }
+        std::thread::sleep(std::time::Duration::from_micros(200));
+        active[folder_of(*index)].fetch_sub(1, Ordering::SeqCst);
+        *index
+    });
+    done.sort_unstable();
+    assert_eq!(done, items);
+    assert!(*most.lock().unwrap() <= cap);
+}
+
+#[test]
 fn neighbouring_orders_go_to_different_folders() {
     let object = Path::new("object");
     let paths: Vec<PathBuf> = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"]

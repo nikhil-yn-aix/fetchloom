@@ -58,6 +58,18 @@ struct Context {
     unsaved: std::sync::Mutex<Vec<net::Credential>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
     cautioned: std::sync::atomic::AtomicBool,
+    exp: Experiments,
+}
+
+/// the experiment switches a command reads, each off unless its variable is set.
+#[derive(Clone, Copy, Debug, Default)]
+struct Experiments {
+    /// a settled sync skips data.lock parsing and the network (`FETCHLOOM_EXP_SETTLED_FIRST`).
+    settled_first: bool,
+    /// `path` reads data.lock and plans once, scanning one dataset (`FETCHLOOM_EXP_PATH_SCOPED`).
+    path_scoped: bool,
+    /// `get` looks up objects on several threads before placing (`FETCHLOOM_EXP_GET_PARALLEL`).
+    get_parallel: bool,
 }
 
 impl Context {
@@ -76,6 +88,7 @@ impl Context {
             needed: std::sync::Mutex::default(),
             unsaved: std::sync::Mutex::default(),
             cautioned: std::sync::atomic::AtomicBool::default(),
+            exp: Experiments::default(),
         }
     }
 
@@ -351,6 +364,11 @@ pub(crate) fn run() -> ExitCode {
     );
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
+    context.exp = Experiments {
+        settled_first: crate::exp::on("SETTLED_FIRST"),
+        path_scoped: crate::exp::on("PATH_SCOPED"),
+        get_parallel: crate::exp::on("GET_PARALLEL"),
+    };
     if args.version {
         let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
         // what a bug report needs: which build, on which system

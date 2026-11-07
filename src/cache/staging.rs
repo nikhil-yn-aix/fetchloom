@@ -5,6 +5,7 @@ use std::fs::{self, File, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use super::partial::open_unfollowed;
@@ -17,6 +18,8 @@ pub(crate) struct Staging {
     cache: Cache,
     folder: PathBuf,
     lock: Option<File>,
+    /// which of the cache's `stage_shards` subfolders this staging has made.
+    shards: Box<[AtomicBool]>,
 }
 
 impl Cache {
@@ -35,6 +38,9 @@ impl Cache {
                         cache: self.clone(),
                         folder,
                         lock: None,
+                        shards: (0..self.stage_shards)
+                            .map(|_| AtomicBool::new(false))
+                            .collect(),
                     };
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
@@ -134,6 +140,15 @@ impl Cache {
             if entry.file_name() == "lock" || entry.file_name() == "unlocked" {
                 continue;
             }
+            if entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+            {
+                let (inside, emptied) = self.clear_shard(&entry.path(), stop, not_removed);
+                removed += inside;
+                cleared &= emptied;
+                continue;
+            }
             match self.remove_inside(&entry.path()) {
                 Ok(()) => removed += 1,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -158,29 +173,98 @@ impl Cache {
         }
         removed
     }
+
+    /// removes the files in one subfolder of a staging folder, then the subfolder. says how many
+    /// files went and whether the subfolder is gone.
+    fn clear_shard(
+        &self,
+        shard: &Path,
+        stop: &Stop,
+        not_removed: &mut Vec<PathBuf>,
+    ) -> (u64, bool) {
+        let Ok(entries) = fs::read_dir(shard) else {
+            not_removed.push(shard.to_path_buf());
+            return (0, false);
+        };
+        let mut removed = 0;
+        for entry in entries {
+            if stop.is_asked() {
+                return (removed, false);
+            }
+            let Ok(entry) = entry else {
+                not_removed.push(shard.to_path_buf());
+                return (removed, false);
+            };
+            match self.remove_inside(&entry.path()) {
+                Ok(()) => removed += 1,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    not_removed.push(entry.path());
+                    return (removed, false);
+                }
+            }
+        }
+        match self
+            .check_inside(shard)
+            .and_then(|()| self.volume.remove_folder(shard))
+        {
+            Ok(()) => (removed, true),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => (removed, true),
+            Err(_) => {
+                not_removed.push(shard.to_path_buf());
+                (removed, false)
+            }
+        }
+    }
 }
 
 /// a large member can keep growing without changing its folder's timestamp.
 fn old_staging(folder: &Path, now: SystemTime, stop: &Stop) -> bool {
-    let old = |modified| now.duration_since(modified).is_ok_and(|age| age > GRACE);
     fs::metadata(folder)
         .and_then(|metadata| metadata.modified())
-        .is_ok_and(old)
-        && fs::read_dir(folder).is_ok_and(|mut entries| {
-            entries.all(|entry| {
-                !stop.is_asked()
-                    && entry
-                        .and_then(|entry| entry.metadata())
+        .is_ok_and(|modified| is_old(now, modified))
+        && all_old(folder, true, now, stop)
+}
+
+/// whether every entry in `folder` is past the grace period, and with `deeper`, every entry in
+/// its subfolders too, where staging spread over subfolders keeps its members.
+fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
+    fs::read_dir(folder).is_ok_and(|mut entries| {
+        entries.all(|entry| {
+            !stop.is_asked()
+                && entry.is_ok_and(|entry| {
+                    let inside = deeper
+                        && entry
+                            .file_type()
+                            .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink());
+                    entry
+                        .metadata()
                         .and_then(|metadata| metadata.modified())
-                        .is_ok_and(old)
-            })
+                        .is_ok_and(|modified| is_old(now, modified))
+                        && (!inside || all_old(&entry.path(), false, now, stop))
+                })
         })
+    })
+}
+
+fn is_old(now: SystemTime, modified: SystemTime) -> bool {
+    now.duration_since(modified).is_ok_and(|age| age > GRACE)
 }
 
 impl Staging {
     pub(crate) fn new_object(self: &Arc<Self>) -> io::Result<NewObject> {
-        self.cache
-            .new_object_in(&self.folder, Some(Arc::clone(self)))
+        if self.shards.is_empty() {
+            return self
+                .cache
+                .new_object_in(&self.folder, Some(Arc::clone(self)));
+        }
+        let shard = fastrand::usize(..self.shards.len());
+        let folder = self.folder.join(format!("{shard:02x}"));
+        if !self.shards[shard].load(Ordering::Relaxed) {
+            real_folder(&folder, FolderUse::Cache)?;
+            self.shards[shard].store(true, Ordering::Relaxed);
+        }
+        self.cache.new_object_in(&folder, Some(Arc::clone(self)))
     }
 }
 
@@ -195,12 +279,75 @@ impl Drop for Staging {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Write;
+    use std::time::Duration;
 
     use super::super::tests::cache;
+    use super::*;
 
+    #[test]
+    fn spread_staging_makes_objects_in_subfolders_and_clears_them() {
+        let (_dir, mut cache) = cache();
+        cache.stage_shards = 4;
+        let staging = cache.staging().unwrap();
+        let mut objects: Vec<NewObject> = (0..16).map(|_| staging.new_object().unwrap()).collect();
+        for object in &mut objects {
+            object.write_all(b"member").unwrap();
+        }
+        let shards: Vec<_> = fs::read_dir(&staging.folder)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .collect();
+        assert!(!shards.is_empty() && shards.len() <= 4);
+        let staged: usize = shards
+            .iter()
+            .map(|shard| fs::read_dir(shard.path()).unwrap().count())
+            .sum();
+        assert_eq!(staged, 16);
+        drop(objects);
+        drop(staging);
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_sweep_clears_spread_staging_a_killed_run_left() {
+        let (_dir, cache) = cache();
+        let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
+        fs::create_dir_all(folder.join("03")).unwrap();
+        fs::write(folder.join("lock"), b"").unwrap();
+        fs::write(folder.join("03").join("0123456789abcdef.new"), b"part").unwrap();
+
+        let removed = cache.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
+
+        assert_eq!(removed, 1);
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_young_member_in_a_subfolder_keeps_staging_without_a_lock() {
+        let (_dir, cache) = cache();
+        let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
+        fs::create_dir_all(folder.join("03")).unwrap();
+        let member = folder.join("03").join("0123456789abcdef.new");
+        fs::write(&member, b"part").unwrap();
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        fs::File::options()
+            .write(true)
+            .open(&member)
+            .unwrap()
+            .set_modified(later + GRACE)
+            .unwrap();
+
+        assert!(all_old(&folder, false, later, &Stop::default()));
+        assert!(!all_old(&folder, true, later, &Stop::default()));
+        assert!(!old_staging(&folder, later, &Stop::default()));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn clearing_never_follows_a_link_swapped_in_for_the_folder() {
         let (dir, cache) = cache();

@@ -301,6 +301,7 @@ async fn sync_add(
         false,
         Some((name.to_owned(), listing)),
         Read::Planned(seen),
+        None,
     )
     .await
     .map_err(|error| restore(work.project, before, name, error))
@@ -465,6 +466,7 @@ async fn again(
         false,
         None,
         Read::Planned(seen),
+        None,
     )
     .await?;
     // a project that became a git repository after its first add gets its ignore rule now
@@ -574,6 +576,11 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Some(hold(context, &project, "sync").await?)
     };
     let (text, manifest) = project.manifest()?;
+    if context.exp.settled_first && !dry_run && !args.locked {
+        let (lock_changed, placement) =
+            settled_first(context, &project, &manifest, &text, args.force).await?;
+        return Ok(synced(context, project, &manifest, lock_changed, placement));
+    }
     let read = project.lock_and_text()?;
     if args.locked {
         let Some((lock, _)) = &read else {
@@ -608,8 +615,63 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         args.force,
         None,
         Read::Settled(&seen),
+        None,
     )
     .await?;
+    Ok(synced(context, project, &manifest, lock_changed, placement))
+}
+
+/// a sync that tries the settled shortcut before data.lock is parsed or the network is built,
+/// neither of which it needs. otherwise it goes the long way with the survey it made.
+async fn settled_first(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    text: &str,
+    force: bool,
+) -> Result<(bool, Placement), Error> {
+    let lock_text = project.lock_text()?;
+    let seen = Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: lock_text
+            .as_ref()
+            .map(|text| digest::sha256(text.as_bytes())),
+    };
+    let cache = open_cache()?;
+    let mut survey = Survey::read(project, &manifest.data_dir, context.threads);
+    survey.check_doubted(&project.root, &cache)?;
+    disk::audit(project, &survey, &cache)?;
+    if let Some(placement) = place::untouched(project, manifest, &survey, &seen, true)? {
+        register_with(&cache, project, &context.output);
+        return Ok((false, placement));
+    }
+    let old = {
+        let _span = tracing::debug_span!("read_lock").entered();
+        lock_text.map(|text| Lock::parse(&text)).transpose()?
+    };
+    let work = Loop::new(context, project, Arc::new(net(context, manifest)), cache);
+    // the shortcut was tried already
+    sync_all(
+        &work,
+        manifest,
+        old,
+        &Upgrade::Nothing,
+        force,
+        None,
+        Read::Planned(&seen),
+        Some(survey),
+    )
+    .await
+}
+
+/// what a sync tells once it is done, and its report.
+fn synced(
+    context: &Context,
+    project: Project,
+    manifest: &Manifest,
+    lock_changed: bool,
+    placement: Placement,
+) -> Report {
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
@@ -649,12 +711,12 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             ));
         }
     }
-    Ok(Report {
+    Report {
         project: project.root,
         lock_changed,
         placement: Some(placement),
         ..Report::default()
-    })
+    }
 }
 
 /// `sync --dry-run`: what syncing would change, given data.lock as `read` and both files as
@@ -786,6 +848,9 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
+    if context.exp.path_scoped {
+        return scoped_path(context, &project, &manifest, name, file).await;
+    }
     check_member(&project, &manifest, name, file)?;
     if !ready(context, &project, &manifest, name)? {
         let _held = hold(context, &project, "path").await?;
@@ -817,12 +882,25 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                 false,
                 None,
                 Read::Planned(&seen),
+                None,
             )
             .await?;
         }
     }
     let lock = project.lock()?.unwrap_or_default();
     let targets = plan::from_cache(&manifest, &lock, &open_cache()?)?.targets;
+    answer(context, &project, &manifest, name, file, &targets)
+}
+
+/// says where dataset `name`, or its `file`, sits once placed, given every target of the plan.
+fn answer(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+    file: Option<&str>,
+    targets: &[plan::Target],
+) -> Result<PathBuf, Error> {
     if !targets.iter().any(|target| target.dataset == name) {
         return Err(Error::new(
             Kind::Usage,
@@ -832,7 +910,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             "set extract = false on {name} in data.toml, then run `fetchloom sync` to keep the packed archive"
         )));
     }
-    let folder = plan::folder(&manifest, name);
+    let folder = plan::folder(manifest, name);
     let relative = match file.filter(|file| !file.is_empty()) {
         None => folder,
         Some(file) => {
@@ -854,6 +932,123 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
     context.output.answer(&path.display().to_string());
     Ok(path)
+}
+
+/// `path` as it answers otherwise, reading data.lock and planning once per look rather than
+/// three times, opening the cache once, and surveying only the folder of dataset `name`.
+async fn scoped_path(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+    file: Option<&str>,
+) -> Result<PathBuf, Error> {
+    let cache = open_cache()?;
+    if let Some(lock) = project.lock()?
+        && let Some(planned) = scoped_ready(context, project, manifest, name, file, &lock, &cache)?
+    {
+        return answer(context, project, manifest, name, file, &planned.targets);
+    }
+    let _held = hold(context, project, "path").await?;
+    // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
+    // done once they hold the lock, so they answer without syncing in turn
+    let (text, manifest) = project.manifest()?;
+    known(&manifest, name, "path")?;
+    let read = project.lock_and_text()?;
+    if let Some((lock, _)) = &read
+        && let Some(planned) = scoped_ready(context, project, &manifest, name, file, lock, &cache)?
+    {
+        return answer(context, project, &manifest, name, file, &planned.targets);
+    }
+    let work = Loop::new(
+        context,
+        project,
+        Arc::new(net(context, &manifest)),
+        cache.clone(),
+    );
+    let seen = Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: read
+            .as_ref()
+            .map(|(_, text)| digest::sha256(text.as_bytes())),
+    };
+    sync_all(
+        &work,
+        &manifest,
+        read.map(|(lock, _)| lock),
+        &Upgrade::Nothing,
+        false,
+        None,
+        Read::Planned(&seen),
+        None,
+    )
+    .await?;
+    let lock = project.lock()?.unwrap_or_default();
+    let targets = plan::from_cache(&manifest, &lock, &cache)?.targets;
+    answer(context, project, &manifest, name, file, &targets)
+}
+
+/// [`check_member`] and [`ready`] over one read of data.lock and one plan, which it returns when
+/// the dataset is ready, looking only at the dataset's folder.
+fn scoped_ready<'l>(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    name: &str,
+    file: Option<&str>,
+    lock: &'l Lock,
+    cache: &crate::cache::Cache,
+) -> Result<Option<plan::Plan<'l>>, Error> {
+    let fresh = lock.get(name).is_some_and(|locked| {
+        manifest
+            .datasets
+            .get(name)
+            .is_some_and(|entry| locked.spec == lock::spec(entry))
+    });
+    if !fresh {
+        return Ok(None);
+    }
+    let planned = plan::from_cache(manifest, lock, cache)?;
+    if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
+        return Ok(None);
+    }
+    let folder = plan::folder(manifest, name);
+    if let Some(file) = file.filter(|file| !file.is_empty()) {
+        let wanted = format!("{folder}/{file}");
+        let mine = || {
+            planned
+                .targets
+                .iter()
+                .filter(|target| target.dataset == name)
+        };
+        if !mine()
+            .any(|target| target.path == wanted || target.path.starts_with(&format!("{wanted}/")))
+        {
+            let inside: Vec<&str> = mine()
+                .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
+                .collect();
+            // a dataset with no files at all gets the fuller answer that explains why
+            if !inside.is_empty() {
+                return Err(not_in(name, file, &inside));
+            }
+        }
+    }
+    let survey = Survey::read_within(project, &manifest.data_dir, &folder, context.threads);
+    let doubted = survey.doubted(&project.root, cache);
+    let ready = planned
+        .targets
+        .iter()
+        .filter(|target| target.dataset == name)
+        .all(|target| {
+            !doubted.contains(&target.path)
+                && survey.state.files.get(&target.path).is_some_and(|placed| {
+                    placed.sha256 == target.sha256
+                        && survey.disk.get(&target.path) == Some(&placed.look)
+                        && !survey.edited.contains(&target.path)
+                        && (!target.copy || placed.writable)
+                })
+        });
+    Ok(ready.then_some(planned))
 }
 
 /// rejects a member only when the current lock and cached trees prove it cannot exist.
@@ -986,7 +1181,12 @@ enum Read<'a> {
 }
 
 /// the lock, the cache and the data folder brought in line, in that order, and the state left
-/// recording data.toml and data.lock as `read` and as this run leaves them.
+/// recording data.toml and data.lock as `read` and as this run leaves them. `surveyed` is the
+/// data folder as a caller already surveyed it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a sync that tried its shortcut first hands over the survey it made"
+)]
 async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -995,10 +1195,16 @@ async fn sync_all(
     force: bool,
     given: Option<(String, Listing)>,
     read: Read<'_>,
+    surveyed: Option<Survey>,
 ) -> Result<(bool, Placement), Error> {
-    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
-    survey.check_doubted(&work.project.root, &work.cache)?;
-    disk::audit(work.project, &survey, &work.cache)?;
+    let survey = if let Some(survey) = surveyed {
+        survey
+    } else {
+        let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+        survey.check_doubted(&work.project.root, &work.cache)?;
+        disk::audit(work.project, &survey, &work.cache)?;
+        survey
+    };
     let seen = match read {
         Read::Settled(seen) => {
             if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
@@ -1098,10 +1304,14 @@ pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
 /// registers the project with the cache. gc keeps what registered projects need, so a failure
 /// here only risks a later download.
 fn register(work: &Loop<'_>) {
-    if let Err(err) = work.cache.register(&work.project.root) {
-        work.context.output.warn(&format!(
+    register_with(&work.cache, work.project, &work.context.output);
+}
+
+fn register_with(cache: &crate::cache::Cache, project: &Project, output: &Output) {
+    if let Err(err) = cache.register(&project.root) {
+        output.warn(&format!(
             "could not register this project with {}: {err}. gc may not keep this project's files; check the cache folder's permissions and run the command again",
-            work.cache.root().display()
+            cache.root().display()
         ));
     }
 }
@@ -1545,6 +1755,7 @@ mod tests {
             false,
             Some(given),
             Read::Planned(&unread()),
+            None,
         ))
         .unwrap_err();
 
@@ -1601,6 +1812,7 @@ mod tests {
             false,
             Some(given),
             Read::Planned(&unread()),
+            None,
         ))
         .unwrap_err();
 

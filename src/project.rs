@@ -30,6 +30,8 @@ pub(crate) struct Project {
 pub(crate) struct Held {
     lock: Option<File>,
     owner: Option<PathBuf>,
+    /// skips the owner record's fsync; all zeros read as empty (`FETCHLOOM_EXP_OWNER_NOSYNC`).
+    owner_nosync: bool,
 }
 
 pub(crate) enum Hold {
@@ -67,7 +69,14 @@ impl Held {
             }
         };
         let published = (|| {
-            fill(file, record)?;
+            if self.owner_nosync {
+                // the record holds no data, and a crash leaves it absent, empty or zeroed, which
+                // all read as stale; flushing never changes what other processes see
+                let mut file = file;
+                file.write_all(record)?;
+            } else {
+                fill(file, record)?;
+            }
             // windows and WSL do not share OS locks, so an empty reservation could be
             // reclaimed while its writer is still publishing.
             match fs::hard_link(&temporary, path) {
@@ -108,7 +117,9 @@ impl Held {
                 Err(err) => return Err(err),
             };
             let owner = serde_json::from_slice::<Owner>(&bytes).ok();
-            let stale = if bytes.is_empty() {
+            let empty =
+                bytes.is_empty() || (self.owner_nosync && bytes.iter().all(|&byte| byte == 0));
+            let stale = if empty {
                 now.duration_since(modified)
                     .is_ok_and(|age| age > Duration::from_secs(10))
             } else {
@@ -222,11 +233,17 @@ impl Project {
     /// data.lock with the text it was read from, or nothing when the project has none yet.
     pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
+        let Some(text) = self.lock_text()? else {
+            return Ok(None);
+        };
+        span.record("bytes", text.len());
+        Ok(Some((Lock::parse(&text)?, text)))
+    }
+
+    /// data.lock's text, unparsed, or nothing when the project has none yet.
+    pub(crate) fn lock_text(&self) -> Result<Option<String>, Error> {
         match fs::read_to_string(self.root.join(lock::FILE)) {
-            Ok(text) => {
-                span.record("bytes", text.len());
-                Ok(Some((Lock::parse(&text)?, text)))
-            }
+            Ok(text) => Ok(Some(text)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
                 Kind::ProjectInvalid,
@@ -298,9 +315,13 @@ impl Project {
                 None
             }
         };
-        Held { lock, owner: None }
-            .claim(&folder.join("owner"), command, now)
-            .map_err(|err| Error::io("could not claim the project owner", &err))
+        Held {
+            lock,
+            owner: None,
+            owner_nosync: crate::exp::on("OWNER_NOSYNC"),
+        }
+        .claim(&folder.join("owner"), command, now)
+        .map_err(|err| Error::io("could not claim the project owner", &err))
     }
 
     /// the data folder, made sure to be a real folder inside the project with no link on the way,
@@ -600,6 +621,7 @@ mod tests {
         let competing = Held {
             lock: None,
             owner: None,
+            owner_nosync: false,
         };
         assert!(matches!(
             competing.claim(&path, "remove", SystemTime::now()).unwrap(),
@@ -612,6 +634,72 @@ mod tests {
             .collect();
         files.sort();
         assert_eq!(files, [".gitignore", "lock", "owner"]);
+        drop(held);
+        assert!(!path.exists());
+    }
+
+    fn claimed(path: &Path, owner_nosync: bool, now: SystemTime) -> Hold {
+        let held = Held {
+            lock: None,
+            owner: None,
+            owner_nosync,
+        };
+        held.claim(path, "sync", now).unwrap()
+    }
+
+    #[test]
+    fn an_unflushed_owner_is_the_same_record_published_the_same_way() {
+        let (_dir, project) = project(&[(".fetchloom/.gitignore", "*\n")]);
+        let path = project.own_folder().join("owner");
+        let now = SystemTime::now();
+        let mut records = Vec::new();
+        for owner_nosync in [false, true] {
+            if crate::cache::tests::hardlinks(&project.root) {
+                OWNER_PUBLISHED.set(Some(|path| {
+                    let owner: Owner = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                    assert_eq!(owner.command, "sync");
+                }));
+            }
+            let Hold::Held(held) = claimed(&path, owner_nosync, now) else {
+                panic!("free")
+            };
+            assert!(
+                OWNER_PUBLISHED.take().is_none(),
+                "publication was not observed"
+            );
+            records.push(fs::read(&path).unwrap());
+            let mut files: Vec<_> = fs::read_dir(project.own_folder())
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .collect();
+            files.sort();
+            assert_eq!(files, [".gitignore", "owner"]);
+            assert!(matches!(claimed(&path, owner_nosync, now), Hold::Owner(_)));
+            drop(held);
+            assert!(!path.exists());
+        }
+        assert_eq!(records[0], records[1]);
+    }
+
+    #[test]
+    fn a_zeroed_owner_is_stale_like_an_empty_one_only_unflushed() {
+        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+        let path = project.own_folder().join("owner");
+        let zeroed = [0_u8; 96];
+        fs::write(&path, zeroed).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        let fresh = modified + Duration::from_secs(5);
+        assert!(matches!(claimed(&path, true, fresh), Hold::Owner(_)));
+        let old = modified + Duration::from_secs(11);
+        assert!(matches!(claimed(&path, false, old), Hold::Owner(_)));
+        assert_eq!(fs::read(&path).unwrap(), zeroed);
+
+        let Hold::Held(held) = claimed(&path, true, old) else {
+            panic!("an old zeroed owner is stale when owners are not flushed")
+        };
+        let owner: Owner = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(owner.command, "sync");
         drop(held);
         assert!(!path.exists());
     }
@@ -691,6 +779,7 @@ mod tests {
         let held = Held {
             lock: None,
             owner: None,
+            owner_nosync: false,
         };
         assert!(matches!(
             held.claim(&path, "remove", std::time::SystemTime::now())
