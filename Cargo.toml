@@ -48,7 +48,6 @@ keyring = "4.2"
 liblzma = { version = "0.4.9", default-features = false }
 md-5 = "0.11"
 percent-encoding = "2.3"
-reflink-copy = { version = "0.1", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["cookies", "http2", "rustls-no-provider", "system-proxy"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # std keeps windows file ids unstable, and the crate forbids unsafe code, so this tells a placed
@@ -74,6 +73,10 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }
 
+# block cloning on other systems; linux uses rustix
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reflink-copy = { version = "0.1", default-features = false }
+
 # musl's own allocator is slow under many threads, so the static linux builds use mimalloc. other
 # targets keep the system allocator
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
@@ -90,6 +93,8 @@ winapi-util = "0.1"
 # targets under cargo bolero
 bolero = "0.13"
 insta = { version = "1.49", features = ["filters"] }
+# the cli sandbox probes clone support on every platform
+reflink-copy = { version = "0.1", default-features = false }
 
 # the md-5 package's library is named md5, which cargo machete does not match to the package
 [package.metadata.cargo-machete]
