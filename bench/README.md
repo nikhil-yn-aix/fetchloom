@@ -83,13 +83,13 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
 
-to compare a change behind a fetchloom setting, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` then prints, per case, how many paired rounds the variant won and its median wall, cpu, memory and disk over the plain build's.
+to compare a fetchloom setting accepted by the measured build, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` then prints, per case, how many paired rounds the variant won and its median wall, cpu, memory and disk over the plain build's. `FETCHLOOM_SPLIT=1` asks eligible large downloads to split from the first answer.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles lan \
-  --scenarios s3 --fs ext4 --rounds 7 --variant lean:FETCHLOOM_EXP_LEAN_PARTIAL=1 \
-  --out "$FL_BENCH_ROOT/results/ab/lean"
-python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/lean"
+  --scenarios s1 --fs ext4 --rounds 7 --variant split:FETCHLOOM_SPLIT=1 \
+  --out "$FL_BENCH_ROOT/results/ab/split"
+python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/split"
 ```
 
 s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
