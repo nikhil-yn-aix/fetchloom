@@ -131,5 +131,18 @@ class ProvenanceTests(unittest.TestCase):
             self.assertNotEqual(records[0]["sha256"], records[1]["sha256"])
 
 
+class MetadataWriteTests(unittest.TestCase):
+    def test_failed_serialization_preserves_previous_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            path = root / "meta.json"
+            run.write_metadata(path, dict(version=1))
+            previous = path.read_bytes()
+            with self.assertRaises(TypeError):
+                run.write_metadata(path, dict(unserializable=object()))
+            self.assertEqual(path.read_bytes(), previous)
+            self.assertEqual(list(root.iterdir()), [path])
+
+
 if __name__ == "__main__":
     unittest.main()

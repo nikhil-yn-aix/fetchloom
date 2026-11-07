@@ -205,6 +205,58 @@ def versions(services):
     return result
 
 
+def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=None):
+    expected = dataset["expected_sha256"]
+    service = dataset["service"]
+    row = dict(kind="live", service=service, scenario=service, tool=name, round=number, warmup=False,
+               quick=dataset["quick"], filesystem="ext4", profile="live", status="failed",
+               count=len(expected), file_size=dataset["bytes"])
+    try:
+        tools.reset(work)
+        for folder in ("home", "cache", "scratch"):
+            (work / folder).mkdir()
+        env = tools.Tool(fetchloom).env(work)
+        env.update(HF_HOME=str(work / "cache" / "hf"), HF_XET_CACHE=str(work / "cache" / "xet"),
+                   HF_HUB_CACHE=str(work / "cache" / "hf" / "hub"),
+                   HUGGINGFACE_HUB_CACHE=str(work / "cache" / "hf" / "hub"),
+                   HF_TOKEN_PATH=str(work / "home" / "hf-token"), HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
+                   KAGGLEHUB_CACHE=str(work / "cache" / "kaggle"), HF_HUB_DISABLE_TELEMETRY="1")
+        argv = command(name, dataset, work, fetchloom)
+        row["command"] = run.exact_command(argv, work)
+        row["command"]["cwd"] = str(work)
+        if (work / "download.py").exists():
+            row["command"]["download.py"] = (work / "download.py").read_text()
+        meta["commands"][f"{service}/{name}"] = row["command"]
+        row["environment"] = {key: value for key, value in env.items()
+                              if key in ("HOME", "XDG_CACHE_HOME", "FETCHLOOM_CACHE", "TMPDIR",
+                                         "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_XET_CACHE",
+                                         "KAGGLEHUB_CACHE", "HF_TOKEN_PATH", "HF_HUB_DISABLE_IMPLICIT_TOKEN",
+                                         "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "HF_HUB_DISABLE_TELEMETRY",
+                                         "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL")}
+        run.write_metadata(out / "meta.json", meta)
+        logfile = out / f"{service}-{number}-{name}.log"
+        lab.drop_caches([])
+        before = run.free_bytes(work)
+        row.update(run.measure(argv, work, env, logfile, timeout, cpus=cpus))
+        os.sync()
+        row["free_before_bytes"] = before
+        row["free_after_bytes"] = run.free_bytes(work)
+        row["disk_bytes"] = before - row["free_after_bytes"]
+        output_root = Path((work / "output-path").read_text()) if (work / "output-path").exists() else work / "output"
+        actual = fingerprint(output_root, client=name)
+        row["files"] = actual
+        row["comparison_to_reference"] = compare(expected, actual)
+        if row["exit_code"] == 0 and not row["timeout"] and row["comparison_to_reference"]["status"] in ("identical", "layout-difference"):
+            row["status"] = "passed"
+        elif name == "kagglehub" and any(word in logfile.read_text(errors="replace").lower()
+                                        for word in ("credential", "unauthorized", "401", "403", "authenticate", "captcha")):
+            row.update(status="skipped", reason="kagglehub refused anonymous access; see command log")
+    except Exception as error:
+        row["error"] = f"{type(error).__name__}: {error}"
+    run.append(out / "runs.jsonl", row)
+    return row
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
@@ -220,88 +272,53 @@ def main():
         parser.error(f"write results under {lab.ROOT}")
     if not (lab.ROOT / "owned.json").exists():
         parser.error("run lab.py setup first")
-    lock = lab.exclusive()
-    if (args.out / "runs.jsonl").exists():
-        parser.error("output already contains runs")
-    args.fs = ["ext4"]
-    args.profiles = ["live"]
-    args.fetchloom = args.fetchloom.resolve()
-    args.out.mkdir(parents=True, exist_ok=True)
-    server_cpus = lab.pin_server(args.cpus)
-    meta = run.metadata(args, {"fetchloom": tools.Fetchloom(args.fetchloom)})
-    meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
-    meta.update(kind="live", datasets=[], rounds=1 if args.quick else 5)
-    meta["tool_versions"].update(versions(args.services))
-    rng = random.Random(args.seed)
-    failures = 0
-    for service in args.services:
-        reference_root = args.out / "references" / service
-        try:
-            dataset = catalog(service, args.quick)
-            expected = reference(dataset, reference_root)
-            dataset["expected_sha256"] = expected
-            meta["datasets"].append(dataset)
-        except Exception as error:
-            reason = f"public metadata or reference unavailable: {type(error).__name__}: {error}"
-            run.append(args.out / "runs.jsonl", dict(kind="live", service=service, status="skipped", reason=reason, quick=args.quick))
-            print(f"{service}: skipped: {reason}", flush=True)
-            continue
-        for number in range(1, meta["rounds"] + 1):
-            order = ["fetchloom", dataset["tool"]]
-            rng.shuffle(order)
-            meta["orders"].append(dict(service=service, round=number, tools=order))
-            pair = {}
-            for name in order:
-                work = lab.ROOT / "fs" / "ext4" / "live-work"
-                tools.reset(work)
-                for folder in ("home", "cache", "scratch"):
-                    (work / folder).mkdir()
-                env = tools.Tool(args.fetchloom).env(work)
-                env.update(HF_HOME=str(work / "cache" / "hf"), HF_XET_CACHE=str(work / "cache" / "xet"),
-                           HF_HUB_CACHE=str(work / "cache" / "hf" / "hub"),
-                           HUGGINGFACE_HUB_CACHE=str(work / "cache" / "hf" / "hub"),
-                           HF_TOKEN_PATH=str(work / "home" / "hf-token"), HF_HUB_DISABLE_IMPLICIT_TOKEN="1",
-                           KAGGLEHUB_CACHE=str(work / "cache" / "kaggle"), HF_HUB_DISABLE_TELEMETRY="1")
-                argv = command(name, dataset, work, args.fetchloom)
-                meta["commands"][f"{service}/{name}"] = run.exact_command(argv, work)
-                if (work / "download.py").exists():
-                    meta["commands"][f"{service}/{name}"]["download.py"] = (work / "download.py").read_text()
-                logfile = args.out / f"{service}-{number}-{name}.log"
-                lab.drop_caches([])
-                before = run.free_bytes(work)
-                row = dict(kind="live", service=service, scenario=service, tool=name, round=number, warmup=False,
-                           quick=args.quick, filesystem="ext4", profile="live", status="failed",
-                           command=meta["commands"][f"{service}/{name}"], count=len(expected), file_size=dataset["bytes"])
-                row["environment"] = {key: value for key, value in env.items()
-                                      if key in ("HOME", "XDG_CACHE_HOME", "FETCHLOOM_CACHE", "TMPDIR",
-                                                 "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_XET_CACHE",
-                                                 "KAGGLEHUB_CACHE", "HF_TOKEN_PATH", "HF_HUB_DISABLE_IMPLICIT_TOKEN",
-                                                 "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "HF_HUB_DISABLE_TELEMETRY")}
-                row.update(run.measure(argv, work, env, logfile, args.timeout, cpus=args.cpus))
-                os.sync()
-                row["free_before_bytes"] = before
-                row["free_after_bytes"] = run.free_bytes(work)
-                row["disk_bytes"] = before - row["free_after_bytes"]
-                output_root = Path((work / "output-path").read_text()) if (work / "output-path").exists() else work / "output"
-                actual = fingerprint(output_root, client=name)
-                row["files"] = actual
-                row["comparison_to_reference"] = compare(expected, actual)
-                if row["exit_code"] == 0 and not row["timeout"] and row["comparison_to_reference"]["status"] in ("identical", "layout-difference"):
-                    row["status"] = "passed"
-                elif name == "kagglehub" and any(word in logfile.read_text(errors="replace").lower()
-                                                for word in ("credential", "unauthorized", "401", "403", "authenticate", "captcha")):
-                    row.update(status="skipped", reason="kagglehub refused anonymous access; see command log")
-                failures += row["status"] == "failed"
-                pair[name] = actual
-                run.append(args.out / "runs.jsonl", row)
-                print(f"{service} round {number}/{meta['rounds']} {name}: {row['status']} {row['wall_seconds']:.3f}s", flush=True)
-                shutil.rmtree(work)
-            run.append(args.out / "runs.jsonl", dict(kind="comparison", service=service, round=number,
-                                                     comparison=compare(pair["fetchloom"], pair[dataset["tool"]])))
-        (args.out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-    (args.out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
-    lock.close()
-    return 1 if failures else 0
+    with lab.exclusive():
+        if (args.out / "runs.jsonl").exists():
+            parser.error("output already contains runs")
+        args.fs = ["ext4"]
+        args.profiles = ["live"]
+        args.fetchloom = args.fetchloom.resolve()
+        args.out.mkdir(parents=True, exist_ok=True)
+        server_cpus = lab.pin_server(args.cpus)
+        meta = run.metadata(args, {"fetchloom": tools.Fetchloom(args.fetchloom)})
+        meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
+        meta.update(kind="live", datasets=[], rounds=1 if args.quick else 5)
+        meta["tool_versions"].update(versions(args.services))
+        run.write_metadata(args.out / "meta.json", meta)
+        rng = random.Random(args.seed)
+        failures = 0
+        for service in args.services:
+            reference_root = args.out / "references" / service
+            try:
+                dataset = catalog(service, args.quick)
+                expected = reference(dataset, reference_root)
+                dataset["expected_sha256"] = expected
+                meta["datasets"].append(dataset)
+            except Exception as error:
+                reason = f"public metadata or reference unavailable: {type(error).__name__}: {error}"
+                run.append(args.out / "runs.jsonl", dict(kind="live", service=service, status="skipped", reason=reason, quick=args.quick))
+                print(f"{service}: skipped: {reason}", flush=True)
+                continue
+            for number in range(1, meta["rounds"] + 1):
+                order = ["fetchloom", dataset["tool"]]
+                rng.shuffle(order)
+                meta["orders"].append(dict(service=service, round=number, tools=order))
+                run.write_metadata(args.out / "meta.json", meta)
+                pair = {}
+                for name in order:
+                    work = lab.ROOT / "fs" / "ext4" / "live-work"
+                    row = one_run(name, dataset, work, args.out, number, args.fetchloom, meta, args.timeout, cpus=args.cpus)
+                    failures += row["status"] == "failed"
+                    pair[name] = row.get("files", {})
+                    wall = f"{row['wall_seconds']:.3f}s" if "wall_seconds" in row else row.get("error", "no timing")
+                    print(f"{service} round {number}/{meta['rounds']} {name}: {row['status']} {wall}", flush=True)
+                    if work.exists():
+                        shutil.rmtree(work)
+                run.append(args.out / "runs.jsonl", dict(kind="comparison", service=service, round=number,
+                                                         comparison=compare(pair["fetchloom"], pair[dataset["tool"]])))
+            run.write_metadata(args.out / "meta.json", meta)
+        run.write_metadata(args.out / "meta.json", meta)
+        return 1 if failures else 0
 
 
 if __name__ == "__main__":

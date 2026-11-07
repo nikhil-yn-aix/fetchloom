@@ -291,6 +291,24 @@ def metadata(args, adapters):
                 installed_packages=python_packages())
 
 
+def write_metadata(path, value):
+    pending = path.with_suffix(path.suffix + ".new")
+    try:
+        with pending.open("w") as output:
+            json.dump(value, output, indent=2, allow_nan=False)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        pending.replace(path)
+        folder = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    finally:
+        pending.unlink(missing_ok=True)
+
+
 def append(path, row):
     with path.open("a") as f:
         f.write(json.dumps(row) + "\n")
@@ -463,7 +481,7 @@ def main():
                 order = list(eligible)
                 rng.shuffle(order)
                 meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))
-                meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+                write_metadata(meta_path, meta)
                 for name in order:
                     workdir = lab.ROOT / "fs" / fs / "work"
                     if name in preparation_errors:
@@ -481,7 +499,7 @@ def main():
                     print(f"{fs}/{case['profile']}/{case['id']} round {number}/{rounds} {name}: {row['status']} {wall}", flush=True)
                     if workdir.exists():
                         shutil.rmtree(workdir)
-    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    write_metadata(meta_path, meta)
     print(f"recorded {failures} failed runs (including warmups); results: {args.out}")
     lock.close()
     return 1 if failures else 0
