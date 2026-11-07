@@ -579,7 +579,12 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     } else {
         open_cache()?
     };
-    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
+    let survey = Survey::read(
+        &project,
+        &new_manifest.data_dir,
+        context.threads,
+        &context.exp,
+    );
     let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
     if dry_run {
         let preview = placing.preview_removal();
@@ -996,7 +1001,7 @@ fn ready_path(
     }
     // reject a known impossible member before a missing file can trigger downloads.
     let answer = planned_path(project, manifest, &planned, name, file)?;
-    let survey = Survey::read(project, &manifest.data_dir, context.threads);
+    let survey = Survey::read(project, &manifest.data_dir, context.threads, &context.exp);
     let doubted = survey.doubted(&project.root, cache)?;
     let ready = planned
         .targets
@@ -1035,7 +1040,12 @@ async fn sync_all(
     given: Option<(String, Listing)>,
     read: Read<'_>,
 ) -> Result<(bool, Placement), Error> {
-    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    let mut survey = Survey::read(
+        work.project,
+        &manifest.data_dir,
+        work.context.threads,
+        &work.context.exp,
+    );
     survey.check_doubted(&work.project.root, &work.cache)?;
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
@@ -1088,7 +1098,12 @@ async fn preview_all(
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
 ) -> Result<(bool, Preview), Error> {
-    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
+    let mut survey = Survey::read(
+        work.project,
+        &manifest.data_dir,
+        work.context.threads,
+        &work.context.exp,
+    );
     survey.check_doubted(&work.project.root, &work.cache)?;
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen

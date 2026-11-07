@@ -834,7 +834,12 @@ mod tests {
         }
         project.write_state(&state).unwrap();
         let before = nanos(SystemTime::now());
-        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let survey = Survey::read(
+            &project,
+            "data",
+            crate::threads::Threads::default(),
+            &crate::exp::Experiments::default(),
+        );
         let surveyed = nanos(SystemTime::now());
         let started = survey.started;
         assert!((before..=surveyed).contains(&started));
@@ -922,7 +927,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let (project, manifest, leftover, own) = interrupted(dir.path());
-        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let survey = Survey::read(
+            &project,
+            "data",
+            crate::threads::Threads::default(),
+            &crate::exp::Experiments::default(),
+        );
         let placing = Placing {
             project: &project,
             manifest: &manifest,
@@ -944,7 +954,12 @@ mod tests {
     fn a_leftover_copy_keeps_a_settled_sync_from_skipping_its_sweep() {
         let dir = tempfile::tempdir().unwrap();
         let (project, manifest, _, _) = interrupted(dir.path());
-        let mut survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let mut survey = Survey::read(
+            &project,
+            "data",
+            crate::threads::Threads::default(),
+            &crate::exp::Experiments::default(),
+        );
         let seen = Seen {
             manifest: crate::digest::sha256(b"data.toml"),
             lock: Some(crate::digest::sha256(b"data.lock")),

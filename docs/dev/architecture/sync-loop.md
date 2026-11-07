@@ -55,6 +55,10 @@ flowchart TD
 
 settling writes newer state so later runs need not hash the same intact files. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
 
+### parallel metadata scan experiment
+
+`FETCHLOOM_EXP_PROJECT_PARALLEL_SCAN=1` keeps directory traversal and no-follow file-type checks serial, then reads file metadata with the placement worker helper. each batch holds at most 4,096 directory entries and preserves discovery order. worker groups obey available parallelism and `FETCHLOOM_THREADS`; the default keeps the original serial scan. state parsing, racy hashing, aliases and hardlink audits use the same rules in both modes.
+
 ### settled-sync shortcut
 
 `Synced` stores the SHA-256 of the exact manifest and lock text plus a completion flag. `untouched` requires matching inputs, complete state, matching recorded files and no unsettled scan work. it skips relocking, archive-member records and planning, but still registers the project with the cache. `sync_all` hashes the lock text `write_lock` wrote, so the lock is rendered once.
