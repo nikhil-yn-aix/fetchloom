@@ -133,6 +133,78 @@ fn a_dataverse_token_goes_only_to_the_installation_it_names() {
 }
 
 #[test]
+fn a_dataverse_host_keeps_its_port_and_nothing_else() {
+    let parse = |host: &str| Account::parse("dataverse", Some(host));
+    for (typed, account) in [
+        ("dv.lab:8443", "dv.lab:8443"),
+        ("https://DV.lab:8443/", "dv.lab:8443"),
+        ("dv.lab:443", "dv.lab"),
+        ("https://dv.lab", "dv.lab"),
+        ("[::1]:8443", "[::1]:8443"),
+    ] {
+        assert_eq!(
+            parse(typed).unwrap(),
+            Account::Dataverse(account.to_owned()),
+            "{typed}"
+        );
+    }
+    for typed in [
+        "user:pw@dv.lab",
+        "https://user@dv.lab/",
+        "dv.lab/path",
+        "dv.lab?x=1",
+        "dv.lab#top",
+        "dv.lab:port",
+        "",
+    ] {
+        let error = parse(typed).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage, "{typed}");
+        assert!(!error.message.contains("pw"), "{}", error.message);
+    }
+    let account = parse("dv.lab:8443").unwrap();
+    let found = Found {
+        origin: Origin::Keyring,
+        secret: "k".to_owned(),
+        login: None,
+    };
+    assert_eq!(account.credential(&found).unwrap().host, "dv.lab:8443");
+    assert_eq!(
+        account.check().unwrap().url.as_str(),
+        "https://dv.lab:8443/api/users/:me"
+    );
+    assert_eq!(
+        account.command(),
+        "fetchloom auth login dataverse --host dv.lab:8443"
+    );
+}
+
+#[test]
+fn a_dataverse_url_with_a_port_names_that_installation() {
+    let home = tempfile::tempdir().unwrap();
+    let var = machine(
+        home.path(),
+        &[
+            ("DATAVERSE_URL", "https://dv.lab:8443/"),
+            ("DATAVERSE_API_TOKEN", "dv"),
+        ],
+    );
+    assert_eq!(dataverses(&var), ["dv.lab:8443"]);
+    let account = Account::Dataverse("dv.lab:8443".into());
+    assert_eq!(account.find(&var).map(|f| f.secret).as_deref(), Some("dv"));
+    assert_eq!(
+        Account::Dataverse("dv.lab".into())
+            .find(&var)
+            .map(|f| f.secret),
+        None
+    );
+    assert!(
+        credentials(&var)
+            .iter()
+            .any(|c| c.host == "dv.lab:8443" && c.header == "x-dataverse-key")
+    );
+}
+
+#[test]
 fn signing_in_saves_where_the_sources_own_tools_read() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path();

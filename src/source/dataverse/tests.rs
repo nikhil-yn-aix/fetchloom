@@ -303,3 +303,22 @@ fn access_errors_do_not_suggest_unscoped_credentials() {
         );
     }
 }
+
+/// a key is saved under the install's port when that is not 443, so a download from that port
+/// finds it.
+#[test]
+fn an_install_on_another_port_keeps_its_port_in_the_account() {
+    let account = |text: &str| Dataset::parse(text).unwrap().account();
+    for (text, host) in [
+        ("dv.lab:8443/doi:10.1/X", "dv.lab:8443"),
+        ("dv.lab:443/doi:10.1/X", "dv.lab"),
+        ("DV.lab/file:1", "dv.lab"),
+        ("[::1]:8443/doi:10.1/X", "[::1]:8443"),
+    ] {
+        assert_eq!(
+            account(text),
+            crate::auth::Account::Dataverse(host.to_owned()),
+            "{text}"
+        );
+    }
+}

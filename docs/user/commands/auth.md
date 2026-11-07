@@ -18,7 +18,7 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a host name such as `data.example.edu`. `--host` names a dataverse installation; harvard's is the default.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a host name such as `data.example.edu`. `--host` names a dataverse installation; harvard's is the default. it takes a host name, with its port when that is not 443, as `--host dv.example.edu:8443`, and refuses a login, path or query.
 
 ## signing in
 
@@ -45,7 +45,7 @@ answering no keeps the key for that command only. a key the source refuses is ne
 
 a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable only by you: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
 
-each key is sent over https to its own host only, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there. an osf key also goes to `osf.io` and `files.osf.io` on any hop, since osf's download links start on the one and send you to the other.
+each key is sent over https to its own host only, on port 443 unless it was saved for another port, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there. an osf key also goes to `osf.io` and `files.osf.io` on any hop, since osf's download links start on the one and send you to the other.
 
 ## scripts and CI
 

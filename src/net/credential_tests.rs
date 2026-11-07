@@ -213,6 +213,92 @@ fn a_bare_dataverse_token_has_no_host_to_send_it_to() {
     assert!(crate::auth::credentials(&var).is_empty());
 }
 
+fn keyed(hosts: &[&str]) -> Net {
+    let credentials = hosts
+        .iter()
+        .map(|host| Credential {
+            host: (*host).to_owned(),
+            header: "authorization",
+            value: format!("key {host}"),
+            every_hop: false,
+        })
+        .collect();
+    Net::new(
+        Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials,
+            split: crate::net::Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    )
+}
+
+/// a dataverse on another port gets its key there, while a key for port 443 never reaches
+/// another port of the same host, nor the other way round, as curl's CVE-2022-27776 was.
+#[test]
+fn a_key_for_another_port_reaches_that_port_only() {
+    let net = keyed(&["dv.lab:8443", "dv.lab"]);
+    let client = &net.wire().unwrap().client;
+    let sent = |url: &str| {
+        let url = Url::parse(url).unwrap();
+        let request = net.request(client, &url, true).build().unwrap();
+        request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .map(|value| value.to_str().unwrap().to_owned())
+    };
+    for url in ["https://dv.lab:8443/api/x", "https://DV.LAB:8443/api/x"] {
+        assert_eq!(sent(url).as_deref(), Some("key dv.lab:8443"), "{url}");
+    }
+    for url in ["https://dv.lab/api/x", "https://dv.lab:443/api/x"] {
+        assert_eq!(sent(url).as_deref(), Some("key dv.lab"), "{url}");
+    }
+    for url in [
+        "https://dv.lab:9443/x",
+        "http://dv.lab:8443/x",
+        "http://dv.lab/x",
+        "https://other.lab:8443/x",
+        "https://sub.dv.lab:8443/x",
+    ] {
+        assert_eq!(sent(url), None, "{url}");
+    }
+}
+
+#[test]
+fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
+    for (start, away, key) in [
+        (
+            "https://dv.lab:8443/start",
+            "https://dv.lab/away",
+            "key dv.lab:8443",
+        ),
+        (
+            "https://dv.lab/start",
+            "https://dv.lab:8443/away",
+            "key dv.lab",
+        ),
+    ] {
+        let net = keyed(&["dv.lab:8443", "dv.lab"]);
+        net.trust(["dv.lab".to_owned()]);
+        let client = transport();
+        let start = Url::parse(start).unwrap();
+        let (local, serving) = server(&[away.to_owned(), start.join("back").unwrap().to_string()]);
+        let answer = block_on(net.send(&start, |request| {
+            let request = request.build().unwrap();
+            client.get(local.clone()).headers(request.headers().clone())
+        }));
+        assert!(answer.is_ok());
+        assert_eq!(
+            serving.join().unwrap(),
+            [Some(key.to_owned()), None, None],
+            "{start}"
+        );
+    }
+}
+
 #[test]
 fn a_redirect_cannot_pick_up_another_sources_credentials() {
     let net = net();

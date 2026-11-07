@@ -23,7 +23,8 @@ pub(crate) enum Account {
     Zenodo,
     Figshare,
     Osf,
-    /// one installation: a dataverse key works only on the server that made it
+    /// one installation: a dataverse key works only on the server that made it. the host, with
+    /// its port when that is not 443
     Dataverse(String),
     /// a username and password for one host, kept in `.netrc`, as for nasa earthdata or physionet
     Login(String),
@@ -108,18 +109,17 @@ impl Account {
             "zenodo" | "zenodo.org" => Account::Zenodo,
             "figshare" | "figshare.com" => Account::Figshare,
             "osf" | "osf.io" => Account::Osf,
-            "dataverse" => {
-                match host.map_or_else(|| HARVARD.to_owned(), clean_host) {
-                    host if one_word(&host) => Account::Dataverse(host),
-                    host => {
-                        return Err(Error::new(
+            "dataverse" => match host {
+                None => Account::Dataverse(HARVARD.to_owned()),
+                Some(host) => Account::Dataverse(dataverse_host(host).ok_or_else(|| {
+                    // what was typed is not repeated, since it may hold a password
+                    Error::new(
                         Kind::Usage,
-                        format!("\"{}\" is not a host name", host.escape_debug()),
+                        "--host takes a dataverse installation's host name, with its port when that is not 443",
                     )
-                    .help("use it as `fetchloom auth login dataverse --host dataverse.example.edu`"));
-                    }
-                }
-            }
+                    .help("use it as `fetchloom auth login dataverse --host dataverse.example.edu`, or with a port as `--host dataverse.example.edu:8443`")
+                })?),
+            },
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
             other if other.contains('.') && one_word(other) && !other.contains(['/', ':', '@']) => {
@@ -422,7 +422,7 @@ impl Account {
                 let named = var("DATAVERSE_URL")
                     .and_then(|value| value.into_string().ok())
                     .and_then(|value| Url::parse(&value).ok())
-                    .and_then(|url| url.host_str().map(str::to_ascii_lowercase));
+                    .and_then(|url| installation(&url));
                 (named.as_deref() == Some(host.as_str()))
                     .then(|| set("DATAVERSE_API_TOKEN"))
                     .flatten()
@@ -510,7 +510,7 @@ pub(crate) fn dataverses(var: Var<'_>) -> Vec<String> {
     if let Some(host) = var("DATAVERSE_URL")
         .and_then(|value| value.into_string().ok())
         .and_then(|value| Url::parse(&value).ok())
-        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .and_then(|url| installation(&url))
         && !hosts.contains(&host)
     {
         hosts.push(host);
@@ -564,13 +564,37 @@ fn one_word(host: &str) -> bool {
     !host.is_empty() && !host.contains(|c: char| c.is_whitespace() || c.is_control() || c == '"')
 }
 
-fn clean_host(host: &str) -> String {
-    let host = host.trim().trim_end_matches('/');
-    let host = host
+/// a dataverse installation as its account names it, from what a person typed: the host, with
+/// its port when that is not 443. none for anything else, such as a login, a path or a query.
+pub(crate) fn dataverse_host(typed: &str) -> Option<String> {
+    let typed = typed.trim();
+    // the URL parser drops tabs and line breaks, which would join two words into one host
+    if !one_word(typed) {
+        return None;
+    }
+    let bare = typed
         .strip_prefix("https://")
-        .or_else(|| host.strip_prefix("http://"))
-        .unwrap_or(host);
-    host.split('/').next().unwrap_or(host).to_ascii_lowercase()
+        .or_else(|| typed.strip_prefix("http://"))
+        .unwrap_or(typed);
+    let url = Url::parse(&format!("https://{bare}")).ok()?;
+    let plain = url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none();
+    if !plain {
+        return None;
+    }
+    installation(&url)
+}
+
+/// the installation a dataverse URL is on: its host, with its port when that is not 443.
+fn installation(url: &Url) -> Option<String> {
+    let host = url.host_str()?.to_ascii_lowercase();
+    Some(match url.port().filter(|port| *port != 443) {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
 
 fn bearer(token: &str) -> String {

@@ -37,9 +37,11 @@ const REDIRECTS: usize = 10;
 /// requests running at once to one host, so no server sees fetchloom as a flood.
 const PER_HOST: usize = 4;
 
-/// a token from where its source keeps it, sent only to its own host and only over https.
+/// a token from where its source keeps it, sent only to its own host and port and only over
+/// https.
 #[derive(Clone)]
 pub(crate) struct Credential {
+    /// the host, with `:port` when the key belongs to another port than 443.
     pub(crate) host: String,
     pub(crate) header: &'static str,
     pub(crate) value: String,
@@ -139,7 +141,7 @@ pub(crate) struct Net {
     wire: OnceLock<Result<Wire, Error>>,
     offline: Offline,
     typed: address::Typed,
-    credentials: Vec<(String, HeaderName, HeaderValue, bool)>,
+    credentials: Vec<Key>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -149,6 +151,30 @@ pub(crate) struct Net {
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
+}
+
+/// a credential as requests carry it: to one host and port.
+struct Key {
+    host: String,
+    port: u16,
+    name: HeaderName,
+    value: HeaderValue,
+    every_hop: bool,
+}
+
+/// the host and port a credential's host names: lowercase, with port 443 unless it names
+/// another. none when it is no plain host.
+fn key_origin(host: &str) -> Option<(String, u16)> {
+    let url = Url::parse(&format!("https://{host}/")).ok()?;
+    let plain = url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none();
+    if !plain {
+        return None;
+    }
+    Some((url.host_str()?.to_owned(), url.port_or_known_default()?))
 }
 
 /// the HTTP clients and the proxies their requests go through.
@@ -225,19 +251,26 @@ impl Wire {
 
 impl Net {
     pub(crate) fn new(options: Options, work: Arc<Work>, stop: Arc<Stop>, notify: Notify) -> Net {
-        // one value per header and host: the first, so a key just signed in with wins over an
-        // older one for the same host
+        // one value per header, host and port: the first, so a key just signed in with wins over
+        // an older one for the same host
         let mut seen = std::collections::HashSet::new();
         let credentials = options
             .credentials
             .into_iter()
             .filter_map(|credential| {
+                let (host, port) = key_origin(&credential.host)?;
                 let name = HeaderName::from_static(credential.header);
                 let mut value = HeaderValue::from_str(&credential.value).ok()?;
                 value.set_sensitive(true);
-                Some((credential.host, name, value, credential.every_hop))
+                Some(Key {
+                    host,
+                    port,
+                    name,
+                    value,
+                    every_hop: credential.every_hop,
+                })
             })
-            .filter(|(host, name, ..)| seen.insert((host.to_ascii_lowercase(), name.clone())))
+            .filter(|key| seen.insert((key.host.clone(), key.port, key.name.clone())))
             .collect();
         Net {
             wire: OnceLock::new(),
@@ -290,7 +323,7 @@ impl Net {
     pub(crate) fn credential_hosts(&self) -> Vec<&str> {
         self.credentials
             .iter()
-            .map(|(host, ..)| host.as_str())
+            .map(|key| key.host.as_str())
             .collect()
     }
 
@@ -382,7 +415,8 @@ impl Net {
     }
 
     /// a GET with the user agent and, when `credentials` allows, the credential for this exact
-    /// host.
+    /// host and port, over https only. a key for port 443 never goes to another port of its
+    /// host, as curl's CVE-2022-27776 let one.
     fn request(
         &self,
         client: &reqwest::Client,
@@ -390,13 +424,18 @@ impl Net {
         credentials: bool,
     ) -> reqwest::RequestBuilder {
         let mut request = client.get(url.clone());
-        let secure = url.scheme() == "https" && url.port_or_known_default() == Some(443);
-        if secure && let Some(host) = url.host_str() {
-            for (owner, name, value, every_hop) in &self.credentials {
-                if (credentials || *every_hop) && host.eq_ignore_ascii_case(owner) {
+        if url.scheme() == "https"
+            && let Some(host) = url.host_str()
+        {
+            let port = url.port_or_known_default();
+            for key in &self.credentials {
+                if (credentials || key.every_hop)
+                    && port == Some(key.port)
+                    && host.eq_ignore_ascii_case(&key.host)
+                {
                     // the header name only; the value is the secret
-                    tracing::debug!(host, header = %name, "sending a stored credential");
-                    request = request.header(name.clone(), value.clone());
+                    tracing::debug!(host, header = %key.name, "sending a stored credential");
+                    request = request.header(key.name.clone(), key.value.clone());
                 }
             }
         }
