@@ -177,6 +177,11 @@ fn help_json_teaches_every_command_in_one_call() -> Result {
         .as_array()
         .ok_or("no options")?;
     assert!(options.iter().any(|option| option["name"] == "--json"));
+    assert!(
+        options
+            .iter()
+            .any(|option| option["name"] == "--version" && option["short"] == "-V")
+    );
     let one = serde_json::from_slice::<Value>(&sandbox.run(&["help", "get", "--json"])?.stdout)?;
     assert_eq!(one["result"]["commands"].as_array().map(Vec::len), Some(1));
     assert!(!String::from_utf8_lossy(&output.stdout).contains('\u{1b}'));

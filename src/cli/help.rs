@@ -164,7 +164,7 @@ struct Topic {
 /// what `fetchloom help --json` returns.
 #[derive(Serialize)]
 struct Tree {
-    /// the options every command takes
+    /// the options fetchloom itself takes: those every command takes, and `--version`
     options: Vec<Argument>,
     commands: Vec<Described>,
 }
@@ -230,12 +230,15 @@ fn described(command: &clap::Command, parent: &str) -> Vec<Described> {
     found
 }
 
-/// `command`'s own arguments, or with `global` the options every command takes.
-fn arguments(command: &clap::Command, global: bool) -> Vec<Argument> {
+/// `command`'s own arguments, or with `top` the options fetchloom itself takes: those every
+/// command takes, and `--version`.
+fn arguments(command: &clap::Command, top: bool) -> Vec<Argument> {
     command
         .get_arguments()
-        .filter(|arg| !arg.is_hide_set() && arg.is_global_set() == global)
-        .filter(|arg| !matches!(arg.get_id().as_str(), "help" | "version") || global)
+        .filter(|arg| !arg.is_hide_set())
+        .filter(|arg| {
+            top || !arg.is_global_set() && !matches!(arg.get_id().as_str(), "help" | "version")
+        })
         .map(|arg| {
             let value = arg
                 .get_value_names()
@@ -326,6 +329,23 @@ mod tests {
             .unwrap();
         assert_eq!(links.short, None);
         assert_eq!(links.value, None);
+    }
+
+    #[test]
+    fn the_help_document_lists_the_version_option() {
+        let options = arguments(&args::Args::command(), true);
+        let version = options
+            .iter()
+            .find(|option| option.name == "--version")
+            .unwrap();
+        assert_eq!(version.short.as_deref(), Some("-V"));
+        assert_eq!(version.value, None);
+        for global in ["--json", "--help", "-C"] {
+            assert!(
+                options.iter().any(|option| option.name == global),
+                "{global}"
+            );
+        }
     }
 
     /// the words in `text` shaped like fetchloom's own variables.
