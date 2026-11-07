@@ -20,6 +20,8 @@ fetchloom auth logout [options] <account>
 
 `<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a host name such as `data.example.edu`. `--host` names a dataverse installation; harvard's is the default. it takes a host name, with its port when that is not 443, as `--host dv.example.edu:8443`, and refuses a login, path or query.
 
+a URL pasted as an account name is rejected. its login and secret query values stay masked in the error, including with `--json`.
+
 ## signing in
 
 `fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it:

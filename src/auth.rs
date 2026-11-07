@@ -130,7 +130,7 @@ impl Account {
                     Kind::Usage,
                     format!(
                         "fetchloom does not know an account called \"{}\"",
-                        name.escape_debug()
+                        crate::net::mask_query(name).escape_debug()
                     ),
                 )
                 .help(format!(

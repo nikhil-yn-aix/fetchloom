@@ -77,7 +77,7 @@ JSON is one completed document, not a stream of progress events. it holds schema
 - never depend on color alone to convey an error or completion.
 - snapshot filters remove paths, ports, times and rates. inspect unfiltered output when changing a value those filters can hide.
 - literal error kinds are stable script interfaces. prose can improve without renaming them.
-- masked display URLs do not sanitize raw URL values stored elsewhere.
+- masked display URLs do not sanitize raw URL values stored elsewhere. semantic argument errors, such as an unknown auth account, need the same masking as clap errors.
 - a panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`.
 
 ## tests

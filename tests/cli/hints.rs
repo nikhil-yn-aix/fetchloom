@@ -237,3 +237,24 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+#[test]
+fn errors_messages_account_typos_never_echo_link_secrets() -> Result {
+    let sandbox = Sandbox::new()?;
+    for account in [
+        "https://example.org/?token=EM_CANARY",
+        "https://user:EM_CANARY@example.org/",
+    ] {
+        for json in [false, true] {
+            let mut args = vec!["auth", "login", account];
+            if json {
+                args.push("--json");
+            }
+            let output = sandbox.run(&args)?;
+            assert_eq!(output.status.code(), Some(2));
+            let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+            assert!(!shown.contains("EM_CANARY"), "{shown}");
+        }
+    }
+    Ok(())
+}
