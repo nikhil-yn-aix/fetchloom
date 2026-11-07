@@ -82,3 +82,5 @@ patterns select the files a source lists, before download and before a server-su
 ## encoding and validation
 
 manifest files are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys fail; a nearby spelling is suggested when one is available.
+
+diagnostics show only the line number when a cited line contains a reference, including inline tables, or when invalid TOML prevents identifying reference boundaries. reference text can hold credentials, so it is not copied into those diagnostics.

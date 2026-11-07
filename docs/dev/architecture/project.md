@@ -26,7 +26,7 @@
 | `data.lock` | resolved references, SHA-256, size and optional archive tree hash | malformed, duplicate-name or unsupported locks fail; silently resolving anew could pin different bytes |
 | `.fetchloom/state` | what this machine placed and how it looked | unreadable or unsupported state counts as empty; matching files must then be checked before adoption |
 
-`Manifest` uses `toml_edit` so add and remove can preserve human formatting. unknown keys fail. the lock writer sorts datasets and files for stable diffs. `canonical::read` accepts the writer's narrow format quickly; other valid TOML falls back to the general parser and the same path checks.
+`Manifest` uses `toml_edit` so add and remove can preserve human formatting. unknown keys fail. manifest citations omit a line's text when it overlaps a parsed reference span; invalid TOML has no trusted spans and cites positions only. this also protects inline tables and escaped keys without scanning every reference for every citation. the lock writer sorts datasets and files for stable diffs. `canonical::read` accepts the writer's narrow format quickly; other valid TOML falls back to the general parser and the same path checks.
 
 `Look` stores size and modification time, not the full filesystem metadata object. `Placed` also records the digest, dataset, method, writable mode and last checked time. `Synced` stores exact input hashes and completeness for the [settled shortcut](sync-loop.md#settled-sync-shortcut).
 

@@ -39,12 +39,26 @@ pub(crate) struct Entry {
 impl Manifest {
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
+        let root = document.as_table();
+        let mut references = Vec::new();
+        if let Some(datasets) = root.get("datasets").and_then(Item::as_table_like) {
+            for (_, entry) in datasets.iter() {
+                if let Some(span) = entry
+                    .as_table_like()
+                    .and_then(|entry| entry.get("ref"))
+                    .and_then(Item::span)
+                {
+                    references.push(span);
+                }
+            }
+        }
+        references.sort_unstable_by_key(|span| span.start);
         let reader = Reader {
             text,
             starts: std::cell::OnceCell::new(),
+            references: Some(references),
         };
-        let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
-        let root = document.as_table();
         reader.known(root, &TOP_KEYS, "")?;
         let data_dir = match root.get("project") {
             None => DATA_DIR.to_owned(),
@@ -84,6 +98,8 @@ struct Reader<'a> {
     text: &'a str,
     /// where each line begins, found the first time a line is cited.
     starts: std::cell::OnceCell<Vec<usize>>,
+    /// sorted reference spans; invalid TOML has no trustworthy bounds for hiding credentials.
+    references: Option<Vec<Range<usize>>>,
 }
 
 impl Reader<'_> {
@@ -295,7 +311,15 @@ impl Reader<'_> {
         let end = self.text[start..]
             .find('\n')
             .map_or(self.text.len(), |at| start + at);
-        format!("{FILE}:{line}   {}", self.text[start..end].trim())
+        let private = self.references.as_ref().is_none_or(|references| {
+            let after = references.partition_point(|reference| reference.start < end);
+            after > 0 && references[after - 1].end > start
+        });
+        if private {
+            format!("{FILE}:{line}")
+        } else {
+            format!("{FILE}:{line}   {}", self.text[start..end].trim())
+        }
     }
 }
 
@@ -417,6 +441,7 @@ fn not_toml(text: &str, err: &TomlError) -> Error {
     Reader {
         text,
         starts: std::cell::OnceCell::new(),
+        references: None,
     }
     .error(
         err.span(),

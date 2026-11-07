@@ -1405,3 +1405,24 @@ fn adding_a_previous_source_does_not_match_an_edited_reference() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn manifest_citations_do_not_echo_reference_secrets() -> Result {
+    let sandbox = Sandbox::new()?;
+    for manifest in [
+        r#"datasets = { sample = { ref = "https://example.org/a?token=EM_CANARY", extract = "yes" } }"#,
+        r#"datasets = { sample = { ref = "https://user:EM_CANARY@example.org/a", extract = "yes" } }"#,
+        r#"datasets = { sample = { "r\u0065f" = "ht\u0074ps://example.org/a?token=EM_CANARY", extract = "yes" } }"#,
+        r#"datasets = { sample = { ref = "https://example.org/a?token=EM_CANARY", extract = } }"#,
+    ] {
+        fs::write(sandbox.work().join("data.toml"), manifest)?;
+        for args in [&["status"][..], &["status", "--json"]] {
+            let output = sandbox.run(args)?;
+            assert_eq!(output.status.code(), Some(50));
+            let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+            assert!(shown.contains("data.toml:1"), "{shown}");
+            assert!(!shown.contains("EM_CANARY"), "{shown}");
+        }
+    }
+    Ok(())
+}
