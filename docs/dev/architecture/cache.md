@@ -93,6 +93,8 @@ archive staging holds an OS lock until publication or discard. the next unpack o
 
 ## tests
 
+deferred-publication tests inject a real failed `syncfs` through an `O_PATH` descriptor. they check that failed or latched flushes publish no names and that discarding one duplicate changes digest tracking only after its last pending copy is gone.
+
 cache-lock tests keep conflicting guards alive while checking wait and stop behavior. they check clone lifetime through weak handles: after the last guard drops, a forked test helper may still hold an inherited file descriptor until exec, so immediate lock reacquisition is not a deterministic assertion about that guard.
 
 | files | cargo filter |

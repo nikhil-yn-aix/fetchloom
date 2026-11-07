@@ -24,6 +24,85 @@ fn finished(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
     writer.finish().unwrap()
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failed_batch_flush_never_names_its_downloads() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    // syncfs rejects an O_PATH handle, so this exercises a real flush error without disk faults.
+    let file = rustix::fs::open(
+        cache.root.join("tmp"),
+        rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .unwrap();
+    lock(&cache.deferred.pending).as_mut().unwrap().batch = Arc::new(
+        super::super::object::Batch::with_file_for_test(File::from(file)),
+    );
+    let stored = finished(&cache, "https://example.org/flush-error", b"unflushed");
+    assert!(cache.publish_downloads().is_err());
+    assert!(!cache.object_path(&stored.digest).exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_latched_flush_failure_blocks_the_final_pending_group() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    let stored = finished(&cache, "https://example.org/later-group", b"later");
+    *lock(&cache.deferred.publishing) = Publishing {
+        failed: Some(io::ErrorKind::StorageFull.into()),
+        unflushed: true,
+    };
+    assert_eq!(
+        cache.publish_downloads().unwrap_err().kind(),
+        io::ErrorKind::StorageFull
+    );
+    assert!(
+        !cache.object_path(&stored.digest).exists(),
+        "a latched flush failure cannot publish later downloads"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn discarding_a_duplicate_updates_only_its_last_pending_digest() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    let pending = |url: &str, bytes: &[u8]| {
+        let Claim::Owned(partial) = cache.claim(url).unwrap() else {
+            panic!("the test owns every download");
+        };
+        let mut writer = partial
+            .writer(0, None, Validators::default(), false, false)
+            .unwrap();
+        writer.write_at(0, bytes).unwrap();
+        let stored = writer.finish().unwrap();
+        (partial, stored)
+    };
+    let (first, first_stored) = pending("https://example.org/a", b"same");
+    let (second, second_stored) = pending("https://example.org/b", b"same");
+    assert!(first_stored.new);
+    assert!(!second_stored.new);
+    let other = finished(&cache, "https://example.org/c", b"other");
+    first.discard();
+    let (third, third_stored) = pending("https://example.org/d", b"same");
+    assert!(!third_stored.new, "another copy still waits in the batch");
+    second.discard();
+    third.discard();
+    let (_last, last) = pending("https://example.org/e", b"same");
+    assert!(
+        last.new,
+        "no copy of these bytes remains in the batch or cache"
+    );
+    cache.publish_downloads().unwrap();
+    assert_eq!(fs::read(cache.object_path(&last.digest)).unwrap(), b"same");
+    assert_eq!(
+        fs::read(cache.object_path(&other.digest)).unwrap(),
+        b"other"
+    );
+}
+
 #[test]
 fn a_long_batch_keeps_only_its_latest_downloads_claimed() {
     let (_dir, cache) = cache();

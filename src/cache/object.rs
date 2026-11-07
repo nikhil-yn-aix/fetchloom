@@ -120,6 +120,14 @@ impl Batch {
         Ok(Batch { file, device })
     }
 
+    #[cfg(test)]
+    pub(super) fn with_file_for_test(file: File) -> Batch {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let device = file.metadata().unwrap().dev();
+        Batch { file, device }
+    }
+
     pub(super) fn covers(&self, metadata: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
 
