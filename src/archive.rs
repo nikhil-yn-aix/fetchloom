@@ -122,8 +122,8 @@ type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), E
 ///
 /// # Errors
 ///
-/// `source.invalid` for an unsafe or damaged archive, `local.io` when the cache cannot take the
-/// files, and `interrupted` once `watch` returns true. `watch` hears how many bytes of the
+/// `source.invalid` for an unsafe or damaged archive, `local.io` when the cached archive cannot
+/// be read or the cache cannot take its files, and `interrupted` once `watch` returns true. `watch` hears how many bytes of the
 /// archive were read so far.
 pub(crate) fn unpack(
     archive: &Path,
@@ -209,6 +209,13 @@ fn refused_member(path: &str, reason: &str) -> Error {
 /// an archive that could not be read to the end: cut short, corrupted or not what it seemed, or
 /// refused when its xz stream asks for too much memory.
 fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
+    if let Some(error) = crate::error::io_cause(err) {
+        let doing = match at {
+            Some(path) => format!("could not read the cached archive at \"{path}\""),
+            None => "could not read the cached archive".to_owned(),
+        };
+        return Error::io(doing, error);
+    }
     if tar::needs_too_much_memory(err) {
         return refused(format!(
             "the archive's xz stream needs more than {} of memory to unpack",

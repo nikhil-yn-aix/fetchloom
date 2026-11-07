@@ -254,3 +254,26 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+mod errors_messages_read_proof {
+    use super::*;
+
+    #[test]
+    fn errors_messages_local_read_failure_keeps_its_kind() {
+        struct Failed;
+        impl Read for Failed {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from_raw_os_error(5))
+            }
+        }
+        let meter = Meter::default();
+        let limits = Limits::default();
+        let mut guard = Guard::new(&limits, &|_| false, &meter);
+        let error = guard
+            .copy("a.csv", &mut Failed, &mut Vec::new(), &mut [0; 64])
+            .unwrap_err();
+        assert_eq!(error.kind, Kind::LocalIo, "{error:?}");
+        assert!(error.message.contains("a.csv"), "{error:?}");
+    }
+}

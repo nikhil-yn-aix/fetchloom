@@ -169,6 +169,22 @@ impl Error {
     }
 }
 
+/// the native filesystem failure inside an archive reader's wrappers, if any.
+pub(crate) fn io_cause<'e>(
+    mut cause: &'e (dyn std::error::Error + 'static),
+) -> Option<&'e io::Error> {
+    loop {
+        if let Some(error) = cause.downcast_ref::<io::Error>() {
+            if error.raw_os_error().is_some() {
+                return Some(error);
+            }
+            cause = error.get_ref()?;
+        } else {
+            cause = cause.source()?;
+        }
+    }
+}
+
 /// what went wrong on the machine in plain words, without the system's own phrasing and its
 /// error number, which mean little to a person.
 pub(crate) fn said(err: &io::Error) -> String {
@@ -313,5 +329,22 @@ mod tests {
                 "{code}: {advice:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod io_cause_tests {
+    use super::*;
+
+    #[test]
+    fn native_io_causes_survive_decoder_wrappers() {
+        let native = io::Error::from_raw_os_error(5);
+        assert_eq!(io_cause(&native).and_then(io::Error::raw_os_error), Some(5));
+        let wrapped = io::Error::other(io::Error::other(native));
+        let zipped = zip::result::ZipError::Io(wrapped);
+        assert_eq!(io_cause(&zipped).and_then(io::Error::raw_os_error), Some(5));
+        let corrupt = io::Error::new(io::ErrorKind::InvalidData, "bad archive");
+        assert!(io_cause(&corrupt).is_none());
+        assert!(io_cause(&std::fmt::Error).is_none());
     }
 }

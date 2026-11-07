@@ -35,6 +35,8 @@ exit codes group failures, while error kinds identify the cause.
 | `project.invalid` | correct or restore the manifest, lock or project folders |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
+a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.
+
 ## success with differences
 
 the python helper also has a helper-only `conflict.kept` error with no process exit code; see [strict sync](../scripting.md#python-helper).

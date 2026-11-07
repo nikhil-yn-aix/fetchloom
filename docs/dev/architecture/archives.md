@@ -62,6 +62,8 @@ names become NFC, a unicode normalization form that gives canonically equivalent
 
 links, devices, fifos, sparse tar entries, encrypted zip entries and unsupported zip compression methods fail. windows-specific name restrictions apply on windows. archive permissions and timestamps are not restored.
 
+native filesystem errors while reading cached archives remain `local.io`, with the OS reason and member path when known. malformed archive bytes remain `source.invalid`; decoder wrappers must not turn a disk error into a damaged-source diagnosis.
+
 ### tree identity and recovery
 
 members are sorted by path and hashed as a tree of names, sizes and digests. `data.lock` pins the tree hash while the cache stores the full member list. `unpack_cached` records a tree only when it matches the expected tree or no tree was pinned yet.
