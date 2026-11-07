@@ -527,7 +527,7 @@ impl Net {
             total,
             validators: validators.clone(),
             md5: fetch.expect.needs_md5(),
-            keep: splits,
+            keep: splits && status == StatusCode::PARTIAL_CONTENT && earlier.is_some(),
         };
         let Some(writer) = open(partial, body).await? else {
             return Ok(Answer::StartOver);

@@ -709,3 +709,55 @@ fn kept_ranges_leave_gaps_for_the_streams() {
     assert_eq!(board.deliver(0, 3), (9, 3));
     assert!(board.finished());
 }
+
+#[test]
+fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
+    let body = body(4 * MIB);
+    for pinned in [false, true] {
+        let server = serve(
+            body.clone(),
+            Serving {
+                etag: Some("\"v2\""),
+                ..SERVING
+            },
+        );
+        let net = net(&server.url, 1);
+        let (_folder, cache) = cache();
+        let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
+            panic!("nothing else holds the download");
+        };
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            last_modified: None,
+        };
+        let mut writer = partial
+            .writer(0, Some(4 * MIB), validators, false, true)
+            .unwrap();
+        writer
+            .write_at(3 * MIB, &vec![0xff; usize::try_from(MIB).unwrap()])
+            .unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        assert_eq!(partial.resumable().unwrap().0, 0);
+        drop(partial);
+        let fetched = download(
+            &net,
+            &cache,
+            &server.url,
+            Expect {
+                sha256: pinned.then(|| sha256(&body)),
+                ..Expect::default()
+            },
+        );
+        assert_eq!(fetched.digest, sha256(&body), "pinned={pinned}");
+        assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), *body);
+        let heads = server.heads();
+        assert!(heads[0].contains("range: bytes=0-"), "{}", heads[0]);
+        assert!(heads[0].contains("if-range: \"v1\""), "{}", heads[0]);
+        assert_eq!(
+            heads.len(),
+            1,
+            "a full replacement needs no further request"
+        );
+    }
+}

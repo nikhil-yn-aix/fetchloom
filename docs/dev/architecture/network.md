@@ -65,7 +65,7 @@ a finished stream takes half the largest remaining range only when that half is 
 
 ### resumption and revalidation
 
-resumption rehashes saved bytes and needs version proof before joining them to a response. `If-Range` uses a strong `ETag`, or `Last-Modified` only when there was no `ETag`. unsuitable ranges restart from zero. a resumed checksum mismatch also gets one full restart.
+resumption rehashes saved bytes and needs version proof before joining them to a response. `If-Range` uses a strong `ETag`, or `Last-Modified` only when there was no `ETag`. unsuitable ranges restart from zero. a full `200` response replaces the earlier version and discards every saved range, including a suffix saved before any prefix arrived. a resumed checksum mismatch also gets one full restart.
 
 unpinned `get` revalidates URL records with conditional requests. project pins can reuse checked objects without that request. MD5 is computed only when a source requires it and no pinned SHA-256 already identifies the bytes.
 
