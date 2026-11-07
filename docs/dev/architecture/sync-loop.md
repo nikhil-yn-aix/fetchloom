@@ -89,6 +89,8 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 | [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
 | [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 
+fixed placement models cover every combination of force, writable mode and shared ownership across missing, untracked, changed, vouched and damaged observations. a separate 32-case model checks which unwanted records are removed, retained or forgotten.
+
 ## related
 
 [project](project.md), [placing](placing.md), [cache](cache.md), [archives](archives.md), [settled-sync measurements](../performance/measurements.md#placement-and-settled-sync).

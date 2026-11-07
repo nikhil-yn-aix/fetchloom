@@ -2,6 +2,8 @@
 //! before when the lock moved on, remove what no dataset needs, and leave alone every file
 //! someone changed or added.
 
+#[cfg(all(test, unix))]
+mod model_tests;
 mod put;
 mod tell;
 
