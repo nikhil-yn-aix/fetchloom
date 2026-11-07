@@ -76,6 +76,8 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 the lock reader models use fixed generated inputs and mutations to compare canonical and general TOML decoding, including escaped strings, integer limits, line endings, path rejection and deterministic rendering.
 
+`path` and `status` reject portable case collisions in the plan before reporting locations or creating project metadata. Linux command tests cover this independently of the host filesystem’s case sensitivity.
+
 ## related
 
 [sync loop](sync-loop.md), [placing](placing.md), [data.toml](../../user/reference/data-toml.md), [data.lock](../../user/reference/data-lock.md), [project-folder records](../../user/reference/project-folder.md).

@@ -1689,3 +1689,37 @@ fn prepared_downloads_validate_late_links_before_any_transfer() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn path_and_status_refuse_case_collisions_before_reporting_locations() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let project = clone(&sandbox, "case-clash")?;
+    let path = project.join("data.lock");
+    let lock = fs::read_to_string(&path)?;
+    let row = lock
+        .lines()
+        .find(|line| line.starts_with("  { path = "))
+        .ok_or("no locked file")?;
+    let other = row.replacen("iris.csv", "IRIS.csv", 1);
+    fs::write(&path, lock.replace(row, &format!("{other}\n{row}")))?;
+    for args in [
+        &["status"][..],
+        &["path", "iris"],
+        &["path", "iris/iris.csv"],
+    ] {
+        let output = sandbox
+            .command_in(&project, &["--json", "--offline"])
+            .args(args)
+            .output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        assert_eq!(document["errors"][0]["kind"], "project.invalid");
+        assert_eq!(document["work"]["requests"], 0);
+        assert!(!project.join("data").exists());
+        assert!(!project.join(".fetchloom").exists());
+    }
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
