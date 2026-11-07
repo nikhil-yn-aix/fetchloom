@@ -76,7 +76,7 @@ when a locked tree differs, or decoding fails with an archive error, the sync la
 - a refused archive may leave its downloaded packed object in the cache.
 - staging cleanup must respect held locks. age alone cannot identify a live writer when locking works.
 - decoder opens still use archive paths after cache lookup. do not extend the cache's no-follow hashing guarantee into a claim of protection against all concurrent path swaps.
-- member-byte limits count actual output, not sizes declared by an untrusted header.
+- member-byte limits count actual output, not sizes declared by an untrusted header. exact byte and ratio ceilings are accepted; the next byte is refused. an interrupted member read is retried without counting or losing bytes, and every decoder counts compressed input through the guard's own meter.
 
 ## tests
 

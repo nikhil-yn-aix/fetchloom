@@ -175,6 +175,63 @@ mod tests {
     }
 
     #[test]
+    fn the_byte_limit_allows_the_exact_total_across_members() {
+        let limits = Limits {
+            bytes: 10,
+            ..Limits::default()
+        };
+        guarded(limits, |guard, _| {
+            assert_eq!(copy(guard, b"123456").unwrap(), b"123456");
+            assert_eq!(copy(guard, b"7890").unwrap(), b"7890");
+            assert_eq!(copy(guard, b"x").unwrap_err().kind, Kind::SourceInvalid);
+        });
+    }
+
+    #[test]
+    fn the_ratio_limit_allows_the_exact_ratio_then_refuses_more() {
+        let limits = Limits {
+            ratio: 2,
+            ..Limits::default()
+        };
+        guarded(limits, |guard, meter| {
+            meter.count(2 << 20);
+            let bytes = vec![0; 4 << 20];
+            assert_eq!(copy(guard, &bytes).unwrap(), bytes);
+            assert_eq!(copy(guard, b"x").unwrap_err().kind, Kind::SourceInvalid);
+        });
+    }
+
+    #[test]
+    fn an_interrupted_member_read_resumes_without_losing_bytes() {
+        struct Interrupted {
+            inner: io::Cursor<&'static [u8]>,
+            interrupted: bool,
+        }
+        impl Read for Interrupted {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if self.inner.position() == 2 && !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                self.inner.read(buffer)
+            }
+        }
+        guarded(Limits::default(), |guard, meter| {
+            meter.count(4);
+            let mut reader = Interrupted {
+                inner: io::Cursor::new(b"good"),
+                interrupted: false,
+            };
+            let mut bytes = Vec::new();
+            guard
+                .copy("x", &mut reader, &mut bytes, &mut [0; 2])
+                .unwrap();
+            assert!(reader.interrupted);
+            assert_eq!(bytes, b"good");
+        });
+    }
+
+    #[test]
     fn a_seekable_meter_never_exceeds_its_file() {
         let meter = Meter::default();
         meter.count(5);

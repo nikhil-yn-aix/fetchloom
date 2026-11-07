@@ -108,6 +108,20 @@ fn archive(format: Format, files: &[(&str, &[u8])]) -> Vec<u8> {
 const FILES: &[(&str, &[u8])] = &[("a.csv", b"1"), ("b.csv", b"2"), ("c/d.csv", b"3")];
 
 #[test]
+fn large_archives_with_modest_expansion_unpack() {
+    let mut bytes = vec![0; 5 << 20];
+    fastrand::Rng::with_seed(19).fill(&mut bytes);
+    for format in FAMILIES {
+        let packed = archive(format, &[("payload.bin", &bytes)]);
+        assert!(packed.len() > bytes.len() / 200);
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(format, &packed).unwrap();
+        assert_eq!(unpacked.members.len(), 1);
+        scratch.assert_stored(&unpacked.members[0], &bytes);
+    }
+}
+
+#[test]
 fn a_ratio_bomb_is_refused() {
     let zeros = vec![0; 10 << 20];
     for format in FAMILIES {
