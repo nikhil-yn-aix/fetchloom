@@ -456,7 +456,57 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
 /// script handed it as the next step can run it. `fetchloom add` alone names a command and is not one.
 pub(crate) fn runs(command: &str) -> bool {
     use clap::Parser;
-    args::Args::try_parse_from(command.split_whitespace()).is_ok()
+    command_words(command, cfg!(windows))
+        .is_some_and(|words| args::Args::try_parse_from(words).is_ok())
+}
+
+/// reads the literal quoting in suggestions without interpreting expansions or shell operators.
+fn command_words(command: &str, windows: bool) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quote = None;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(delimiter) = quote {
+            if c == delimiter {
+                if windows && c == '\'' && chars.peek() == Some(&'\'') {
+                    chars.next();
+                    word.get_or_insert_default().push(c);
+                } else {
+                    quote = None;
+                }
+            } else if delimiter == '"' && c == '\\' && !windows {
+                let next = *chars.peek()?;
+                if matches!(next, '"' | '\\' | '$' | '\u{60}') {
+                    chars.next();
+                    word.get_or_insert_default().push(next);
+                } else {
+                    word.get_or_insert_default().push(c);
+                }
+            } else if delimiter == '"' && matches!(c, '$' | '\u{60}') {
+                return None;
+            } else {
+                word.get_or_insert_default().push(c);
+            }
+        } else {
+            match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    word.get_or_insert_default();
+                }
+                '\n' | '\r' | '|' | '&' | ';' | '<' | '>' | '$' | '\u{60}' | '(' | ')' | '*'
+                | '?' | '[' | ']' => return None,
+                c if c.is_whitespace() => words.extend(word.take()),
+                '\\' if !windows => word.get_or_insert_default().push(chars.next()?),
+                _ => word.get_or_insert_default().push(c),
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    words.extend(word);
+    Some(words)
 }
 
 /// commands after which the cache may remind a person what no project needs: they change what
@@ -1066,6 +1116,47 @@ mod tests {
             "{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
+    fn quoted_retry_commands_are_runnable() {
+        for command in [
+            r#"fetchloom -C "my project" status"#,
+            "fetchloom -C 'my project' list",
+            "fetchloom status",
+        ] {
+            assert!(runs(command), "{command}");
+        }
+        assert!(!runs("fetchloom -C 'an unfinished quote status"));
+    }
+    #[test]
+    fn retry_words_preserve_literal_quoting() {
+        for windows in [false, true] {
+            assert_eq!(
+                command_words(r#"fetchloom -C "my project" status"#, windows).unwrap(),
+                ["fetchloom", "-C", "my project", "status"],
+            );
+            assert_eq!(
+                command_words("fetchloom -C '' status", windows).unwrap(),
+                ["fetchloom", "-C", "", "status"],
+            );
+            for command in [
+                "fetchloom get a | fetchloom get b",
+                "fetchloom get $dataset",
+                "fetchloom get a; fetchloom get b",
+                "fetchloom get a\nfetchloom get b",
+                "fetchloom -C \"$directory\" status",
+            ] {
+                assert!(command_words(command, windows).is_none(), "{command}");
+            }
+        }
+        assert_eq!(
+            command_words(r#"fetchloom -C 'ada'"'"'s project' status"#, false).unwrap(),
+            ["fetchloom", "-C", "ada's project", "status"],
+        );
+        assert_eq!(
+            command_words("fetchloom -C 'ada''s project' status", true).unwrap(),
+            ["fetchloom", "-C", "ada's project", "status"],
         );
     }
 }

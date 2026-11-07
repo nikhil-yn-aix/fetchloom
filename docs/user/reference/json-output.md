@@ -24,7 +24,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 | `errors[].message` | summary string |
 | `errors[].details` | array of supporting strings |
 | `errors[].help` | string or null |
-| `errors[].fix` | the first runnable `fetchloom` command that `help` names, without placeholders, or null. an agent or script can run it as the next step. an example (`as in`), a guess (`did you mean`), a command meant for a person's own terminal, or one that first needs a broken file deleted is never a fix, so those leave it null |
+| `errors[].fix` | the first runnable `fetchloom` command that `help` names, without placeholders, or null. quoted arguments, including folders containing spaces, stay intact. an agent or script can run it as the next step. an example (`as in`), a guess (`did you mean`), a command meant for a person's own terminal, or one that first needs a broken file deleted is never a fix, so those leave it null |
 | `errors[].failures` | present for file download failures and for `get` runs of several links: every failed file or link, in job or command line order, with `file`, `kind`, `message`, `details` and `help` |
 | `work` | counters below, present on success and failure |
 

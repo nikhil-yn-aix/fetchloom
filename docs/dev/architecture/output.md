@@ -69,7 +69,7 @@ JSON is one completed document, not a stream of progress events. it holds schema
 
 `Counts` snapshots atomic counters for requests, downloaded bytes, retries, resumes, object writes, cache hits, reflinks, hardlinks and copies. [JSON output](../../user/reference/json-output.md) defines the fields and counting contract. elapsed time is reported, but tests use deterministic counts rather than wall-time assertions.
 
-`-v` prints work summaries; `-vv` enables debug events. `FETCHLOOM_TRACE` writes a Chrome trace through a guard that must live until command work ends. trace output is separate from the JSON contract.
+`-v` prints work summaries; `-vv` enables debug events. `FETCHLOOM_TRACE` writes a Chrome trace through a guard that must live until command work ends. trace output is separate from the JSON contract. retry-command validation reads literal quoting rather than splitting quoted paths at spaces; it does not interpret shell expansions or operators.
 
 flag help initializes the same palette as the `help` command. both apply `FETCHLOOM_COLORS` and warn about unreadable entries before printing help.
 
