@@ -96,7 +96,8 @@ fn a_folder_that_is_not_there_or_a_data_toml_that_does_not_parse_says_what_to_do
     let broken = sandbox.run(&["status"])?;
     assert_eq!(broken.status.code(), Some(50));
     let stderr = text(&broken.stderr)?;
-    assert!(stderr.contains("data.toml:1   [datasets.iris"), "{stderr}");
+    assert!(stderr.contains("data.toml:1\n"), "{stderr}");
+    assert!(!stderr.contains("[datasets.iris"), "{stderr}");
     assert!(
         stderr.ends_with("help: fix that line, then run `fetchloom status` again\n"),
         "{stderr}"
