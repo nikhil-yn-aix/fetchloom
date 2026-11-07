@@ -158,6 +158,8 @@ struct Wire {
     /// its own instead of sharing one with every other request to the host. made when first
     /// needed.
     apart: OnceLock<Result<reqwest::Client, Error>>,
+    /// the cookies both clients send, so a sign-in cookie reaches the added streams too.
+    cookies: Arc<reqwest::cookie::Jar>,
     typed: address::Typed,
     offline: bool,
     proxies: address::Proxies,
@@ -174,9 +176,11 @@ impl Wire {
     fn new(typed: &address::Typed, offline: bool) -> Result<Wire, Error> {
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let cookies = Arc::new(reqwest::cookie::Jar::default());
         Ok(Wire {
-            client: Wire::client(typed, offline, false)?,
+            client: Wire::client(typed, offline, &cookies, false)?,
             apart: OnceLock::new(),
+            cookies,
             typed: typed.clone(),
             offline,
             proxies: address::Proxies::from_system(),
@@ -186,6 +190,7 @@ impl Wire {
     fn client(
         typed: &address::Typed,
         offline: bool,
+        cookies: &Arc<reqwest::cookie::Jar>,
         apart: bool,
     ) -> Result<reqwest::Client, Error> {
         let builder = reqwest::Client::builder()
@@ -196,7 +201,7 @@ impl Wire {
             .redirect(reqwest::redirect::Policy::none())
             // earthdata's archives sign a person in through a redirect to urs.earthdata.nasa.gov,
             // which hands back a cookie the archive then asks for. cookies live for this run only
-            .cookie_store(true);
+            .cookie_provider(cookies.clone());
         let builder = if apart { builder.http1_only() } else { builder };
         builder.build().map_err(|err| {
             Error::new(
@@ -211,7 +216,7 @@ impl Wire {
             Lane::Shared => Ok(&self.client),
             Lane::Apart => self
                 .apart
-                .get_or_init(|| Wire::client(&self.typed, self.offline, true))
+                .get_or_init(|| Wire::client(&self.typed, self.offline, &self.cookies, true))
                 .as_ref()
                 .map_err(Clone::clone),
         }
@@ -532,5 +537,47 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(sent, ["new"]);
+    }
+
+    /// a sign-in cookie, as earthdata hands out, reaches the added streams of a split download
+    /// too.
+    #[test]
+    fn both_clients_keep_cookies_in_one_jar() {
+        use crate::source::recorded::block_on;
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let serving = std::thread::spawn(move || {
+            let mut heads = Vec::new();
+            for cookie in ["Set-Cookie: session=abc; Path=/\r\n", ""] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0; 1];
+                while !head.ends_with(b"\r\n\r\n")
+                    && stream.read(&mut byte).is_ok_and(|read| read == 1)
+                {
+                    head.push(byte[0]);
+                }
+                heads.push(String::from_utf8_lossy(&head).to_ascii_lowercase());
+                let answer = format!(
+                    "HTTP/1.1 200 OK\r\n{cookie}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                stream.write_all(answer.as_bytes()).unwrap();
+            }
+            heads
+        });
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: Splitting::WhenSlow,
+        };
+        let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+        net.typed(&url);
+        assert!(block_on(net.send(&url, |request| request)).is_ok());
+        assert!(block_on(net.send_apart(&url, |request| request)).is_ok());
+        let heads = serving.join().unwrap();
+        assert!(heads[1].contains("cookie: session=abc"), "{}", heads[1]);
     }
 }
