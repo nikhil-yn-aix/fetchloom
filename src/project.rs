@@ -507,7 +507,11 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// flushes directory entries on unix, where flushing a file does not publish its name durably.
-fn sync_directory(path: &Path) -> io::Result<()> {
+/// other platforms keep their existing publication behavior.
+///
+/// # Errors
+/// returns an error when the directory cannot be opened or flushed.
+pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         #[cfg(test)]
