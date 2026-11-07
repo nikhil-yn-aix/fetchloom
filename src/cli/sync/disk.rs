@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 use super::place::local;
@@ -414,16 +414,28 @@ fn scan(
     let mut temporaries = Vec::new();
     if exp.on("PROJECT_PARALLEL_SCAN") {
         let mut pending = Vec::new();
-        visit_files(root, data_dir, |entry, path, temporary| {
-            pending.push((entry.path(), path, temporary));
-            // queued DirEntry values would keep their parent directory descriptors open.
+        let mut last_parent = None;
+        let mut parents = 0;
+        visit_files(root, data_dir, |entry, path, temporary, parent| {
+            if last_parent != Some(parent) {
+                // DirEntry retains its parent handle on unix; bound distinct parents too.
+                if parents == 8 {
+                    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+                    parents = 0;
+                }
+                parents += 1;
+                last_parent = Some(parent);
+            }
+            pending.push((entry, path, temporary));
             if pending.len() == 4096 {
                 scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+                parents = 0;
+                last_parent = None;
             }
         });
         scan_pending(&mut pending, threads, &mut found, &mut temporaries);
     } else {
-        visit_files(root, data_dir, |entry, path, temporary| {
+        visit_files(root, data_dir, |entry, path, temporary, _| {
             if let Ok(metadata) = entry.metadata() {
                 if temporary {
                     temporaries.push(path.clone());
@@ -437,14 +449,18 @@ fn scan(
 }
 
 fn scan_pending(
-    pending: &mut Vec<(PathBuf, String, bool)>,
+    pending: &mut Vec<(fs::DirEntry, String, bool)>,
     threads: Threads,
     found: &mut HashMap<String, Look>,
     temporaries: &mut Vec<String>,
 ) {
-    let looks = place::run_all(pending, threads, |(path, _, _)| {
-        fs::symlink_metadata(path).ok().as_ref().map(Look::of)
-    });
+    let metadata =
+        |(entry, _, _): &(fs::DirEntry, String, bool)| entry.metadata().ok().as_ref().map(Look::of);
+    let looks = if pending.len() < 512 {
+        pending.iter().map(metadata).collect()
+    } else {
+        place::run_all(pending, threads, metadata)
+    };
     for ((_, path, temporary), look) in pending.drain(..).zip(looks) {
         if let Some(look) = look {
             if temporary {
@@ -455,9 +471,15 @@ fn scan_pending(
     }
 }
 
-fn visit_files(root: &Path, data_dir: &str, mut visit: impl FnMut(fs::DirEntry, String, bool)) {
+fn visit_files(
+    root: &Path,
+    data_dir: &str,
+    mut visit: impl FnMut(fs::DirEntry, String, bool, usize),
+) {
     let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
+    let mut parent = 0;
     while let Some((folder, relative)) = folders.pop() {
+        parent += 1;
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
         };
@@ -472,7 +494,7 @@ fn visit_files(root: &Path, data_dir: &str, mut visit: impl FnMut(fs::DirEntry, 
                 folders.push((entry.path(), path));
             } else if kind.is_file() {
                 let temporary = place::is_copy_temporary(&name);
-                visit(entry, path, temporary);
+                visit(entry, path, temporary, parent);
             }
         }
     }
