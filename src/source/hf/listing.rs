@@ -235,6 +235,60 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_page_lists_its_commit_instead_of_main() {
+        let other = "1111111111111111111111111111111111111111";
+        let main = api(&format!("datasets/stanfordnlp/imdb/revision/main?{EXPAND}"));
+        let at_commit = api(&format!(
+            "datasets/stanfordnlp/imdb/revision/{IMDB}?{EXPAND}"
+        ));
+        let tree = api(&format!(
+            "datasets/stanfordnlp/imdb/tree/{IMDB}?recursive=true"
+        ));
+        let mut info: serde_json::Value =
+            serde_json::from_slice(&fixture_bytes("hf/imdb-revision.json")).unwrap();
+        info["sha"] = other.into();
+        let recorded = Recorded::default()
+            .on(&main, 200, info.to_string())
+            .on(
+                &api(&format!(
+                    "datasets/stanfordnlp/imdb/tree/{other}?recursive=true"
+                )),
+                200,
+                "[]",
+            )
+            .fixture(&at_commit, "hf/imdb-revision.json")
+            .fixture(&tree, "hf/imdb-tree.json");
+        let parsed = Reference::parse(&format!(
+            "https://huggingface.co/datasets/stanfordnlp/imdb/commit/{IMDB}"
+        ))
+        .unwrap();
+        let listing = block_on(parsed.reference.resolve(&recorded)).unwrap();
+        assert_eq!(
+            listing.resolved.to_string(),
+            format!("hf:datasets/stanfordnlp/imdb@{IMDB}")
+        );
+        assert_eq!(listing.files.len(), 5);
+        assert_eq!(recorded.asked(), [at_commit, tree]);
+    }
+
+    #[test]
+    fn commit_page_links_keep_repository_kinds() {
+        for (page, reference) in [
+            ("gpt2", "hf:models/gpt2"),
+            ("org/model", "hf:models/org/model"),
+            ("datasets/imdb", "hf:datasets/imdb"),
+            ("datasets/org/data", "hf:datasets/org/data"),
+            ("spaces/org/demo", "hf:spaces/org/demo"),
+        ] {
+            let parsed =
+                Reference::parse(&format!("https://huggingface.co/{page}/commit/{IMDB}")).unwrap();
+            assert_eq!(parsed.reference.to_string(), format!("{reference}@{IMDB}"));
+            assert_eq!(parsed.file, None);
+            assert_eq!(parsed.folder, None);
+        }
+    }
+
+    #[test]
     fn a_missing_revision_is_unresolved() {
         let recorded = Recorded::default().on(
             &api(&format!(

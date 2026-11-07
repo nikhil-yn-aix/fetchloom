@@ -143,6 +143,7 @@ impl Repo {
         let inside = || (after.len() > 2).then(|| after[2..].join("/"));
         let (revision, file, folder) = match after.first().map(String::as_str) {
             Some("tree") => (after.get(1).cloned(), None, inside()),
+            Some("commit") => (after.get(1).cloned(), None, None),
             Some("blob" | "resolve" | "raw" | "blame") if after.len() > 2 => {
                 (after.get(1).cloned(), inside(), None)
             }
