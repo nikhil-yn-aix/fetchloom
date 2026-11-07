@@ -124,4 +124,4 @@ unknown sizes are checked per file, with at most one such question per batch. of
 
 ## interruptions
 
-at a download question, ctrl-c stops with exit 130. during other work, the first ctrl-c requests a stop and preserves resumable bytes before exiting 130. cache scans check between entries, and verification checks between hash reads. a second ctrl-c exits immediately with code 130.
+at a download question, a sign-in prompt or the dataset picker, ctrl-c cancels the question and stops with exit 130, and the terminal shows what you type again. during other work, the first ctrl-c requests a stop, prints `Stopping` with a reminder that a second ctrl-c quits at once, and preserves resumable bytes before exiting 130. cache scans check between entries, and verification checks between hash reads. a second ctrl-c clears the progress bars and exits immediately with code 130.

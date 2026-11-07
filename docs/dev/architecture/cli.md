@@ -72,7 +72,7 @@ put parsing and conflicts in `args.rs`, then pass the value through `Context` or
 - stdout carries answers or one JSON document. diagnostic text belongs on stderr through `Output`.
 - a successful argument parse does not permit overwriting a hand edit. placement makes that decision later.
 - do not initialize TLS or source credentials on help, version or local-only paths.
-- a second ctrl-c exits immediately; the first asks running work to stop and clean up.
+- a second ctrl-c clears the bars through `Output::abandon` and exits immediately; the first prints `Stopping` through `Output::stopping` and asks running work to stop and clean up. `interrupts` in cli.rs holds that order. prompts read keys raw, so at a question ctrl-c is a key that cancels it rather than a signal.
 - a single failing source can stop dataset resolution. catalog search instead retains successful catalogs unless all fail. failed batches can carry partial results in their error report.
 
 ## tests

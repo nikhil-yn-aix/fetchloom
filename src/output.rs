@@ -461,7 +461,7 @@ impl Output {
 
     /// asks for a line of text, such as a username, or returns none when nobody can answer.
     /// with `hidden`, nothing typed or pasted shows until enter, then a masked echo confirms it
-    /// arrived. a blank answer is asked again, twice at most.
+    /// arrived. a blank answer is asked again, twice at most. ctrl-c cancels the question.
     pub(crate) fn ask_text(&self, prompt: &str, hidden: bool) -> Result<Option<String>, Error> {
         if !self.can_ask() {
             return Ok(None);
@@ -472,15 +472,25 @@ impl Output {
             let label = format!("{tone}{prompt:>11}{tone:#} ");
             for _ in 0..3 {
                 let _ = terminal.write_str(&label);
-                let read = if hidden {
-                    terminal.read_secure_line()
-                } else {
-                    terminal.read_line()
-                };
+                let read = typed_line(
+                    || terminal.read_key_raw(),
+                    |edit| {
+                        let mut bytes = [0; 4];
+                        let _ = match edit {
+                            _ if hidden => Ok(()),
+                            Edit::Typed(typed) => terminal.write_str(typed.encode_utf8(&mut bytes)),
+                            Edit::Erased(erased) => terminal.clear_chars(
+                                console::measure_text_width(erased.encode_utf8(&mut bytes)),
+                            ),
+                        };
+                    },
+                );
+                // keys read one by one bring no line break of their own
+                let _ = terminal.write_line("");
                 // a password may start or end with a space; a visible answer, such as a name,
                 // may not
                 let text = match read {
-                    Ok(text) if hidden => text.trim_end_matches(['\r', '\n']).to_owned(),
+                    Ok(text) if hidden => text,
                     Ok(text) => text.trim().to_owned(),
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
                         return Err(Error::new(crate::error::Kind::Interrupted, "stopped"));
@@ -644,6 +654,23 @@ impl Output {
             }
         });
         answer
+    }
+
+    /// says that a first ctrl-c was heard, and what a second one does.
+    pub(crate) fn stopping(&self) {
+        self.mark("Stopping", "press ctrl-c again to quit now");
+    }
+
+    /// clears the bars and shows the cursor again, for a run that ends at once, as at a second
+    /// ctrl-c, so it leaves the terminal as it found it.
+    pub(crate) fn abandon(&self) {
+        if let Some(bars) = &self.bars {
+            let _ = bars.clear();
+            bars.set_draw_target(ProgressDrawTarget::hidden());
+        }
+        if self.style.interactive {
+            let _ = console::Term::stderr().show_cursor();
+        }
     }
 
     fn line(&self, text: &str) {
@@ -957,6 +984,40 @@ fn write_line(color: bool, text: &str) {
     };
     let mut err = anstream::AutoStream::new(std::io::stderr().lock(), choice);
     let _ = writeln!(err, "{text}");
+}
+
+/// what a key did to a line typed at a prompt, for showing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    Typed(char),
+    Erased(char),
+}
+
+/// a line typed at a prompt, read one key at a time from `key` until enter, with each change
+/// told to `edited`. ctrl-c arrives as a key, so it cancels the line on every system: a terminal
+/// reading whole lines turns it into a signal, which only asks the work to stop while the read
+/// goes on waiting, and leaves echo off on unix if a second ctrl-c ends the run.
+fn typed_line(
+    mut key: impl FnMut() -> std::io::Result<console::Key>,
+    mut edited: impl FnMut(Edit),
+) -> std::io::Result<String> {
+    let mut line = String::new();
+    loop {
+        match key()? {
+            console::Key::Enter => return Ok(line),
+            console::Key::CtrlC => return Err(std::io::ErrorKind::Interrupted.into()),
+            console::Key::Backspace => {
+                if let Some(erased) = line.pop() {
+                    edited(Edit::Erased(erased));
+                }
+            }
+            console::Key::Char(typed) if !typed.is_control() => {
+                line.push(typed);
+                edited(Edit::Typed(typed));
+            }
+            _ => {}
+        }
+    }
 }
 
 fn confirmation_key(
@@ -1369,5 +1430,129 @@ mod tests {
         });
         assert!(moved, "a download stood still while the question waited");
         assert_eq!(bar.position(), 100);
+    }
+
+    #[test]
+    fn a_typed_line_ends_at_enter_and_ctrl_c_cancels_it() {
+        use console::Key::{Backspace, Char, CtrlC, Enter, Tab};
+
+        use super::Edit::{Erased, Typed};
+        fn keys(
+            keys: Vec<std::io::Result<console::Key>>,
+        ) -> impl FnMut() -> std::io::Result<console::Key> {
+            let mut keys = keys.into_iter();
+            move || keys.next().unwrap_or(Ok(Enter))
+        }
+        let mut edits = Vec::new();
+        let line = super::typed_line(
+            keys(vec![
+                Ok(Backspace),
+                Ok(Char('a')),
+                Ok(Char('b')),
+                Ok(Backspace),
+                Ok(Char('é')),
+                Ok(Char(' ')),
+                Ok(Tab),
+                Ok(Char('\u{4}')),
+                Ok(Enter),
+                Ok(Char('x')),
+            ]),
+            |edit| edits.push(edit),
+        )
+        .unwrap();
+        assert_eq!(line, "aé ");
+        assert_eq!(
+            edits,
+            [Typed('a'), Typed('b'), Erased('b'), Typed('é'), Typed(' ')]
+        );
+        for stop in [Ok(CtrlC), Err(std::io::ErrorKind::Interrupted.into())] {
+            let error = super::typed_line(keys(vec![Ok(Char('s')), stop]), |_| {}).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+        }
+        let error = super::typed_line(
+            keys(vec![Err(std::io::ErrorKind::UnexpectedEof.into())]),
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    /// a terminal that records what bars draw on it.
+    #[derive(Debug, Default, Clone)]
+    struct Screen(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+    impl Screen {
+        fn record(&self, what: String) {
+            self.0.lock().unwrap().push(what);
+        }
+    }
+
+    impl indicatif::TermLike for Screen {
+        fn width(&self) -> u16 {
+            80
+        }
+        fn move_cursor_up(&self, n: usize) -> std::io::Result<()> {
+            self.record(format!("up {n}"));
+            Ok(())
+        }
+        fn move_cursor_down(&self, n: usize) -> std::io::Result<()> {
+            self.record(format!("down {n}"));
+            Ok(())
+        }
+        fn move_cursor_right(&self, n: usize) -> std::io::Result<()> {
+            self.record(format!("right {n}"));
+            Ok(())
+        }
+        fn move_cursor_left(&self, n: usize) -> std::io::Result<()> {
+            self.record(format!("left {n}"));
+            Ok(())
+        }
+        fn write_line(&self, s: &str) -> std::io::Result<()> {
+            self.record(format!("line {s}"));
+            Ok(())
+        }
+        fn write_str(&self, s: &str) -> std::io::Result<()> {
+            self.record(format!("text {s}"));
+            Ok(())
+        }
+        fn clear_line(&self) -> std::io::Result<()> {
+            self.record("clear".to_owned());
+            Ok(())
+        }
+        fn flush(&self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_run_that_ends_at_once_clears_its_bars_first() {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut output = Output::new(style, Level::Normal, false, false);
+        let screen = Screen::default();
+        output.bars = Some(indicatif::MultiProgress::with_draw_target(
+            indicatif::ProgressDrawTarget::term_like(Box::new(screen.clone())),
+        ));
+        let bars = output.bars.as_ref().unwrap();
+        let bar = bars.add(indicatif::ProgressBar::new(10));
+        bar.set_message("iris.csv");
+        bar.tick();
+        assert!(!bars.is_hidden());
+        let drawn = screen.0.lock().unwrap().len();
+        assert!(drawn > 0);
+
+        output.abandon();
+
+        let after = screen.0.lock().unwrap()[drawn..].to_vec();
+        assert!(after.contains(&"clear".to_owned()), "{after:?}");
+        assert!(bars.is_hidden());
+        bar.inc(5);
+        bar.tick();
+        assert_eq!(screen.0.lock().unwrap().len(), drawn + after.len());
     }
 }

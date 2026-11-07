@@ -402,12 +402,12 @@ pub(crate) fn run() -> ExitCode {
 
 fn execute(context: Context, command: Option<args::Command>, started: Instant) -> ExitCode {
     let name = command.as_ref().map(args::Command::name);
+    let context = Arc::new(context);
     let runtime = match command_runtime(&context) {
         Ok(runtime) => runtime,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     };
     let entered = runtime.enter();
-    let context = Arc::new(context);
     let _ = WAITS.set((Arc::clone(&context.output), Arc::clone(&context.stop)));
     let mut outcome = match command.clone() {
         Some(command) => dispatch(&context, command, started),
@@ -587,7 +587,7 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
 }
 
 /// installs interruption handling before either synchronous or asynchronous work starts.
-fn command_runtime(context: &Context) -> Result<tokio::runtime::Runtime, Error> {
+fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(context.threads.limit(workers))
@@ -604,20 +604,42 @@ fn command_runtime(context: &Context) -> Result<tokio::runtime::Runtime, Error> 
             })
         }))
         .map_err(|err| Error::io("could not listen for ctrl-c", &err))?;
-    let stop = context.stop.clone();
     if already_stopped {
-        stop.ask();
+        context.stop.ask();
     }
-    runtime.spawn(async move {
-        if already_stopped || signal.await.is_ok() {
-            stop.ask();
-            // a second ctrl-c means now
-            if tokio::signal::ctrl_c().await.is_ok() {
-                std::process::exit(130);
-            }
-        }
-    });
+    let stopping = Arc::clone(context);
+    let quitting = Arc::clone(context);
+    runtime.spawn(interrupts(
+        signal,
+        already_stopped,
+        tokio::signal::ctrl_c(),
+        move || {
+            stopping.stop.ask();
+            stopping.output.stopping();
+        },
+        move || {
+            quitting.output.abandon();
+            std::process::exit(130);
+        },
+    ));
     Ok(runtime)
+}
+
+/// what ctrl-c does: at the first press, or at once when one came `already`, `stopping` asks the
+/// work to wind down; at the `next`, `quitting` ends the run now.
+async fn interrupts(
+    first: impl Future<Output = std::io::Result<()>>,
+    already: bool,
+    next: impl Future<Output = std::io::Result<()>>,
+    stopping: impl FnOnce(),
+    quitting: impl FnOnce(),
+) {
+    if already || first.await.is_ok() {
+        stopping();
+        if next.await.is_ok() {
+            quitting();
+        }
+    }
 }
 
 fn block_on<T>(
@@ -796,6 +818,47 @@ mod tests {
             .count();
         assert_eq!(about, 1, "{told:?}");
         assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
+    }
+
+    #[test]
+    fn the_first_ctrl_c_stops_the_work_and_the_second_quits() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let wait = Duration::from_millis(20);
+        let told = std::sync::Mutex::new(Vec::new());
+        let tell = |what: &'static str| told.lock().unwrap().push(what);
+        runtime.block_on(async {
+            let (first, pressed_first) = tokio::sync::oneshot::channel::<()>();
+            let (next, pressed_next) = tokio::sync::oneshot::channel::<()>();
+            let listening = interrupts(
+                async { pressed_first.await.map_err(std::io::Error::other) },
+                false,
+                async { pressed_next.await.map_err(std::io::Error::other) },
+                || tell("stopping"),
+                || tell("quitting"),
+            );
+            tokio::pin!(listening);
+            assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
+            assert!(told.lock().unwrap().is_empty());
+            first.send(()).unwrap();
+            assert!(tokio::time::timeout(wait, &mut listening).await.is_err());
+            assert_eq!(*told.lock().unwrap(), ["stopping"]);
+            next.send(()).unwrap();
+            listening.await;
+        });
+        assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
+
+        told.lock().unwrap().clear();
+        runtime.block_on(interrupts(
+            std::future::pending(),
+            true,
+            async { Ok(()) },
+            || tell("stopping"),
+            || tell("quitting"),
+        ));
+        assert_eq!(*told.lock().unwrap(), ["stopping", "quitting"]);
     }
 
     #[test]
