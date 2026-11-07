@@ -51,6 +51,22 @@ pub(crate) struct Cache {
     deferred: Arc<deferred::Deferred>,
     /// the cache-wide lock this run holds, let go when the last clone is dropped.
     held: Option<Arc<File>>,
+    pub(crate) switches: Switches,
+}
+
+/// the measured experiments on the cache's write path, read once when the cache is opened.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Switches {
+    /// small fresh downloads skip their closing checkpoint, a missed open, a truncate and an fstat.
+    pub(crate) lean_partial: bool,
+}
+
+impl Switches {
+    fn read() -> Switches {
+        Switches {
+            lean_partial: crate::exp::on("LEAN_PARTIAL"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -134,6 +150,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            switches: Switches::read(),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -170,6 +187,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            switches: Switches::read(),
         })
     }
 

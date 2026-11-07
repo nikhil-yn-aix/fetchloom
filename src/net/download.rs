@@ -661,7 +661,9 @@ impl Net {
                     writer.write_chunk(writer.written(), chunk)?;
                 }
             }
-            writer.save()?;
+            if writer.needs_checkpoint() {
+                writer.save()?;
+            }
             Ok(writer)
         });
         let body = self

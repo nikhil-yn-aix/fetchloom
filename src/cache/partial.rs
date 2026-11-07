@@ -164,7 +164,11 @@ impl Partial {
         md5: bool,
         keep: bool,
     ) -> io::Result<PartialWriter> {
-        let file = self.open(offset, keep)?;
+        let lean = self.cache.switches.lean_partial
+            && offset == 0
+            && !keep
+            && length.is_some_and(|length| length <= SMALL);
+        let file = self.open(offset, keep, lean)?;
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -180,7 +184,12 @@ impl Partial {
             })?;
         }
         let sha256 = hasher.sha256_so_far();
-        let recorded = self.recorded().filter(|record| record.received == offset);
+        // only a resume or kept ranges use the record, and a lean download has neither
+        let recorded = if lean {
+            None
+        } else {
+            self.recorded().filter(|record| record.received == offset)
+        };
         if offset > 0 && recorded.as_ref().map(|record| record.sha256) != Some(sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -200,7 +209,8 @@ impl Partial {
             hasher,
             _lock: self.lock.clone(),
             prefix: offset,
-            pending: Vec::with_capacity(BUFFER),
+            pending: Vec::with_capacity(pending_capacity(lean, length)),
+            lean,
             runs: Vec::new(),
             read_back: 0,
             saved: Instant::now(),
@@ -233,8 +243,18 @@ impl Partial {
     /// them. bytes an earlier run kept are used only when this process may continue them.
     /// otherwise a download from the first byte removes their name and makes a new file there: a
     /// read-only one was sealed by a run that did not finish publishing, and may already be a
-    /// second name of the object, which must never become writable.
-    fn open(&self, offset: u64, keep: bool) -> io::Result<File> {
+    /// second name of the object, which must never become writable. a `lean` download first tries
+    /// to make the new file, which needs no cut and leaves nothing to remove.
+    fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<File> {
+        if lean
+            && let Ok(file) = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&self.bytes)
+        {
+            return Ok(file);
+        }
         // windows reports no link count in metadata, so a second name is asked for apart
         let kept = open_unfollowed(&self.bytes, false).ok().filter(|file| {
             file.metadata().is_ok_and(|metadata| continuable(&metadata))
@@ -357,6 +377,8 @@ pub(crate) struct PartialWriter {
     prefix: u64,
     /// the end of the prefix, not yet in the file.
     pending: Vec<u8>,
+    /// skips the closing checkpoint once every byte is in, and one fstat when finishing.
+    lean: bool,
     /// what other streams wrote past the prefix, by start.
     runs: Vec<Run>,
     /// bytes read back from the file to hash them, since another stream wrote them.
@@ -376,6 +398,12 @@ impl PartialWriter {
     /// how many bytes past the prefix are written.
     pub(crate) fn kept(&self) -> u64 {
         self.runs.iter().map(|run| run.end - run.start).sum()
+    }
+
+    /// whether a stream that ends here should save a checkpoint. a lean download holding every
+    /// byte has nothing worth resuming.
+    pub(crate) fn needs_checkpoint(&self) -> bool {
+        !(self.lean && self.runs.is_empty() && self.record.length == Some(self.prefix))
     }
 
     /// the ranges up to `total` that nothing has written, in order.
@@ -553,18 +581,24 @@ impl PartialWriter {
             bytes,
             record_path,
             record,
+            lean,
             _lock: lock,
             ..
         } = self;
         // read-back must finish before resizing could hide a short read.
         let (digest, md5) = hasher.finish(prefix)?;
+        let metadata = file.metadata()?;
         // bytes past the prefix are not in the hash, such as the end of an earlier version
-        if file.metadata()?.len() != prefix {
+        if metadata.len() != prefix {
             file.set_len(prefix)?;
         }
         // sealed through the handle that wrote it: by name, a link swapped in since would be
         // sealed in its place
-        let mut permissions = file.metadata()?.permissions();
+        let mut permissions = if lean {
+            metadata.permissions()
+        } else {
+            file.metadata()?.permissions()
+        };
         permissions.set_readonly(true);
         file.set_permissions(permissions)?;
         let finished = Finished {
@@ -596,6 +630,14 @@ impl Write for PartialWriter {
 
     fn flush(&mut self) -> io::Result<()> {
         self.flush_pending()
+    }
+}
+
+/// how much a writer gathers before it writes: all of a lean download, else up to [`BUFFER`].
+fn pending_capacity(lean: bool, length: Option<u64>) -> usize {
+    match length {
+        Some(length) if lean => usize::try_from(length).map_or(BUFFER, |length| length.min(BUFFER)),
+        _ => BUFFER,
     }
 }
 

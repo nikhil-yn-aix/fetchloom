@@ -189,3 +189,28 @@ fn a_second_download_of_the_same_link_puts_the_first_in_place_instead_of_waiting
     assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
     cache.publish_downloads().unwrap();
 }
+
+#[test]
+fn a_lean_download_takes_its_name_only_with_its_group() {
+    let (_dir, mut cache) = cache();
+    cache.switches.lean_partial = true;
+    deferring(&cache);
+    let Claim::Owned(partial) = cache.claim("https://example.org/lean").unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let mut writer = partial
+        .writer(0, Some(4), Validators::default(), false, false)
+        .unwrap();
+    writer.write_at(0, b"lean").unwrap();
+    assert!(!writer.needs_checkpoint());
+    let stored = writer.finish().unwrap();
+    assert!(
+        !cache.object_path(&stored.digest).exists(),
+        "no download takes its name before the flush"
+    );
+    cache.publish_downloads().unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"lean"
+    );
+}

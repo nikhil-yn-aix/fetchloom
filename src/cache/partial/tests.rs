@@ -492,3 +492,137 @@ fn pipelined_writes_preserve_full_disk_errors() {
         Some("free some space on that disk, then run the command again")
     );
 }
+
+fn lean() -> (tempfile::TempDir, Cache) {
+    let (dir, mut cache) = cache();
+    cache.switches.lean_partial = true;
+    (dir, cache)
+}
+
+/// writes `bytes` as one stream that states their length and finishes it.
+fn whole(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
+    let partial = owned(cache, url);
+    let length = u64::try_from(bytes.len()).unwrap();
+    let mut writer = partial
+        .writer(0, Some(length), Validators::default(), true, false)
+        .unwrap();
+    assert!(writer.needs_checkpoint(), "nothing is written yet");
+    writer.write_all(bytes).unwrap();
+    if writer.needs_checkpoint() {
+        writer.save().unwrap();
+    } else {
+        assert!(!partial.record.exists(), "a lean download writes no record");
+    }
+    let stored = writer.finish().unwrap();
+    assert!(!partial.bytes.exists());
+    assert!(!partial.record.exists());
+    stored
+}
+
+#[test]
+fn a_lean_download_stores_the_same_object_as_one_with_a_checkpoint() {
+    let bytes = b"the same bytes either way";
+    let (_dir, plain) = cache();
+    let (_lean_dir, lean) = lean();
+    let before = whole(&plain, "https://example.org/a", bytes);
+    let after = whole(&lean, "https://example.org/a", bytes);
+    assert_eq!(after.digest, before.digest);
+    assert_eq!(after.md5, before.md5);
+    assert_eq!(after.size, before.size);
+    assert!(after.new);
+    let object = lean.object_path(&after.digest);
+    assert_eq!(fs::read(&object).unwrap(), bytes);
+    assert!(fs::metadata(&object).unwrap().permissions().readonly());
+}
+
+#[test]
+fn only_small_downloads_from_the_first_byte_are_lean() {
+    let (_dir, cache) = lean();
+    let partial = owned(&cache, "https://example.org/kinds");
+    let writer = |offset, length, keep| {
+        partial
+            .writer(offset, length, Validators::default(), false, keep)
+            .unwrap()
+            .lean
+    };
+    assert!(writer(0, Some(SMALL), false));
+    assert!(!writer(0, Some(SMALL + 1), false));
+    assert!(!writer(0, None, false), "an unstated length may be large");
+    assert!(
+        !writer(0, Some(12), true),
+        "a split download keeps a record"
+    );
+}
+
+#[test]
+fn a_lean_download_cut_short_still_saves_its_checkpoint() {
+    let (_dir, cache) = lean();
+    let partial = owned(&cache, "https://example.org/cut");
+    let mut writer = partial
+        .writer(0, Some(6), Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    assert!(writer.needs_checkpoint());
+    writer.save().unwrap();
+    drop(writer);
+    let (received, validators) = partial.resumable().unwrap();
+    assert_eq!(received, 3);
+    let mut resumed = partial
+        .writer(received, Some(6), validators, false, false)
+        .unwrap();
+    resumed.write_all(b"def").unwrap();
+    let stored = resumed.finish().unwrap();
+    assert_eq!(stored.digest, digest::sha256(b"abcdef"));
+    assert!(partial.resumable().is_none());
+}
+
+#[test]
+fn a_lean_download_replaces_bytes_an_earlier_run_sealed() {
+    for ((dir, mut cache), links) in [(cache(), true), (fat(), false)] {
+        cache.switches.lean_partial = true;
+        let url = "https://example.org/sealed";
+        let object = store(&cache, b"abc");
+        let partial = owned(&cache, url);
+        // a run that died while publishing leaves its bytes sealed, as a second name of the
+        // object where the disk has hardlinks
+        if links && hardlinks(dir.path()) {
+            fs::hard_link(cache.object_path(&object.digest), &partial.bytes).unwrap();
+        } else {
+            fs::write(&partial.bytes, b"abc").unwrap();
+            seal(&partial.bytes);
+        }
+        drop(partial);
+        let stored = whole(&cache, url, b"xyz");
+        assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"xyz");
+        assert_eq!(fs::read(cache.object_path(&object.digest)).unwrap(), b"abc");
+        assert!(
+            fs::metadata(cache.object_path(&object.digest))
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
+    }
+}
+
+#[test]
+fn a_lean_download_cuts_what_an_earlier_run_left_past_its_end() {
+    let (_dir, cache) = lean();
+    let url = "https://example.org/longer";
+    let partial = owned(&cache, url);
+    fs::write(&partial.bytes, b"an earlier, longer version").unwrap();
+    drop(partial);
+    let stored = whole(&cache, url, b"short");
+    assert_eq!(stored.digest, digest::sha256(b"short"));
+    assert_eq!(
+        fs::read(cache.object_path(&stored.digest)).unwrap(),
+        b"short"
+    );
+}
+
+#[test]
+fn a_lean_writer_gathers_no_more_than_its_download() {
+    assert_eq!(pending_capacity(true, Some(4096)), 4096);
+    assert_eq!(pending_capacity(true, Some(0)), 0);
+    assert_eq!(pending_capacity(true, None), BUFFER);
+    assert_eq!(pending_capacity(false, Some(4096)), BUFFER);
+}

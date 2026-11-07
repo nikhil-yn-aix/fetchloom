@@ -587,6 +587,15 @@ fn expired_storage_responses_are_not_retried_for_other_sources() {
 
 #[test]
 fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
+    interrupted_then_resumed(false);
+}
+
+#[test]
+fn a_lean_download_cut_short_keeps_its_checkpoint_and_resumes() {
+    interrupted_then_resumed(true);
+}
+
+fn interrupted_then_resumed(lean: bool) {
     let body = "abcdefgh".repeat(32 * 1024);
     let received = body.len() / 2;
     let cut = format!(
@@ -604,7 +613,8 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
         ),
     ]);
     let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let mut cache = Cache::open(folder.path().join("cache")).unwrap();
+    cache.switches.lean_partial = lean;
     let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
         panic!("nothing else holds the download");
     };
@@ -857,4 +867,25 @@ fn a_body_of_unstated_length_stops_past_the_pinned_size() {
         "read {} bytes",
         net.work.counts().bytes_down
     );
+}
+
+#[test]
+fn a_lean_download_stores_what_the_server_sent_and_leaves_nothing_behind() {
+    let body: Vec<u8> = (0..4096u32)
+        .map(|n| u8::try_from(n % 251).unwrap())
+        .collect();
+    let (url, _) = serve(vec![reply_bytes(&body)]);
+    let folder = tempfile::tempdir().unwrap();
+    let mut cache = Cache::open(folder.path().join("cache")).unwrap();
+    cache.switches.lean_partial = true;
+    let fetched =
+        block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(&body));
+    assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), body);
+    let left: Vec<_> = fs::read_dir(cache.root().join("partial"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| !name.to_string_lossy().ends_with(".lock"))
+        .collect();
+    assert_eq!(left, Vec::<std::ffi::OsString>::new());
 }
