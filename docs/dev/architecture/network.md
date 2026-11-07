@@ -100,6 +100,14 @@ redirects are checked hop by hop. credentials attach only to their configured ho
 
 shown URLs and account arguments share `mask_query`: it masks userinfo and recognized credential fields in both queries and fragments, including URL control-character normalization and wholly percent-encoded pasted URLs. text without credentials is unchanged. project references reject those query or fragment fields before writing data.toml or data.lock; one-off `get` can use them with masked output.
 
+## network experiments
+
+experiment settings come from the run's `Experiments` value and are off by default.
+
+| switch | behavior |
+|---|---|
+| `FETCHLOOM_EXP_NET_BODY_CONNECTIONS=1` | file bodies use the pooled HTTP/1.1 client, so concurrent bodies have separate TCP connections. metadata retains protocol negotiation and HTTP/2 multiplexing. the four-request host cap, overall job cap, cookies, redirect checks, credential scope, retries and byte-rate cap are unchanged. |
+
 ## invariants and traps
 
 - keep byte processing off async workers and queues bounded. a queue size is not a bound on total project memory.

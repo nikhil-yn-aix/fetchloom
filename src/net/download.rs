@@ -494,7 +494,8 @@ impl Net {
             .resumable()
             .filter(|(_, validators)| pinned || if_range(validators).is_some());
         Work::add(&self.work.requests, 1);
-        let response = self.send(from, conditions(earlier.as_ref(), known)).await?;
+        let shape = conditions(earlier.as_ref(), known);
+        let response = self.send_body(from, shape).await?;
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
