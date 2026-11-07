@@ -705,6 +705,13 @@ impl Net {
             )
         };
         let before = probe.step(now, delivered, started, gone, policy.window)?;
+        if policy.initial > 1 && before <= 0.0 {
+            *probe = Probe::Measure {
+                since: now,
+                delivered,
+            };
+            return None;
+        }
         let added = self.add_stream(shared, policy.maximum);
         *probe = match &added {
             Some((id, _)) => Probe::Wait { id: *id, before },

@@ -924,3 +924,38 @@ fn early_range_downloads_preserve_bytes_with_either_setting() {
         assert_eq!(!parts(&server).is_empty(), enabled);
     }
 }
+
+#[test]
+fn adaptive_ranges_wait_through_empty_rate_windows() {
+    for enabled in [false, true] {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let mut net = net(&url, 16);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            ..Validators::default()
+        };
+        let policy = Policy::for_run(&net, &validators);
+        let (sender, _receiver) = tokio::sync::mpsc::channel(16);
+        let streams = Streams {
+            job: Job {
+                from: &url,
+                key: &url,
+                validators: &validators,
+                pinned: false,
+                total: 128 * MIB,
+                on: &|_| Ok(()),
+                slow: None,
+            },
+            board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
+            sender,
+        };
+        let _first = net.try_permit(&url).unwrap();
+        let mut probe = Probe::Measured { rate: 0.0 };
+        let added = net.consider(&streams, &mut probe, policy);
+        assert_eq!(added.is_none(), enabled);
+        assert_eq!(streams.board().shares.len(), if enabled { 1 } else { 2 });
+    }
+}
