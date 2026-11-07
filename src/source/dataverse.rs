@@ -147,10 +147,11 @@ impl Dataset {
     fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {
         super::json(self, response).map_err(|error| {
             if error.kind == Kind::AuthRequired {
-                let command = self.account().command();
+                let account = self.account();
+                let command = account.command();
                 error.help(format!(
                     "if you have access, sign in with `{command}` and run the same command again; otherwise ask the dataset's owner for access"
-                ))
+                )).needs(account, None)
             } else {
                 error
             }

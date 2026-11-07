@@ -69,7 +69,7 @@ no credential is read for either store and none is attached to these hosts; `no_
 
 ## invariants and traps
 
-- credentials come from the context, never a `Remote` field or a serialized lock.
+- credentials come from the context, never a `Remote` field or a serialized lock. dataverse attaches its installation account to both HTTP refusals and restricted-file metadata errors, including the port when it is not 443.
 - project references reject recognized secret query keys. masking a URL is explicit through `Shown` or `shown`, not an invariant of `url::Url`.
 - a reported MD5 is checked against the bytes a URL served before its mapping to SHA-256 can be reused, and only for that URL. the remembered SHA-256 must agree with any SHA-256 the source states, including when its listing omits the size.
 - mutable services cannot guarantee historical listings. the lock's hashes establish byte identity even when a source changes.

@@ -381,3 +381,44 @@ fn pasted_published_versions_keep_their_one_request_pin() {
     .unwrap();
     assert_eq!(doi.reference.to_string(), "doi:10.1234/dataset.xhtml");
 }
+
+#[test]
+fn http_refusals_name_the_install_account() {
+    for (host, account_host) in [
+        ("dataverse.harvard.edu", "dataverse.harvard.edu"),
+        ("dv.example.edu:443", "dv.example.edu"),
+        ("DV.example.edu:8443", "dv.example.edu:8443"),
+        ("[::1]:8443", "[::1]:8443"),
+    ] {
+        let account = crate::auth::Account::Dataverse(account_host.to_owned());
+        for (item, path) in [
+            (
+                "doi:10.7910/DVN/TJCLKP",
+                "/api/datasets/:persistentId/versions/:latest-published?persistentId=doi%3A10.7910%2FDVN%2FTJCLKP",
+            ),
+            (
+                "file:6867336",
+                "/api/files/6867336/versions/:latest-published?returnDatasetVersion=true",
+            ),
+        ] {
+            let url = Url::parse(&format!("https://{host}{path}")).unwrap();
+            let dataset = Dataset::parse(&format!("{host}/{item}")).unwrap();
+            for status in [401, 403] {
+                let recorded = Recorded::default().on(
+                    url.as_str(),
+                    status,
+                    fixture_bytes("dataverse/refused.json"),
+                );
+                let error = block_on(dataset.resolve(&recorded)).unwrap_err();
+                assert_eq!(error.kind, Kind::AuthRequired);
+                assert_eq!(
+                    error.need.as_ref().map(|need| &need.account),
+                    Some(&account),
+                    "{host}, {item}, {status}"
+                );
+                assert!(error.help.unwrap().contains(&account.command()));
+                assert_eq!(recorded.asked(), [url.as_str()]);
+            }
+        }
+    }
+}
