@@ -273,7 +273,7 @@ impl Cache {
         if !recorded_url_matches(&record.url, url) {
             return None;
         }
-        record.url = url.to_owned();
+        url.clone_into(&mut record.url);
         Some(record)
     }
 

@@ -236,8 +236,8 @@ fn zenodo_preserves_whitespace_in_quoted_words() -> Result {
             requests[0].contains("q=title%3a%28fashion+and+mnist%29"),
             "{words:?}: {requests:?}"
         );
-        assert!(catalogs.hf.requests().is_empty());
-        assert!(catalogs.kaggle.requests().is_empty());
+        assert_eq!(catalogs.hf.requests(), Vec::<String>::new());
+        assert_eq!(catalogs.kaggle.requests(), Vec::<String>::new());
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 use super::*;
 
@@ -96,10 +97,10 @@ fn ipv4_forms(ip: Ipv4Addr) -> BTreeSet<String> {
     let octets = ip.octets();
     let canonical = ip.to_string();
     let mut forms = BTreeSet::from([
-        canonical
-            .bytes()
-            .map(|byte| format!("%{byte:02X}"))
-            .collect(),
+        canonical.bytes().fold(String::new(), |mut text, byte| {
+            write!(text, "%{byte:02X}").unwrap();
+            text
+        }),
         canonical.replace('.', "\u{ff0e}"),
         canonical.replace('.', "\u{3002}"),
     ]);

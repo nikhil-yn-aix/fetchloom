@@ -517,7 +517,7 @@ fn nonempty_folder_objects_are_not_ignored_by_s3() {
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("nonempty object"));
         assert!(error.message.contains(key));
-        assert_eq!(recorded.asked(), [url.clone()]);
+        assert_eq!(recorded.asked(), [url.as_str()]);
     }
 }
 
@@ -536,7 +536,7 @@ fn nonempty_folder_objects_are_not_ignored_by_gcs() {
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("nonempty object"));
         assert!(error.message.contains(key));
-        assert_eq!(recorded.asked(), [url.clone()]);
+        assert_eq!(recorded.asked(), [url.as_str()]);
     }
 }
 
@@ -677,7 +677,7 @@ fn missing_gcs_generations_are_refused() {
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("generation"));
         assert!(error.message.contains("d/keep.csv"));
-        assert_eq!(recorded.asked(), [url.clone()]);
+        assert_eq!(recorded.asked(), [url.as_str()]);
     }
 }
 

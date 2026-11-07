@@ -571,7 +571,7 @@ mod tests {
             ),
             (r#"<page2>; rel="next last""#, Some("page2")),
             (r#"<page2>; title="a,b;c"; rel="n\ext last""#, Some("page2")),
-            (r#"<page2>; rel=prev; rel=next"#, None),
+            (r"<page2>; rel=prev; rel=next", None),
             (r#"<page2>; anchor="/another"; rel=next"#, None),
         ] {
             assert_eq!(next_link(value).as_deref(), wanted, "{value}");

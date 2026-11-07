@@ -303,7 +303,7 @@ fn wave1_configured_keys_stay_out_of_outputs_locks_state_and_url_records() -> Re
             scan_secrets(&name, &bytes, &secrets, &mut failures);
         }
         let asked = server.requests();
-        assert!(!asked.is_empty());
+        assert_ne!(asked, Vec::<String>::new());
         for request in asked {
             if secrets
                 .iter()
@@ -446,11 +446,11 @@ fn wave1_project_references_refuse_secret_fragments_without_persisting_them() ->
             ("stderr", output.stderr),
             ("trace", trace_bytes(&trace, false)?),
         ] {
-            scan_secrets(&name, &bytes, &[LINK_SECRET], &mut failures);
+            scan_secrets(name, &bytes, &[LINK_SECRET], &mut failures);
         }
         assert!(!sandbox.work().join("data.lock").exists());
         assert!(!sandbox.work().join("data.toml").exists());
-        assert!(server.requests().is_empty());
+        assert_eq!(server.requests(), Vec::<String>::new());
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
@@ -589,7 +589,7 @@ fn wave1_userinfo_links_are_rejected_without_leaking_or_making_a_request() -> Re
                 scan_secrets(name, &bytes, &secrets, &mut failures);
             }
             assert!(failures.is_empty(), "{}", failures.join("\n"));
-            assert!(server.requests().is_empty());
+            assert_eq!(server.requests(), Vec::<String>::new());
             assert!(!sandbox.work().join("data.toml").exists());
             assert!(!sandbox.work().join("data.lock").exists());
         }

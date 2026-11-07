@@ -212,7 +212,9 @@ fn check_a_replacement_is_whole(validators: String) -> Result {
     });
     let sandbox = Sandbox::new()?;
     let output = sandbox.run(&["--json", "get", &url, "--no-extract", "-o", "out"])?;
-    let asked = serving.join().unwrap()?;
+    let asked = serving
+        .join()
+        .map_err(|_| "the replacement server failed")??;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         fs::read(sandbox.work().join("out/payload.bin"))?,
