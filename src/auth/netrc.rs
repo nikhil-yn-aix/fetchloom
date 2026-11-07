@@ -106,7 +106,10 @@ pub(crate) fn parse(text: &str) -> Vec<Entry> {
                 }
             }
         }
-        if let (Some(login), Some(password)) = (login, password) {
+        if let (Some(login), Some(password)) = (login, password)
+            && !host.contains(['/', '\\', '@', '?', '#', '%'])
+            && super::dataverse_host(host).is_some()
+        {
             entries.push(Entry {
                 host: host.to_ascii_lowercase(),
                 login,

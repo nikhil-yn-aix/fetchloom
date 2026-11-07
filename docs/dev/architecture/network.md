@@ -98,7 +98,7 @@ plain URLs a person writes, and manifest URL or dataverse hosts, can name privat
 
 redirects are checked hop by hop. credentials attach only to their configured host and port over HTTPS: port 443 unless the credential names another, as a key saved for a dataverse installation on another port does, or a `.netrc` machine written with a port. a key for port 443 never reaches another port of its host, nor the other way round, which is curl's CVE-2022-27776. a source key never returns after a redirect leaves the original origin; a `.netrc` login answers its own host on any hop, as curl does, for earthdata's sign-in round trip. the osf key is the other exception: `Account::credentials` adds it for `osf.io` and `files.osf.io` on every hop, since osf download links redirect between the two. offline mode stops both requests and DNS lookup. OSF retries a forbidden XML storage answer only when it explicitly identifies an expired `X-Amz` request.
 
-shown URLs mask userinfo and recognized credential fields in both queries and fragments. project references reject those query or fragment fields before writing data.toml or data.lock; one-off `get` can use them with masked output.
+shown URLs and account arguments share `mask_query`: it masks userinfo and recognized credential fields in both queries and fragments, including URL control-character normalization and wholly percent-encoded pasted URLs. text without credentials is unchanged. project references reject those query or fragment fields before writing data.toml or data.lock; one-off `get` can use them with masked output.
 
 ## invariants and traps
 

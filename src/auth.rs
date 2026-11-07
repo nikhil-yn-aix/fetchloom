@@ -122,7 +122,8 @@ impl Account {
             },
             "earthdata" | "nasa" | EARTHDATA => Account::Login(EARTHDATA.to_owned()),
             "physionet" | PHYSIONET => Account::Login(PHYSIONET.to_owned()),
-            other if other.contains('.') && one_word(other) && !other.contains(['/', ':', '@']) => {
+            other if other.contains('.') && one_word(other) && !other.contains(['/', '\\', ':', '@', '?', '#', '%'])
+                && url::Host::parse(other).is_ok() => {
                 Account::Login(other.to_owned())
             }
             _ => {
@@ -521,7 +522,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
 pub(crate) fn dataverses(var: Var<'_>) -> Vec<String> {
     let mut hosts: Vec<String> = store::saved(var)
         .keys()
-        .filter_map(|id| id.strip_prefix("dataverse:").map(str::to_owned))
+        .filter_map(|id| id.strip_prefix("dataverse:").and_then(dataverse_host))
         .collect();
     if let Some(host) = var("DATAVERSE_URL")
         .and_then(|value| value.into_string().ok())

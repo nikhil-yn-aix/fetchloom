@@ -53,11 +53,34 @@ impl fmt::Display for Shown<'_> {
 
 /// masks a login and secret query or fragment values, even before a reference is a valid URL.
 pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
-    let text = mask_login(text);
-    if let Cow::Owned(masked) = mask_secret_values(&text) {
+    if let Some(masked) = mask_normalized(text) {
         return Cow::Owned(masked);
     }
-    text
+    // pasted, wholly encoded URLs are still sensitive when rejected as arguments.
+    if !text.contains(':') && text.contains('%') {
+        let decoded = percent_encoding::percent_decode_str(text).decode_utf8_lossy();
+        if let Some(masked) = mask_normalized(&decoded) {
+            return Cow::Owned(masked);
+        }
+    }
+    Cow::Borrowed(text)
+}
+
+fn mask_normalized(text: &str) -> Option<String> {
+    // URL parsing removes these characters, even from the scheme or authority.
+    let normalized = if text.contains(['\t', '\r', '\n']) {
+        Cow::Owned(text.replace(['\t', '\r', '\n'], ""))
+    } else {
+        Cow::Borrowed(text)
+    };
+    let login = mask_login(&normalized);
+    if let Cow::Owned(masked) = mask_secret_values(&login) {
+        return Some(masked);
+    }
+    match login {
+        Cow::Owned(masked) => Some(masked),
+        Cow::Borrowed(_) => None,
+    }
 }
 
 /// replaces the `user:password@` of a web link's authority with `***@`. the authority starts
@@ -119,6 +142,23 @@ fn mask_pairs(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalization_cannot_hide_userinfo_from_masking() {
+        for text in [
+            "ht\ttps://reader:mask_canary@example.org/path",
+            "http\rs://reader:mask_canary@example.org/path",
+            "https:\n//reader:mask_canary@example.org/path",
+            "https%3A%2F%2Freader%3Amask_canary%40example.org/path",
+            "https%3A%2F%2Fexample.org/path%3Ftoken%3Dmask_canary",
+        ] {
+            let shown = mask_query(text);
+            assert!(!shown.contains("mask_canary"), "{shown}");
+            assert!(shown.contains("***"), "{shown}");
+        }
+        let plain = "http\rs://example.org/path";
+        assert_eq!(mask_query(plain), plain);
+    }
 
     #[test]
     fn signed_storage_links_show_without_their_secrets() {

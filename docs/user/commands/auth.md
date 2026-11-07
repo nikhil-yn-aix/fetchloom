@@ -20,7 +20,7 @@ fetchloom auth logout [options] <account>
 
 `<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a host name such as `data.example.edu`. `--host` names a dataverse installation; harvard's is the default. it takes a host name, with its port when that is not 443, as `--host dv.example.edu:8443`, and refuses a login, path or query.
 
-a URL pasted as an account name is rejected. its login and secret query values stay masked in the error, including with `--json`.
+an account name must be a source name or a plain host name, not a URL, query or fragment. rejected arguments use the same masking as URL output, including percent-encoded URLs and syntax the URL parser would normalize. `--json` and `-vv` keep that masking. malformed hosts in the account index or `.netrc` are ignored.
 
 ## signing in
 

@@ -472,3 +472,36 @@ fn a_netrc_others_can_open_is_told_apart() {
         assert!(!netrc::too_open(&path));
     }
 }
+
+#[test]
+fn account_hosts_cannot_carry_url_components() {
+    for name in [
+        "example.org?token=mask_canary",
+        "example.org#client_secret=mask_canary",
+        "https%3A%2F%2Freader%3Amask_canary%40example.org",
+    ] {
+        let error = Account::parse(name, None).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert!(!error.message.contains("mask_canary"));
+    }
+    assert_eq!(
+        Account::parse("DATA.example.org", None).unwrap(),
+        Account::Login("data.example.org".to_owned())
+    );
+}
+
+#[test]
+fn stored_account_hosts_cannot_become_displayed_secret_urls() {
+    let home = tempfile::tempdir().unwrap();
+    write(
+        &home.path().join(".netrc"),
+        "machine example.org?token=mask_canary login ada password pw\nmachine example.org:8443 login ada password pw\n",
+    );
+    let listed = listed(&machine(home.path(), &[]));
+    assert!(
+        listed
+            .iter()
+            .all(|account| !account.id().contains("mask_canary"))
+    );
+    assert!(listed.contains(&Account::Login("example.org:8443".to_owned())));
+}

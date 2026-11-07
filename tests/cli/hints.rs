@@ -258,3 +258,32 @@ fn errors_messages_account_typos_never_echo_link_secrets() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn normalized_account_typos_never_echo_link_secrets() -> Result {
+    let sandbox = Sandbox::new()?;
+    for account in [
+        "ht\ttps://reader:mask_canary@example.org/data",
+        "http\rs://reader:mask_canary@example.org/data",
+        "https:\n//reader:mask%5Fcanary@example.org/data",
+        "example.org?token=mask_canary",
+        "example.org#client_secret=mask_canary",
+        "https%3A%2F%2Freader%3Amask_canary%40example.org",
+    ] {
+        for action in ["login", "logout"] {
+            for flags in [&[][..], &["--json"], &["-vv"], &["--json", "-vv"]] {
+                let output = sandbox
+                    .command(&["--offline", "auth", action, account])
+                    .args(flags)
+                    .output()?;
+                assert_eq!(output.status.code(), Some(2));
+                let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+                assert!(
+                    !shown.contains("mask_canary") && !shown.contains("mask%5Fcanary"),
+                    "{shown}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
