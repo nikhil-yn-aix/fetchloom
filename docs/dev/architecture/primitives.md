@@ -63,6 +63,8 @@ linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLO
 
 ## tests
 
+CLI resource-cap tests check accepted settings, configuration errors and complete output bytes. they do not infer token accounting or worker counts from elapsed time, which also includes scheduling and filesystem waits.
+
 | files | cargo filter |
 |---|---|
 | [digest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/digest.rs), [name.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/name.rs), [glob.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/glob.rs), [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | `cargo test --locked --lib digest::`; `cargo test --locked --lib name::`; `cargo test --locked --lib glob::`; `cargo test --locked --lib units::` |
