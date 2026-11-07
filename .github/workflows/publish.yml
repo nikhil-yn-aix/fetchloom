@@ -25,14 +25,17 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
       - name: download the wheels
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern '*.whl' --pattern SHA256SUMS
-          cd dist
-          sha256sum --check --ignore-missing SHA256SUMS
-          rm SHA256SUMS
+          python3 python/check_release.py dist --suffix .whl --count 6
+          rm dist/SHA256SUMS
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
   crates:

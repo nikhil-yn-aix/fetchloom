@@ -110,8 +110,7 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist --pattern '*.deb' --pattern SHA256SUMS
-          cd dist
-          sha256sum --check --ignore-missing SHA256SUMS
+          python3 python/check_release.py dist --suffix .deb --count 2
       # a flat repository: `deb [signed-by=...] https://nikhil-yn-aix.github.io/fetchloom/apt ./`
       - name: build the signed apt repository
         if: steps.release.outputs.tag != ''

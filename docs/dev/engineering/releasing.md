@@ -36,6 +36,8 @@ build jobs have a 60-minute timeout. attestation and release each have 15 minute
 | `pypi` | the `pypi` environment and a PyPI trusted publisher naming `publish.yml` and that environment | download the release wheels, check them against `SHA256SUMS`, upload them |
 | `crates` | the `CARGO_REGISTRY_TOKEN` secret, scoped to publishing fetchloom | `cargo publish --locked` from the tag |
 
+`python/check_release.py` checks the downloaded package inventory before publication: all six wheels or both debs must have one checksum entry and matching bytes. it rejects missing packages, unlisted downloads, duplicate entries and malformed checksum lines. entries for other release artifact types may remain undownloaded. update the expected counts with the release matrix when adding a platform. this check detects incomplete or inconsistent assets; it does not independently authenticate a release whose assets and checksums were both replaced.
+
 ## apt repository
 
 github pages serves one site per repository, and a deployment replaces the whole site. [pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml) is therefore the only workflow that deploys it: the documentation at the root and the apt repository under `/apt`. it runs when a release is published and when documentation changes on main, and each run rebuilds `/apt` from the latest published release.
