@@ -28,27 +28,51 @@ pub(crate) enum Access {
 impl Cache {
     /// this cache, held for `access` until its last clone is dropped. while another run holds
     /// it in a way that conflicts, `waiting` is called once and the lock is asked for again until
-    /// it is free, or until `stop` is asked, which fails with [`io::ErrorKind::Interrupted`]. a
-    /// filesystem without locks leaves the cache unheld, as it leaves downloads unclaimed.
-    pub(crate) fn hold(
+    /// it is free, or until `stop` is asked, which fails with [`io::ErrorKind::Interrupted`].
+    /// unsupported locking permits unheld shared access only. exclusive access fails on every
+    /// lock error, and unexpected shared-lock errors also fail.
+    pub(crate) fn hold(self, access: Access, stop: &Stop, waiting: &dyn Fn()) -> io::Result<Cache> {
+        self.hold_with(
+            access,
+            stop,
+            waiting,
+            |file, access| match access {
+                Access::Shared => file.try_lock_shared(),
+                Access::Exclusive => file.try_lock(),
+            },
+            || std::thread::sleep(RETRY),
+        )
+    }
+
+    fn hold_with(
         mut self,
         access: Access,
         stop: &Stop,
         waiting: &dyn Fn(),
+        take: impl Fn(&File, Access) -> Result<(), TryLockError>,
+        retry: impl Fn(),
     ) -> io::Result<Cache> {
         let Some(file) = open_lock(&self.root.join(LOCK))? else {
             return Ok(self);
         };
         let mut told = false;
         loop {
-            let taken = match access {
-                Access::Shared => file.try_lock_shared(),
-                Access::Exclusive => file.try_lock(),
-            };
+            let taken = take(&file, access);
             match taken {
                 Ok(()) => break,
                 Err(TryLockError::WouldBlock) => {}
-                Err(TryLockError::Error(_)) => return Ok(self),
+                Err(TryLockError::Error(err))
+                    if access == Access::Shared && err.kind() == io::ErrorKind::Unsupported =>
+                {
+                    return Ok(self);
+                }
+                Err(TryLockError::Error(err)) if access == Access::Exclusive => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!("cannot collect the cache without an exclusive cache lock: {err}"),
+                    ));
+                }
+                Err(TryLockError::Error(err)) => return Err(err),
             }
             if stop.is_asked() {
                 return Err(io::ErrorKind::Interrupted.into());
@@ -57,7 +81,7 @@ impl Cache {
                 waiting();
                 told = true;
             }
-            std::thread::sleep(RETRY);
+            retry();
         }
         self.held = Some(Arc::new(file));
         Ok(self)
@@ -156,5 +180,91 @@ mod tests {
                 .unwrap();
             assert!(held.held.is_some());
         }
+    }
+
+    #[test]
+    fn gc_refuses_every_lock_error_instead_of_running_unlocked() {
+        for kind in [
+            io::ErrorKind::Unsupported,
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::Other,
+        ] {
+            let (_dir, cache) = cache();
+            let error = cache
+                .hold_with(
+                    Access::Exclusive,
+                    &Stop::default(),
+                    &|| panic!("a lock error is not contention"),
+                    |_, access| {
+                        assert_eq!(access, Access::Exclusive);
+                        Err(TryLockError::Error(io::Error::new(kind, "lock refused")))
+                    },
+                    || panic!("a lock error must not be retried"),
+                )
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert!(error.to_string().contains("exclusive cache lock"));
+        }
+    }
+
+    #[test]
+    fn unexpected_shared_lock_errors_stop_the_run() {
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::Other] {
+            let (_dir, cache) = cache();
+            let error = cache
+                .hold_with(
+                    Access::Shared,
+                    &Stop::default(),
+                    &|| panic!("a lock error is not contention"),
+                    |_, _| Err(TryLockError::Error(io::Error::new(kind, "lock refused"))),
+                    || panic!("a lock error must not be retried"),
+                )
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.to_string(), "lock refused");
+        }
+    }
+
+    #[test]
+    fn unsupported_shared_locking_keeps_the_private_writer_fallback() {
+        let (_dir, cache) = cache();
+        let held = cache
+            .hold_with(
+                Access::Shared,
+                &Stop::default(),
+                &|| panic!("unsupported locking is not contention"),
+                |_, _| Err(TryLockError::Error(io::ErrorKind::Unsupported.into())),
+                || panic!("unsupported locking must not be retried"),
+            )
+            .unwrap();
+        assert!(held.held.is_none());
+    }
+
+    #[test]
+    fn contention_is_announced_once_and_retried_until_acquired() {
+        let (_dir, cache) = cache();
+        let attempts = Cell::new(0);
+        let waits = Cell::new(0);
+        let retries = Cell::new(0);
+        let held = cache
+            .hold_with(
+                Access::Shared,
+                &Stop::default(),
+                &|| waits.set(waits.get() + 1),
+                |_, _| {
+                    attempts.set(attempts.get() + 1);
+                    if attempts.get() < 3 {
+                        Err(TryLockError::WouldBlock)
+                    } else {
+                        Ok(())
+                    }
+                },
+                || retries.set(retries.get() + 1),
+            )
+            .unwrap();
+        assert!(held.held.is_some());
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(waits.get(), 1);
+        assert_eq!(retries.get(), 2);
     }
 }

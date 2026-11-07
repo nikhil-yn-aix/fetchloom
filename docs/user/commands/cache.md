@@ -55,7 +55,7 @@ gc warns about paths it could not remove or inspect for cleanup. JSON retains su
 
 ### runs that use the cache
 
-every command that opens the cache to work with it, such as `add`, `sync`, `get`, `cache` and `cache verify`, holds the empty `gc.lock` file in the cache folder with a shared OS lock while it works, and `cache gc` takes that lock alone, as cargo and uv lock their caches. so gc never removes an object that a running command has found and is about to place. while another command uses the cache, gc prints `Waiting for other fetchloom runs to finish with the cache` and starts once they have; a command started during gc waits for it in the same way. ctrl-c stops either wait. dry runs, `cache gc --dry-run` among them, take no lock and never wait, so what a gc dry run lists can differ from what a gc run later frees. a filesystem without file locks leaves the cache unlocked.
+every command that opens the cache to work with it, such as `add`, `sync`, `get`, `cache` and `cache verify`, holds the empty `gc.lock` file in the cache folder with a shared OS lock while it works, and `cache gc` takes that lock alone, as cargo and uv lock their caches. so gc never removes an object that a running command has found and is about to place. while another command uses the cache, gc prints `Waiting for other fetchloom runs to finish with the cache` and starts once they have; a command started during gc waits for it in the same way. ctrl-c stops either wait. dry runs, `cache gc --dry-run` among them, take no lock and never wait, so what a gc dry run lists can differ from what a gc run later frees. when the filesystem explicitly reports that locks are unsupported, shared-cache commands can continue, but gc refuses to delete without an exclusive lock. other lock errors stop the command. a read-only `gc.lock` can still protect shared readers; on NFS, gc needs write access to that file to take its exclusive lock.
 
 ### reminder
 
@@ -101,6 +101,7 @@ verification does not check independent copies in `data/`. after repairing cache
 | successful inspection, gc or verification | 0 |
 | verification found changed bytes | 30, `integrity.mismatch` |
 | verification found unreadable paths but no changed bytes | 50, `local.io` |
+| gc could not acquire its exclusive cache lock | 50, `local.io`; nothing is removed |
 | gc could not remove or inspect a cleanup path | 50, `local.io`, even after other removals succeeded |
 | interrupted work | 130 |
 

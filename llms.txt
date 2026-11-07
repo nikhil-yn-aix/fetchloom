@@ -17,8 +17,8 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [status](docs/user/commands/status.md): local differences and success-with-differences behavior
 - [path](docs/user/commands/path.md): absolute paths and implicit sync
 - [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
-- [get](docs/user/commands/get.md): one-off downloads, real generated folders and explicit output-folder link rules
-- [cache](docs/user/commands/cache.md): inspection, garbage collection and verification
+- [get](docs/user/commands/get.md): one-off downloads and existing-folder rules
+- [cache](docs/user/commands/cache.md): inspection, exclusively locked garbage collection and verification; lock errors prevent deletion
 - [auth](docs/user/commands/auth.md): signing in once, with keys shared with each source's own tools
 - [completions](docs/user/commands/completions.md): shell completion scripts for bash, zsh, fish, powershell and elvish
 - [sources](docs/user/sources/README.md): reference spellings, pins, credentials and limits for each family
