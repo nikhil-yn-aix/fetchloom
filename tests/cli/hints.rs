@@ -310,3 +310,25 @@ fn errors_messages_json_help_survives_non_unicode_arguments() -> Result {
     assert!(serde_json::from_slice::<serde_json::Value>(&after_separator.stdout).is_err());
     Ok(())
 }
+
+#[test]
+fn errors_messages_a_broken_lock_has_no_unusable_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("data.toml"), "[datasets]\n")?;
+    fs::write(sandbox.work().join("data.lock"), "version = [\n")?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(50));
+    let document = crate::support::json(&output)?;
+    let fix = &document["errors"][0]["fix"];
+    if let Some(command) = fix.as_str() {
+        assert_eq!(command, "fetchloom lock");
+        let repeated = sandbox.run(&["--json", "lock"])?;
+        assert!(
+            fix.is_null(),
+            "fix {fix} repeated exit {:?}: {}",
+            repeated.status.code(),
+            text(&repeated.stdout)?
+        );
+    }
+    Ok(())
+}
