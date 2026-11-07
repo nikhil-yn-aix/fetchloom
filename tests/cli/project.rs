@@ -1549,3 +1549,28 @@ fn equal_untracked_read_only_files_get_the_requested_writable_copy() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+#[test]
+fn ready_paths_read_and_plan_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let trace = sandbox.work().join("path.trace.json");
+    for target in ["iris", "iris/iris.csv"] {
+        let output = sandbox
+            .command(&["--offline", "path", target])
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
+        for name in ["read_manifest", "read_lock", "plan", "open_cache", "scan"] {
+            let calls = events
+                .iter()
+                .filter(|event| event["ph"] == "B" && event["name"] == name)
+                .count();
+            assert_eq!(calls, 1, "{target}: {name}");
+        }
+    }
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

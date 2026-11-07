@@ -23,7 +23,7 @@ there are no command-specific options. [global options](README.md#global-options
 3. if the dataset is not ready, sync the whole project.
 4. print its absolute location on stdout. JSON returns that location as a string in `result`.
 
-a ready dataset needs no project lock and prints no closing summary. a subfolder is accepted when it contains locked files. when an archive tree is unknown, sync may be needed before checking its members.
+a ready dataset needs no project lock and prints no closing summary. member validation, readiness and the answer share one lock read and one plan. after waiting for another command, fetchloom rereads the project before deciding whether sync is still needed. a subfolder is accepted when it contains locked files. when an archive tree is unknown, sync may be needed before checking its members.
 
 stderr excerpt for a path absent from a dataset:
 

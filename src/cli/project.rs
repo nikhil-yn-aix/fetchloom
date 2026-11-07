@@ -14,6 +14,7 @@ use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Changes, Placement, Preview, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
+use crate::cache::Cache;
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
@@ -824,29 +825,47 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
     let project = find(&context.output)?;
-    let (_, mut manifest) = project.manifest()?;
+    let (_, manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
-    check_member(&project, &manifest, name, file)?;
-    if !ready(context, &project, &manifest, name)? {
-        let _held = hold(context, &project, "path").await?;
-        // many jobs on a cluster may ask at once: the first syncs, and the rest find its work
-        // done once they hold the lock, so they answer without syncing in turn
-        let (text, reread) = project.manifest()?;
-        manifest = reread;
+    let lock = project.lock()?;
+    let mut cache = None;
+    let path = if let Some(path) = ready_path(
+        context,
+        &project,
+        &manifest,
+        lock.as_ref(),
+        &mut cache,
+        name,
+        file,
+    )? {
+        path
+    } else {
+        drop(lock);
+        drop(manifest);
+        let held = hold(context, &project, "path").await?;
+        let (text, manifest) = project.manifest()?;
         known(&manifest, name, "path")?;
-        check_member(&project, &manifest, name, file)?;
-        if !ready(context, &project, &manifest, name)? {
-            let work = Loop::new(
-                context,
-                &project,
-                Arc::new(net(context, &manifest)),
-                open_cache()?,
-            );
-            let read = project.lock_and_text()?;
+        let read = project.lock_and_text()?;
+        if let Some(path) = ready_path(
+            context,
+            &project,
+            &manifest,
+            read.as_ref().map(|(lock, _)| lock),
+            &mut cache,
+            name,
+            file,
+        )? {
+            path
+        } else {
+            let cache = match cache {
+                Some(cache) => cache,
+                None => open_cache()?,
+            };
+            let work = Loop::new(context, &project, Arc::new(net(context, &manifest)), cache);
             let seen = Seen {
                 manifest: digest::sha256(text.as_bytes()),
                 lock: read
@@ -863,11 +882,25 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                 Read::Planned(&seen),
             )
             .await?;
+            drop(held);
+            let lock = project.lock()?.unwrap_or_default();
+            let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
+            planned_path(&project, &manifest, &planned, name, file)?
         }
-    }
-    let lock = project.lock()?.unwrap_or_default();
-    let targets = plan::from_cache(&manifest, &lock, &open_cache()?)?.targets;
-    if !targets.iter().any(|target| target.dataset == name) {
+    };
+    context.output.answer(&path.display().to_string());
+    Ok(path)
+}
+
+/// validates the answer against the same plan used to check readiness.
+fn planned_path(
+    project: &Project,
+    manifest: &Manifest,
+    planned: &plan::Plan<'_>,
+    name: &str,
+    file: Option<&str>,
+) -> Result<PathBuf, Error> {
+    if !planned.targets.iter().any(|target| target.dataset == name) {
         return Err(Error::new(
             Kind::Usage,
             format!("{name} has no regular files after extraction"),
@@ -876,76 +909,31 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             "set extract = false on {name} in data.toml, then run `fetchloom sync` to keep the packed archive"
         )));
     }
-    let folder = plan::folder(&manifest, name);
+    let folder = plan::folder(manifest, name);
     let relative = match file.filter(|file| !file.is_empty()) {
         None => folder,
         Some(file) => {
             let wanted = format!("{folder}/{file}");
-            if !targets.iter().any(|target| {
-                target.path == wanted || target.path.starts_with(&format!("{wanted}/"))
+            let prefix = format!("{wanted}/");
+            if !planned.targets.iter().any(|target| {
+                target.dataset == name
+                    && (target.path == wanted || target.path.starts_with(&prefix))
             }) {
-                let inside: Vec<&str> = targets
+                let prefix = format!("{folder}/");
+                let inside: Vec<&str> = planned
+                    .targets
                     .iter()
-                    .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
+                    .filter(|target| target.dataset == name)
+                    .filter_map(|target| target.path.strip_prefix(&prefix))
                     .collect();
                 return Err(not_in(name, file, &inside));
             }
             wanted
         }
     };
-    let path = project
+    Ok(project
         .root
-        .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
-    context.output.answer(&path.display().to_string());
-    Ok(path)
-}
-
-/// rejects a member only when the current lock and cached trees prove it cannot exist.
-fn check_member(
-    project: &Project,
-    manifest: &Manifest,
-    name: &str,
-    file: Option<&str>,
-) -> Result<(), Error> {
-    let Some(file) = file.filter(|file| !file.is_empty()) else {
-        return Ok(());
-    };
-    let Some(lock) = project.lock()? else {
-        return Ok(());
-    };
-    let Some(locked) = lock.get(name) else {
-        return Ok(());
-    };
-    if manifest
-        .datasets
-        .get(name)
-        .is_none_or(|entry| locked.spec != lock::spec(entry))
-    {
-        return Ok(());
-    }
-    let planned = plan::from_cache(manifest, &lock, &open_cache()?)?;
-    if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
-        return Ok(());
-    }
-    let folder = plan::folder(manifest, name);
-    let wanted = format!("{folder}/{file}");
-    if planned.targets.iter().any(|target| {
-        target.dataset == name
-            && (target.path == wanted || target.path.starts_with(&format!("{wanted}/")))
-    }) {
-        return Ok(());
-    }
-    let inside: Vec<&str> = planned
-        .targets
-        .iter()
-        .filter(|target| target.dataset == name)
-        .filter_map(|target| target.path.strip_prefix(&format!("{folder}/")))
-        .collect();
-    // a dataset with no files at all gets the fuller answer that explains why
-    if inside.is_empty() {
-        return Ok(());
-    }
-    Err(not_in(name, file, &inside))
+        .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
 /// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to
@@ -976,16 +964,18 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
     ))
 }
 
-/// whether a dataset is locked as data.toml asks and every file of it sits unchanged where it
-/// belongs, so `path` can answer without the project lock.
-fn ready(
+/// a ready answer from one lock snapshot and one plan, without a mutation hold.
+fn ready_path(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
+    lock: Option<&Lock>,
+    cache: &mut Option<Cache>,
     name: &str,
-) -> Result<bool, Error> {
-    let Some(lock) = project.lock()? else {
-        return Ok(false);
+    file: Option<&str>,
+) -> Result<Option<PathBuf>, Error> {
+    let Some(lock) = lock else {
+        return Ok(None);
     };
     let fresh = lock.get(name).is_some_and(|locked| {
         manifest
@@ -994,17 +984,21 @@ fn ready(
             .is_some_and(|entry| locked.spec == lock::spec(entry))
     });
     if !fresh {
-        return Ok(false);
+        return Ok(None);
     }
-    let survey = Survey::read(project, &manifest.data_dir, context.threads);
-    let cache = open_cache()?;
-    // a file a mark puts in doubt waits for a sync, which hashes it once and records it
-    let doubted = survey.doubted(&project.root, &cache)?;
-    let planned = plan::from_cache(manifest, &lock, &cache)?;
+    let cache = match cache {
+        Some(cache) => cache,
+        slot @ None => slot.insert(open_cache()?),
+    };
+    let planned = plan::from_cache(manifest, lock, cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
-        return Ok(false);
+        return Ok(None);
     }
-    Ok(planned
+    // reject a known impossible member before a missing file can trigger downloads.
+    let answer = planned_path(project, manifest, &planned, name, file)?;
+    let survey = Survey::read(project, &manifest.data_dir, context.threads);
+    let doubted = survey.doubted(&project.root, cache)?;
+    let ready = planned
         .targets
         .iter()
         .filter(|target| target.dataset == name)
@@ -1016,7 +1010,8 @@ fn ready(
                         && !survey.edited.contains(&target.path)
                         && (!target.copy || placed.writable)
                 })
-        }))
+        });
+    Ok(ready.then_some(answer))
 }
 
 /// data.toml and data.lock as a run read them, which the state records as the run leaves them.

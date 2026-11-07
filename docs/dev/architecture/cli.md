@@ -45,7 +45,7 @@ help routing reads short-option bundles from clap metadata. `-qh` still requests
 | `sync` | hold the project, read inputs, reject a stale lock under `--locked`, then enter `sync_all` |
 | `lock` | resolve changed entries and learn pins; already pinned files need not fill the cache |
 | `lock --check` | compare specs without network access or mutation locking |
-| `path` | answer directly when the dataset is ready; otherwise hold, reread and sync before answering |
+| `path` | read the lock and build its plan once per readiness check, sharing that plan with member validation and the answer; open the cache at most once; otherwise hold, reread and sync before answering |
 | `get` | share download, archive and placement machinery without writing project metadata; a lone link prechecks its known folder, while batches check final names and collision suffixes after downloading |
 | `status` | inspect local state without taking the mutation lock |
 | `list` | read manifest and lock on a cancellable blocking task, without scanning placements or taking the mutation lock |
