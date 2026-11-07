@@ -43,7 +43,11 @@ pub(super) fn is_html(headers: &HeaderMap) -> bool {
 /// RFC 9110 section 13.1.5 allows no weak date; the minute allows for clock uncertainty.
 pub(super) fn if_range(validators: &Validators) -> Option<&str> {
     if let Some(tag) = &validators.etag {
-        return (!tag.starts_with("W/")).then_some(tag.as_str());
+        let opaque = tag.strip_prefix('"')?.strip_suffix('"')?;
+        return opaque
+            .bytes()
+            .all(|byte| matches!(byte, b'!' | b'#'..=b'~' | 0x80..=0xff))
+            .then_some(tag.as_str());
     }
     let modified = validators.last_modified.as_deref()?;
     let date = httpdate::parse_http_date(validators.date.as_deref()?).ok()?;
@@ -195,6 +199,32 @@ fn decode_extended(raw: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_entity_tags_cannot_prove_a_version() {
+        let invalid = ["", "v1", "w/\"v1\"", "\"v1\", \"v2\"", "\"unfinished"];
+        let accepted: Vec<_> = invalid
+            .into_iter()
+            .filter(|etag| {
+                let validators = Validators {
+                    etag: Some((*etag).to_owned()),
+                    ..Validators::default()
+                };
+                if_range(&validators).is_some()
+            })
+            .collect();
+        assert!(
+            accepted.is_empty(),
+            "invalid entity tags were accepted as strong version proof: {accepted:?}"
+        );
+        for etag in ["\"\"", "\"v1\""] {
+            let validators = Validators {
+                etag: Some(etag.to_owned()),
+                ..Validators::default()
+            };
+            assert_eq!(if_range(&validators), Some(etag));
+        }
+    }
 
     fn headers(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
         let mut map = HeaderMap::new();

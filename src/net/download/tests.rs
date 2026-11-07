@@ -859,3 +859,20 @@ fn a_body_of_unstated_length_stops_past_the_pinned_size() {
         net.work.counts().bytes_down
     );
 }
+
+#[test]
+fn malformed_tags_do_not_enable_range_splitting() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let net = net(&url);
+    for tag in ["", "v1", "w/\"v1\""] {
+        let mut head = header::HeaderMap::new();
+        head.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+        head.insert(header::ETAG, tag.parse().unwrap());
+        let proof = if_range(&headers::validators(&head)).is_some();
+        assert!(
+            !net.may_split(Some(SPLIT_ABOVE), StatusCode::OK, &head, proof),
+            "{tag:?}"
+        );
+        assert!(net.may_split(Some(SPLIT_ABOVE), StatusCode::OK, &head, true));
+    }
+}

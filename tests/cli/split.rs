@@ -158,6 +158,21 @@ fn saved_ranges(sandbox: &Sandbox) -> bool {
 
 #[test]
 fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
+    check_a_replacement_is_whole(
+        "Date: Wed, 21 Oct 2015 07:28:00 GMT\r\nLast-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\n"
+            .to_owned(),
+    )
+}
+
+#[test]
+fn malformed_tags_cannot_splice_versions() -> Result {
+    for tag in ["", "v1", "w/\"v1\"", "\"v1\", \"v2\"", "\"unfinished"] {
+        check_a_replacement_is_whole(format!("ETag: {tag}\r\n"))?;
+    }
+    Ok(())
+}
+
+fn check_a_replacement_is_whole(validators: String) -> Result {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
@@ -166,7 +181,6 @@ fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
     let url = format!("http://{}/payload.bin", listener.local_addr()?);
     let serving = std::thread::spawn(move || -> std::io::Result<Vec<String>> {
         let mut asked = Vec::new();
-        let date = "Wed, 21 Oct 2015 07:28:00 GMT";
         for attempt in 0..2 {
             let (mut stream, _) = listener.accept()?;
             stream.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -176,19 +190,21 @@ fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
                 head.push(byte[0]);
             }
             let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
-            let response = if attempt == 0 {
-                format!(
-                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\naaaa"
-                )
+            let (status, range, length, body) = if attempt == 0 {
+                ("200 OK", "", 8, "aaaa")
             } else if head.contains("range:") {
-                format!(
-                    "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 4\r\nContent-Range: bytes 4-7/8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\nBBBB"
+                (
+                    "206 Partial Content",
+                    "Content-Range: bytes 4-7/8\r\n",
+                    4,
+                    "BBBB",
                 )
             } else {
-                format!(
-                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\nBBBBBBBB"
-                )
+                ("200 OK", "", 8, "BBBBBBBB")
             };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {length}\r\n{range}{validators}\r\n{body}"
+            );
             asked.push(head);
             stream.write_all(response.as_bytes())?;
         }
