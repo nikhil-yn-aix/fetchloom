@@ -645,4 +645,10 @@ mod tests {
         assert_eq!(common_top(&members(&["a.csv"])), None);
         assert_eq!(common_top(&[]), None);
     }
+
+    #[test]
+    fn caseless_sharp_s_paths_are_refused() {
+        let locked = lock(&[("a", &["ß.csv", "ẞ.csv"])]);
+        assert!(targets(&manifest(ONE), &locked).is_err());
+    }
 }

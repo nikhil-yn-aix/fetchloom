@@ -26,7 +26,7 @@ these modules contain small value types and policies used by more than one compo
 
 `Sha256` and `Md5` reject invalid encoded digests at construction. `Hasher` always computes SHA-256 and optionally MD5; callers that already have a SHA-256 pin avoid redundant MD5 work.
 
-`sanitize` cleans suggested names; validation of manifest and locked paths instead refuses unsafe input. do not replace validation with sanitization, which could silently change a requested destination. `fold` uses ASCII lowercase for ASCII names, or NFC followed by uppercase and lowercase for unicode collision detection.
+`sanitize` cleans suggested names; validation of manifest and locked paths instead refuses unsafe input. do not replace validation with sanitization, which could silently change a requested destination. `fold` uses ASCII lowercase for ASCII names, or NFC followed by lowercase, uppercase and lowercase for unicode collision detection. lowercasing first joins capital and small sharp s; the uppercase round trip also joins the two greek sigmas.
 
 path components longer than 255 UTF-8 bytes are refused, except on windows, which counts the 255 in UTF-16 units as ntfs does. windows also rejects reserved device names, forbidden characters and trailing dots or spaces. metadata path checks keep data placements out of fetchloom and project-control files.
 

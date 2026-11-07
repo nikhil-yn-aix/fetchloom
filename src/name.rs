@@ -336,7 +336,8 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
 }
 
 /// a key for portable collision checks and possible filesystem aliases. unicode names are
-/// composed first; the round trip through uppercase joins letters like the two greek sigmas,
+/// composed and lowercased first to join both sharp-s forms; the round trip through uppercase
+/// joins letters like the two greek sigmas,
 /// which lowercase alone keeps apart. equal keys still need a filesystem check before two
 /// paths can be treated as the same file.
 pub(crate) fn fold(path: &str) -> String {
@@ -345,6 +346,7 @@ pub(crate) fn fold(path: &str) -> String {
     }
     ComposingNormalizerBorrowed::new_nfc()
         .normalize(path)
+        .to_lowercase()
         .to_uppercase()
         .to_lowercase()
 }
@@ -691,5 +693,17 @@ mod tests {
             assert_eq!(seen, "cafe\u{301}");
         }
         assert_eq!(as_disk_sees("iris"), "iris");
+    }
+
+    #[test]
+    fn capital_sharp_s_has_the_same_portable_key() {
+        for (a, b) in [
+            ("ß", "ẞ"),
+            ("Straße", "STRAẞE"),
+            ("σ", "ς"),
+            ("café", "cafe\u{301}"),
+        ] {
+            assert_eq!(fold(a), fold(b), "{a} and {b}");
+        }
     }
 }
