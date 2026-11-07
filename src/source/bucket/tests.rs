@@ -682,6 +682,24 @@ fn missing_gcs_generations_are_refused() {
 }
 
 #[test]
+fn generation_errors_escape_unvalidated_object_names() {
+    let url = STATES
+        .replace("cloud-samples-data", "bucket")
+        .replace("bigquery%2Fus-states%2F", "d%2F");
+    for control in ['\n', '\u{202e}', '\u{1b}'] {
+        let name = format!("d/bad{control}.csv");
+        for generation in [None, Some(""), Some("not-a-number")] {
+            let body = serde_json::json!({"items": [{"name": name, "size": "1", "generation": generation}]});
+            let recorded = Recorded::default().on(&url, 200, body.to_string());
+            let error = resolve("gs://bucket/d/", &recorded).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(!error.message.contains(control), "{:?}", error.message);
+            assert!(error.message.contains(&name.escape_debug().to_string()));
+        }
+    }
+}
+
+#[test]
 fn malformed_gcs_pages_are_invalid_listings() {
     let change = |key: &str, value: serde_json::Value| {
         let mut page: serde_json::Value =

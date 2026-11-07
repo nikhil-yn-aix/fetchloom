@@ -96,12 +96,15 @@ fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error
         .transpose()?;
     let mut url = object_url(objects_at, &item.name);
     let generation = item.generation.as_deref().ok_or_else(|| {
-        prefix.invalid(&format!("the object \"{}\" has no generation", item.name))
+        prefix.invalid(&format!(
+            "the object \"{}\" has no generation",
+            item.name.escape_debug()
+        ))
     })?;
     if generation.is_empty() || !generation.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(prefix.invalid(&format!(
             "the generation of \"{}\" is not a number",
-            item.name
+            item.name.escape_debug()
         )));
     }
     url.set_query(Some(&format!("generation={generation}")));
