@@ -71,6 +71,8 @@ pub(crate) struct Placer {
     parents: Parents,
     links: OnceLock<bool>,
     serial: OnceLock<bool>,
+    #[cfg(test)]
+    observed: Option<Box<Observation>>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -79,6 +81,9 @@ pub(crate) struct Placer {
     #[cfg(target_os = "linux")]
     unflushed: AtomicBool,
 }
+
+#[cfg(test)]
+type Observation = dyn Fn(&Metadata) + Send + Sync;
 
 /// one file to place: the object, where it goes, and whether it must be a writable copy.
 pub(crate) struct Order {
@@ -164,6 +169,8 @@ impl Placer {
             parents: Parents::default(),
             links: OnceLock::new(),
             serial: OnceLock::new(),
+            #[cfg(test)]
+            observed: None,
             threads: Threads::default(),
             exp: Experiments::default(),
             stop: Arc::default(),
@@ -194,6 +201,15 @@ impl Placer {
 
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
         self.threads = threads;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observing(
+        mut self,
+        observed: impl Fn(&Metadata) + Send + Sync + 'static,
+    ) -> Self {
+        self.observed = Some(Box::new(observed));
         self
     }
 
@@ -270,6 +286,13 @@ impl Placer {
             }
         }));
         let this = &*self;
+        let observe = |metadata: &Metadata| {
+            #[cfg(test)]
+            if let Some(observed) = &this.observed {
+                observed(metadata);
+            }
+            seen(metadata)
+        };
         let grouped = folders.map(|folders| {
             let serial = !ready.is_empty()
                 && *this.serial.get_or_init(|| {
@@ -289,7 +312,7 @@ impl Placer {
             let placed = this
                 .put(&order.object, &order.destination, order.writable, batch)
                 .map(|put| match put {
-                    Put::Placed(method, metadata) => Put::Placed(method, seen(&metadata)),
+                    Put::Placed(method, metadata) => Put::Placed(method, observe(&metadata)),
                     Put::Waiting(staged) => Put::Waiting(staged),
                 });
             (*index, placed)
@@ -319,7 +342,7 @@ impl Placer {
             waiting,
             || this.flush_copies(),
             threads,
-            &seen,
+            &observe,
             &this.stop,
             grouped.as_ref(),
         ));

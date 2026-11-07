@@ -100,6 +100,8 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 
 ## tests
 
+placement-order tests pause at the first metadata observation before later names appear. interruption tests wait for a staged-copy acknowledgement before killing the child. neither depends on disk speed or a clock deadline.
+
 | files | cargo filter |
 |---|---|
 | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs), [place/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/tests.rs), [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |

@@ -350,69 +350,54 @@ fn a_writable_copy_works_where_the_mount_refuses_chmod() {
 
 #[test]
 fn an_interrupted_copy_never_leaves_partial_bytes_at_its_name() {
+    use std::io::BufRead as _;
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
 
     const CHILD: &str = "FETCHLOOM_TEST_COPY_CHILD";
+    const READY: &str = "fetchloom-copy-staged";
     if let Some(root) = std::env::var_os(CHILD) {
-        let root = PathBuf::from(root);
-        copy(
-            &root.join("object"),
-            &root.join("placed.bin"),
-            false,
-            Threads::default(),
-            true,
-            &Stop::default(),
-        )
-        .unwrap();
+        let destination = PathBuf::from(root).join("placed.bin");
+        let location = Arc::new(Location::standalone(&destination).unwrap());
+        let (_staged, mut file) = location.create(0o600, false).unwrap();
+        file.write_all(b"partial bytes").unwrap();
+        println!("{READY}");
+        std::io::stdout().flush().unwrap();
+        let _ = std::io::stdin().read(&mut [0]);
         return;
     }
     let folder = TempDir::new().unwrap();
-    let object = folder.path().join("object");
     let destination = folder.path().join("placed.bin");
-    fs::write(&object, vec![0x5a; 64 << 20]).unwrap();
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "place::tests::an_interrupted_copy_never_leaves_partial_bytes_at_its_name",
+            "--nocapture",
         ])
         .env(CHILD, folder.path())
-        .stdout(Stdio::null())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let started = Instant::now();
-    let started_copy = loop {
-        if fs::read_dir(folder.path())
-            .unwrap()
-            .flatten()
-            .any(|entry| entry.path() != object)
-        {
-            break true;
-        }
-        if child.try_wait().unwrap().is_some() || started.elapsed() > Duration::from_secs(30) {
-            break false;
-        }
-        std::thread::yield_now();
-    };
+    let output = child.stdout.take().unwrap();
+    let staged = std::io::BufReader::new(output)
+        .lines()
+        .any(|line| line.is_ok_and(|line| line.contains(READY)));
     let _ = child.kill();
     let output = child.wait_with_output().unwrap();
     assert!(
-        started_copy,
-        "the copy never started: {}",
+        staged,
+        "the child did not stage a copy: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    if destination.exists() {
-        assert_eq!(
-            fs::metadata(&destination).unwrap().len(),
-            64 << 20,
-            "a killed copy left partial bytes at the destination"
-        );
-        assert_eq!(
-            crate::digest::Sha256::of_file(&destination).unwrap(),
-            crate::digest::Sha256::of_file(&object).unwrap()
-        );
-    }
+    assert!(!destination.exists());
+    let hidden: Vec<_> = fs::read_dir(folder.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(hidden.len(), 1);
+    assert!(is_copy_temporary(&hidden[0].file_name().to_string_lossy()));
+    assert_eq!(fs::read(hidden[0].path()).unwrap(), b"partial bytes");
 }
 
 #[cfg(windows)]

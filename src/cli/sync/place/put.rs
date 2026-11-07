@@ -112,7 +112,11 @@ fn count(work: &Work, method: Method) {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::time::{Duration, Instant};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
 
     use super::*;
     use crate::project::lock::LockedFile;
@@ -131,8 +135,7 @@ mod tests {
             url: "https://example.org/weather.csv".to_owned(),
             unpacks_to: None,
         };
-        // enough writable copies that the rest take a while once the first is in place
-        let targets: Vec<Target> = (0..1000)
+        let targets: Vec<Target> = (0..2)
             .map(|index| Target {
                 dataset: "weather",
                 path: format!("data/weather/{index:04}.csv"),
@@ -146,25 +149,45 @@ mod tests {
         let project = Project {
             root: dir.path().join("project"),
         };
-        let mut placer = Placer::new(&project.root.join("data"));
         let mut state = State::default();
         let work = Work::default();
         let first = project.root.join(&targets[0].path);
         let second = project.root.join(&targets[1].path);
 
-        std::thread::scope(|scope| {
-            let placing =
-                scope.spawn(|| put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work));
-            // the first file is placed alone, so it is in place once the second appears
-            let started = Instant::now();
-            while !second.exists() {
-                assert!(started.elapsed() < Duration::from_mins(1), "nothing placed");
-                std::thread::sleep(Duration::from_millis(1));
+        let (notify, ready) = mpsc::channel();
+        let (resume, edited) = mpsc::channel();
+        let edited = Mutex::new(edited);
+        let first_seen = AtomicBool::new(false);
+        let placer = Placer::new(&project.root.join("data")).observing(move |_| {
+            if !first_seen.swap(true, Ordering::SeqCst) {
+                notify.send(second.exists()).unwrap();
+                edited.lock().unwrap().recv().unwrap();
             }
-            fs::write(&first, "edited while the rest were placed\n").unwrap();
+        });
+        std::thread::scope(|scope| {
+            let placing = scope.spawn(|| {
+                let mut placer = placer;
+                put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work)
+            });
+            let observed = ready.recv();
+            let changed = if observed.is_ok() {
+                fs::write(&first, "edited while the rest were placed\n")
+            } else {
+                Ok(())
+            };
+            let _ = resume.send(());
             let (_, failure) = placing.join().unwrap();
+            assert!(
+                !observed.unwrap(),
+                "metadata was deferred until later placements"
+            );
+            changed.unwrap();
             assert!(failure.is_none());
         });
+        assert_eq!(
+            fs::read_to_string(&first).unwrap(),
+            "edited while the rest were placed\n"
+        );
 
         assert_eq!(
             state.files[&targets[0].path].look.size,
