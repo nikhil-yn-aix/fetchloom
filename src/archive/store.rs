@@ -477,4 +477,46 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn staging_shards_preserve_members_and_failed_cleanup() {
+        for value in ["0", "16"] {
+            let mut scratch = Scratch::new();
+            scratch.cache = scratch.cache.clone().with_experiments(
+                crate::exp::Experiments::default().with("ARCH_STAGE_SHARDS", value),
+            );
+            let large = vec![7; SMALL + 1];
+            let mut members = stored(
+                &scratch,
+                &[("small", b"1,2\n".to_vec()), ("large", large.clone())],
+            )
+            .unwrap();
+            members.sort_by(|a, b| a.path.cmp(&b.path));
+            scratch.assert_stored(&members[0], &large);
+            scratch.assert_stored(&members[1], b"1,2\n");
+            let before = scratch.cache.objects().len();
+            let meter = Meter::default();
+            let limits = Limits::default();
+            let never = |_: u64| false;
+            let mut guard = Guard::new(&limits, &never, &meter);
+            let error = store_all(&scratch.cache, Some(0), |writers| {
+                writers.keep(
+                    &mut guard,
+                    "discard".to_owned(),
+                    &mut &b"not kept"[..],
+                    &mut [0; 32],
+                )?;
+                Err(Error::new(Kind::SourceInvalid, "refused"))
+            })
+            .unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert_eq!(scratch.cache.objects().len(), before);
+            assert_eq!(
+                fs::read_dir(scratch.cache.root().join("tmp"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+    }
 }
