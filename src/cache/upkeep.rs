@@ -298,7 +298,9 @@ impl Cache {
         Ok(())
     }
 
-    /// keeps empty lock files because a waiting download may have opened one already.
+    /// removes abandoned downloads, and the lock files of downloads nobody holds, while holding
+    /// each lock. a run that opened a lock file before it went locks a file with no name, which
+    /// `claim` notices before it trusts the lock.
     fn sweep_partials(
         &self,
         old: &dyn Fn(SystemTime) -> bool,
@@ -336,6 +338,8 @@ impl Cache {
                     freed.leftovers += 1;
                 }
             }
+            // an empty lock file frees nothing worth counting, and one left behind costs nothing
+            let _ = self.remove_inside(&entry.path());
         }
         Ok(())
     }
@@ -708,8 +712,24 @@ mod tests {
                 .flatten()
                 .map(|entry| entry.file_name().to_string_lossy().into_owned())
                 .collect();
-            assert_eq!(left, ["left.lock"], "a run may hold the lock open");
+            assert_eq!(left, Vec::<String>::new(), "nothing holds the lock");
         }
+    }
+
+    #[test]
+    fn a_sweep_keeps_the_lock_of_a_download_in_progress_and_drops_finished_ones() {
+        let (_dir, cache) = cache();
+        let running = cache.claim("https://example.org/running").unwrap();
+        drop(cache.claim("https://example.org/finished").unwrap());
+        let lock = |url: &str| {
+            let key = digest::sha256(url.as_bytes()).hex();
+            cache.root.join("partial").join(format!("{key}.lock"))
+        };
+        let freed = cache.sweep(&Needed::default(), SystemTime::now());
+        assert_eq!(freed.leftovers, 0, "a lock file frees nothing");
+        assert!(lock("https://example.org/running").exists());
+        assert!(!lock("https://example.org/finished").exists());
+        drop(running);
     }
 
     #[test]
@@ -760,10 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_opened_a_lock_before_a_sweep_owns_the_download_alone() {
+    fn a_run_that_opened_a_lock_before_a_sweep_removed_it_never_owns_the_download_twice() {
         let (_dir, cache) = cache();
         let url = "https://example.org/raced";
-        // every download leaves its lock file behind
         drop(cache.claim(url).unwrap());
         let key = digest::sha256(url.as_bytes()).hex();
         let lock = cache.root.join("partial").join(format!("{key}.lock"));
@@ -773,9 +792,14 @@ mod tests {
             &Needed::default(),
             SystemTime::now() + GRACE + Duration::from_secs(60),
         );
-        opened.try_lock().unwrap();
+        let super::super::Claim::Owned(_owner) = cache.claim(url).unwrap() else {
+            panic!("nothing else holds the download");
+        };
         assert!(
-            matches!(cache.claim(url).unwrap(), super::super::Claim::Busy),
+            matches!(
+                super::super::partial::take_lock(&lock, opened),
+                Err(std::fs::TryLockError::WouldBlock)
+            ),
             "a second run owns the same download"
         );
     }

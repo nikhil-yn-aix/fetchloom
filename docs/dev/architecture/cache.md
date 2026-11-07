@@ -55,7 +55,7 @@ repairs use atomic rename on hardlink-capable volumes. when windows refuses a re
 
 ### partial ownership and checkpoints
 
-partials use a separate OS lock file so windows' mandatory locks do not prevent reads through the final object name. a competing process waits. if locking is unavailable, the writer uses private files under `tmp` and loses cross-run resumption.
+partials use a separate OS lock file so windows' mandatory locks do not prevent reads through the final object name. a competing process waits. if locking is unavailable, the writer uses private files under `tmp` and loses cross-run resumption. gc removes the lock files nobody holds while holding each one, so `partial/` does not keep one file per URL ever fetched. a claimer that opened a lock file before gc removed it would lock a file with no name, so `claim` checks after locking that the path still names the locked file, by device and inode on unix and by volume serial and file index on windows, and opens the path again when it does not.
 
 resume accepts only writable plain files; on unix they must belong to the current user and have one hardlink. checkpoints save the prefix digest and independently hashed ranges beyond it about once a second. they are hints: a torn or missing record loses reuse, and resumed bytes are rehashed. checkpoints, URL records and MD5 indexes skip their own flush; objects and safety-critical records retain durability.
 

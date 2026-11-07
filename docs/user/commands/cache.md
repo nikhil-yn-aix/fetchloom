@@ -28,7 +28,7 @@ byte totals exclude indexes and partial downloads. [cache folder](../reference/c
 
 1. read registered project locks to find needed objects and unpacked members.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
-3. clean abandoned partial and temporary files, and forget links whose bytes are gone, then report deleted counts and bytes.
+3. clean abandoned partial and temporary files and the lock files of downloads nobody holds, and forget links whose bytes are gone, then report deleted counts and bytes.
 4. report unneeded objects kept because they are less than a day old.
 
 ```sh

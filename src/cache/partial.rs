@@ -80,9 +80,9 @@ impl Cache {
         real_folder(&partial, FolderUse::Cache)?;
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
-        let lock = open_unfollowed(&partial.join(format!("{key}.lock")), true)?;
-        let (folder, stem, lock) = match lock.try_lock() {
-            Ok(()) => (partial, key, Some(Arc::new(lock))),
+        let path = partial.join(format!("{key}.lock"));
+        let (folder, stem, lock) = match take_lock(&path, open_unfollowed(&path, true)?) {
+            Ok(lock) => (partial, key, Some(Arc::new(lock))),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
             // without locks, a private file keeps processes apart, at the cost of resuming
             Err(TryLockError::Error(_)) => (
@@ -98,6 +98,44 @@ impl Cache {
             record: folder.join(format!("{stem}.json")),
             lock,
         }))
+    }
+}
+
+/// locks the claim file `opened` from `path`, opening `path` again until the file locked is the
+/// one it names: gc removes lock files nobody holds, and a lock on a file with no name keeps
+/// nobody out. an error that keeps the lock from being checked counts as having no locks.
+pub(super) fn take_lock(path: &Path, mut opened: File) -> Result<File, TryLockError> {
+    loop {
+        opened.try_lock()?;
+        if names(path, &opened).map_err(TryLockError::Error)? {
+            return Ok(opened);
+        }
+        opened = open_unfollowed(path, true).map_err(TryLockError::Error)?;
+    }
+}
+
+/// whether `path` still names the file `file` has open.
+fn names(path: &Path, file: &File) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held = file.metadata()?;
+        match fs::symlink_metadata(path) {
+            Ok(named) => Ok(named.dev() == held.dev() && named.ino() == held.ino()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let held = winapi_util::file::information(file)?;
+        let named = match read_unfollowed(path) {
+            Ok(named) => winapi_util::file::information(&named)?,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        Ok(held.volume_serial_number() == named.volume_serial_number()
+            && held.file_index() == named.file_index())
     }
 }
 
