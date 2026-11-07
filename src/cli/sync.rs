@@ -123,17 +123,24 @@ impl<'a> Loop<'a> {
         )
     }
 
-    /// the lock data.toml asks for. datasets whose entry changed are resolved again, and files
-    /// whose hash no source states are downloaded to learn it. `given` is a listing already
-    /// resolved for one dataset.
+    /// the lock data.toml asks for, beside data.lock as it was. datasets whose entry changed are
+    /// resolved again, and files whose hash no source states are downloaded to learn it. `given`
+    /// is a listing already resolved for one dataset.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
-        old: &Lock,
+        old: Option<Lock>,
         upgrade: &Upgrade,
         given: Option<(String, Listing)>,
-    ) -> Result<Lock, Error> {
-        let Drafted { kept, mut drafts } = self.draft(manifest, old, upgrade, given).await?;
+    ) -> Result<(Lock, Before), Error> {
+        let existed = old.is_some();
+        let Drafted {
+            kept,
+            mut drafts,
+            others,
+        } = self
+            .draft(manifest, old.unwrap_or_default(), upgrade, given)
+            .await?;
         let mut jobs = Vec::new();
         let mut slots = Vec::new();
         for (index, draft) in drafts.iter().enumerate() {
@@ -154,20 +161,35 @@ impl<'a> Loop<'a> {
             .into_iter()
             .map(|draft| draft.finish(&now))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(settled(old, kept, drafted.into_iter()))
+        let (lock, kept) = settled(&others, kept, drafted);
+        Ok((
+            lock,
+            Before {
+                existed,
+                others,
+                kept,
+            },
+        ))
     }
 
-    /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and the
-    /// downloads it would need. a hash only those can learn has a stand-in, so the lock is only
-    /// for planning.
+    /// the lock [`Loop::relock`] would make, beside data.lock as it was, found without
+    /// downloading or unpacking, and the downloads it would need. a hash only those can learn has
+    /// a stand-in, so the lock is only for planning.
     pub(super) async fn relock_dry(
         &self,
         manifest: &Manifest,
-        old: &Lock,
+        old: Option<Lock>,
         upgrade: &Upgrade,
         given: Option<(String, Listing)>,
-    ) -> Result<(Lock, Vec<Job>), Error> {
-        let Drafted { kept, mut drafts } = self.draft(manifest, old, upgrade, given).await?;
+    ) -> Result<(Lock, Before, Vec<Job>), Error> {
+        let existed = old.is_some();
+        let Drafted {
+            kept,
+            mut drafts,
+            others,
+        } = self
+            .draft(manifest, old.unwrap_or_default(), upgrade, given)
+            .await?;
         let mut jobs = Vec::new();
         for draft in &mut drafts {
             // archives this machine unpacked before are known from their records
@@ -179,31 +201,47 @@ impl<'a> Loop<'a> {
             .into_iter()
             .map(|draft| draft.stand_in(&now))
             .collect::<Result<Vec<_>, _>>()?;
-        let lock = settled(old, kept, drafted.into_iter());
-        Ok((lock, jobs))
+        let (lock, kept) = settled(&others, kept, drafted);
+        let before = Before {
+            existed,
+            others,
+            kept,
+        };
+        Ok((lock, before, jobs))
     }
 
-    /// datasets whose entry is unchanged, kept as data.lock has them, and drafts of the others,
-    /// resolved and with every hash known without a download.
+    /// datasets whose entry is unchanged, moved from data.lock as it has them, and drafts of the
+    /// others, resolved and with every hash known without a download.
     async fn draft(
         &self,
         manifest: &Manifest,
-        old: &Lock,
+        old: Lock,
         upgrade: &Upgrade,
         given: Option<(String, Listing)>,
     ) -> Result<Drafted, Error> {
         let mut kept: Vec<Locked> = Vec::new();
+        let mut others = Vec::new();
+        for locked in old.datasets {
+            match manifest.datasets.get(&locked.name) {
+                Some(entry)
+                    if locked.spec == lock::spec(entry) && !upgrade.includes(&locked.name) =>
+                {
+                    kept.push(locked);
+                }
+                _ => others.push(locked),
+            }
+        }
+        let others = Lock { datasets: others };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
-            let previous = old.get(name);
-            match previous {
-                Some(locked) if locked.spec == lock::spec(entry) && !upgrade.includes(name) => {
-                    kept.push(locked.clone());
-                }
-                _ => asks.push((
+            let is_kept = kept
+                .binary_search_by(|locked| locked.name.as_str().cmp(name))
+                .is_ok();
+            if !is_kept {
+                asks.push((
                     name.clone(),
-                    pinned(entry, previous, upgrade.includes(name)),
-                )),
+                    pinned(entry, others.get(name), upgrade.includes(name)),
+                ));
             }
         }
         let listings = self.resolve_all(manifest, asks, given).await?;
@@ -213,12 +251,16 @@ impl<'a> Loop<'a> {
                 &name,
                 &manifest.datasets[&name],
                 listing,
-                old.get(&name),
+                others.get(&name),
                 upgrade.includes(&name),
                 &self.cache,
             )?);
         }
-        Ok(Drafted { kept, drafts })
+        Ok(Drafted {
+            kept,
+            drafts,
+            others,
+        })
     }
 
     /// what [`Loop::place`] would do, decided without downloading, unpacking or writing, given
@@ -262,21 +304,23 @@ impl<'a> Loop<'a> {
         Ok(preview)
     }
 
-    /// writes data.lock when it changed, and says which datasets it pins anew or no longer.
-    pub(super) fn write_lock(&self, old: Option<&Lock>, lock: &Lock) -> Result<bool, Error> {
-        if old == Some(lock) {
-            return Ok(false);
+    /// writes data.lock when it changed from what it was `before`, and says which datasets it
+    /// pins anew or no longer. returns the text written, if any.
+    pub(super) fn write_lock(&self, before: &Before, lock: &Lock) -> Result<Option<String>, Error> {
+        if before.holds(lock) {
+            return Ok(None);
         }
         let _span = tracing::debug_span!("write_lock").entered();
-        self.project.write(lock::FILE, lock.render().as_bytes())?;
+        let text = lock.render();
+        self.project.write(lock::FILE, text.as_bytes())?;
         tell_lock(
             &self.context.output,
-            old,
+            before,
             lock,
             ("Locked", "Removed"),
             self.told.as_deref(),
         );
-        Ok(true)
+        Ok(Some(text))
     }
 
     async fn resolve_all(
@@ -439,33 +483,90 @@ fn shown_five(mut error: Error, labels: &[&str]) -> Error {
 
 /// datasets on their way into data.lock.
 struct Drafted {
-    /// entries whose data.toml entry did not change, as data.lock has them.
+    /// entries whose data.toml entry did not change, moved from data.lock.
     kept: Vec<Locked>,
     drafts: Vec<Draft>,
+    /// the entries of data.lock not kept: those to replace or drop.
+    others: Lock,
 }
 
-/// the lock of `kept` and `drafted` entries, by name. a pin dates from when its data last
-/// changed, so resolving the same data again leaves data.lock as it was.
-fn settled(old: &Lock, kept: Vec<Locked>, drafted: impl Iterator<Item = Locked>) -> Lock {
-    let mut datasets = kept;
-    datasets.extend(drafted.map(|mut locked| {
-        if let Some(before) = old.get(&locked.name)
+/// the lock of `kept` and `drafted` entries, by name, and for each of its datasets whether it
+/// was kept. a pin dates from when its data last changed, so resolving the same data again
+/// leaves data.lock as it was.
+fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
+    let mut datasets: Vec<(Locked, bool)> = kept.into_iter().map(|locked| (locked, true)).collect();
+    datasets.extend(drafted.into_iter().map(|mut locked| {
+        if let Some(before) = others.get(&locked.name)
             && before.resolved == locked.resolved
             && before.files == locked.files
         {
             locked.timestamp.clone_from(&before.timestamp);
         }
-        locked
+        (locked, false)
     }));
-    datasets.sort_by(|a, b| a.name.cmp(&b.name));
-    Lock { datasets }
+    datasets.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+    let (datasets, kept) = datasets.into_iter().unzip();
+    (Lock { datasets }, kept)
 }
 
-/// says which datasets `lock` pins anew and which it no longer has, with `verbs` for each, such
-/// as `Locked` and `Removed`. `told` is left out, since a later line tells about it.
+/// data.lock as it was before relocking, beside the new lock. entries relocking kept as they
+/// were are moved into the new lock instead of copied, so they are found there.
+pub(super) struct Before {
+    /// whether there was a data.lock.
+    existed: bool,
+    /// the old entries relocking did not keep: those it replaced or dropped.
+    others: Lock,
+    /// for each dataset of the new lock, in its order, whether it was kept from the old one.
+    kept: Vec<bool>,
+}
+
+impl Before {
+    /// data.lock, or its absence, as a lock of which nothing was kept.
+    #[cfg(test)]
+    pub(super) fn whole(old: Option<Lock>) -> Before {
+        Before {
+            existed: old.is_some(),
+            others: old.unwrap_or_default(),
+            kept: Vec::new(),
+        }
+    }
+
+    /// the old entry named `name`, beside the new `lock`.
+    fn get<'a>(&'a self, lock: &'a Lock, name: &str) -> Option<&'a Locked> {
+        match lock
+            .datasets
+            .binary_search_by(|dataset| dataset.name.as_str().cmp(name))
+        {
+            Ok(index) if self.kept.get(index) == Some(&true) => lock.datasets.get(index),
+            _ => self.others.get(name),
+        }
+    }
+
+    /// whether `lock` is exactly what data.lock held.
+    pub(super) fn holds(&self, lock: &Lock) -> bool {
+        self.existed
+            && lock
+                .datasets
+                .iter()
+                .all(|dataset| self.get(lock, &dataset.name) == Some(dataset))
+            && self.dropped(lock).next().is_none()
+    }
+
+    /// the old datasets `lock` no longer has.
+    fn dropped<'a>(&'a self, lock: &'a Lock) -> impl Iterator<Item = &'a Locked> {
+        self.others
+            .datasets
+            .iter()
+            .filter(|dataset| lock.get(&dataset.name).is_none())
+    }
+}
+
+/// says which datasets `lock` pins anew and which it no longer has, beside data.lock as it was
+/// `before`, with `verbs` for each, such as `Locked` and `Removed`. `told` is left out, since a
+/// later line tells about it.
 pub(super) fn tell_lock(
     output: &Output,
-    old: Option<&Lock>,
+    before: &Before,
     lock: &Lock,
     verbs: (&str, &str),
     told: Option<&str>,
@@ -473,7 +574,7 @@ pub(super) fn tell_lock(
     let pinned: Vec<&Locked> = lock
         .datasets
         .iter()
-        .filter(|dataset| old.and_then(|old| old.get(&dataset.name)) != Some(*dataset))
+        .filter(|dataset| before.get(lock, &dataset.name) != Some(*dataset))
         .filter(|dataset| told != Some(dataset.name.as_str()))
         .collect();
     let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
@@ -492,11 +593,7 @@ pub(super) fn tell_lock(
             ),
         );
     }
-    let dropped = old
-        .iter()
-        .flat_map(|old| &old.datasets)
-        .filter(|dataset| lock.get(&dataset.name).is_none());
-    for dataset in dropped {
+    for dataset in before.dropped(lock) {
         output.step(verbs.1, &format!("{} from {}", dataset.name, lock::FILE));
     }
 }
@@ -676,11 +773,12 @@ fn tell_facts(output: &Output, listing: &Listing) {
     }
 }
 
-/// prints each dataset that moved to another version, and returns their names.
-pub(super) fn tell_upgrades(output: &Output, old: &Lock, new: &Lock) -> Vec<String> {
+/// prints each dataset that moved to another version, beside data.lock as it was `before`, and
+/// returns their names.
+pub(super) fn tell_upgrades(output: &Output, before: &Before, new: &Lock) -> Vec<String> {
     let mut moved = Vec::new();
     for dataset in &new.datasets {
-        let Some(before) = old.get(&dataset.name) else {
+        let Some(before) = before.get(new, &dataset.name) else {
             continue;
         };
         if before.resolved == dataset.resolved && before.files == dataset.files {
@@ -974,7 +1072,12 @@ mod tests {
         let lock = Lock {
             datasets: vec![locked("set")],
         };
-        assert!(runner.write_lock(None, &lock).unwrap());
+        assert!(
+            runner
+                .write_lock(&Before::whole(None), &lock)
+                .unwrap()
+                .is_some()
+        );
         let path = project.root.join(lock::FILE);
         std::fs::File::options()
             .write(true)
@@ -983,13 +1086,23 @@ mod tests {
             .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000))
             .unwrap();
         let before = std::fs::metadata(&path).unwrap().modified().unwrap();
-        assert!(!runner.write_lock(Some(&lock), &lock).unwrap());
+        assert!(
+            runner
+                .write_lock(&Before::whole(Some(lock.clone())), &lock)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             std::fs::metadata(&path).unwrap().modified().unwrap(),
             before
         );
         assert_eq!(project.lock().unwrap(), Some(lock.clone()));
-        assert!(runner.write_lock(Some(&lock), &Lock::default()).unwrap());
+        assert!(
+            runner
+                .write_lock(&Before::whole(Some(lock.clone())), &Lock::default())
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(project.lock().unwrap(), Some(Lock::default()));
     }
 
@@ -1005,11 +1118,11 @@ mod tests {
         new.datasets[2].resolved = "zenodo:3".to_owned();
         new.datasets.push(locked("new"));
         assert_eq!(
-            tell_upgrades(&context.output, &old, &new),
+            tell_upgrades(&context.output, &Before::whole(Some(old.clone())), &new),
             ["changed", "revision"]
         );
         assert_eq!(
-            tell_upgrades(&context.output, &old, &old),
+            tell_upgrades(&context.output, &Before::whole(Some(old.clone())), &old),
             Vec::<String>::new()
         );
     }
@@ -1029,6 +1142,67 @@ mod tests {
         };
         tell_resolved(&context.output, &listing);
         assert_eq!(context.output.warned(), ["osf:ezcuj has 2 components"]);
+    }
+
+    #[test]
+    fn kept_entries_move_into_the_new_lock_and_still_compare_with_the_old_one() {
+        let mut changed = locked("b");
+        changed.resolved = "zenodo:3".to_owned();
+        let old = Lock {
+            datasets: vec![locked("a"), locked("b"), locked("c")],
+        };
+        let others = Lock {
+            datasets: vec![locked("b"), locked("c")],
+        };
+        let (lock, kept) = settled(
+            &others,
+            vec![locked("a")],
+            vec![changed.clone(), locked("d")],
+        );
+        assert_eq!(
+            lock.datasets
+                .iter()
+                .map(|dataset| dataset.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "d"]
+        );
+        assert_eq!(kept, [true, false, false]);
+        let before = Before {
+            existed: true,
+            others,
+            kept,
+        };
+        for name in ["a", "b", "c", "d", "e"] {
+            assert_eq!(before.get(&lock, name), old.get(name), "{name}");
+        }
+        assert_eq!(
+            before
+                .dropped(&lock)
+                .map(|dataset| dataset.name.as_str())
+                .collect::<Vec<_>>(),
+            ["c"]
+        );
+        assert!(!before.holds(&lock));
+        let (same, kept) = settled(
+            &Lock {
+                datasets: vec![locked("b")],
+            },
+            vec![locked("a")],
+            vec![locked("b")],
+        );
+        let unchanged = Before {
+            existed: true,
+            others: Lock {
+                datasets: vec![locked("b")],
+            },
+            kept,
+        };
+        assert!(unchanged.holds(&same));
+        let absent = Before {
+            existed: false,
+            ..unchanged
+        };
+        assert!(!absent.holds(&same), "a missing data.lock is written");
     }
 
     #[test]

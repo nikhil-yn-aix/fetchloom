@@ -92,7 +92,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         return again(
             &work,
             manifest,
-            old.as_ref(),
+            old,
             &name,
             &addition.entry,
             &addition.listing,
@@ -121,19 +121,12 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
     let work = Loop::new(context, project, net, cache).telling(&name);
     if dry_run {
-        return preview_add(&work, &new_manifest, old.as_ref(), name, addition.listing).await;
+        return preview_add(&work, &new_manifest, old, name, addition.listing).await;
     }
     project.write(manifest::FILE, updated.as_bytes())?;
     let before = (adding.text.as_deref(), lock_text.as_deref());
-    let (lock_changed, placement) = sync_add(
-        &work,
-        &new_manifest,
-        old.as_ref(),
-        before,
-        &name,
-        addition.listing,
-    )
-    .await?;
+    let (lock_changed, placement) =
+        sync_add(&work, &new_manifest, old, before, &name, addition.listing).await?;
     render_add(&work, &new_manifest, &name)?;
     Ok(Report {
         project: adding.project.root,
@@ -246,7 +239,7 @@ fn added(
 async fn preview_add(
     work: &Loop<'_>,
     manifest: &Manifest,
-    old: Option<&Lock>,
+    old: Option<Lock>,
     name: String,
     listing: Listing,
 ) -> Result<Report, Error> {
@@ -273,7 +266,7 @@ async fn preview_add(
 async fn sync_add(
     work: &Loop<'_>,
     manifest: &Manifest,
-    old: Option<&Lock>,
+    old: Option<Lock>,
     before: (Option<&str>, Option<&str>),
     name: &str,
     listing: Listing,
@@ -396,7 +389,7 @@ fn present(
 async fn again(
     work: &Loop<'_>,
     manifest: &Manifest,
-    old: Option<&Lock>,
+    old: Option<Lock>,
     name: &str,
     entry: &manifest::Entry,
     listing: &Listing,
@@ -574,7 +567,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let (lock_changed, placement) = sync_all(
         &work,
         &manifest,
-        old.as_ref(),
+        old,
         &Upgrade::Nothing,
         args.force,
         None,
@@ -646,7 +639,7 @@ async fn preview_sync(
         peek_cache()?,
     );
     let (lock_changed, preview) =
-        preview_all(&work, manifest, old.as_ref(), force, None, Some(seen)).await?;
+        preview_all(&work, manifest, old, force, None, Some(seen)).await?;
     let nothing = !lock_changed && preview.changes_nothing();
     dry_run_done(
         &context.output,
@@ -690,13 +683,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         Arc::new(net(context, &manifest)),
         open_cache()?,
     );
-    let empty = Lock::default();
-    let lock = work
-        .relock(&manifest, old.as_ref().unwrap_or(&empty), &upgrade, None)
-        .await?;
-    let changed = work.write_lock(old.as_ref(), &lock)?;
+    let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
+    let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
-    let moved = engine::tell_upgrades(&context.output, old.as_ref().unwrap_or(&empty), &lock);
+    let moved = engine::tell_upgrades(&context.output, &before, &lock);
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
@@ -778,7 +768,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             sync_all(
                 &work,
                 &manifest,
-                project.lock()?.as_ref(),
+                project.lock()?,
                 &Upgrade::Nothing,
                 false,
                 None,
@@ -947,7 +937,7 @@ fn ready(
 async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
-    old: Option<&Lock>,
+    old: Option<Lock>,
     upgrade: &Upgrade,
     force: bool,
     given: Option<(String, Listing)>,
@@ -962,24 +952,23 @@ async fn sync_all(
         register(work);
         return Ok((false, placement));
     }
-    let empty = Lock::default();
-    let lock = work
-        .relock(manifest, old.unwrap_or(&empty), upgrade, given)
+    let (lock, before) = work
+        .relock(manifest, old, upgrade, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
     plan::from_cache(manifest, &lock, &work.cache)?;
-    let changed = work.write_lock(old, &lock)?;
+    let written = work.write_lock(&before, &lock)?;
+    let changed = written.is_some();
     let synced = seen.and_then(|seen| {
-        let written = if changed {
-            digest::sha256(lock.render().as_bytes())
-        } else {
-            seen.lock?
+        let lock = match &written {
+            Some(text) => digest::sha256(text.as_bytes()),
+            None => seen.lock?,
         };
         Some(Synced {
             manifest: seen.manifest,
-            lock: written,
+            lock,
             complete: false,
         })
     });
@@ -997,7 +986,7 @@ async fn sync_all(
 async fn preview_all(
     work: &Loop<'_>,
     manifest: &Manifest,
-    old: Option<&Lock>,
+    old: Option<Lock>,
     force: bool,
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
@@ -1015,14 +1004,13 @@ async fn preview_all(
             },
         ));
     }
-    let empty = Lock::default();
-    let (lock, jobs) = work
-        .relock_dry(manifest, old.unwrap_or(&empty), &Upgrade::Nothing, given)
+    let (lock, before, jobs) = work
+        .relock_dry(manifest, old, &Upgrade::Nothing, given)
         .await?;
-    let changed = old != Some(&lock);
+    let changed = !before.holds(&lock);
     let output = &work.context.output;
     if changed {
-        engine::tell_lock(output, old, &lock, ("Would lock", "Would drop"), None);
+        engine::tell_lock(output, &before, &lock, ("Would lock", "Would drop"), None);
     }
     let preview = work.preview(manifest, &lock, force, survey, jobs)?;
     for download in &preview.changes.download {
@@ -1488,7 +1476,7 @@ mod tests {
         let error = block_on(sync_all(
             &work,
             &manifest,
-            Some(&old),
+            Some(old.clone()),
             &Upgrade::Nothing,
             false,
             Some(given),
@@ -1544,7 +1532,7 @@ mod tests {
         let error = block_on(sync_all(
             &work,
             &manifest,
-            Some(&old),
+            Some(old.clone()),
             &Upgrade::Nothing,
             false,
             Some(given),
