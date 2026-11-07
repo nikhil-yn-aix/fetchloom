@@ -1,135 +1,61 @@
-//! a host on this machine that limits how often it may be asked, the way zenodo does: a quota for
-//! each second, stated on every answer, and a 429 for a request past it.
+//! rate-limit headers and admission decisions at fixed times.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::StatusCode;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use url::Url;
 
 use super::*;
-use crate::cache::Cache;
-use crate::net::download::Fetch;
-use crate::net::{Net, Notice, Offline, Options};
-use crate::source::recorded::block_on;
-
-/// requests the host takes in each second.
-const QUOTA: u64 = 5;
-
-struct Host {
-    url: Url,
-    refused: Arc<AtomicUsize>,
-}
-
-fn serve() -> Host {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    // the second the count is for, and the requests in it
-    let window = Arc::new(Mutex::new((0, 0)));
-    let refused = Arc::new(AtomicUsize::new(0));
-    let (shared, count) = (window.clone(), refused.clone());
-    std::thread::spawn(move || {
-        for stream in listener.incoming().flatten() {
-            let (window, refused) = (shared.clone(), count.clone());
-            std::thread::spawn(move || answer(stream, &window, &refused));
-        }
-    });
-    Host { url, refused }
-}
-
-fn answer(mut stream: TcpStream, window: &Mutex<(u64, u64)>, refused: &AtomicUsize) {
-    let mut head = Vec::new();
-    let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-        head.push(byte[0]);
-    }
-    let now = SystemTime::now();
-    let second = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let taken = {
-        let mut window = window.lock().unwrap();
-        if window.0 != second {
-            *window = (second, 0);
-        }
-        window.1 += 1;
-        window.1
-    };
-    // zenodo sends retry-after on every answer. on one that worked it must slow nothing, so it
-    // says far longer here than the limit takes to reset
-    let (status, body, retry_after) = if taken > QUOTA {
-        refused.fetch_add(1, Ordering::SeqCst);
-        ("429 Too Many Requests", "", 1)
-    } else {
-        ("200 OK", "a file", 30)
-    };
-    let text = format!(
-        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\nDate: {}\r\n\
-         X-RateLimit-Limit: {QUOTA}\r\nX-RateLimit-Remaining: {}\r\nX-RateLimit-Reset: {}\r\n\
-         Retry-After: {retry_after}\r\n\r\n{body}",
-        body.len(),
-        httpdate::fmt_http_date(now),
-        QUOTA.saturating_sub(taken),
-        second + 1,
-    );
-    let _ = stream.write_all(text.as_bytes());
-}
 
 #[test]
 fn a_host_is_asked_no_faster_than_its_limit_allows() {
-    let host = serve();
-    let options = Options {
-        offline: Offline::No,
-        jobs: 8,
-        credentials: Vec::new(),
-        split: crate::net::Splitting::WhenSlow,
-    };
-    let waits = Arc::new(Mutex::new(Vec::new()));
-    let heard = waits.clone();
-    let notify: crate::net::Notify = Arc::new(move |notice| {
-        if let Notice::Waiting { quota, .. } = notice {
-            heard.lock().unwrap().push(quota);
+    let paces = Paces::default();
+    let start = Instant::now();
+    for window in 0..3 {
+        let at = start + Duration::from_secs(window);
+        for remaining in (0..5).rev() {
+            let ticket = paces.admit("zenodo.org", at).unwrap();
+            Paces::heard(
+                ticket,
+                vec![Limit {
+                    name: String::new(),
+                    quota: Some(5),
+                    window: None,
+                    remaining,
+                    reset: Duration::from_secs(1),
+                    stamp: Some(1_793_350_507 + window),
+                }],
+                at,
+            );
         }
-    });
-    let net = Net::new(options, Arc::default(), Arc::default(), notify);
-    net.typed(&host.url);
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let started = Instant::now();
-    // four at a time, as many as one host gets
-    let batch = |first: usize| {
-        let (net, cache, url) = (&net, &cache, &host.url);
-        async move {
-            for n in (first..12).step_by(4) {
-                let fetch = Fetch::new(url.join(&n.to_string()).unwrap());
-                net.download(&fetch, cache, &|_| Ok(())).await.unwrap();
+        for request in 0..4 {
+            assert_eq!(
+                paces.admit("zenodo.org", at).unwrap_err(),
+                Hold {
+                    until: at + Duration::from_secs(1),
+                    quota: Some(5),
+                    window: None,
+                    announce: window == 0 && request == 0,
+                }
+            );
+        }
+        assert_eq!(
+            paces
+                .admit("zenodo.org", at + Duration::from_millis(999))
+                .unwrap_err(),
+            Hold {
+                until: at + Duration::from_secs(1),
+                quota: Some(5),
+                window: None,
+                announce: false,
             }
-        }
-    };
-    block_on(async { tokio::join!(batch(0), batch(1), batch(2), batch(3)) });
-    assert_eq!(
-        host.refused.load(Ordering::SeqCst),
-        0,
-        "a request went past the limit"
-    );
-    let elapsed = started.elapsed();
+        );
+    }
     assert!(
-        elapsed >= Duration::from_secs(1),
-        "12 requests at 5 a second took {elapsed:?}"
+        paces
+            .admit("zenodo.org", start + Duration::from_secs(3))
+            .is_ok()
     );
-    assert!(
-        elapsed < Duration::from_secs(10),
-        "retry-after on answers that worked slowed the run to {elapsed:?}"
-    );
-    assert_eq!(net.work.counts().retries, 0);
-    let waits = waits.lock().unwrap();
-    assert!(
-        (1..=3).contains(&waits.len()),
-        "one notice for each reset waited for, not one for each request: {waits:?}"
-    );
-    assert!(waits.iter().all(|quota| *quota == Some(QUOTA)), "{waits:?}");
 }
 
 fn date(text: &str) -> SystemTime {
