@@ -37,6 +37,7 @@ class RenderTests(unittest.TestCase):
                           quick=True, count=1, file_size=4, status="passed", wall_seconds=1,
                           download_ratio=1.0)
             (root / "runs.jsonl").write_text(json.dumps(record))
+            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=True)))
             render.render(root, root / "report")
             page = (root / "report" / "docs" / "dev" / "performance" / "benchmarks.md").read_text()
             self.assertIn("wall time is the second attempt. CPU adds both attempts, peak memory is the larger "
@@ -57,6 +58,7 @@ class RenderTests(unittest.TestCase):
                           quick=True, count=1, file_size=4, status="passed", wall_seconds=1)
             rival = dict(record, tool="curl", wall_seconds=2)
             (root / "runs.jsonl").write_text(json.dumps(record) + "\n" + json.dumps(rival))
+            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=True)))
             render.render(root, root / "report")
             self.assertTrue((charts / "hero-s1-ext4.svg").exists())
             self.assertTrue((charts / "hero-s1-ext4-dark.svg").exists())
@@ -81,6 +83,7 @@ class RenderTests(unittest.TestCase):
                             status="passed", wall_seconds=1)
                        for quick, size in ((True, 2097152), (False, 1073741824))]
             (root / "runs.jsonl").write_text("\n".join(json.dumps(row) for row in records))
+            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False)))
             with self.assertRaisesRegex(ValueError, "conditions"):
                 render.render(root, root / "report")
         finally:
@@ -129,7 +132,7 @@ class RenderTests(unittest.TestCase):
                           status="passed", wall_seconds=2)
             failed = dict(record, tool="curl", status="failed", wall_seconds=.001)
             (root / "runs.jsonl").write_text(json.dumps(record) + "\n" + json.dumps(failed))
-            (root / "meta.json").write_text(json.dumps(dict(quick=True)))
+            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=True)))
             render.render(root, root / "report")
             for dark in ("", "-dark"):
                 path = root / "report" / "docs" / "assets" / "bench" / f"s1-lan-ext4{dark}.svg"
@@ -142,6 +145,79 @@ class RenderTests(unittest.TestCase):
             self.assertIn("prefers-color-scheme: dark", page)
         finally:
             shutil.rmtree(root)
+
+
+class CampaignTests(unittest.TestCase):
+    def write_live(self, root, chunk, service="huggingface", ref="dataset-one", size=4, quick=False):
+        import json
+        folder = root / chunk
+        folder.mkdir()
+        record = dict(kind="live", service=service, tool="fetchloom", round=1, warmup=False,
+                      quick=quick, count=1, file_size=size, status="passed", wall_seconds=1)
+        dataset = dict(service=service, ref=ref, bytes=size, select=[], expected_sha256={"file": "digest"})
+        (folder / "runs.jsonl").write_text(json.dumps(record) + "\n")
+        (folder / "meta.json").write_text(json.dumps(dict(kind="live", quick=quick, datasets=[dataset])))
+        return folder
+
+    def test_live_dataset_changes_cannot_be_pooled(self):
+        from pathlib import Path
+        import render
+        for changes in (dict(size=8), dict(quick=True), dict(ref="dataset-two"), dict()):
+            with self.subTest(changes=changes), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.write_live(root, "one")
+                self.write_live(root, "two", **changes)
+                report = root / "report"
+                (report / "docs" / "dev" / "performance").mkdir(parents=True)
+                cards = report / "docs" / "assets" / "bench"
+                cards.mkdir(parents=True)
+                sentinel = cards / "kept.svg"
+                sentinel.write_text("previous output")
+                with self.assertRaisesRegex(ValueError, "live"):
+                    render.render(root, report)
+                self.assertEqual(sentinel.read_text(), "previous output")
+
+    def test_distinct_live_services_can_share_a_report(self):
+        from pathlib import Path
+        import render
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.write_live(root, "one", service="zenodo")
+            self.write_live(root, "two", service="kaggle")
+            report = root / "report"
+            (report / "docs" / "dev" / "performance").mkdir(parents=True)
+            render.render(root, report)
+            self.assertTrue((report / "docs" / "assets" / "bench" / "live-zenodo.svg").is_file())
+            self.assertTrue((report / "docs" / "assets" / "bench" / "live-kaggle.svg").is_file())
+
+    def test_missing_metadata_cannot_be_rendered_as_a_full_campaign(self):
+        from pathlib import Path
+        import render
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            campaign = self.write_live(root, "one", quick=True)
+            (campaign / "meta.json").unlink()
+            report = root / "report"
+            (report / "docs" / "dev" / "performance").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "metadata"):
+                render.render(root, report)
+            self.assertFalse((report / "docs" / "assets").exists())
+
+    def test_live_rows_must_match_their_own_dataset_metadata(self):
+        from pathlib import Path
+        import json
+        import render
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            campaign = self.write_live(root, "one")
+            path = campaign / "runs.jsonl"
+            row = json.loads(path.read_text())
+            row["count"] = 2
+            path.write_text(json.dumps(row))
+            report = root / "report"
+            (report / "docs" / "dev" / "performance").mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, "conditions"):
+                render.render(root, report)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """Render measured results as light and dark SVG cards and a markdown page."""
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 import html
 import json
 from pathlib import Path
@@ -190,13 +190,61 @@ def picture(name, title):
             f'  <img src="../../assets/bench/{name}.svg" alt="{escaped}">\n</picture>\n')
 
 
-def render(results, repo):
+def load_results(results):
     paths = sorted(results.rglob("runs.jsonl"))
     if not paths:
         raise ValueError("no runs.jsonl found")
-    all_rows = [json.loads(line) for path in paths for line in path.read_text().splitlines() if line.strip()]
+    all_rows, metas = [], []
+    live_origins = {}
+    for path in paths:
+        meta_path = path.with_name("meta.json")
+        if not meta_path.is_file():
+            raise ValueError(f"missing metadata for {path}")
+        meta = json.loads(meta_path.read_text())
+        if not isinstance(meta, dict) or meta.get("kind") not in ("lab", "live") or not isinstance(meta.get("quick"), bool):
+            raise ValueError(f"invalid campaign metadata in {meta_path}")
+        records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        datasets = {dataset["service"]: dataset for dataset in meta.get("datasets", [])}
+        if len(datasets) != len(meta.get("datasets", [])):
+            raise ValueError(f"live metadata repeats a service in {meta_path}")
+        seen = set()
+        for row in records:
+            if row.get("kind") == "comparison" and meta["kind"] == "live":
+                continue
+            if row.get("kind") != meta["kind"] or row.get("quick") != meta["quick"]:
+                raise ValueError(f"mixed benchmark conditions in {path}")
+            if "tool" not in row:
+                if meta["kind"] == "live" and row.get("status") == "skipped":
+                    continue
+                raise ValueError(f"a measured row has no tool in {path}")
+            if "round" in row:
+                identity = (row["kind"], row.get("filesystem"), row.get("profile"), row.get("scenario", row.get("service")),
+                            row["tool"], row["round"])
+                if identity in seen:
+                    raise ValueError(f"duplicate measured row in {path}: {identity}")
+                seen.add(identity)
+            if row["kind"] != "live":
+                continue
+            service = row["service"]
+            if service in live_origins and live_origins[service] != path:
+                raise ValueError(f"live service {service} was measured twice; render campaigns separately")
+            live_origins[service] = path
+            dataset = datasets.get(service)
+            if dataset is None or not dataset.get("expected_sha256"):
+                raise ValueError(f"live metadata has no reference dataset for {service}")
+            expected = dataset["expected_sha256"]
+            if (row.get("count"), row.get("file_size")) != (len(expected), dataset.get("bytes")):
+                raise ValueError(f"mixed live benchmark conditions for {service}")
+            if row.get("status") == "passed" and "files" in row and Counter(row["files"].values()) != Counter(expected.values()):
+                raise ValueError(f"live checked bytes do not match metadata for {service}")
+        all_rows.extend(records)
+        metas.append(meta)
+    return all_rows, sorted(metas, key=lambda meta: meta.get("date", ""))
+
+
+def render(results, repo):
+    all_rows, metas = load_results(results)
     rows = [row for row in all_rows if not row.get("warmup") and row.get("kind") in ("lab", "live")]
-    metas = sorted((json.loads(path.read_text()) for path in results.rglob("meta.json")), key=lambda meta: meta.get("date", ""))
     conditions = {}
     for row in rows:
         if row.get("kind") != "lab":
@@ -220,7 +268,7 @@ def render(results, repo):
     for old in charts.glob("*.svg"):
         old.unlink()
     lines = ["# benchmark results\n", "measurements from the recorded commands and checked outputs.\n", "## conditions\n"]
-    if any(meta.get("quick") for meta in metas):
+    if any(meta.get("quick") for meta in metas) or any(row.get("quick") for row in rows):
         lines.append("these are smoke-test sizes and rounds, not full benchmark results.\n")
     shared = None
     for meta in metas:
@@ -229,6 +277,10 @@ def render(results, repo):
                    f"- kernel: `{meta.get('kernel', 'unknown')}`; seed: `{meta.get('seed', 'unknown')}`",
                    f"- fetchloom: `{meta.get('tool_versions', {}).get('fetchloom', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
                    "- versions: " + "; ".join(f"{name} `{version}`" for name, version in meta.get("tool_versions", {}).items())]
+        if meta.get("cpu_affinity") is not None:
+            setting.append(f"- measured CPUs: `{meta['cpu_affinity']}`; nginx threads: `{meta.get('nginx_cpu_affinity', {})}`")
+        if meta.get("fetchloom_binary"):
+            setting.append(f"- supplied executable: `{meta['fetchloom_binary']['path']}`; SHA-256: `{meta['fetchloom_binary']['sha256']}`")
         cases = ", ".join(sorted({f"{case['filesystem']}/{case['profile']}/{case['id']}" for case in meta.get("cases") or []}))
         recorded = f"- recorded `{meta.get('date', 'unknown')}`" + (f": {cases}" if cases else f": {meta.get('kind', 'unknown')} run")
         if meta.get("filesystems"):
@@ -246,7 +298,7 @@ def render(results, repo):
             rate = f"{values[2]} Mbit/s" if values[2] else "unlimited"
             lines.append(f"| {name} | {values[0]} ms | {values[1]}% | {rate} |")
         lines.append("")
-    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past the 20-minute limit counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
+    lines.append("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat the lan results with a verdict against the fastest other tool, for the README.\n")
     warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in all_rows)
     if warmup_failures:
         lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
