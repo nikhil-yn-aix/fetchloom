@@ -107,12 +107,23 @@ fn restricted_files_are_all_named_instead_of_skipped() {
         value["data"]["files"][0]["restricted"] = true.into();
         value["data"]["files"][1]["restricted"] = true.into();
     });
-    let recorded = Recorded::default().on(LATEST, 200, body);
+    let recorded = Recorded::default().on(LATEST, 200, body.clone());
     let error = block_on(Dataset::parse(ID).unwrap().resolve(&recorded)).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert!(error.message.contains("data/2026-06-24.tsv"));
     assert!(error.message.contains("code/language.py"));
     assert!(error.help.is_some());
+    // a key for this install may be allowed the files, and its downloads then say if not
+    let answer: version::Answer = serde_json::from_slice(&body).unwrap();
+    let signed_in = |name: &str| match name {
+        "DATAVERSE_URL" => Some("https://dataverse.harvard.edu".into()),
+        "DATAVERSE_API_TOKEN" => Some("0123-key".into()),
+        _ => None,
+    };
+    let listing = answer
+        .listing(&Dataset::parse(ID).unwrap(), &signed_in)
+        .unwrap();
+    assert_eq!(listing.files.len(), 3);
 }
 
 #[test]

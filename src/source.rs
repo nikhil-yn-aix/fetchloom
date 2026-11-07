@@ -36,6 +36,17 @@ pub(crate) const MOST_FILES: usize = 100_000;
 /// reads the environment, so tests can give each run its own.
 pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
 
+/// the environment a source reads to tell whether its requests go signed in, as the network
+/// that sends them found its credentials there. unit tests read an empty one instead, so a key
+/// saved on the machine running them changes nothing, and pass their own where it matters.
+fn env(name: &str) -> Option<OsString> {
+    if cfg!(test) {
+        None
+    } else {
+        crate::auth::env(name)
+    }
+}
+
 /// where a dataset comes from, parsed once where it enters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Reference {

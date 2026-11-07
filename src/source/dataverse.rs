@@ -132,7 +132,7 @@ impl Dataset {
         }
         let response = api.get(&self.url()?).await?;
         let answer: version::Answer = self.answer(&response)?;
-        answer.listing(self)
+        answer.listing(self, &super::env)
     }
 
     fn answer<T: serde::de::DeserializeOwned>(&self, response: &Response) -> Result<T, Error> {

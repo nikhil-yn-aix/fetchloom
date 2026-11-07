@@ -41,7 +41,7 @@ pub(super) async fn resolve(dataset: &Dataset, id: &str, api: &impl Api) -> Resu
         return Err(dataset.invalid("the answer describes another file"));
     }
     let item = Item::File(file.id().to_string());
-    dataset_version.pinned(dataset, item, vec![file])
+    dataset_version.pinned(dataset, item, vec![file], &crate::source::env)
 }
 
 /// `/api/files/<id>/versions/<version>`, asking for the dataset version's facts as well.

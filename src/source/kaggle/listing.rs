@@ -71,7 +71,7 @@ impl Dataset {
         crate::source::json(self, &response).map_err(|err| {
             if err.kind == Kind::AuthRequired {
                 // kaggle answers 403 alike for a private dataset and for one that does not exist
-                let signed_in = super::token::find(&crate::auth::env).is_some();
+                let signed_in = super::token::find(&crate::source::env).is_some();
                 self.hidden(err, signed_in)
             } else {
                 err
@@ -440,11 +440,10 @@ mod tests {
         );
         let err = block_on(dataset("uciml/no-such-dataset").resolve(&recorded)).unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
-        assert!(
-            err.message
-                .starts_with("kaggle has no dataset uciml/no-such-dataset, or "),
-            "{}",
-            err.message
+        // unit tests see no kaggle key, whatever the machine running them keeps
+        assert_eq!(
+            err.message,
+            "kaggle has no dataset uciml/no-such-dataset, or it is private"
         );
         let help = err.help.unwrap();
         assert!(

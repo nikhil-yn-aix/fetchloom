@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{Dataset, Item};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::source::{Listing, Reference, Remote};
+use crate::source::{Listing, Reference, Remote, Var};
 
 /// a native API answer for one version of a dataset.
 #[derive(Deserialize)]
@@ -90,22 +90,22 @@ enum Checksum {
 
 impl Answer {
     /// lists the published version without requesting file bodies.
-    pub(super) fn listing(self, dataset: &Dataset) -> Result<Listing, Error> {
+    pub(super) fn listing(self, dataset: &Dataset, var: Var<'_>) -> Result<Listing, Error> {
         if self.status != "OK" {
             return Err(dataset.invalid("the API did not return an OK answer"));
         }
-        self.data.listing(dataset)
+        self.data.listing(dataset, var)
     }
 }
 
 impl Version {
-    fn listing(mut self, dataset: &Dataset) -> Result<Listing, Error> {
+    fn listing(mut self, dataset: &Dataset, var: Var<'_>) -> Result<Listing, Error> {
         let item = Item::Dataset(self.dataset_persistent_id.clone());
         let files = self
             .files
             .take()
             .ok_or_else(|| dataset.invalid("the dataset version has no file list"))?;
-        self.pinned(dataset, item, files)
+        self.pinned(dataset, item, files, var)
     }
 
     pub(super) fn pinned(
@@ -113,9 +113,10 @@ impl Version {
         dataset: &Dataset,
         item: Item,
         files: Vec<File>,
+        var: Var<'_>,
     ) -> Result<Listing, Error> {
         let number = format!("{}.{}", self.major, self.minor);
-        self.check(dataset, &number, &files)?;
+        self.check(dataset, &number, &files, var)?;
         let title = self.title(dataset)?;
         let files = files
             .into_iter()
@@ -145,7 +146,13 @@ impl Version {
         })
     }
 
-    fn check(&self, dataset: &Dataset, number: &str, files: &[File]) -> Result<(), Error> {
+    fn check(
+        &self,
+        dataset: &Dataset,
+        number: &str,
+        files: &[File],
+        var: Var<'_>,
+    ) -> Result<(), Error> {
         if self.state != "RELEASED" || self.major == 0 {
             return Err(dataset.invalid("the version is not published"));
         }
@@ -172,7 +179,7 @@ impl Version {
         // a key for this installation may be allowed the files; if not, their downloads are
         // refused and say so
         let account = dataset.account();
-        if !restricted.is_empty() && account.find(&crate::auth::env).is_none() {
+        if !restricted.is_empty() && account.find(var).is_none() {
             let command = account.command();
             return Err(Error::new(
                 Kind::AuthRequired,
