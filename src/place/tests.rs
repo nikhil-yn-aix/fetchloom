@@ -1487,3 +1487,22 @@ fn parent_handle_experiment_preserves_placement_and_removal() {
         assert_eq!(placer.parents.cached() != 0, value == "1");
     }
 }
+
+#[test]
+fn a_chosen_root_may_contain_parent_components() {
+    let (folder, object) = cache(true);
+    fs::create_dir(folder.path().join("working")).unwrap();
+    let root = folder.path().join("working/../got");
+    let mut placer = Placer::in_named_folder(&root);
+    placer.place(&object, &root.join("file"), false).unwrap();
+    assert_eq!(
+        fs::read_to_string(folder.path().join("got/file")).unwrap(),
+        CONTENTS
+    );
+    assert!(
+        placer
+            .place(&object, &root.join("../escaped"), false)
+            .is_err()
+    );
+    assert!(!folder.path().join("escaped").exists());
+}

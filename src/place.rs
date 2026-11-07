@@ -613,17 +613,18 @@ impl Placer {
     /// `path` made absolute, and its folder, which must be the root or inside it.
     fn within(&self, path: &Path) -> io::Result<(PathBuf, PathBuf)> {
         let path = std::path::absolute(path)?;
-        if path
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "a placement path cannot contain ..",
-            ));
-        }
         match path.parent() {
             Some(parent) if parent.starts_with(&self.root) => {
+                if path.strip_prefix(&self.root).is_ok_and(|relative| {
+                    relative
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+                }) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "a placement path cannot contain .. below its root",
+                    ));
+                }
                 let parent = parent.to_path_buf();
                 Ok((path, parent))
             }

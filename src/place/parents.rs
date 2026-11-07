@@ -439,12 +439,6 @@ fn component(parent: &File, name: &OsStr, make: bool) -> io::Result<File> {
 
 pub(super) fn open_root(path: &Path, make: bool, real: bool) -> io::Result<File> {
     let absolute = std::path::absolute(path)?;
-    if absolute
-        .components()
-        .any(|part| matches!(part, Component::ParentDir))
-    {
-        return Err(invalid("a placement root contains a parent component"));
-    }
     let Some(parent) = absolute.parent() else {
         return native::openat(native::CWD, absolute, flags(), Mode::empty())
             .map(File::from)
@@ -458,9 +452,9 @@ pub(super) fn open_root(path: &Path, make: bool, real: bool) -> io::Result<File>
         }
         Err(error) => return Err(error),
     };
-    let name = absolute
-        .file_name()
-        .ok_or_else(|| invalid("a placement root has no name"))?;
+    let Some(name) = absolute.file_name() else {
+        return open_root(&std::fs::canonicalize(&absolute)?, make, real);
+    };
     if !real {
         if make {
             match native::mkdirat(&folder, name, Mode::from_bits_truncate(0o777)) {
