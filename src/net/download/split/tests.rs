@@ -494,14 +494,16 @@ fn a_fast_stream_is_never_split() {
     let server = serve(
         body.clone(),
         Serving {
-            rate: 64 * MIB,
+            rate: 16 * MIB,
             ..SERVING
         },
     );
     let mut net = net(&server.url, 8);
     net.split.when = Splitting::WhenSlow;
-    // a loaded test machine can slow a local stream below the usual rate, so only a stall counts
+    // a loaded test machine can slow a local stream below the usual rate or pause it for a
+    // short window, so only a long stall counts. the download still outlasts one window.
     net.split.slow = 1024;
+    net.split.window = Duration::from_millis(400);
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));
@@ -511,7 +513,7 @@ fn a_fast_stream_is_never_split() {
 
 #[test]
 fn streams_are_added_only_while_the_download_gets_faster() {
-    let body = body(4 * MIB);
+    let body = body(8 * MIB);
     let server = serve(
         body.clone(),
         Serving {
@@ -520,7 +522,9 @@ fn streams_are_added_only_while_the_download_gets_faster() {
             ..SERVING
         },
     );
-    let net = net(&server.url, 8);
+    let mut net = net(&server.url, 8);
+    // a window long enough that a short pause of a loaded test machine reads as no gain
+    net.split.window = Duration::from_millis(400);
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));
