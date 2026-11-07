@@ -206,15 +206,37 @@ impl Loop<'_> {
         lock: &Lock,
         archives: &[(String, &LockedFile)],
     ) -> Result<(), Error> {
-        let mut damaged = Vec::new();
-        for (dataset, file) in self.unpack_checked(lock, archives).await? {
-            let intact = self.cache.verify(&file.sha256).map_err(|err| {
+        let intact = |dataset: &str, file: &LockedFile| {
+            self.cache.verify(&file.sha256).map_err(|err| {
                 Error::io(
                     format_args!("could not check {dataset}/{}", file.path),
                     &err,
                 )
-            })?;
-            if intact {
+            })
+        };
+        let checked = match self.unpack_checked(lock, archives).await {
+            Err(error) if error.kind == Kind::SourceInvalid => {
+                // a checksum can fail before a tree exists to compare with the lock.
+                let mut changed = false;
+                for (dataset, file) in archives {
+                    if !intact(dataset, file)? {
+                        changed = true;
+                        self.context.output.warn(&format!(
+                            "{dataset}/{} changed in the cache, so it is downloaded again",
+                            file.path
+                        ));
+                    }
+                }
+                if !changed {
+                    return Err(error);
+                }
+                self.unpack_checked(lock, archives).await?
+            }
+            result => result?,
+        };
+        let mut damaged = Vec::new();
+        for (dataset, file) in checked {
+            if intact(&dataset, file)? {
                 return Err(other_files(&dataset, file));
             }
             self.context.output.warn(&format!(
@@ -505,5 +527,33 @@ mod tests {
         assert!(cache.find(&archive.digest, None).is_some());
         let registered = cache.registered_projects(&crate::stop::Stop::default());
         assert_eq!(registered.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn intact_damaged_archives_preserve_the_source_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = store(&cache, b"PK\x03\x04broken");
+        let lock = lock_for(LockedFile {
+            path: "set.zip".to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/set.zip".to_owned(),
+            unpacks_to: Some(digest::sha256(b"a pinned tree")),
+        });
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let error = block_on(
+            runner.unpack_locked(&lock, &[("set".to_owned(), &lock.datasets[0].files[0])]),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.message.contains("damaged"), "{}", error.message);
+        assert!(runner.cache.changed().is_empty());
+        assert_eq!(context.work.counts().requests, 0);
     }
 }

@@ -548,3 +548,45 @@ fn path_checks_known_archive_members_before_syncing() -> Result {
     assert_eq!(server.requests().len(), 2);
     Ok(())
 }
+
+#[test]
+fn a_cached_archive_with_crc_damage_is_fetched_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let server = Server::start(PATH, (0..4).map(|_| file(&zip, "\"z1\"")).collect())?;
+    let packed = sandbox.folder("packed")?;
+    ok(&sandbox
+        .command_in(&packed, &["add", "--no-extract", &server.url])
+        .output()?)?;
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let cache = sandbox.cache();
+    let record = cache.join("unpacked").join(ZIP_SHA256);
+    let pinned = fs::read_to_string(&record)?;
+    let mut damaged = zip.clone();
+    let central = damaged
+        .windows(4)
+        .position(|bytes| bytes == b"PK\x01\x02")
+        .ok_or("zip has a central directory")?;
+    damaged[central + 16] ^= 1;
+    let permissions = fs::metadata(zip_object(&cache))?.permissions();
+    edit(&zip_object(&cache), &damaged)?;
+    fs::set_permissions(zip_object(&cache), permissions)?;
+    let readme = pinned
+        .lines()
+        .find_map(|line| line.strip_prefix("dataset/README.md\t"))
+        .and_then(|line| line.rsplit('\t').next())
+        .ok_or("README.md is in the record")?;
+    delete(&cache.join("objects").join(&readme[..2]).join(&readme[2..]))?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let requests = server.requests().len();
+    let synced = sandbox.command_in(&clone, &["sync"]).output()?;
+    ok(&synced)?;
+    holds_the_archive(&clone.join("data").join("dataset"))?;
+    assert_eq!(fs::read_to_string(&record)?, pinned);
+    assert_eq!(fs::read(zip_object(&cache))?, zip);
+    assert_eq!(server.requests().len(), requests + 1);
+    Ok(())
+}
