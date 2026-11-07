@@ -242,6 +242,66 @@ fn s3_follows_a_bucket_to_its_region_once() {
 }
 
 #[test]
+fn soap_objects_use_path_style_at_global_and_regional_endpoints() {
+    for bucket in ["bucket", "open.data"] {
+        for region in [None, Some("eu-west-1")] {
+            let service = region.map_or_else(
+                || "s3.amazonaws.com".to_owned(),
+                |region| format!("s3.{region}.amazonaws.com"),
+            );
+            let base = |service: &str| {
+                if bucket.contains('.') {
+                    format!("https://{service}/{bucket}/")
+                } else {
+                    format!("https://{bucket}.{service}/")
+                }
+            };
+            let initial = listing_url(&base("s3.amazonaws.com"), "");
+            let active = listing_url(&base(&service), "");
+            let body = page(
+                false,
+                &[
+                    ("soap", "\"x\""),
+                    ("folder/soap", "\"x\""),
+                    ("SOAP", "\"x\""),
+                ],
+            );
+            let recorded = if let Some(region) = region {
+                Recorded::default()
+                    .on(
+                        &initial,
+                        301,
+                        format!("<Error><Region>{region}</Region></Error>"),
+                    )
+                    .on(&active, 200, body)
+            } else {
+                Recorded::default().on(&initial, 200, body)
+            };
+            let listing = resolve(&format!("s3://{bucket}/"), &recorded).unwrap();
+            assert_eq!(listing.files.len(), 3);
+            assert_eq!(
+                listing.files[0].url.as_str(),
+                format!("https://{service}/{bucket}/soap")
+            );
+            assert_eq!(
+                listing.files[1].url.as_str(),
+                format!("{}folder/soap", base(&service))
+            );
+            assert_eq!(
+                listing.files[2].url.as_str(),
+                format!("{}SOAP", base(&service))
+            );
+            let asked = if region.is_some() {
+                vec![initial, active]
+            } else {
+                vec![initial]
+            };
+            assert_eq!(recorded.asked(), asked);
+        }
+    }
+}
+
+#[test]
 fn a_dotted_bucket_moves_to_the_regional_path_named_in_the_error() {
     let global = listing_url("https://s3.amazonaws.com/open.data/", "x/");
     let regional = listing_url("https://s3.eu-west-1.amazonaws.com/open.data/", "x/");

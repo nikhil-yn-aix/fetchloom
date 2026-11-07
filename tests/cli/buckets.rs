@@ -366,6 +366,28 @@ fn nonempty_folder_objects_are_not_ignored() -> Result {
 }
 
 #[test]
+fn soap_objects_download_through_path_style_urls() -> Result {
+    let sandbox = Sandbox::new()?;
+    let listing = s3_listing("/soap-bucket.s3.amazonaws.com/", "", None);
+    let object = "/s3.amazonaws.com/soap-bucket/soap".to_owned();
+    let routes = Routes::start(vec![
+        (listing.clone(), s3_page(&[("soap", SCAN)], None)),
+        (object.clone(), file(SCAN, &format!("\"{}\"", md5(SCAN)))),
+    ])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", "s3://soap-bucket/", "--as", "soap-data"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("data/soap-data/soap"))?, SCAN);
+    assert_eq!(routes.targets(), [listing, object]);
+    assert_anonymous(&routes);
+    Ok(())
+}
+
+#[test]
 fn a_private_bucket_is_refused_with_auth_required() -> Result {
     let sandbox = Sandbox::new()?;
     let denied = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";

@@ -25,7 +25,7 @@ an `s3://` or `gs://` reference without a final `/` names the object with exactl
 
 ## listing
 
-S3 buckets are listed with ListObjectsV2, up to 1,000 keys a page, following continuation tokens. a bucket whose name contains a dot is addressed by path on `s3.amazonaws.com`, because the service's certificate does not cover dotted host names; other buckets use their own host. when S3 answers that a bucket lives in another region, through its `x-amz-bucket-region` header or the region named in its error, fetchloom asks that region's endpoint once.
+S3 buckets are listed with ListObjectsV2, up to 1,000 keys a page, following continuation tokens. a bucket whose name contains a dot is addressed by path on `s3.amazonaws.com`, because the service's certificate does not cover dotted host names; other buckets use their own host. an object whose whole key is `soap` downloads by path on the service's host, as [S3 requires](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html). when S3 answers that a bucket lives in another region, through its `x-amz-bucket-region` header or the region named in its error, fetchloom asks that region's endpoint once.
 
 cloud storage buckets are listed through the JSON API at `storage.googleapis.com/storage/v1/b/<bucket>/o`, following page tokens.
 

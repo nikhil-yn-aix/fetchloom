@@ -144,8 +144,20 @@ fn object(
         .text_of("Size")
         .and_then(|size| size.parse().ok())
         .ok_or_else(|| prefix.invalid(&format!("the size of \"{key}\" is not a number")))?;
+    let mut url = object_url(&endpoint.base, &key);
+    // s3 reserves the exact key soap on a bucket host for its legacy SOAP endpoint.
+    if key == "soap" && !prefix.bucket.contains('.') {
+        let service = endpoint
+            .base
+            .host_str()
+            .and_then(|host| host.strip_prefix(&format!("{}.", prefix.bucket)))
+            .ok_or_else(|| prefix.invalid("the bucket makes no valid link"))?;
+        url.set_host(Some(service))
+            .map_err(|_| prefix.invalid("the bucket makes no valid link"))?;
+        url.set_path(&format!("/{}/soap", prefix.bucket));
+    }
     Ok(Object {
-        url: object_url(&endpoint.base, &key),
+        url,
         md5: contents.text_of("ETag").and_then(etag_md5),
         key,
         size,
