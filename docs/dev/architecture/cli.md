@@ -32,7 +32,7 @@ command handlers order effects across modules. `Context` reads settings once and
 
 network clients are created only where commands need them. `Net` delays TLS roots and proxy setup until the first request. version and help paths avoid that work.
 
-help routing reads short-option bundles from clap metadata. `-qh` still requests help, and attached or following values of `-C` do not become command names. help and JSON flags are found before `--`, including after malformed arguments.
+help routing reads short-option bundles from clap metadata. `-qh` still requests help, and attached or following values of `-C`, including non-UTF-8 paths, do not become command names. only option spellings are read lossily; command names still need valid UTF-8. help and JSON flags are found before `--`, including after malformed arguments.
 
 ### command boundaries
 

@@ -402,19 +402,43 @@ fn errors_messages_bundled_help_uses_json_and_the_right_command() -> Result {
     Ok(())
 }
 
+#[cfg(any(unix, windows))]
 #[test]
-fn errors_messages_help_skips_bundled_directory_values() -> Result {
+fn attached_non_unicode_directories_keep_the_help_topic() -> Result {
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    let folder = {
+        use std::os::unix::ffi::OsStringExt as _;
+        OsString::from_vec(b"project-\xff".to_vec())
+    };
+    #[cfg(windows)]
+    let folder = {
+        use std::os::windows::ffi::OsStringExt as _;
+        OsString::from_wide(&[112, 114, 111, 106, 101, 99, 116, 45, 0xd800])
+    };
     let sandbox = Sandbox::new()?;
-    for args in [
-        &["-qC", "cache", "get", "--help", "--json"][..],
-        &["-qCcache", "get", "--help", "--json"][..],
-    ] {
-        let output = sandbox.run(args)?;
-        let document = crate::support::json(&output)?;
-        let commands = document["result"]["commands"]
-            .as_array()
-            .ok_or("missing help commands")?;
-        assert_eq!(commands[0]["name"], "get", "{args:?}: {document}");
+    for flag in ["-C", "-qC"] {
+        let mut attached = OsString::from(flag);
+        attached.push(&folder);
+        for json in [false, true] {
+            let mut command = sandbox.command(&[]);
+            command.arg(&attached).args(["get", "--help"]);
+            if json {
+                command.arg("--json");
+            }
+            let output = command.output()?;
+            assert!(output.status.success(), "{}", text(&output.stderr)?);
+            if json {
+                let document = crate::support::json(&output)?;
+                let commands = document["result"]["commands"]
+                    .as_array()
+                    .ok_or("missing help commands")?;
+                assert_eq!(commands.len(), 1, "{flag}: {document}");
+                assert_eq!(commands[0]["name"], "get");
+            } else {
+                assert!(text(&output.stdout)?.contains("usage: fetchloom get"));
+            }
+        }
     }
     Ok(())
 }

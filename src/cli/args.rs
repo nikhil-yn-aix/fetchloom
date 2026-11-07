@@ -253,16 +253,17 @@ fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Ve
         if std::mem::take(&mut value_next) {
             continue;
         }
-        let Some(word) = word.to_str() else {
-            names = false;
-            continue;
-        };
-        if word.starts_with('-') {
-            let (help, value) = help_option(command, current, word);
+        let option = word.to_string_lossy();
+        if option.starts_with('-') {
+            let (help, value) = help_option(command, current, &option);
             asked |= help;
             value_next = value;
             continue;
         }
+        let Some(word) = word.to_str() else {
+            names = false;
+            continue;
+        };
         if names {
             match current.find_subcommand(word) {
                 Some(sub) if sub.get_name() != "help" => {
