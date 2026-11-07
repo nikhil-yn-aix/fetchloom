@@ -99,6 +99,8 @@ both read `SHA256SUMS`, select the architecture's archive, verify its digest and
 
 ## local fake-release test
 
+`python3 -m unittest discover -s python -p test_install.py` runs the shell installer against a loopback HTTP server on linux. it uses a fake executable and a private home to check matching and mismatched digests, failed version checks, and idempotent profile changes. it contacts no release service and leaves the real home and installed program alone. the digest regression also checks that a mismatched archive is never executed.
+
 use a folder named `release` holding a locally packaged archive with the layout above and its matching `SHA256SUMS`. an archive from a successful build-job artifact also works; no published release is needed. on linux, from the folder holding those archives, write the checksum file with `sha256sum -- *.tar.gz > SHA256SUMS`. on windows, from the repository root:
 
 ```powershell
