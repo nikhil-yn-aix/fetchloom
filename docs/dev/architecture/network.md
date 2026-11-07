@@ -86,6 +86,8 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 
 408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.rate_limited` after a 429, `network.status` after a 5xx and `network.unreachable` otherwise; excessive requested waits report `network.rate_limited` while retries remain.
 
+when a split download remains incomplete, a terminal stream failure keeps priority over transient stream failures in either arrival order. interruption still takes priority.
+
 `Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. a response that omits a known policy still spends one of its remembered requests. waits remain cancellable.
 
 metadata pagination reads every `Link` header field. angle-bracketed targets and quoted parameters keep their commas and semicolons; the first `rel` parameter may name several relations. links with an `anchor` are skipped because their context is not the requested page.

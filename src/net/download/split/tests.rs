@@ -764,3 +764,22 @@ fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
         );
     }
 }
+
+#[test]
+fn terminal_stream_failures_win_in_either_arrival_order() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    for terminal_first in [false, true] {
+        let terminal = failure::refusal(&url, StatusCode::FORBIDDEN, &header::HeaderMap::new());
+        let transient = failure::transient("a connection broke".to_owned());
+        let failures = if terminal_first {
+            [terminal, transient]
+        } else {
+            [transient, terminal]
+        };
+        let mut outcome = None;
+        for failure in failures {
+            keep_failure(&mut outcome, failure);
+        }
+        assert!(matches!(outcome, Some(Failure::Final(error)) if error.kind == Kind::AuthRequired));
+    }
+}

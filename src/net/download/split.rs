@@ -305,6 +305,12 @@ impl Probe {
     }
 }
 
+fn keep_failure(outcome: &mut Option<Failure>, failure: Failure) {
+    if !matches!(outcome, Some(Failure::Final(_))) {
+        *outcome = Some(failure);
+    }
+}
+
 struct Completion {
     interrupted: bool,
     start_over: bool,
@@ -440,7 +446,7 @@ impl Net {
                                 shared.board().stopped = true;
                             }
                             tracing::debug!(id, "a stream of a split download failed");
-                            outcome = Some(failure);
+                            keep_failure(&mut outcome, failure);
                         }
                     }
                 }
