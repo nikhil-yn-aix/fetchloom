@@ -132,14 +132,31 @@ def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
 
 
 def _program() -> str:
-    name = "fetchloom.exe" if sys.platform == "win32" else "fetchloom"
-    folders = [sysconfig.get_path("scripts")]
+    windows = sys.platform == "win32"
+    name = "fetchloom.exe" if windows else "fetchloom"
+    package = Path(__file__).resolve().parent
+    # --target keeps scripts beside the package; --prefix puts them above site-packages.
+    folders = [package.parent / "bin"]
+    site = package.parent
+    if site.name in {"site-packages", "dist-packages"}:
+        prefix = site.parent
+        if windows:
+            if prefix.name.lower() == "lib":
+                prefix = prefix.parent
+            folders.append(prefix / "Scripts")
+        else:
+            if prefix.name.startswith("python"):
+                prefix = prefix.parent
+            if prefix.name in {"lib", "lib64"}:
+                folders.append(prefix.parent / "bin")
+    folders.extend([
+        sysconfig.get_path("scripts"),
+        sysconfig.get_path("scripts", vars={"base": sys.base_prefix}),
+    ])
     try:
-        folders.append(sysconfig.get_path("scripts", f"{os.name}_user"))
+        folders.append(sysconfig.get_path("scripts", _user_scheme()))
     except KeyError:
         pass
-    # pip install --target puts the program in bin beside the package folder
-    folders.append(str(Path(__file__).resolve().parent.parent / "bin"))
     for folder in folders:
         if folder and Path(folder, name).is_file():
             return str(Path(folder, name))
@@ -147,3 +164,12 @@ def _program() -> str:
     if found is None:
         raise FileNotFoundError("the fetchloom program is missing. reinstall it with `pip install fetchloom`")
     return found
+
+
+def _user_scheme() -> str:
+    preferred = getattr(sysconfig, "get_preferred_scheme", None)
+    if preferred is not None:
+        return preferred("user")
+    if sys.platform == "darwin" and getattr(sys, "_framework", None):
+        return "osx_framework_user"
+    return f"{os.name}_user"
