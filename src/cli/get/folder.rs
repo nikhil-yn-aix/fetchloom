@@ -75,7 +75,9 @@ pub(super) fn put_all(
 ) -> Result<Vec<Outcome>, Error> {
     // an archive that holds nothing still leaves the folder get answers with
     fs::create_dir_all(folder).map_err(|err| local(folder, &err))?;
-    let mut placer = Placer::in_named_folder(folder).with_threads(context.threads);
+    let mut placer = Placer::in_named_folder(folder)
+        .with_experiments(cache.experiments().clone())
+        .with_threads(context.threads);
     let mut outcomes = Vec::with_capacity(targets.len());
     let mut orders = Vec::new();
     for (index, target) in targets.iter().enumerate() {

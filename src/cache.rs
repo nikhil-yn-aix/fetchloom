@@ -32,6 +32,7 @@ pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
 
 use crate::digest::{self, Md5, Sha256};
+use crate::exp::Experiments;
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::{Volume, is_plain};
 
@@ -43,6 +44,7 @@ const FOLDERS: [&str; 8] = [
 #[derive(Clone, Debug)]
 pub(crate) struct Cache {
     root: PathBuf,
+    exp: Experiments,
     /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
@@ -134,6 +136,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            exp: Experiments::default(),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -170,6 +173,7 @@ impl Cache {
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
             held: None,
+            exp: Experiments::default(),
         })
     }
 
@@ -184,6 +188,17 @@ impl Cache {
     /// what a [`Cache::pretending`] cache would have removed, in order.
     pub(crate) fn pretended(&self) -> Vec<PathBuf> {
         self.volume.pretended()
+    }
+
+    /// uses this run's experiment settings without reading the environment.
+    pub(crate) fn with_experiments(mut self, exp: Experiments) -> Cache {
+        self.exp = exp;
+        self
+    }
+
+    /// the experiment settings supplied for this cache.
+    pub(crate) fn experiments(&self) -> &Experiments {
+        &self.exp
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -472,6 +487,28 @@ fn fill_and_rename(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn experiments_default_to_empty_in_cache_constructors() {
+        let (dir, cache) = cache();
+        assert!(cache.experiments().is_empty());
+        let unopened = Cache::unopened(dir.path().join("unopened")).unwrap();
+        assert!(unopened.experiments().is_empty());
+        assert!(!unopened.root().exists());
+        assert!(cache.pretending().experiments().is_empty());
+    }
+
+    #[test]
+    fn experiments_follow_cache_clones_and_pretending() {
+        let (_dir, cache) = cache();
+        let original = cache.clone();
+        let cache = cache.with_experiments(Experiments::default().with("DEMO", " 7 "));
+        assert!(original.experiments().is_empty());
+        for cache in [cache.clone(), cache.pretending(), cache] {
+            assert!(cache.experiments().on("DEMO"));
+            assert_eq!(cache.experiments().number("DEMO"), Some(7));
+        }
+    }
 
     pub(super) fn cache() -> (tempfile::TempDir, Cache) {
         let dir = tempfile::tempdir().unwrap();

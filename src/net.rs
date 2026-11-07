@@ -27,6 +27,7 @@ pub(crate) use shown::{Shown, mask_query, secret};
 
 use self::failure::Failure;
 use crate::error::{Error, Kind};
+use crate::exp::Experiments;
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -111,6 +112,8 @@ pub(crate) struct Options {
     pub(crate) credentials: Vec<Credential>,
     /// when a large download is split across streams.
     pub(crate) split: Splitting,
+    /// experiment settings read once for this run.
+    pub(crate) exp: Experiments,
 }
 
 /// when a large download that may split across streams does.
@@ -149,6 +152,7 @@ pub(crate) struct Net {
     paces: pace::Paces,
     rate: Option<Arc<Rate>>,
     split: Split,
+    exp: Experiments,
     idle: Duration,
     work: Arc<Work>,
     stop: Arc<Stop>,
@@ -287,6 +291,7 @@ impl Net {
         Net {
             wire: OnceLock::new(),
             offline: options.offline,
+            exp: options.exp,
             typed: address::Typed::default(),
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
@@ -337,6 +342,18 @@ impl Net {
             .iter()
             .map(|key| key.host.as_str())
             .collect()
+    }
+
+    /// the experiment settings supplied for this run.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "network switch consumers arrive during the a/b period"
+        )
+    )]
+    pub(crate) fn exp(&self) -> &Experiments {
+        &self.exp
     }
 
     pub(crate) fn offline(&self) -> Offline {
@@ -551,6 +568,7 @@ mod tests {
     #[test]
     fn a_run_that_sends_nothing_loads_no_tls_roots() {
         let options = Options {
+            exp: crate::exp::Experiments::default(),
             offline: Offline::No,
             jobs: 1,
             credentials: Vec::new(),
@@ -571,6 +589,7 @@ mod tests {
             every_hop: false,
         };
         let options = Options {
+            exp: crate::exp::Experiments::default(),
             offline: Offline::No,
             jobs: 1,
             credentials: vec![credential("new"), credential("old")],
@@ -619,6 +638,7 @@ mod tests {
             heads
         });
         let options = Options {
+            exp: crate::exp::Experiments::default(),
             offline: Offline::No,
             jobs: 1,
             credentials: Vec::new(),

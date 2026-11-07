@@ -80,6 +80,7 @@ fn answer(mut stream: TcpStream, window: &Mutex<(u64, u64)>, refused: &AtomicUsi
 fn concurrent_downloads_respect_the_hosts_quota() {
     let host = serve();
     let options = Options {
+        exp: crate::exp::Experiments::default(),
         offline: Offline::No,
         jobs: 8,
         credentials: Vec::new(),

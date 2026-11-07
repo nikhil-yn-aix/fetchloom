@@ -16,6 +16,27 @@ fn version() -> Result {
 }
 
 #[test]
+fn experiments_are_logged_once_only_when_supplied() -> Result {
+    let sandbox = Sandbox::new()?;
+    let enabled = sandbox
+        .command(&["-vv", "--version"])
+        .env("FETCHLOOM_EXP_DEMO", "1")
+        .output()?;
+    assert!(enabled.status.success());
+    let stderr = text(&enabled.stderr)?;
+    assert_eq!(stderr.matches("experiment settings").count(), 1, "{stderr}");
+    assert!(stderr.contains(r#"Experiments({"DEMO": "1"})"#), "{stderr}");
+    for arguments in [&["-vv", "--version"][..], &["--version"]] {
+        let disabled = sandbox.run(arguments)?;
+        assert!(disabled.status.success());
+        let stderr = text(&disabled.stderr)?;
+        assert!(!stderr.contains("experiment settings"), "{stderr}");
+        assert!(!stderr.contains("DEMO"), "{stderr}");
+    }
+    Ok(())
+}
+
+#[test]
 fn help_is_lowercase() -> Result {
     let output = Sandbox::new()?.run(&["--help"])?;
     assert!(output.status.success());

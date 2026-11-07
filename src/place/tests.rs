@@ -21,6 +21,27 @@ fn cache(read_only: bool) -> (TempDir, PathBuf) {
 }
 
 #[test]
+fn experiments_default_to_empty_in_placer_constructors() {
+    let folder = TempDir::new().unwrap();
+    for placer in [
+        Placer::new(folder.path(), folder.path()),
+        Placer::in_named_folder(folder.path()),
+        Placer::starting_at(folder.path().to_path_buf(), Method::Copy, None),
+    ] {
+        assert!(placer.experiments().is_empty());
+    }
+}
+
+#[test]
+fn experiments_round_trip_through_a_placer() {
+    let folder = TempDir::new().unwrap();
+    let placer = Placer::new(folder.path(), folder.path())
+        .with_experiments(Experiments::default().with("DEMO", " 7 "));
+    assert!(placer.experiments().on("DEMO"));
+    assert_eq!(placer.experiments().number("DEMO"), Some(7));
+}
+
+#[test]
 fn synced_copy_advice_does_not_promise_zero_disk() {
     for (place, subject, expected) in [
         (

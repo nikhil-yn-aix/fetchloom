@@ -548,7 +548,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     }
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let placement = placing.remove_only(&context.output).map_err(|error| {
+    let placement = placing.remove_only(&context.output, &cache).map_err(|error| {
         error.detail("data.toml and data.lock were updated; after fixing the error, `fetchloom sync` finishes the removal")
     })?;
     context.output.done("Removed", &args.name);

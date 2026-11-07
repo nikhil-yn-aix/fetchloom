@@ -229,6 +229,7 @@ fn live_osf() {
     let work = Arc::new(crate::work::Work::default());
     let net = crate::net::Net::new(
         crate::net::Options {
+            exp: crate::exp::Experiments::default(),
             offline: crate::net::Offline::No,
             jobs: 4,
             credentials: Vec::new(),

@@ -331,7 +331,9 @@ impl<'a> Placing<'a> {
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
+        let mut placer = Placer::new(&data_dir, &project.own_folder())
+            .with_experiments(cache.experiments().clone())
+            .with_threads(survey.threads);
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
@@ -375,7 +377,7 @@ impl<'a> Placing<'a> {
     }
 
     /// removes only what no dataset needs, and places nothing, so `remove` never downloads.
-    pub(crate) fn remove_only(self, output: &Output) -> Result<Placement, Error> {
+    pub(crate) fn remove_only(self, output: &Output, cache: &Cache) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("remove").entered();
         let Placing {
             project,
@@ -388,7 +390,9 @@ impl<'a> Placing<'a> {
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir, &project.own_folder()).with_threads(survey.threads);
+        let mut placer = Placer::new(&data_dir, &project.own_folder())
+            .with_experiments(cache.experiments().clone())
+            .with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
             &mut placer,

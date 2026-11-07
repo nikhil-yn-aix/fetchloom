@@ -244,6 +244,7 @@ fn read_head(stream: &mut TcpStream) -> String {
 /// to small files and short windows.
 fn net(url: &Url, jobs: usize) -> Net {
     let options = Options {
+        exp: crate::exp::Experiments::default(),
         offline: Offline::No,
         jobs,
         credentials: Vec::new(),

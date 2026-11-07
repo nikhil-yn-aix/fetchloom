@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::read_unfollowed;
+use crate::exp::Experiments;
 use crate::threads::Threads;
 use crate::volume::{Volume, crosses_volumes, is_plain, refuses_links};
 
@@ -41,6 +42,7 @@ pub(crate) enum Method {
 
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
+    exp: Experiments,
     threads: Threads,
     root: PathBuf,
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
@@ -149,6 +151,7 @@ impl Placer {
         Placer {
             volume: Volume::new(root.clone()),
             threads: Threads::default(),
+            exp: Experiments::default(),
             root,
             checks_root: true,
             folders: HashSet::new(),
@@ -161,6 +164,24 @@ impl Placer {
             #[cfg(target_os = "linux")]
             unflushed: AtomicBool::new(false),
         }
+    }
+
+    /// uses the cache's experiment settings for this placement.
+    pub(crate) fn with_experiments(mut self, exp: Experiments) -> Placer {
+        self.exp = exp;
+        self
+    }
+
+    /// the experiment settings supplied for this placement.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "placement switch consumers arrive during the a/b period"
+        )
+    )]
+    pub(crate) fn experiments(&self) -> &Experiments {
+        &self.exp
     }
 
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
