@@ -807,16 +807,28 @@ mod tests {
     #[test]
     fn an_error_releases_the_owner() {
         let (_dir, project) = project(&[]);
-        let result = (|| -> Result<(), Error> {
-            let Hold::Held(_held) = project.hold("sync")? else {
+        let path = project.inner().unwrap().join("owner");
+        let now = std::time::UNIX_EPOCH + Duration::from_secs(1234);
+        // a forked test child can retain an OS lock until exec; owner cleanup needs no OS lock.
+        let claim = || {
+            Held {
+                lock: None,
+                owner: None,
+            }
+            .claim(&path, "sync", now)
+            .unwrap()
+        };
+        let fail = || -> Result<(), Error> {
+            let Hold::Held(_held) = claim() else {
                 panic!("free")
             };
-            assert!(project.own_folder().join("owner").is_file());
+            assert!(path.is_file());
             Err(Error::new(Kind::ProjectInvalid, "invalid project"))
-        })();
+        };
+        let result = fail();
         assert_eq!(result.unwrap_err().kind, Kind::ProjectInvalid);
-        assert!(!project.own_folder().join("owner").exists());
-        assert!(matches!(project.hold("sync").unwrap(), Hold::Held(_)));
+        assert!(!path.exists());
+        assert!(matches!(claim(), Hold::Held(_)));
     }
 
     #[cfg(windows)]
