@@ -257,7 +257,11 @@ pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error>
         }
         let mut parent = path_key.as_str();
         while let Some((folder, _)) = parent.rsplit_once('/') {
-            folders.entry(folder.to_owned()).or_insert(target);
+            // a folder seen before had its own parents recorded with it
+            if folders.contains_key(folder) {
+                break;
+            }
+            folders.insert(folder.to_owned(), target);
             parent = folder;
         }
     }
