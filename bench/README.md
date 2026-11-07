@@ -36,7 +36,7 @@ in WSL, open that shell from powershell at the repository root with `wsl --cd $P
 
 ## setup
 
-use a root shell in the same checkout for setup and runs. from powershell at the repository root, `wsl --cd $PWD.Path --user root` opens one in the default WSL distribution. on native linux, enter the same checkout after switching to your root shell. set the binary and lab paths in that shell. keep both `FL_BENCH_` variables set for setup, tests, runs and teardown; with sudo, pass them explicitly through `sudo env`:
+use a root shell in the same checkout for setup and runs. from powershell at the repository root, `wsl --cd $PWD.Path --user root` opens one in the default WSL distribution. on native linux, enter the same checkout after switching to your root shell. set the binary and lab paths in that shell. the two paths are canonicalized at startup, so a directory symlink names the same lab for setup, output checks and teardown. keep both `FL_BENCH_` variables set for setup, tests, runs and teardown; with sudo, pass them explicitly through `sudo env`:
 
 ```sh
 benchmark_binary="$(realpath target/release/fetchloom)"

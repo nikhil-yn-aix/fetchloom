@@ -12,8 +12,8 @@ import subprocess
 import time
 import urllib.request
 
-ROOT = Path(os.environ.get("FL_BENCH_ROOT", "/srv/fl-bench"))
-VENV = Path(os.environ.get("FL_BENCH_VENV", "/opt/fl-bench/venv"))
+ROOT = Path(os.environ.get("FL_BENCH_ROOT", "/srv/fl-bench")).resolve()
+VENV = Path(os.environ.get("FL_BENCH_VENV", "/opt/fl-bench/venv")).resolve()
 NS = "flb-srv"
 CLIENT = "flb-client"
 SERVER = "flb-server"

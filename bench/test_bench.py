@@ -38,6 +38,20 @@ with tempfile.TemporaryDirectory() as folder:
                          ["/data/lab", "/data/lab/scratch", "/data/venv/bin",
                           "/data/venv/bin/python", "/data/venv/bin/python", "/data/venv/bin/zenodo_get"])
 
+    def test_lab_path_aliases_resolve_before_lifecycle_and_output_checks(self):
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            actual = root / "actual"
+            actual.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(actual, target_is_directory=True)
+            paths = self.paths(FL_BENCH_ROOT=str(alias), FL_BENCH_VENV=str(alias / "venv"))
+            self.assertEqual(paths[0], str(actual))
+            self.assertEqual(paths[1], str(actual / "scratch"))
+            self.assertEqual(paths[2], str(actual / "venv" / "bin"))
+            self.assertTrue((alias / "results").resolve().is_relative_to(Path(paths[0])))
+
 
 class FixtureTests(unittest.TestCase):
     def test_seed_controls_entropy(self):
