@@ -94,7 +94,15 @@ const IPV6: &[(&str, bool)] = &[
 
 fn ipv4_forms(ip: Ipv4Addr) -> BTreeSet<String> {
     let octets = ip.octets();
-    let mut forms = BTreeSet::new();
+    let canonical = ip.to_string();
+    let mut forms = BTreeSet::from([
+        canonical
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect(),
+        canonical.replace('.', "\u{ff0e}"),
+        canonical.replace('.', "\u{3002}"),
+    ]);
     for parts in 1..=4_u32 {
         let count = usize::try_from(parts).unwrap();
         let mut chunks: Vec<u32> = octets[..count - 1].iter().map(|n| u32::from(*n)).collect();
@@ -158,8 +166,36 @@ fn ipv6_forms(ip: Ipv6Addr) -> BTreeSet<String> {
             }
         }
     }
+    forms.insert(
+        segments
+            .iter()
+            .enumerate()
+            .map(|(index, word)| {
+                if index % 2 == 0 {
+                    format!("{word:04X}")
+                } else {
+                    format!("{word:x}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(":"),
+    );
     let [.., a, b, c, d] = ip.octets();
-    forms.insert(format!("{}:{a}.{b}.{c}.{d}", words[..6].join(":")));
+    let dotted = format!("{a}.{b}.{c}.{d}");
+    forms.insert(format!("{}:{dotted}", words[..6].join(":")));
+    for start in 0..6 {
+        for end in start + 1..=6 {
+            if segments[start..end].iter().all(|word| *word == 0) {
+                let suffix = words[end..6]
+                    .iter()
+                    .chain(std::iter::once(&dotted))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(":");
+                forms.insert(format!("{}::{suffix}", words[..start].join(":")));
+            }
+        }
+    }
     forms
 }
 
@@ -276,4 +312,83 @@ fn scoped_and_malformed_literals_cannot_enter_the_url_address_path() {
         Url::parse("http://010.0.0.1/").unwrap().host(),
         Some(Host::Ipv4(Ipv4Addr::new(8, 0, 0, 1)))
     );
+}
+
+#[test]
+fn numeric_socket_scope_ids_are_not_accepted_as_url_hosts() {
+    for (text, scope) in [
+        ("[fe80::1%1]:443", 1),
+        ("[fe80::1%01]:443", 1),
+        ("[fe80::1%4294967295]:443", u32::MAX),
+        ("[::1%0]:80", 0),
+    ] {
+        let address: std::net::SocketAddrV6 = text.parse().unwrap();
+        assert_eq!(address.scope_id(), scope, "{text}");
+        assert!(
+            Url::parse(&format!("http://{text}/")).is_err(),
+            "a scoped socket literal entered the URL parser: {text}"
+        );
+    }
+    for text in ["[fe80::1%lo]:443", "[fe80::1%4294967296]:443"] {
+        assert!(text.parse::<std::net::SocketAddrV6>().is_err(), "{text}");
+        assert!(Url::parse(&format!("http://{text}/")).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn offline_errors_keep_their_explanation() {
+    assert_eq!(Offline.to_string(), "offline");
+}
+
+#[test]
+fn unknown_host_errors_keep_the_host_and_explanation() {
+    assert_eq!(
+        Unknown("missing.invalid".to_owned()).to_string(),
+        "missing.invalid is not a known host"
+    );
+}
+
+#[tokio::test]
+async fn a_name_rejected_as_nonexistent_keeps_its_permanent_error_category() {
+    use reqwest::dns::Resolve as _;
+
+    let resolver = Resolver::new(Typed::default(), false);
+    // an overlong label fails locally without querying a DNS server.
+    let long = "x".repeat(256);
+    let Err(error) = resolver.resolve(long.parse().unwrap()).await else {
+        panic!("an overlong name cannot resolve");
+    };
+    assert!(error.downcast_ref::<Unknown>().is_some(), "{error}");
+}
+
+#[tokio::test]
+async fn an_invalid_lookup_input_is_not_mislabeled_as_a_nonexistent_host() {
+    use reqwest::dns::Resolve as _;
+
+    let resolver = Resolver::new(Typed::default(), false);
+    let Err(error) = resolver.resolve("bad\0host".parse().unwrap()).await else {
+        panic!("a name containing NUL cannot resolve");
+    };
+    assert!(error.downcast_ref::<Unknown>().is_none());
+    assert!(error.downcast_ref::<std::io::Error>().is_some());
+}
+
+#[tokio::test]
+async fn public_numeric_proxy_targets_are_not_refused() {
+    for address in [
+        "8.8.8.8",
+        "198.18.0.1",
+        "::ffff:8.8.8.8",
+        "64:ff9b::8.8.8.8",
+    ] {
+        assert!(private_address(address, 443).await.is_none(), "{address}");
+    }
+}
+
+#[tokio::test]
+async fn private_numeric_proxy_targets_name_the_refused_address() {
+    for address in ["127.0.0.1", "169.254.169.254", "::1"] {
+        let reason = private_address(address, 443).await.unwrap();
+        assert!(reason.contains(address), "{reason}");
+    }
 }

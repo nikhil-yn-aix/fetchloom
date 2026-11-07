@@ -104,7 +104,7 @@ shown URLs mask userinfo and recognized credential fields in both queries and fr
 - hold the partial claim until the writer and hash worker stop using its file.
 - range support without version proof is insufficient for joining bytes.
 - masking is explicit. URL and partial records store only URL fingerprints. cache bodies and other metadata are not sanitized output.
-- a shared writable cache trusts its writers; address checks do not isolate cache users.
+- a shared writable cache trusts its writers; address checks do not isolate cache users. address tests cover radix, percent-encoded and Unicode-dot IPv4 hosts, compressed and embedded IPv6 hosts, scoped-literal refusal, and DNS failure categories.
 
 ## tests
 

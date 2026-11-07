@@ -23,7 +23,7 @@ fn proxy_verdicts_are_cached_and_typed_hosts_skip_preflight() {
                 assert_eq!(proxies.check(&url, &typed).await.is_err(), private);
             }
             assert_eq!(lookups.load(Ordering::SeqCst), 1);
-            typed.add_host("inward.invalid");
+            typed.add_host("INWARD.invalid");
             assert!(proxies.check(&url, &typed).await.is_ok());
             assert_eq!(lookups.load(Ordering::SeqCst), 1);
         });
