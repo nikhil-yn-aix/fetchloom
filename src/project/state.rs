@@ -65,20 +65,32 @@ impl State {
     }
 
     pub(crate) fn render(&self) -> Vec<u8> {
-        #[derive(Serialize)]
-        struct Written<'a> {
-            version: u32,
-            files: &'a BTreeMap<String, Placed>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            synced: Option<Synced>,
-        }
-        let state = Written {
+        serde_json::to_vec(&self.stored()).unwrap_or_default()
+    }
+
+    /// writes the current state without retaining its complete JSON representation.
+    ///
+    /// # Errors
+    /// returns serialization or destination write failures without hiding a partial write.
+    pub(crate) fn write(&self, out: impl std::io::Write) -> Result<(), serde_json::Error> {
+        serde_json::to_writer(out, &self.stored())
+    }
+
+    fn stored(&self) -> Written<'_> {
+        Written {
             version: VERSION,
             files: &self.files,
             synced: self.synced,
-        };
-        serde_json::to_vec(&state).unwrap_or_default()
+        }
     }
+}
+
+#[derive(Serialize)]
+struct Written<'a> {
+    version: u32,
+    files: &'a BTreeMap<String, Placed>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    synced: Option<Synced>,
 }
 
 impl Look {

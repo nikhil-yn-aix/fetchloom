@@ -50,6 +50,10 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 `FETCHLOOM_EXP_PROJECT_LOCK_COMMENTS=1` lets the canonical reader skip blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser. off keeps the original narrow reader.
 
+## streaming state experiment
+
+`FETCHLOOM_EXP_PROJECT_STREAM_STATE=1` serializes state through a 256 KiB buffer into the existing staged metadata file. the buffer and file are flushed before rename; a write failure keeps the previous state and removes the staging file. off retains the complete in-memory JSON buffer. both modes write identical bytes and preserve the metadata publication rules.
+
 ## invariants and traps
 
 - commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.

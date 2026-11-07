@@ -383,7 +383,7 @@ impl<'a> Placing<'a> {
         let resynced = state.synced != synced;
         state.synced = synced;
         if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
-            project.write_state(state)?;
+            project.write_state(state, cache.experiments())?;
         }
         if let Some(error) = failure {
             return Err(error);
@@ -420,7 +420,7 @@ impl<'a> Placing<'a> {
         survey.smudge_edited();
         let forgot = survey.state.synced.take().is_some();
         if removed || forgot || survey.needs_writing {
-            project.write_state(&survey.state)?;
+            project.write_state(&survey.state, cache.experiments())?;
         }
         tell(
             output,
@@ -832,7 +832,9 @@ mod tests {
                 );
             }
         }
-        project.write_state(&state).unwrap();
+        project
+            .write_state(&state, &crate::exp::Experiments::default())
+            .unwrap();
         let before = nanos(SystemTime::now());
         let survey = Survey::read(
             &project,

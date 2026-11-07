@@ -6,9 +6,9 @@ pub(crate) mod manifest;
 pub(crate) mod state;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -294,12 +294,7 @@ impl Project {
                 }
             }
         };
-        let flushed = fill(file, bytes).and_then(|()| {
-            // unix can flush the new recovery name; windows only flushes the file.
-            #[cfg(unix)]
-            File::open(&folder)?.sync_all()?;
-            Ok(())
-        });
+        let flushed = fill(file, bytes).and_then(|()| sync_directory(&folder));
         if let Err(err) = flushed {
             let _ = fs::remove_file(&path);
             return Err(Error::io(
@@ -310,11 +305,21 @@ impl Project {
         Ok(path)
     }
 
-    pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
+    pub(crate) fn write_state(&self, state: &State, exp: &Experiments) -> Result<(), Error> {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
-        write_atomically(&folder.join("state"), &state.render())
-            .map_err(|err| Error::io("could not record what was placed", &err))
+        let path = folder.join("state");
+        let written = if exp.on("PROJECT_STREAM_STATE") {
+            write_atomically_with(&path, |file| {
+                let mut out = BufWriter::with_capacity(256 << 10, file);
+                state.write(&mut out).map_err(io::Error::other)?;
+                out.flush()?;
+                out.get_ref().sync_all()
+            })
+        } else {
+            write_atomically(&path, &state.render())
+        };
+        written.map_err(|err| Error::io("could not record what was placed", &err))
     }
 
     /// takes the project lock and owner record for `command`, unless another fetchloom holds it.
@@ -502,6 +507,13 @@ impl Project {
 
 /// replaces `path` in one step, so a reader sees the old file or the new one, never half.
 fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomically_with(path, |file| fill(file, bytes))
+}
+
+fn write_atomically_with(
+    path: &Path,
+    write: impl FnOnce(File) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let own = parent.join(FOLDER);
     let folder = if own.is_dir() { own.as_path() } else { parent };
@@ -520,7 +532,7 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     };
     // std's rename hands windows a long path in its `\\?\` form. tempfile's persist does not,
     // and fails once a project's metadata passes 260 characters
-    let written = fill(file, bytes)
+    let written = write(file)
         .and_then(|()| fs::rename(&temporary, path))
         .and_then(|()| {
             let flushed = sync_directory(parent).and_then(|()| {
@@ -580,6 +592,8 @@ fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     thread_local! {
@@ -605,6 +619,61 @@ mod tests {
             root: dir.path().to_path_buf(),
         };
         (dir, project)
+    }
+
+    #[test]
+    fn state_writers_publish_the_same_complete_bytes() {
+        let (_dir, project) = project(&[]);
+        let mut state = State::default();
+        for index in 0..2048 {
+            state.files.insert(
+                format!("data/é/{index:05}"),
+                state::Placed {
+                    dataset: "é".to_owned(),
+                    sha256: crate::digest::sha256(b"data"),
+                    method: crate::place::Method::Copy,
+                    look: Look {
+                        size: 4,
+                        modified: 42,
+                    },
+                    writable: true,
+                    checked: 43,
+                },
+            );
+        }
+        let expected = state.render();
+        assert!(expected.len() > 256 << 10);
+        for exp in [
+            Experiments::default(),
+            Experiments::default().with("PROJECT_STREAM_STATE", "1"),
+        ] {
+            project.write_state(&state, &exp).unwrap();
+            assert_eq!(
+                fs::read(project.own_folder().join("state")).unwrap(),
+                expected
+            );
+            let read = project.state().0;
+            assert_eq!(read.files, state.files);
+            assert_eq!(read.synced, state.synced);
+        }
+    }
+
+    #[test]
+    fn a_streaming_metadata_failure_keeps_the_previous_file() {
+        let (_dir, project) = project(&[("data.lock", "previous")]);
+        let path = project.root.join("data.lock");
+        let failure = write_atomically_with(&path, |mut file| {
+            file.write_all(b"partial")?;
+            Err(io::Error::other("injected write failure"))
+        });
+        assert!(failure.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"previous");
+        let files = fs::read_dir(&project.root)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name(), "data.lock");
     }
 
     #[test]
@@ -878,7 +947,9 @@ mod tests {
     #[test]
     fn a_linked_state_reads_as_none() {
         let (_dir, project) = project(&[]);
-        project.write_state(&State::default()).unwrap();
+        project
+            .write_state(&State::default(), &Experiments::default())
+            .unwrap();
         let path = project.own_folder().join("state");
         assert_ne!(project.state().1, 0, "a plain state is read");
         let target = project.own_folder().join("elsewhere");
@@ -958,7 +1029,7 @@ mod tests {
         );
 
         let held = project.hold("sync");
-        let written = project.write_state(&State::default());
+        let written = project.write_state(&State::default(), &Experiments::default());
         assert!(held.is_err(), "linked .fetchloom accepted a project lock");
         assert!(written.is_err(), "linked .fetchloom accepted project state");
         for error in [held.err().unwrap(), written.unwrap_err()] {
@@ -1106,7 +1177,9 @@ mod tests {
         };
         project.write("data.lock", b"first").unwrap();
         project.write("data.lock", b"second").unwrap();
-        project.write_state(&State::default()).unwrap();
+        project
+            .write_state(&State::default(), &Experiments::default())
+            .unwrap();
         assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"second");
         assert!(project.root.join(FOLDER).join("state").is_file());
     }
@@ -1170,7 +1243,9 @@ mod tests {
             lock: crate::digest::sha256(b"lock"),
             complete: true,
         });
-        project.write_state(&state).unwrap();
+        project
+            .write_state(&state, &Experiments::default())
+            .unwrap();
         let (read, written) = project.state();
         assert_eq!(read.files, state.files);
         assert_eq!(read.synced, state.synced);
@@ -1188,7 +1263,9 @@ mod tests {
             (".fetchloom", "keep metadata blocker"),
             ("data", "keep data blocker"),
         ]);
-        let error = project.write_state(&State::default()).unwrap_err();
+        let error = project
+            .write_state(&State::default(), &Experiments::default())
+            .unwrap_err();
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert!(error.help.unwrap().contains("real folder"));
         let error = project.data_dir(&Manifest::parse("").unwrap()).unwrap_err();
@@ -1279,7 +1356,10 @@ mod tests {
             Kind::ProjectInvalid
         );
         assert_eq!(
-            project.write_state(&State::default()).unwrap_err().kind,
+            project
+                .write_state(&State::default(), &Experiments::default())
+                .unwrap_err()
+                .kind,
             Kind::ProjectInvalid
         );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
