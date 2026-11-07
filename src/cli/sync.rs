@@ -24,6 +24,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
+use crate::plan;
 use crate::project::Project;
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
@@ -93,11 +94,12 @@ impl<'a> Loop<'a> {
         &self,
         manifest: &Manifest,
         lock: &Lock,
+        plan: plan::Plan<'_>,
         force: bool,
         survey: Survey,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
-        let mut placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
+        let mut placing = Placing::from_plan(self.project, manifest, plan, force, survey)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
             self.unpack_locked(lock, &unknown).await?;

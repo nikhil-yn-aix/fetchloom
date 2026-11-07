@@ -1574,3 +1574,26 @@ fn ready_paths_read_and_plan_once() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+#[test]
+fn sync_reuses_its_validated_plan() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let project = clone(&sandbox, "plan-once")?;
+    let trace = sandbox.work().join("sync.trace.json");
+    let output = sandbox
+        .command_in(&project, &["--json", "--offline", "sync"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stdout)?);
+    let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
+    let plans = events
+        .iter()
+        .filter(|event| event["ph"] == "B" && event["name"] == "plan")
+        .count();
+    assert_eq!(plans, 1);
+    assert_eq!(fs::read(project.join("data/iris/iris.csv"))?, IRIS);
+    assert_eq!(json(&output)?["work"]["requests"], 0);
+    Ok(())
+}

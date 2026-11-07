@@ -149,9 +149,20 @@ impl<'a> Placing<'a> {
         lock: &'a Lock,
         cache: &Cache,
         force: bool,
-        mut survey: Survey,
+        survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
+        Self::from_plan(project, manifest, plan, force, survey)
+    }
+
+    /// compares an already validated plan without reading archive member records again.
+    pub(crate) fn from_plan(
+        project: &'a Project,
+        manifest: &'a Manifest,
+        plan: plan::Plan<'a>,
+        force: bool,
+        mut survey: Survey,
+    ) -> Result<Placing<'a>, Error> {
         project.planned_data_dir(manifest)?;
         survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();

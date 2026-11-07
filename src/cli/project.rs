@@ -1055,7 +1055,7 @@ async fn sync_all(
         .await?;
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
-    plan::from_cache(manifest, &lock, &work.cache)?;
+    let plan = plan::from_cache(manifest, &lock, &work.cache)?;
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
     let written = match &written {
@@ -1067,7 +1067,9 @@ async fn sync_all(
         lock,
         complete: false,
     });
-    let placement = work.place(manifest, &lock, force, survey, synced).await?;
+    let placement = work
+        .place(manifest, &lock, plan, force, survey, synced)
+        .await?;
     work.drop_unpacked(&lock);
     register(work);
     Ok((changed, placement))

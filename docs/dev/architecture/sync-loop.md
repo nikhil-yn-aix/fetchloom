@@ -63,7 +63,7 @@ a run that leaves files out, preserves edits or encounters a placement failure r
 
 ### plan before fetching
 
-unknown archive trees must be learned before destination planning can finish. after that, `missing` checks only objects needed by place or replace actions, deduplicates them and verifies doubtful cache entries. already correct destinations need no download just to refill the cache.
+the plan checked before writing data.lock is retained for placement, rather than reading cached member records and validating the same paths again. unknown archive trees must be learned before destination planning can finish; only then is the plan rebuilt. after that, `missing` checks only objects needed by place or replace actions, deduplicates them and verifies doubtful cache entries. already correct destinations need no download just to refill the cache.
 
 placement rechecks files before destructive work, flushes copied payloads, then writes state. the state captures each file's metadata immediately after placement and the start of the scan, so edits or cache marks arriving during later work remain visible.
 
