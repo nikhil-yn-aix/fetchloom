@@ -48,7 +48,7 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 ## commented lock reader experiment
 
-`FETCHLOOM_EXP_PROJECT_LOCK_COMMENTS=1` lets the canonical reader skip blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser. off keeps the original narrow reader.
+`FETCHLOOM_EXP_PROJECT_LOCK_COMMENTS=1` keeps already canonical locks on the narrow reader, then tries a reader that skips blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser. off keeps the original narrow reader.
 
 ## streaming state experiment
 

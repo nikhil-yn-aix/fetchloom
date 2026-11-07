@@ -80,7 +80,12 @@ struct VersionOnly {
 impl Lock {
     pub(crate) fn parse(text: &str, exp: &Experiments) -> Result<Lock, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        if let Some(lock) = canonical::read(text, exp.on("PROJECT_LOCK_COMMENTS")) {
+        let fast = canonical::read(text, false).or_else(|| {
+            exp.on("PROJECT_LOCK_COMMENTS")
+                .then(|| canonical::read(text, true))
+                .flatten()
+        });
+        if let Some(lock) = fast {
             return Ok(lock);
         }
         match toml::from_str::<Stored>(text) {
