@@ -125,8 +125,44 @@ impl ServerTask {
 impl Drop for ServerTask {
     fn drop(&mut self) {
         self.shutdown.stop();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        if let Some(worker) = self.worker.take()
+            && let Err(error) = worker.join()
+            && !std::thread::panicking()
+        {
+            std::panic::resume_unwind(error);
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+
+    use super::ServerTask;
+
+    #[test]
+    #[should_panic(expected = "scripted server failed")]
+    fn worker_panics_fail_the_test() {
+        let task = ServerTask::start(TcpListener::bind("127.0.0.1:0").unwrap(), |_, _| {
+            panic!("scripted server failed");
+        })
+        .unwrap();
+        drop(task);
+    }
+
+    #[test]
+    fn an_existing_panic_keeps_its_payload_during_server_cleanup() {
+        let result = std::panic::catch_unwind(|| {
+            let _task = ServerTask::start(TcpListener::bind("127.0.0.1:0").unwrap(), |_, _| {
+                panic!("worker also failed");
+            })
+            .unwrap();
+            panic!("the test already failed");
+        });
+        assert_eq!(
+            result.unwrap_err().downcast_ref::<&str>(),
+            Some(&"the test already failed")
+        );
     }
 }
