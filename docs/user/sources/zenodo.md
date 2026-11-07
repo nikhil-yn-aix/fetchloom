@@ -27,6 +27,8 @@ patterns match listed paths. listing limits and access checks apply before filte
 
 `resolved` is `zenodo:` followed by the concrete record id. the answer must name the requested record, or identify the requested concept as the parent of that record. unrelated record ids are refused. download URLs use the record's API file-content endpoint. fetchloom checks stated MD5 while learning SHA-256 and size.
 
+zenodo permits [minor file corrections](https://help.zenodo.org/docs/deposit/manage-files/#modify) within 30 days after publication, with republication within 45 days, without changing the DOI. resolving the same record again, including after a filter change, can therefore pin corrected bytes. review the lock diff before committing it. an unchanged locked sync still requires the original size and hashes.
+
 source metadata keeps its casing. the iris record supplies `license = "cc-by-4.0"`. hashes and sizes identify the selected bytes; they do not guarantee that the host will keep serving them.
 
 ## credentials and limits
