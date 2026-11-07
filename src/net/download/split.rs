@@ -249,6 +249,62 @@ enum Probe {
     Settled,
 }
 
+impl Probe {
+    /// moves the rule on by what the streams delivered by `now`: the rate a new stream must beat
+    /// when one should be added, else none.
+    fn step(
+        &mut self,
+        now: Instant,
+        delivered: u64,
+        started: bool,
+        gone: bool,
+        window: Duration,
+    ) -> Option<f64> {
+        let rate = |since: Instant, from: u64| {
+            let seconds = now.duration_since(since).as_secs_f64();
+            #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
+            let bytes = delivered.saturating_sub(from) as f64;
+            bytes / seconds.max(f64::EPSILON)
+        };
+        match *self {
+            Probe::Measured { rate } => Some(rate),
+            Probe::Measure {
+                since,
+                delivered: from,
+            } if now.duration_since(since) >= window => Some(rate(since, from)),
+            Probe::Wait { before, .. } if started => {
+                *self = Probe::Rise {
+                    before,
+                    since: now,
+                    delivered,
+                };
+                None
+            }
+            Probe::Wait { .. } if gone => {
+                *self = Probe::Measure {
+                    since: now,
+                    delivered,
+                };
+                None
+            }
+            Probe::Rise {
+                before,
+                since,
+                delivered: from,
+            } if now.duration_since(since) >= window => {
+                let after = rate(since, from);
+                if after < before * GAIN {
+                    tracing::debug!("another stream made the download no faster");
+                    *self = Probe::Settled;
+                    return None;
+                }
+                Some(after)
+            }
+            _ => None,
+        }
+    }
+}
+
 struct Completion {
     interrupted: bool,
     start_over: bool,
@@ -389,7 +445,7 @@ impl Net {
                     }
                 }
                 _ = tick.tick() => {
-                    if let Some((id, permits)) = self.consider(shared, &mut probe, running.len()) {
+                    if let Some((id, permits)) = self.consider(shared, &mut probe) {
                         running.push(Box::pin(async move {
                             let _permits = permits;
                             (id, self.split_stream(shared, id, None).await)
@@ -571,7 +627,6 @@ impl Net {
         &self,
         shared: &Streams<'_>,
         probe: &mut Probe,
-        running: usize,
     ) -> Option<(usize, (OwnedSemaphorePermit, OwnedSemaphorePermit))> {
         let now = Instant::now();
         let (delivered, started, gone) = {
@@ -586,55 +641,8 @@ impl Net {
                 board.share(id).is_none(),
             )
         };
-        let rate = |since: Instant, from: u64| {
-            let seconds = now.duration_since(since).as_secs_f64();
-            #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
-            let bytes = delivered.saturating_sub(from) as f64;
-            bytes / seconds.max(f64::EPSILON)
-        };
-        let window = self.split.window;
-        let (before, added) = match *probe {
-            Probe::Measured { rate: before } => (before, self.add_stream(shared)),
-            Probe::Measure {
-                since,
-                delivered: from,
-            } if now.duration_since(since) >= window => {
-                let before = rate(since, from);
-                (before, self.add_stream(shared))
-            }
-            Probe::Wait { before, .. } if started => {
-                *probe = Probe::Rise {
-                    before,
-                    since: now,
-                    delivered,
-                };
-                return None;
-            }
-            Probe::Wait { .. } if gone => {
-                *probe = Probe::Measure {
-                    since: now,
-                    delivered,
-                };
-                return None;
-            }
-            Probe::Rise {
-                before,
-                since,
-                delivered: from,
-            } if now.duration_since(since) >= window => {
-                let after = rate(since, from);
-                if after < before * GAIN {
-                    tracing::debug!(
-                        streams = running,
-                        "another stream made the download no faster"
-                    );
-                    *probe = Probe::Settled;
-                    return None;
-                }
-                (after, self.add_stream(shared))
-            }
-            _ => return None,
-        };
+        let before = probe.step(now, delivered, started, gone, self.split.window)?;
+        let added = self.add_stream(shared);
         *probe = match &added {
             Some((id, _)) => Probe::Wait { id: *id, before },
             None => Probe::Measure {

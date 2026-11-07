@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,8 +31,6 @@ struct Serving {
     whole_for_parts: bool,
     /// bytes a second for each connection.
     rate: u64,
-    /// one rate for every connection together.
-    shared: bool,
 }
 
 const SERVING: Serving = Serving {
@@ -41,8 +39,11 @@ const SERVING: Serving = Serving {
     ranges: true,
     whole_for_parts: false,
     rate: 2 * MIB,
-    shared: false,
 };
+
+/// how far the first answer goes, when ranges get the whole file, before it waits for one such
+/// answer to end. the client then knows ranges fail before its first stream needs another.
+const HELD: usize = 256 * 1024;
 
 struct Server {
     url: Url,
@@ -54,8 +55,8 @@ struct Site {
     body: Arc<Vec<u8>>,
     serving: Serving,
     heads: Mutex<Vec<String>>,
-    /// when the next chunk may go, for a rate shared by every connection.
-    clock: Mutex<Instant>,
+    /// a request for a closed range was answered with the whole file.
+    whole_sent: AtomicBool,
     active: AtomicUsize,
     most: AtomicUsize,
 }
@@ -92,7 +93,7 @@ fn serve(body: Arc<Vec<u8>>, serving: Serving) -> Server {
         body,
         serving,
         heads: Mutex::default(),
-        clock: Mutex::new(Instant::now()),
+        whole_sent: AtomicBool::new(false),
         active: AtomicUsize::new(0),
         most: AtomicUsize::new(0),
     });
@@ -122,6 +123,12 @@ fn answer(mut stream: TcpStream, site: &Site) {
     site.most.fetch_max(now, Ordering::SeqCst);
     respond(&mut stream, &head, site, index);
     site.active.fetch_sub(1, Ordering::SeqCst);
+    let closed = head
+        .lines()
+        .any(|line| line.starts_with("range: bytes=") && !line.ends_with('-'));
+    if site.serving.whole_for_parts && closed {
+        site.whole_sent.store(true, Ordering::SeqCst);
+    }
 }
 
 fn respond(stream: &mut TcpStream, head: &str, site: &Site, index: usize) {
@@ -188,22 +195,22 @@ fn respond(stream: &mut TcpStream, head: &str, site: &Site, index: usize) {
     }
     let begun = Instant::now();
     let mut sent = 0;
+    let waits = serving.whole_for_parts && index == 0;
     for chunk in body[start..end].chunks(16 * 1024) {
         if !present(stream) {
             return;
         }
+        if waits && sent >= HELD as u64 {
+            let waited = Instant::now();
+            while !site.whole_sent.load(Ordering::SeqCst)
+                && waited.elapsed() < Duration::from_secs(10)
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         let length = u64::try_from(chunk.len()).unwrap();
-        // a connection that wakes late keeps its pace, so one connection alone reaches the rate
-        let until = if serving.shared {
-            let mut next = site.clock.lock().unwrap();
-            let now = Instant::now();
-            let late = now.checked_sub(Duration::from_millis(20)).unwrap_or(now);
-            *next = (*next).max(late) + Duration::from_nanos(length * 1_000_000_000 / serving.rate);
-            *next
-        } else {
-            sent += length;
-            begun + Duration::from_nanos(sent * 1_000_000_000 / serving.rate)
-        };
+        sent += length;
+        let until = begun + Duration::from_nanos(sent * 1_000_000_000 / serving.rate);
         std::thread::sleep(until.saturating_duration_since(Instant::now()));
         if stream.write_all(chunk).is_err() {
             return;
@@ -512,29 +519,45 @@ fn a_fast_stream_is_never_split() {
 }
 
 #[test]
-fn streams_are_added_only_while_the_download_gets_faster() {
-    let body = body(8 * MIB);
-    let server = serve(
-        body.clone(),
-        Serving {
-            shared: true,
-            rate: 4 * MIB,
-            ..SERVING
-        },
-    );
-    let mut net = net(&server.url, 8);
-    // a window long enough that a short pause of a loaded test machine reads as no gain
-    net.split.window = Duration::from_millis(400);
-    let (_folder, cache) = cache();
-    let fetched = download(&net, &cache, &server.url, Expect::default());
-    assert_eq!(fetched.digest, sha256(&body));
-    // a loaded test machine can make one window look faster than it was and let one more trial
-    // stream in; growing toward all eight slots is the failure this guards against
-    let most = server.most();
-    assert!(
-        (2..=3).contains(&most),
-        "{most} streams: one that adds nothing should be the last"
-    );
+fn a_stream_that_makes_the_download_no_faster_is_the_last() {
+    let window = Duration::from_millis(100);
+    let start = Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    // 1 MiB a window before the stream is added, then the same with it
+    let mut probe = Probe::Measure {
+        since: start,
+        delivered: 0,
+    };
+    assert_eq!(probe.step(at(50), MIB / 2, false, false, window), None);
+    let before = probe.step(at(100), MIB, false, false, window).unwrap();
+    probe = Probe::Wait { id: 1, before };
+    assert_eq!(probe.step(at(110), MIB, false, false, window), None);
+    assert!(matches!(probe, Probe::Wait { .. }), "waits for the stream");
+    assert_eq!(probe.step(at(120), MIB, true, false, window), None);
+    assert_eq!(probe.step(at(200), 2 * MIB, true, false, window), None);
+    assert_eq!(probe.step(at(220), 2 * MIB, true, false, window), None);
+    assert!(matches!(probe, Probe::Settled));
+    assert_eq!(probe.step(at(900), 9 * MIB, true, false, window), None);
+}
+
+#[test]
+fn a_stream_that_makes_the_download_faster_lets_another_in() {
+    let window = Duration::from_millis(100);
+    let start = Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    let mib = 1_048_576.0;
+    let mut probe = Probe::Wait {
+        id: 1,
+        before: 10.0 * mib,
+    };
+    assert_eq!(probe.step(at(0), 0, true, false, window), None);
+    // 2 MiB in a tenth of a second is twice the rate before
+    let after = probe.step(at(100), 2 * MIB, true, false, window).unwrap();
+    assert!((after - 20.0 * mib).abs() < mib, "{after}");
+    // a stream that ended before it delivered anything measures again
+    let mut probe = Probe::Wait { id: 1, before: 1.0 };
+    assert_eq!(probe.step(at(10), 5, false, true, window), None);
+    assert!(matches!(probe, Probe::Measure { delivered: 5, .. }));
 }
 
 #[test]
