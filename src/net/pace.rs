@@ -283,6 +283,11 @@ impl Paces {
         };
         let mut pace = shared.lock().unwrap_or_else(PoisonError::into_inner);
         pace.pending = pace.pending.saturating_sub(1);
+        for (name, known) in &mut pace.limits {
+            if !limits.iter().any(|limit| limit.name == *name) {
+                known.remaining = known.remaining.saturating_sub(1);
+            }
+        }
         for limit in limits {
             pace.learn(limit, at);
         }

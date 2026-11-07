@@ -375,3 +375,34 @@ fn answers_from_one_window_keep_its_lowest_count() {
     drop(admitted);
     assert!(paces.admit("zenodo.org", start).is_ok());
 }
+
+#[test]
+fn missing_policy_headers_consume_remembered_allowances() {
+    for another_policy in [false, true] {
+        let paces = Paces::default();
+        let start = Instant::now();
+        let first = paces.admit("example.org", start).unwrap();
+        let mut known = vec![limit(1, 10, Some(1_793_350_624))];
+        if another_policy {
+            let mut other = limit(5, 10, Some(1_793_350_624));
+            other.name = "other".to_owned();
+            known.push(other);
+        }
+        Paces::heard(first, known, start);
+        let spent = paces.admit("example.org", start).unwrap();
+        let mut stated = Vec::new();
+        if another_policy {
+            let mut other = limit(4, 10, Some(1_793_350_624));
+            other.name = "other".to_owned();
+            stated.push(other);
+        }
+        Paces::heard(spent, stated, start);
+        let held = paces.admit("example.org", start).unwrap_err();
+        assert_eq!(held.until, start + Duration::from_secs(10));
+        assert!(
+            paces
+                .admit("example.org", start + Duration::from_secs(10))
+                .is_ok()
+        );
+    }
+}
