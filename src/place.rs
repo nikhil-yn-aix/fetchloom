@@ -638,22 +638,12 @@ fn workers(items: usize, cap: Threads) -> usize {
 
 /// runs `job` on every item as [`run_all`] does, for jobs that take their item. each thread
 /// takes a run of neighbouring items.
-fn run_owned<T: Send, R: Send>(
-    mut items: Vec<T>,
-    cap: Threads,
-    job: impl Fn(T) -> R + Sync,
-) -> Vec<R> {
+fn run_owned<T: Send, R: Send>(items: Vec<T>, cap: Threads, job: impl Fn(T) -> R + Sync) -> Vec<R> {
     let threads = workers(items.len(), cap);
     if threads < 2 {
         return items.into_iter().map(job).collect();
     }
-    let size = items.len().div_ceil(threads);
-    let mut runs = Vec::with_capacity(threads);
-    while items.len() > size {
-        let rest = items.split_off(size);
-        runs.push(std::mem::replace(&mut items, rest));
-    }
-    runs.push(items);
+    let runs = owned_runs(items, threads);
     let job = &job;
     std::thread::scope(|scope| {
         let workers: Vec<_> = runs
@@ -672,6 +662,15 @@ fn run_owned<T: Send, R: Send>(
             .flat_map(crate::threads::Scoped::join)
             .collect()
     })
+}
+
+fn owned_runs<T>(items: Vec<T>, threads: usize) -> Vec<Vec<T>> {
+    let size = items.len().div_ceil(threads);
+    let mut items = items.into_iter();
+    std::iter::from_fn(|| {
+        (!items.as_slice().is_empty()).then(|| items.by_ref().take(size).collect())
+    })
+    .collect()
 }
 
 /// the orders reordered so that neighbours go to different folders. links made into one folder

@@ -1357,3 +1357,19 @@ fn folder_thread_experiment_keeps_results_and_probes_only_when_enabled() {
         assert_eq!(placer.serial.get().is_some(), value == "1");
     }
 }
+
+#[test]
+fn owned_partitions_do_not_retain_old_tail_capacity() {
+    let count = 8192;
+    let runs = owned_runs((0..count).collect(), 8);
+    let capacities: Vec<usize> = runs.iter().map(Vec::capacity).collect();
+    let held: usize = capacities.iter().sum();
+    assert!(
+        held <= count * 2,
+        "{held} slots for {count} values: {capacities:?}"
+    );
+    assert_eq!(
+        runs.into_iter().flatten().collect::<Vec<_>>(),
+        (0..count).collect::<Vec<_>>()
+    );
+}

@@ -63,7 +63,7 @@ unwanted tracked files are removed only if unchanged. an edited unwanted file le
 
 new placements try reflink, hardlink, then copy. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks. on macos a reflink is an apfs clone made with `fclonefileat`; hfs+ and other disks without clones fall back to hardlinks or copies.
 
-`Placer` remembers refused methods. its capability probes use the opened root. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`.
+`Placer` remembers refused methods. its capability probes use the opened root. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`. owned worker partitions allocate for their own items rather than retaining unused capacity from the remaining batch.
 
 both borrowed and owned placement jobs keep their input when a worker cannot start. the shared [thread helper](primitives.md#worker-budgets) runs refused work on the caller, preserving result order.
 
