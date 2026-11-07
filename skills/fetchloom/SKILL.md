@@ -20,6 +20,8 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json` |
 | words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates`. `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
 | check data/ against the lock | `fetchloom status --json` |
+| inspect signed-in accounts | `fetchloom auth --json` |
+| check cached bytes | `fetchloom cache verify --json` |
 | what the project uses | `fetchloom list --json`; `fetchloom list <name> --json` for one dataset, with `locked_files` paths and sizes |
 
 `<ref>` is a link, a DOI or an id: `hf:datasets/org/name`, `kaggle:owner/name`, `kaggle:competitions/slug`, `zenodo:3608990`, `figshare:34744689`, `osf:3eunr`, `dataverse:host/doi:10.7910/DVN/X`, `s3://bucket/prefix/`, `gs://bucket/prefix/`, `doi:10.5281/zenodo.3608990` or an https URL. `--select "**/*.csv"` and `--exclude` keep only some files.
@@ -49,6 +51,8 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | 130 | `interrupted` | the run was stopped; run it again |
 
 `cache gc` failures retain successful counts and `result.not_removed`; `cache verify` uses `result.unreadable`. these entries contain `path`, `kind`, `os_code` and `message`. use the original cause before suggesting permission changes. unreadable cache change marks stop sync and get: repair storage or access, verify and retry; never delete the marks to bypass the refusal.
+
+a reporting failure does not roll back command effects. JSON encoding failures and stdout errors other than a closed pipe use exit 50; inspect project status before retrying a command that changed it. failed add rollbacks name private recovery files under `.fetchloom/`; preserve those files and never paste their contents into logs.
 
 `fetchloom help --json` lists every command and option, for anything this page leaves out.
 
