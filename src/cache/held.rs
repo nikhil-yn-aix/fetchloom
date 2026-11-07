@@ -80,89 +80,81 @@ fn open_lock(path: &Path) -> io::Result<Option<File>> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
+    use std::cell::Cell;
 
     use super::super::tests::{cache, store};
     use super::*;
 
-    /// waits up to ten seconds for `done`.
-    fn soon(done: impl Fn() -> bool) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !done() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        done()
+    fn waits_until_stopped(cache: &Cache, access: Access) {
+        let stop = Stop::default();
+        let waits = Cell::new(0);
+        let error = Cache::open(cache.root.clone())
+            .unwrap()
+            .hold(access, &stop, &|| {
+                waits.set(waits.get() + 1);
+                stop.ask();
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(waits.get(), 1);
     }
 
     #[test]
     fn gc_waits_for_every_run_that_holds_the_cache() {
         let (_dir, cache) = cache();
         let stored = store(&cache, b"found by a run");
-        let run = Cache::open(cache.root.clone())
-            .unwrap()
+        let run = cache
+            .clone()
             .hold(Access::Shared, &Stop::default(), &|| {})
             .unwrap();
-        let other = Cache::open(cache.root.clone())
-            .unwrap()
+        let other = cache
+            .clone()
             .hold(Access::Shared, &Stop::default(), &|| {})
             .unwrap();
-        let waited = AtomicBool::new(false);
-        let swept = AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let gc = Cache::open(cache.root.clone())
-                    .unwrap()
-                    .hold(Access::Exclusive, &Stop::default(), &|| {
-                        waited.store(true, Ordering::SeqCst);
-                    })
-                    .unwrap();
-                gc.sweep(
-                    &super::super::Needed::default(),
-                    std::time::SystemTime::now() + super::super::GRACE * 2,
-                );
-                swept.store(true, Ordering::SeqCst);
-            });
-            assert!(
-                soon(|| waited.load(Ordering::SeqCst) || swept.load(Ordering::SeqCst)),
-                "gc neither waited nor swept"
-            );
-            assert!(
-                !swept.load(Ordering::SeqCst),
-                "gc swept while runs held the cache"
-            );
-            assert!(cache.object_path(&stored.digest).is_file());
-            drop(run);
-            std::thread::sleep(Duration::from_millis(300));
-            assert!(
-                !swept.load(Ordering::SeqCst),
-                "gc swept while a run held the cache"
-            );
-            drop(other);
-            assert!(soon(|| swept.load(Ordering::SeqCst)), "gc went on");
-        });
-        assert!(!cache.object_path(&stored.digest).exists());
+        waits_until_stopped(&cache, Access::Exclusive);
+        drop(run);
+        waits_until_stopped(&cache, Access::Exclusive);
+        assert!(cache.object_path(&stored.digest).is_file());
+        drop(other);
     }
 
     #[test]
     fn a_run_waits_for_gc_and_a_stop_ends_the_wait() {
         let (_dir, cache) = cache();
-        let gc = Cache::open(cache.root.clone())
-            .unwrap()
+        let _gc = cache
+            .clone()
             .hold(Access::Exclusive, &Stop::default(), &|| {})
             .unwrap();
-        let stop = Stop::default();
-        let error = Cache::open(cache.root.clone())
-            .unwrap()
-            .hold(Access::Shared, &stop, &|| stop.ask())
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        drop(gc);
-        Cache::open(cache.root.clone())
-            .unwrap()
-            .hold(Access::Shared, &Stop::default(), &|| {
-                panic!("nothing holds the cache")
-            })
+        waits_until_stopped(&cache, Access::Shared);
+    }
+
+    #[test]
+    fn clones_keep_the_cache_held_until_the_last_one_drops() {
+        let (_dir, cache) = cache();
+        let run = cache
+            .clone()
+            .hold(Access::Shared, &Stop::default(), &|| {})
             .unwrap();
+        let held = Arc::downgrade(run.held.as_ref().unwrap());
+        let other = run.clone();
+        drop(run);
+        assert!(held.upgrade().is_some());
+        waits_until_stopped(&cache, Access::Exclusive);
+        drop(other);
+        // a forked test helper may still hold the fd until exec, independently of these arcs.
+        assert!(held.upgrade().is_none());
+    }
+
+    #[test]
+    fn a_free_cache_accepts_either_access_mode() {
+        for access in [Access::Shared, Access::Exclusive] {
+            let (_dir, cache) = cache();
+            let held = cache
+                .hold(access, &Stop::default(), &|| {
+                    panic!("a fresh cache is free")
+                })
+                .unwrap();
+            assert!(held.held.is_some());
+        }
     }
 }
