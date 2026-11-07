@@ -189,6 +189,22 @@ def command(name, dataset, work, fetchloom):
     return [PYTHON, str(script)]
 
 
+def versions(services):
+    distributions = {"zenodo": ("zenodo_get",), "huggingface": ("huggingface_hub", "hf_xet"),
+                     "kaggle": ("kagglehub",), "figshare": ("datahugger",), "dataverse": ("datahugger",)}
+    result = {}
+    for name in dict.fromkeys(name for service in services for name in distributions[service]):
+        try:
+            result[name] = subprocess.check_output(
+                [PYTHON, "-c", f"import importlib.metadata; print(importlib.metadata.version({name!r}))"],
+                text=True).strip()
+        except FileNotFoundError:
+            result[name] = "no python env"
+        except (OSError, subprocess.CalledProcessError) as error:
+            result[name] = f"unavailable: {error}"
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
@@ -212,9 +228,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     meta = run.metadata(args, {"fetchloom": tools.Fetchloom(args.fetchloom)})
     meta.update(kind="live", datasets=[], rounds=1 if args.quick else 5)
-    for name in ("zenodo_get", "huggingface_hub", "hf_xet", "kagglehub", "datahugger"):
-        meta["tool_versions"][name] = subprocess.check_output(
-            [PYTHON, "-c", f"import importlib.metadata; print(importlib.metadata.version({name!r}))"], text=True).strip()
+    meta["tool_versions"].update(versions(args.services))
     rng = random.Random(args.seed)
     failures = 0
     for service in args.services:

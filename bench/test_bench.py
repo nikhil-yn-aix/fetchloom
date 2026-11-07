@@ -297,6 +297,102 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result, {"requests": 3, "bytes_served": 20, "file_bytes_served": 13})
 
 
+class MetadataTests(unittest.TestCase):
+    def test_native_inventory_keeps_installed_and_missing_packages(self):
+        import run
+        versions = run.native_versions(("python3", "fl-bench-package-missing"))
+        self.assertRegex(versions[0], r"^python3\t3\.\d+\.")
+        self.assertEqual(versions[1], "fl-bench-package-missing\tnot installed")
+
+    def test_native_inventory_does_not_count_removed_packages_as_installed(self):
+        import subprocess
+        from unittest import mock
+        import run
+        answer = subprocess.CompletedProcess([], 0, "nginx\tconfig-files\t1.24.0\n", "")
+        with mock.patch.object(run.subprocess, "run", return_value=answer):
+            self.assertEqual(run.native_versions(("nginx",)), ["nginx\tnot installed"])
+
+    def test_a_missing_python_environment_is_a_recorded_fact(self):
+        from pathlib import Path
+        from unittest import mock
+        import run
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(lab, "VENV", Path(folder) / "absent"):
+            self.assertEqual(run.python_packages(), ["no python env"])
+
+    def test_metadata_does_not_require_a_python_environment(self):
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest import mock
+        import run
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "owned.json").write_text('{"image_gib": 12}')
+            args = SimpleNamespace(fs=[], seed=1729, quick=True, profiles=["lan"])
+            with mock.patch.object(lab, "ROOT", root), \
+                 mock.patch.object(lab, "VENV", root / "absent"):
+                meta = run.metadata(args, {})
+            self.assertEqual(meta["installed_packages"], ["no python env"])
+            self.assertEqual(meta["tool_versions"], {})
+            self.assertEqual(meta["lab_layout"], {"image_gib": 12})
+
+    def test_a_broken_python_environment_keeps_its_error(self):
+        from pathlib import Path
+        from unittest import mock
+        import run
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "bin").mkdir()
+            (root / "bin" / "python").symlink_to("/bin/false")
+            with mock.patch.object(lab, "VENV", root):
+                [error] = run.python_packages()
+            self.assertIn("python env unavailable", error)
+            self.assertIn("exit status 1", error)
+
+
+class ToolSelectionTests(unittest.TestCase):
+    def test_unselected_adapters_are_not_constructed(self):
+        from unittest import mock
+        import tools
+        class Unselected(tools.Tool):
+            name = "unselected"
+            def __init__(self, _):
+                raise AssertionError("an unselected adapter was constructed")
+        with mock.patch.object(tools, "CLASSES", (tools.Fetchloom, Unselected)):
+            adapters = tools.available("fetchloom", [("aa", {"FETCHLOOM_EXP_NONE": "1"})],
+                                       only=("fetchloom",))
+        self.assertEqual(list(adapters), ["fetchloom", "fetchloom+aa"])
+
+    def test_native_preparation_runs_only_the_selected_client(self):
+        from pathlib import Path
+        import sys
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fetchloom = root / "fetchloom"
+            fetchloom.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nimport sys\n"
+                                 "assert sys.argv[1:] == ['-q', '--yes', 'lock']\n"
+                                 "Path('data.lock').write_text('locked')\n")
+            fetchloom.chmod(0o755)
+            with mock.patch.object(lab, "ROOT", root):
+                case = fixtures.prepare_native(dict(key="case", files=[]), fetchloom, ["fetchloom"])
+            prepared = Path(case["prepared"])
+            self.assertEqual(sorted(path.name for path in prepared.iterdir()),
+                             ["fetchloom", "fetchloom-prepare.log"])
+            self.assertEqual((prepared / "fetchloom" / "data.lock").read_text(), "locked")
+            self.assertTrue((prepared / "fetchloom" / ".ready").is_file())
+
+    def test_live_versions_query_only_selected_services(self):
+        from unittest import mock
+        import live
+        def version(argv, **_):
+            self.assertEqual(argv[0], live.PYTHON)
+            self.assertIn("version('zenodo_get')", argv[-1])
+            return "3.1.0\n"
+        with mock.patch.object(live.subprocess, "check_output", version):
+            self.assertEqual(live.versions(["zenodo"]), {"zenodo_get": "3.1.0"})
+
+
 class VariantTests(unittest.TestCase):
     def test_a_variant_names_only_distinct_fetchloom_settings(self):
         import tools

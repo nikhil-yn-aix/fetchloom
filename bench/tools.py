@@ -275,8 +275,8 @@ class Datalad(Tool):
 CLASSES = (Fetchloom, Curl, Aria2c, Wget, Pooch, Dvc, Datalad)
 
 
-def available(fetchloom, variants=()):
-    adapters = {cls.name: cls(fetchloom) for cls in CLASSES}
+def available(fetchloom, variants=(), only=None):
+    adapters = {cls.name: cls(fetchloom) for cls in CLASSES if only is None or cls.name in only}
     for label, settings in variants:
         tool = Variant(fetchloom, label, settings)
         adapters[tool.name] = tool

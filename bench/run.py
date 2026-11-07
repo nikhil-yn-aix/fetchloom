@@ -184,6 +184,36 @@ def repo_head():
     return "unavailable"
 
 
+def native_versions(packages=("nginx", "aria2", "wget", "curl", "git-annex", "git", "iproute2",
+                              "python3", "xfsprogs", "e2fsprogs", "unzip", "openssl", "time")):
+    try:
+        result = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Status}\t${Version}\n",
+                                 *packages], capture_output=True, text=True)
+    except OSError as error:
+        return [f"native package inventory unavailable: {error}"]
+    if result.returncode not in (0, 1):
+        return [f"native package inventory unavailable: {result.stderr.strip()}"]
+    installed = {}
+    for line in result.stdout.splitlines():
+        name, status, version = line.split("\t", 2)
+        if status == "installed":
+            installed[name] = version
+    return [f"{name}\t{installed.get(name, 'not installed')}" for name in packages]
+
+
+def python_packages():
+    try:
+        return subprocess.check_output(
+            [str(lab.VENV / "bin" / "python"), "-c",
+             "import importlib.metadata as m\n"
+             "print('\\n'.join(sorted(f'{d.name}=={d.version}' for d in m.distributions())))"],
+            text=True).splitlines()
+    except FileNotFoundError:
+        return ["no python env"]
+    except (OSError, subprocess.CalledProcessError) as error:
+        return [f"python env unavailable: {error}"]
+
+
 def metadata(args, adapters):
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.machine())
@@ -200,15 +230,9 @@ def metadata(args, adapters):
                 repo_head=repo_head(),
                 seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.PROFILES,
                 commands={}, orders=[], cases=[],
-                native_packages=subprocess.check_output(["dpkg-query", "-W", "nginx", "aria2", "wget", "curl",
-                                                         "git-annex", "git", "iproute2", "python3", "xfsprogs",
-                                                         "e2fsprogs", "unzip", "openssl", "time"], text=True).splitlines(),
+                native_packages=native_versions(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
-                installed_packages=subprocess.check_output(
-                    [str(lab.VENV / "bin" / "python"), "-c",
-                     "import importlib.metadata as m\n"
-                     "print('\\n'.join(sorted(f'{d.name}=={d.version}' for d in m.distributions())))"],
-                    text=True).splitlines())
+                installed_packages=python_packages())
 
 
 def append(path, row):
@@ -336,10 +360,7 @@ def main():
         parser.error("each variant needs its own label")
     lock = lab.exclusive()
     args.fetchloom = args.fetchloom.resolve()
-    adapters = tools.available(args.fetchloom, args.variant)
-    if args.only_tools:
-        adapters = {name: tool for name, tool in adapters.items()
-                    if name in args.only_tools or isinstance(tool, tools.Variant)}
+    adapters = tools.available(args.fetchloom, args.variant, args.only_tools)
     cases = [case for case in fixtures.case_specs(args.profiles, args.scenarios, args.quick)
              if any(tool.supports(case) for tool in adapters.values())]
     if not cases:

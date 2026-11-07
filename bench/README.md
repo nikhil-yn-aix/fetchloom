@@ -81,7 +81,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
   --out "$FL_BENCH_ROOT/results/quick/live"
 ```
 
-a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
+a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
 
 to compare a change behind a fetchloom setting, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` then prints, per case, how many paired rounds the variant won and its median wall, cpu, memory and disk over the plain build's.
 
@@ -110,7 +110,7 @@ cp -a "$FL_BENCH_ROOT/results/full" bench/results/
 
 rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scenario in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. it first removes every SVG card already in that folder, so no card, including a `hero-*` card, outlives the results that produced it. a card's title states the result, including when another tool wins. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
 
-`meta.json` records the machine, binary and repository versions, seed, random orders, exact commands and package versions. `runs.jsonl` contains metrics, checker failures and exit statuses. command logs retain errors. s7 records both attempts, file-body bytes across them and the second attempt's wall time.
+`meta.json` records the machine, binary and repository versions, seed, random orders, exact commands and package versions. its inventories record missing native packages as `not installed` and a missing python environment as `no python env`; neither stops a run that does not use them. `runs.jsonl` contains metrics, checker failures and exit statuses. command logs retain errors. s7 records both attempts, file-body bytes across them and the second attempt's wall time.
 
 ## teardown
 
