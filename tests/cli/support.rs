@@ -142,6 +142,8 @@ impl Sandbox {
             .current_dir(self.work())
             .env("FETCHLOOM_CACHE", self.cache())
             .env("CLICOLOR", "0")
+            .env("LC_ALL", "C.UTF-8")
+            .env("TERM", "xterm")
             .env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("APPDATA", &home)
@@ -874,5 +876,19 @@ fn dropping_a_server_interrupts_an_unreleased_response() -> Result {
     dropping.join().map_err(|_| "server shutdown panicked")?;
     client.set_read_timeout(Some(Duration::from_secs(1)))?;
     assert_eq!(client.read(&mut [0])?, 0);
+    Ok(())
+}
+
+#[test]
+fn commands_define_their_output_environment() -> Result {
+    let sandbox = Sandbox::new()?;
+    let command = sandbox.command(&["--version"]);
+    for (name, value) in [("LC_ALL", "C.UTF-8"), ("TERM", "xterm"), ("CLICOLOR", "0")] {
+        let actual = command
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value);
+        assert_eq!(actual, Some(std::ffi::OsStr::new(value)), "{name}");
+    }
     Ok(())
 }
