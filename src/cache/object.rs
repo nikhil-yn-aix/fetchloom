@@ -109,7 +109,9 @@ pub(crate) struct Batch(File);
 
 #[cfg(target_os = "linux")]
 impl Batch {
-    pub(crate) fn flush(self) -> io::Result<()> {
+    /// flushes everything written to the cache's filesystem. each call reports a write-back
+    /// error since the one before, so a batch may flush more than once.
+    pub(crate) fn flush(&self) -> io::Result<()> {
         rustix::fs::syncfs(&self.0)?;
         Ok(())
     }

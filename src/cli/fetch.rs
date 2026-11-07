@@ -260,8 +260,8 @@ impl<'a> Watch<'a> {
 }
 
 /// downloads every job within the network's limits and returns what each fetched, in the jobs'
-/// order. on linux the finished downloads are flushed together once at the end, then put in
-/// place, whether or not every job succeeded.
+/// order. on linux the finished downloads are flushed together and put in place a group at a
+/// time, the last group once every job ended, whether or not every job succeeded.
 pub(super) async fn all(
     context: &Context,
     net: &Arc<Net>,

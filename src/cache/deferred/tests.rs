@@ -5,6 +5,14 @@ use crate::cache::Validators;
 #[cfg(target_os = "linux")]
 use crate::digest;
 
+/// opens a batch: linux's own, or one without its flush elsewhere.
+fn deferring(cache: &Cache) {
+    #[cfg(target_os = "linux")]
+    assert!(cache.defer_downloads().unwrap());
+    #[cfg(not(target_os = "linux"))]
+    cache.defer_unflushed();
+}
+
 fn finished(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
     let Claim::Owned(partial) = cache.claim(url).unwrap() else {
         panic!("nothing else holds the download");
@@ -14,6 +22,51 @@ fn finished(cache: &Cache, url: &str, bytes: &[u8]) -> Stored {
         .unwrap();
     writer.write_at(0, bytes).unwrap();
     writer.finish().unwrap()
+}
+
+#[test]
+fn a_long_batch_keeps_only_its_latest_downloads_claimed() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    let urls: Vec<String> = (0..GROUP + 10)
+        .map(|n| format!("https://example.org/{n}"))
+        .collect();
+    let stored: Vec<Stored> = urls
+        .iter()
+        .map(|url| finished(&cache, url, url.as_bytes()))
+        .collect();
+    // each claimed download holds a file open, of which a process may have only so many
+    let claimed = urls
+        .iter()
+        .filter(|url| matches!(cache.claim(url).unwrap(), Claim::Busy))
+        .count();
+    assert!(
+        claimed < GROUP,
+        "{claimed} finished downloads still hold their claims"
+    );
+    cache.publish_downloads().unwrap();
+    for (url, stored) in urls.iter().zip(&stored) {
+        assert_eq!(
+            fs::read(cache.object_path(&stored.digest)).unwrap(),
+            url.as_bytes()
+        );
+    }
+}
+
+#[test]
+fn a_failure_in_an_early_group_is_reported_when_the_batch_ends() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    let first = crate::digest::sha256(b"blocked");
+    // a file where the object's folder belongs keeps it from taking its name
+    let folder = cache.object_path(&first).parent().unwrap().to_path_buf();
+    fs::write(&folder, b"").unwrap();
+    finished(&cache, "https://example.org/blocked", b"blocked");
+    for n in 1..GROUP {
+        let url = format!("https://example.org/{n}");
+        finished(&cache, &url, url.as_bytes());
+    }
+    assert!(cache.publish_downloads().is_err());
 }
 
 #[test]

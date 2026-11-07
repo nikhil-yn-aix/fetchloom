@@ -15,8 +15,8 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -45,8 +45,8 @@ pub(crate) struct Cache {
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
     volume: Arc<Volume>,
-    /// downloads waiting for one flush of the whole batch, shared by every clone.
-    pending: Arc<Mutex<Option<deferred::Pending>>>,
+    /// downloads waiting for a flush that covers them, shared by every clone.
+    deferred: Arc<deferred::Deferred>,
 }
 
 #[derive(Debug)]
@@ -128,7 +128,7 @@ impl Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
-            pending: Arc::new(Mutex::new(None)),
+            deferred: Arc::default(),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -163,7 +163,7 @@ impl Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
-            pending: Arc::new(Mutex::new(None)),
+            deferred: Arc::default(),
         })
     }
 
