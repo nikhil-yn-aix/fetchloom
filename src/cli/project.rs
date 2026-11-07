@@ -967,6 +967,9 @@ async fn sync_all(
         .relock(manifest, old.unwrap_or(&empty), upgrade, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
+    // a lock whose files cannot all land is refused before it is written, so data.lock never
+    // pins what no sync can place. archives not unpacked here yet are checked once they are
+    plan::from_cache(manifest, &lock, &work.cache)?;
     let changed = work.write_lock(old, &lock)?;
     let synced = seen.and_then(|seen| {
         let written = if changed {
@@ -1390,5 +1393,177 @@ mod tests {
             drop(held);
         });
         assert!(!path.exists());
+    }
+
+    fn offline_context() -> Context {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
+        context.offline = crate::net::Offline::Flag;
+        context
+    }
+
+    /// a file a source states the hash of, so pinning it needs no download.
+    fn stated(path: &str, url: &str, bytes: &[u8]) -> crate::source::Remote {
+        crate::source::Remote {
+            path: path.to_owned(),
+            size: Some(bytes.len() as u64),
+            sha256: Some(digest::sha256(bytes)),
+            md5: None,
+            url: url::Url::parse(url).unwrap(),
+            named_by_server: false,
+        }
+    }
+
+    fn listed(url: &str, files: Vec<crate::source::Remote>) -> Listing {
+        Listing {
+            resolved: Reference::Url(url::Url::parse(url).unwrap()),
+            title: None,
+            license: None,
+            doi: None,
+            files,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    fn pinned(name: &str, spec: String, files: Vec<lock::LockedFile>) -> lock::Locked {
+        lock::Locked {
+            name: name.to_owned(),
+            reference: format!("https://example.org/{name}"),
+            spec,
+            resolved: format!("https://example.org/{name}"),
+            title: None,
+            license: None,
+            doi: None,
+            timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            files,
+        }
+    }
+
+    fn pinned_file(path: &str, url: &str, bytes: &[u8]) -> lock::LockedFile {
+        lock::LockedFile {
+            path: path.to_owned(),
+            size: bytes.len() as u64,
+            sha256: digest::sha256(bytes),
+            md5: None,
+            url: url.to_owned(),
+            unpacks_to: None,
+        }
+    }
+
+    #[test]
+    fn a_lock_that_cannot_be_placed_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let context = offline_context();
+        let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.a]\nref = \"https://example.org/a\"\npath = \"shared\"\n\n[datasets.b]\nref = \"https://example.org/b\"\npath = \"shared/inner\"\n",
+        )
+        .unwrap();
+        let a = pinned(
+            "a",
+            lock::spec(&manifest.datasets["a"]),
+            vec![pinned_file("a", "https://example.org/a", b"a")],
+        );
+        let old = Lock { datasets: vec![a] };
+        std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
+        let work = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let given = (
+            "b".to_owned(),
+            listed(
+                "https://example.org/b",
+                vec![stated("b", "https://example.org/b", b"b")],
+            ),
+        );
+
+        let error = block_on(sync_all(
+            &work,
+            &manifest,
+            Some(&old),
+            &Upgrade::Nothing,
+            false,
+            Some(given),
+            None,
+        ))
+        .unwrap_err();
+
+        assert!(error.message.contains("would share files"), "{error:?}");
+        assert_eq!(
+            std::fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
+            old.render(),
+            "data.lock changed though nothing could be placed"
+        );
+    }
+
+    /// kaggle may send a competition file as a zip of itself, which data.lock then pins as
+    /// `<name>.zip`. a listing that also holds a real `<name>.zip` must not pin both on one path,
+    /// or no later run could read data.lock.
+    #[test]
+    fn two_files_on_one_path_are_refused_before_data_lock_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let context = offline_context();
+        let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.comp]\nref = \"https://example.org/comp\"\nextract = false\n",
+        )
+        .unwrap();
+        let download = "https://api.kaggle.com/v1/competitions/data/download/titanic";
+        let wrapped = format!("{download}/train.csv");
+        let zipped = format!("{download}/train.csv.zip");
+        let old = Lock {
+            datasets: vec![pinned(
+                "comp",
+                "sha256:an older entry".to_owned(),
+                vec![pinned_file("train.csv.zip", &wrapped, b"wrapped")],
+            )],
+        };
+        std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
+        let work = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let mut unstated = stated("train.csv", &wrapped, b"wrapped");
+        unstated.sha256 = None;
+        let given = (
+            "comp".to_owned(),
+            listed(
+                "https://example.org/comp",
+                vec![unstated, stated("train.csv.zip", &zipped, b"a real zip")],
+            ),
+        );
+
+        let error = block_on(sync_all(
+            &work,
+            &manifest,
+            Some(&old),
+            &Upgrade::Nothing,
+            false,
+            Some(given),
+            None,
+        ))
+        .unwrap_err();
+
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(
+            error.message.contains("comp")
+                && error.message.contains("train.csv.zip")
+                && error.message.contains("pinned"),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
+            old.render(),
+            "data.lock lists a path twice"
+        );
+        assert!(Lock::parse(&old.render()).is_ok());
     }
 }

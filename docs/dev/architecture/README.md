@@ -69,7 +69,7 @@ sequenceDiagram
     C->>C: render result and work counts
 ```
 
-relocking can download and unpack before it writes `data.lock`, because unknown hashes and archive trees are part of the pin. a destination clash discovered later can therefore leave an updated lock. a completed placement records whether every requested file ended up in place; a run that preserves edits cannot take the settled shortcut next time.
+relocking can download and unpack before it writes `data.lock`, because unknown hashes and archive trees are part of the pin. the new lock is then planned before it is written, so a destination clash, or two files pinned on one path, leaves `data.lock` as it was; only a clash among files of an archive this machine never unpacked shows after the write. a completed placement records whether every requested file ended up in place; a run that preserves edits cannot take the settled shortcut next time.
 
 ## types to recognize
 

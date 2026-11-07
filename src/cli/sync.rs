@@ -150,11 +150,11 @@ impl<'a> Loop<'a> {
         }
         self.unpack_drafts(&mut drafts).await?;
         let now = lock::timestamp(SystemTime::now());
-        Ok(settled(
-            old,
-            kept,
-            drafts.into_iter().map(|draft| draft.finish(&now)),
-        ))
+        let drafted = drafts
+            .into_iter()
+            .map(|draft| draft.finish(&now))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(settled(old, kept, drafted.into_iter()))
     }
 
     /// the lock [`Loop::relock`] would make, found without downloading or unpacking, and the
@@ -175,11 +175,11 @@ impl<'a> Loop<'a> {
             jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
         }
         let now = lock::timestamp(SystemTime::now());
-        let lock = settled(
-            old,
-            kept,
-            drafts.into_iter().map(|draft| draft.stand_in(&now)),
-        );
+        let drafted = drafts
+            .into_iter()
+            .map(|draft| draft.stand_in(&now))
+            .collect::<Result<Vec<_>, _>>()?;
+        let lock = settled(old, kept, drafted.into_iter());
         Ok((lock, jobs))
     }
 

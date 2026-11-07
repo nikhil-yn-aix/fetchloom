@@ -28,7 +28,7 @@
 
 an entry's spec hash covers the manifest choices that affect its locked data. `relock` keeps an entry when that hash matches and no upgrade asks to resolve it again. filter or extraction changes can reuse the old resolved reference when the manifest reference itself is unchanged; changing the reference or upgrading resolves the requested reference again.
 
-`Draft` prefers a usable source SHA-256, reusable old pins or a checked MD5-to-SHA-256 mapping. it downloads when those do not establish the pin. a new archive must be unpacked to learn its member tree. unchanged resolved data retain their old lock timestamp.
+`Draft` prefers a usable source SHA-256, reusable old pins or a checked MD5-to-SHA-256 mapping. it downloads when those do not establish the pin. a new archive must be unpacked to learn its member tree. unchanged resolved data retain their old lock timestamp. `Draft::finish` refuses two files pinned on one path, as when kaggle sends a competition file as a zip of itself, which takes the name `<name>.zip`, beside a listed `<name>.zip`: such a `data.lock` could not be read again.
 
 ### hash files a clock cannot distinguish
 
@@ -69,7 +69,7 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 
 ## invariants and traps
 
-- ordinary sync may have changed `data.lock` when destination planning fails. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes and placements can remain.
+- `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files can still follow a written lock. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes and placements can remain.
 - matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
 - use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
 - mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.

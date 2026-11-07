@@ -23,6 +23,8 @@ pub(super) struct Draft {
     spec: String,
     /// whether archives unpack, as data.toml says.
     extract: bool,
+    /// where the entry's patterns were written, for the help of an error.
+    patterns: Patterns,
     listing: Listing,
     files: Vec<DraftFile>,
 }
@@ -106,6 +108,7 @@ impl Draft {
             reference: entry.reference.clone(),
             spec: lock::spec(entry),
             extract: entry.extract,
+            patterns: written(entry),
             listing,
             files,
         })
@@ -228,7 +231,7 @@ impl Draft {
     /// download can learn and for what each archive not yet unpacked unpacks to. a stand-in
     /// matches no cached object, so planning treats its file as missing and its archive as never
     /// unpacked here. it is never written.
-    pub(super) fn stand_in(mut self, now: &str) -> Locked {
+    pub(super) fn stand_in(mut self, now: &str) -> Result<Locked, Error> {
         let extract = self.extract;
         for file in &mut self.files {
             let label = format!("{}/{}", self.name, file.path);
@@ -244,7 +247,10 @@ impl Draft {
         self.finish(now)
     }
 
-    pub(super) fn finish(self, now: &str) -> Locked {
+    /// the entry for data.lock. two files pinned on one path would leave a data.lock no run can
+    /// read, as when a source wrapped a file in a zip named like another file it lists.
+    pub(super) fn finish(self, now: &str) -> Result<Locked, Error> {
+        let patterns = self.patterns;
         let mut files: Vec<LockedFile> = self
             .files
             .into_iter()
@@ -261,7 +267,24 @@ impl Draft {
             })
             .collect();
         files.sort_by(|a, b| a.path.cmp(&b.path));
-        Locked {
+        if let Some(pair) = files.windows(2).find(|pair| pair[0].path == pair[1].path) {
+            let help = match patterns {
+                Patterns::InDataToml => format!(
+                    "leave one of them out with an exclude pattern in datasets.{} in data.toml",
+                    self.name
+                ),
+                Patterns::OnCommandLine => "leave one of them out with --exclude".to_owned(),
+            };
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "two files of {} would be pinned as {}",
+                    self.name, pair[0].path
+                ),
+            )
+            .help(help));
+        }
+        Ok(Locked {
             name: self.name,
             reference: self.reference,
             spec: self.spec,
@@ -271,7 +294,7 @@ impl Draft {
             doi: self.listing.doi,
             timestamp: now.to_owned(),
             files,
-        }
+        })
     }
 }
 
@@ -768,7 +791,7 @@ mod tests {
             },
             &cache,
         );
-        let locked = draft.finish("2026-10-29T00:00:00Z");
+        let locked = draft.finish("2026-10-29T00:00:00Z").unwrap();
         assert_eq!(locked.files.len(), 1);
         assert_eq!(locked.files[0].path, "file.txt");
         assert_eq!(locked.files[0].size, 4);
@@ -870,7 +893,7 @@ mod tests {
                     .unwrap();
             draft.unpacked(todo.file, Some(unpacked.tree));
         }
-        let locked = draft.finish("2026-11-01T00:00:00Z");
+        let locked = draft.finish("2026-11-01T00:00:00Z").unwrap();
         let pinned: Vec<(&str, Sha256, bool)> = locked
             .files
             .iter()
@@ -904,7 +927,10 @@ mod tests {
         assert_eq!(placed(&cache, &locked.files), expected);
         let again = Draft::new("titanic", entry, titanic(), Some(&locked), false, &cache).unwrap();
         assert_eq!(again.jobs(&cache).len(), 0, "nothing to download");
-        assert_eq!(again.finish("2026-11-01T00:00:00Z").files, locked.files);
+        assert_eq!(
+            again.finish("2026-11-01T00:00:00Z").unwrap().files,
+            locked.files
+        );
     }
 }
 
