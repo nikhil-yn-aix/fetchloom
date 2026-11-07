@@ -51,9 +51,11 @@ object hashing, gc and `cache verify` hashing, and copy input use `read_unfollow
 
 ### publication and repair
 
-new objects normally publish by hardlinking a sealed file to the digest name, which fails if another writer already published it. fallback checks existence then renames; on a system where rename replaces destinations, that is not a universal no-clobber guarantee.
+new objects normally publish by hardlinking a sealed file to the digest name, which fails if another writer already published it. fallback checks existence then renames; on a system where rename replaces destinations, that is not a universal no-clobber guarantee. the payload is flushed before either operation. a new digest name can be lost after a power cut and fetched again; publication does not promise to retain every new cache name.
 
-repairs use atomic rename on hardlink-capable volumes. when windows refuses a read-only destination, the cache clears its flag through an unfollowed handle, replaces the name and restores the old file's flag through that handle, including placed hardlinks. on volumes without hardlinks, refused replacement may remove the old object before renaming, so that fallback is not atomic.
+safety-critical record writes flush the file, rename it, then flush the destination directory and the source directory when different through the project's shared `sync_directory` helper. a directory-flush error reports that the name was published but its directory could not be flushed. existing registrations retry their directory flush, including after a prior failed write. hints and staging lock names remain recoverable without these flushes. the helper flushes directories on unix and retains the existing no-op on other platforms; windows namespace durability is not claimed.
+
+repairs flush both changed directories after replacement and before writing the replacement time into the change mark. if that flush fails, the empty mark keeps the object in doubt. repairs use atomic rename on hardlink-capable volumes. when windows refuses a read-only destination, the cache clears its flag through an unfollowed handle, replaces the name and restores the old file's flag through that handle, including placed hardlinks. on volumes without hardlinks, refused replacement may remove the old object before renaming, so that fallback is not atomic.
 
 ### url identities
 

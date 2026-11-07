@@ -88,6 +88,8 @@ project-local lock and placement records live in [the project folder](project-fo
 
 [cache sharing](../concepts.md#cache) covers per-user caches and trusted group access.
 
+on unix, registrations and change marks flush their containing directory after replacement, as well as their file contents. a reported directory-flush failure means the new name exists but its persistence is uncertain; fix the storage error and retry. registrations retry this flush even when the record already exists. this directory guarantee is not extended to windows here. a lost new cache object name after a power cut causes a later fetch, so it does not substitute for a project's pinned lock.
+
 an unreadable `changed/` folder or change mark stops sync and get with `local.io` (exit 50), before they place files or record a completed sync. fix storage access and read/search permissions, run `fetchloom cache verify`, then retry. keep the marks: deleting them can hide damage from another project's hardlinks.
 
 objects are not rehashed on every use. run `fetchloom cache verify` to check their bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.

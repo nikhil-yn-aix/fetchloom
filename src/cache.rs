@@ -423,6 +423,7 @@ impl Cache {
                     let written = fs::metadata(source).and_then(|metadata| metadata.modified());
                     match volume.replace(source, path) {
                         Ok(()) => {
+                            sync_publication(source, path, crate::project::sync_directory)?;
                             // without the replacement's time the object stays in doubt and is
                             // hashed when found, which costs time but trusts nothing changed
                             if found.is_ok()
@@ -489,19 +490,66 @@ fn existing(
 /// writes `bytes` into the new file at `temporary`, flushes them to disk when `durable` and moves
 /// the file to `path`.
 fn fill_and_rename(
-    mut file: File,
+    file: File,
     bytes: &[u8],
     temporary: &Path,
     path: &Path,
     durable: bool,
 ) -> io::Result<()> {
+    fill_and_rename_with(
+        file,
+        bytes,
+        [temporary, path],
+        durable,
+        File::sync_all,
+        |from, to| fs::rename(from, to),
+        crate::project::sync_directory,
+    )
+}
+
+fn fill_and_rename_with(
+    mut file: File,
+    bytes: &[u8],
+    [temporary, path]: [&Path; 2],
+    durable: bool,
+    sync_file: impl FnOnce(&File) -> io::Result<()>,
+    rename: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    sync_directory: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     file.write_all(bytes)?;
     if durable {
-        file.sync_all()?;
+        sync_file(&file)?;
     }
     drop(file);
     // a rename moves a name: a link at `path` is replaced, never followed
-    fs::rename(temporary, path)
+    rename(temporary, path)?;
+    if durable {
+        sync_publication(temporary, path, sync_directory)?;
+    }
+    Ok(())
+}
+
+/// flushes a published name before the source name's removal, when its folder differs.
+fn sync_publication(
+    source: &Path,
+    path: &Path,
+    mut sync_directory: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let destination = path.parent().unwrap_or_else(|| Path::new("."));
+    let source = source.parent().unwrap_or_else(|| Path::new("."));
+    for folder in std::iter::once(destination).chain((source != destination).then_some(source)) {
+        sync_directory(folder).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "{} was published, but could not flush directory {}: {err}",
+                    path.display(),
+                    folder.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -593,6 +641,177 @@ pub(crate) mod tests {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
         object.seal(true).unwrap().publish(cache).unwrap()
+    }
+
+    #[test]
+    fn durable_record_renames_sync_both_parents() {
+        use std::cell::RefCell;
+
+        let (_dir, cache) = cache();
+        for durable in [false, true] {
+            let temporary = cache.root.join("tmp/record");
+            let destination = cache.root.join("projects/record");
+            let events = RefCell::new(Vec::new());
+            fill_and_rename_with(
+                File::create(&temporary).unwrap(),
+                b"registered",
+                [&temporary, &destination],
+                durable,
+                |_| {
+                    events.borrow_mut().push("file");
+                    Ok(())
+                },
+                |from, to| {
+                    events.borrow_mut().push("rename");
+                    fs::rename(from, to)
+                },
+                |folder| {
+                    events
+                        .borrow_mut()
+                        .push(if folder == destination.parent().unwrap() {
+                            "destination"
+                        } else {
+                            assert_eq!(folder, temporary.parent().unwrap());
+                            "source"
+                        });
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(fs::read(&destination).unwrap(), b"registered");
+            assert_eq!(
+                events.into_inner(),
+                if durable {
+                    vec!["file", "rename", "destination", "source"]
+                } else {
+                    vec!["rename"]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn durable_record_flush_errors_stop_acknowledgement() {
+        use std::cell::RefCell;
+
+        let (_dir, cache) = cache();
+        for (index, failing) in ["file", "rename", "destination", "source"]
+            .into_iter()
+            .enumerate()
+        {
+            let temporary = cache.root.join(format!("tmp/record-{index}"));
+            let destination = cache.root.join(format!("projects/record-{index}"));
+            let events = RefCell::new(Vec::new());
+            let step = |name| {
+                events.borrow_mut().push(name);
+                if name == failing {
+                    Err(io::Error::other("injected flush failure"))
+                } else {
+                    Ok(())
+                }
+            };
+            let result = fill_and_rename_with(
+                File::create(&temporary).unwrap(),
+                b"registered",
+                [&temporary, &destination],
+                true,
+                |_| step("file"),
+                |from, to| {
+                    step("rename")?;
+                    fs::rename(from, to)
+                },
+                |folder| {
+                    assert_eq!(fs::read(&destination).unwrap(), b"registered");
+                    assert!(!temporary.exists());
+                    step(if folder == destination.parent().unwrap() {
+                        "destination"
+                    } else {
+                        "source"
+                    })
+                },
+            );
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::Other);
+            assert_eq!(
+                events.into_inner(),
+                ["file", "rename", "destination", "source"][..=index]
+            );
+            if index >= 2 {
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&destination.display().to_string()),
+                    "{error}"
+                );
+            }
+        }
+        let temporary = cache.root.join("tmp/record");
+        let destination = cache.root.join("tmp/published");
+        let mut folders = Vec::new();
+        fill_and_rename_with(
+            File::create(&temporary).unwrap(),
+            b"registered",
+            [&temporary, &destination],
+            true,
+            File::sync_all,
+            |from, to| fs::rename(from, to),
+            |folder| {
+                folders.push(folder.to_path_buf());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(folders, [cache.root.join("tmp")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_record_directory_flush_is_retried_on_registration() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let (dir, cache) = cache();
+        let folder = cache.root.join("projects");
+        let permissions = fs::metadata(&folder).unwrap().permissions();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o333)).unwrap();
+        let first = cache.register(dir.path());
+        let retried = cache.register(dir.path());
+        fs::set_permissions(&folder, permissions).unwrap();
+        assert_eq!(first.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(retried.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        cache.register(dir.path()).unwrap();
+        assert_eq!(
+            cache
+                .registered_projects(&crate::stop::Stop::default())
+                .unwrap(),
+            [dir.path()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_repair_is_not_marked_complete_before_directory_flush() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let (_dir, cache) = cache();
+        let digest = store(&cache, b"good").digest;
+        let path = cache.object_path(&digest);
+        rewrite(&path, b"evil");
+        seal(&path);
+        let mut object = cache.new_object().unwrap();
+        object.write_all(b"good").unwrap();
+        let sealed = object.seal(true).unwrap();
+        let folder = path.parent().unwrap();
+        let permissions = fs::metadata(folder).unwrap().permissions();
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o333)).unwrap();
+        let result = sealed.publish(&cache);
+        fs::set_permissions(folder, permissions).unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(path).unwrap(), b"good");
+        assert_eq!(cache.marks().unwrap()[&digest].replacement, None);
     }
 
     #[test]

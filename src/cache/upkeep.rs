@@ -76,7 +76,8 @@ impl Cache {
     pub(crate) fn register(&self, root: &Path) -> io::Result<()> {
         let path = self.registration(root);
         if path.exists() {
-            return Ok(());
+            // a previous write may have published the name but failed to flush its folder
+            return super::sync_publication(&path, &path, crate::project::sync_directory);
         }
         let text = serde_json::to_vec(&Registration {
             root: root.to_path_buf(),
