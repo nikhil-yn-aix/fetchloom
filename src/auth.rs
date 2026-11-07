@@ -416,21 +416,7 @@ impl Account {
             })
         };
         match self {
-            Account::HuggingFace => {
-                // huggingface_hub reads the older name only while HF_TOKEN is unset or empty
-                let name = if var("HF_TOKEN").is_some_and(|value| !value.is_empty()) {
-                    "HF_TOKEN"
-                } else {
-                    "HUGGING_FACE_HUB_TOKEN"
-                };
-                set(name)
-                    .or_else(|| hf_file(var).and_then(file))
-                    .or_else(|| {
-                        crate::source::home(var)
-                            .map(|home| home.join(".huggingface").join("token"))
-                            .and_then(file)
-                    })
-            }
+            Account::HuggingFace => set("HF_TOKEN").or_else(|| hf_file(var).and_then(file)),
             Account::Kaggle => crate::source::kaggle_key(var),
             Account::Zenodo => set("ZENODO_TOKEN").or_else(|| stored(&self.id())),
             Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
