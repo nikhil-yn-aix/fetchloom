@@ -1122,8 +1122,15 @@ fn transfer(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
     match usize::try_from(input.metadata()?.len()) {
         Ok(size) if size <= BLOCK => {
             let mut bytes = Vec::with_capacity(size);
-            input.read_to_end(&mut bytes)?;
-            output.write_all(&bytes)
+            Read::by_ref(&mut input)
+                .take(BLOCK as u64)
+                .read_to_end(&mut bytes)?;
+            output.write_all(&bytes)?;
+            if bytes.len() == BLOCK {
+                copy_stoppable(input, output, stop)
+            } else {
+                Ok(())
+            }
         }
         _ => overlapped(input, output, stop),
     }
@@ -1170,31 +1177,42 @@ fn copy_stoppable(mut input: impl Read, mut output: impl Write, stop: &Stop) -> 
 /// while this one writes the last. with the disk never waiting on the other side, a copy keeps
 /// pace with the operating system's own: 1 GiB took 0.62 s against 0.99 s one block at a time
 /// on an nvme laptop.
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(not(target_os = "linux"), test))]
 fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()> {
     let (full, filled) = std::sync::mpsc::sync_channel::<io::Result<Vec<u8>>>(2);
     let (empty, spare) = std::sync::mpsc::sync_channel::<Vec<u8>>(3);
     for _ in 0..3 {
         let _ = empty.send(vec![0; BLOCK]);
     }
+    let caller = std::thread::current().id();
     std::thread::scope(move |scope| {
-        scope.spawn(move || {
+        let worker = crate::threads::scoped(scope, move || {
+            // a refused reader runs at join, when there is no concurrent queue consumer.
+            if std::thread::current().id() == caller {
+                return copy_stoppable(&mut input, output, stop);
+            }
             while let Ok(mut block) = spare.recv() {
                 block.resize(BLOCK, 0);
                 let read = check_stop(stop).and_then(|()| input.read(&mut block));
                 let sent = match read {
-                    Ok(0) => return,
+                    Ok(0) => return Ok(()),
                     Ok(read) => {
                         block.truncate(read);
                         full.send(Ok(block))
                     }
-                    Err(err) => full.send(Err(err)),
+                    Err(error) => full.send(Err(error)),
                 };
                 if sent.is_err() {
-                    return;
+                    return Ok(());
                 }
             }
+            Ok(())
         });
+        if !worker.is_threaded() {
+            drop(filled);
+            drop(empty);
+            return worker.join();
+        }
         let mut written = Ok(());
         while let Ok(block) = filled.recv() {
             written = block.and_then(|block| {
@@ -1207,10 +1225,9 @@ fn overlapped(mut input: File, mut output: &File, stop: &Stop) -> io::Result<()>
                 break;
             }
         }
-        // the reader stops once nobody takes its blocks, so the scope never waits on it
         drop(filled);
         drop(empty);
-        written
+        written.and(worker.join())
     })
 }
 

@@ -1534,3 +1534,22 @@ fn macos_copy_batches_finish_flushing_before_they_return() {
         assert_eq!(placed_names(&root), ["0", "1", "2"]);
     }
 }
+
+#[test]
+fn pipelined_copy_keeps_all_bytes_when_its_reader_is_refused() {
+    let bytes: Vec<_> = (0..3 * BLOCK + 17)
+        .map(|index| u8::try_from(index % 251).unwrap())
+        .collect();
+    for refuse in [false, true] {
+        let folder = tempfile::tempdir().unwrap();
+        let source = folder.path().join("source");
+        let destination = folder.path().join("copy");
+        fs::write(&source, &bytes).unwrap();
+        let input = File::open(source).unwrap();
+        let output = File::create_new(&destination).unwrap();
+        let _refusing = refuse.then(|| crate::threads::refuse_after(0));
+        overlapped(input, &output, &Stop::default()).unwrap();
+        drop(output);
+        assert_eq!(fs::read(destination).unwrap(), bytes);
+    }
+}
