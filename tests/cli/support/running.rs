@@ -63,7 +63,11 @@ impl Running {
     }
 
     pub(crate) fn finish(mut self) -> Result<Output> {
-        let status = self.child.as_mut().ok_or("child already finished")?.wait()?;
+        let status = self
+            .child
+            .as_mut()
+            .ok_or("child already finished")?
+            .wait()?;
         self.child = None;
         let stdout = self
             .stdout
@@ -77,7 +81,11 @@ impl Running {
             .ok_or("stderr already collected")?
             .join()
             .map_err(|_| "stderr reader panicked")??;
-        Ok(Output { status, stdout, stderr })
+        Ok(Output {
+            status,
+            stdout,
+            stderr,
+        })
     }
 }
 
@@ -95,7 +103,6 @@ impl Drop for Running {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -126,13 +133,20 @@ mod tests {
     fn stderr_readiness_does_not_wait_for_stdout_collection() -> Result {
         let mut command = Command::new(std::env::current_exe()?);
         command
-            .args(["--exact", "support::running::tests::stdout_pipe_child", "--nocapture"])
+            .args([
+                "--exact",
+                "support::running::tests::stdout_pipe_child",
+                "--nocapture",
+            ])
             .env(CHILD, "1");
         let child = Running::start(&mut command)?;
         child.wait_for("pipe child ready")?;
         let output = child.finish()?;
         assert!(output.status.success());
-        assert_eq!(output.stdout.iter().filter(|byte| **byte == b'~').count(), BYTES);
+        assert_eq!(
+            output.stdout.iter().filter(|byte| **byte == b'~').count(),
+            BYTES
+        );
         assert!(String::from_utf8_lossy(&output.stderr).contains("pipe child ready"));
         Ok(())
     }

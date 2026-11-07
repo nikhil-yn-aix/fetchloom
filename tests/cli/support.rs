@@ -904,14 +904,15 @@ fn commands_define_their_output_environment() -> Result {
     Ok(())
 }
 
-
 #[cfg(target_os = "linux")]
 #[test]
 fn terminal_commands_report_failures() -> Result {
     let sandbox = Sandbox::new()?;
     match sandbox.on_a_terminal(&["--not-a-fetchloom-option"]) {
         Ok(None) | Err(_) => Ok(()),
-        Ok(Some(screen)) => Err(format!("a failed terminal command returned success: {screen}").into()),
+        Ok(Some(screen)) => {
+            Err(format!("a failed terminal command returned success: {screen}").into())
+        }
     }
 }
 
@@ -920,7 +921,10 @@ fn terminal_commands_report_failures() -> Result {
 fn terminal_commands_use_a_known_shell() -> Result {
     let sandbox = Sandbox::new()?;
     if let Some(screen) = sandbox.on_a_terminal(&["--version"])? {
-        assert_eq!(screen.trim(), concat!("fetchloom ", env!("CARGO_PKG_VERSION")));
+        assert_eq!(
+            screen.trim(),
+            concat!("fetchloom ", env!("CARGO_PKG_VERSION"))
+        );
     }
     Ok(())
 }

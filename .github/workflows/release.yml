@@ -117,7 +117,7 @@ jobs:
           flags=${flags# }
           echo "$variable=$flags"
           echo "$variable=$flags" >> "$GITHUB_ENV"
-      # the cc crate builds zstd, bzip2, liblzma and ring with musl-gcc for the musl target
+      # the cc crate builds zstd, liblzma, ring and mimalloc with musl-gcc for the musl target
       - name: install the musl C compiler
         if: runner.os == 'Linux'
         run: |

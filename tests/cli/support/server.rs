@@ -134,7 +134,6 @@ impl Drop for ServerTask {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
