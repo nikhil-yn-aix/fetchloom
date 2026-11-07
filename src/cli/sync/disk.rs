@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::place::local;
@@ -415,8 +415,8 @@ fn scan(
     if exp.on("PROJECT_PARALLEL_SCAN") {
         let mut pending = Vec::new();
         visit_files(root, data_dir, |entry, path, temporary| {
-            pending.push((entry, path, temporary));
-            // retain at most one batch of directory entries, not one handle per project file.
+            pending.push((entry.path(), path, temporary));
+            // queued DirEntry values would keep their parent directory descriptors open.
             if pending.len() == 4096 {
                 scan_pending(&mut pending, threads, &mut found, &mut temporaries);
             }
@@ -437,13 +437,13 @@ fn scan(
 }
 
 fn scan_pending(
-    pending: &mut Vec<(fs::DirEntry, String, bool)>,
+    pending: &mut Vec<(PathBuf, String, bool)>,
     threads: Threads,
     found: &mut HashMap<String, Look>,
     temporaries: &mut Vec<String>,
 ) {
-    let looks = place::run_all(pending, threads, |(entry, _, _)| {
-        entry.metadata().ok().as_ref().map(Look::of)
+    let looks = place::run_all(pending, threads, |(path, _, _)| {
+        fs::symlink_metadata(path).ok().as_ref().map(Look::of)
     });
     for ((_, path, temporary), look) in pending.drain(..).zip(looks) {
         if let Some(look) = look {
@@ -505,6 +505,47 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parallel_scans_do_not_retain_one_descriptor_per_folder() {
+        const CHILD: &str = "FETCHLOOM_TEST_SCAN_DESCRIPTOR_LIMIT";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "cli::sync::disk::tests::parallel_scans_do_not_retain_one_descriptor_per_folder", "--test-threads=1"])
+                .env(CHILD, "1")
+                .output().unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        let old = rustix::process::getrlimit(rustix::process::Resource::Nofile);
+        rustix::process::setrlimit(
+            rustix::process::Resource::Nofile,
+            rustix::process::Rlimit {
+                current: Some(64),
+                maximum: old.maximum,
+            },
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        for index in 0..512 {
+            let folder = dir.path().join(format!("data/folder-{index}"));
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("x"), b"data").unwrap();
+        }
+        for exp in [
+            Experiments::default(),
+            Experiments::default().with("PROJECT_PARALLEL_SCAN", "1"),
+        ] {
+            let (found, _) = scan(dir.path(), "data", Threads::default(), &exp);
+            assert_eq!(found.len(), 512);
+        }
+    }
 
     #[test]
     fn parallel_scans_keep_the_serial_files_and_staging_names() {

@@ -57,7 +57,7 @@ settling writes newer state so later runs need not hash the same intact files. `
 
 ### parallel metadata scan experiment
 
-`FETCHLOOM_EXP_PROJECT_PARALLEL_SCAN=1` keeps directory traversal and no-follow file-type checks serial, then reads file metadata with the placement worker helper. each batch holds at most 4,096 directory entries and preserves discovery order. worker groups obey available parallelism and `FETCHLOOM_THREADS`; the default keeps the original serial scan. state parsing, racy hashing, aliases and hardlink audits use the same rules in both modes.
+`FETCHLOOM_EXP_PROJECT_PARALLEL_SCAN=1` keeps directory traversal and no-follow file-type checks serial, then reads file metadata with the placement worker helper. each batch holds at most 4,096 paths and preserves discovery order. queued paths retain no directory descriptors, so a project with many single-file folders does not exhaust a small descriptor limit. worker groups obey available parallelism and `FETCHLOOM_THREADS`; the default keeps the original serial scan. state parsing, racy hashing, aliases and hardlink audits use the same rules in both modes.
 
 ### settled-sync shortcut
 
