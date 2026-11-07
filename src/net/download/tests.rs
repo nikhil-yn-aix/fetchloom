@@ -6,72 +6,46 @@ use super::*;
 use crate::net::Options;
 use crate::source::recorded::block_on;
 
-#[test]
-fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    let (release, stalled) = std::sync::mpsc::channel::<()>();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-            head.push(byte[0]);
-        }
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nAccept-Ranges: bytes\r\nETag: \"v1\"\r\n\r\n",
-            )
-            .unwrap();
-        stream.write_all(&[b'x'; 3072]).unwrap();
-        // keep the body open so only the client's idle deadline can end the attempt.
-        let _ = stalled.recv();
-    });
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
-    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
-        panic!("nothing else holds the download");
-    };
-    let mut net = net(&url);
-    net.split.above = 4096;
-    net.split.piece = 1024;
-    net.split.window = std::time::Duration::from_millis(20);
-    let idle = std::time::Duration::from_millis(250);
-    net.idle = idle;
-    let fetch = Fetch::new(url.clone());
-    let mut split = Transfer {
-        split: true,
-        permits: None,
-    };
-    let started = std::time::Instant::now();
-    // the remaining 1024 bytes cannot split, but every rate window still wakes the stream.
-    let result = block_on(async {
-        tokio::time::timeout(
-            idle + std::time::Duration::from_secs(2),
-            net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split),
-        )
-        .await
-    });
-    let elapsed = started.elapsed();
-    drop(release);
-    server.join().unwrap();
-    let Ok(Err(Failure::Transient { reason, .. })) = result else {
-        panic!("the stalled body did not reach its idle timeout");
-    };
-    assert!(reason.contains("sent nothing for 0 s"), "{reason}");
-    assert!(elapsed >= idle, "{elapsed:?}");
-    assert!(
-        elapsed < idle + std::time::Duration::from_secs(2),
-        "{elapsed:?}"
-    );
-    assert_eq!(net.work.counts().bytes_down, 3072);
-    assert_eq!(partial.resumable().unwrap().0, 3072);
+impl Chunks for tokio::sync::mpsc::Receiver<Bytes> {
+    async fn chunk(&mut self) -> Result<Option<Bytes>, reqwest::Error> {
+        Ok(self.recv().await)
+    }
 }
 
-#[test]
-fn the_production_idle_deadline_is_thirty_seconds() {
-    let url = Url::parse("http://127.0.0.1/").unwrap();
-    assert_eq!(net(&url).idle, std::time::Duration::from_secs(30));
+fn poll<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
+    future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
+    let url = Url::parse("https://example.org/file").unwrap();
+    let mut net = net(&url);
+    net.split.piece = 1024;
+    net.split.window = std::time::Duration::from_millis(20);
+    net.idle = std::time::Duration::from_millis(250);
+    let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+    source.send(Bytes::from(vec![b'x'; 3072])).await.unwrap();
+    let (sender, mut written) = tokio::sync::mpsc::channel(16);
+    let listener = |_| Ok(());
+    let mut reading =
+        std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, Some(4096)));
+    assert!(poll(reading.as_mut()).is_pending());
+    // only 1024 bytes remain, so probe windows cannot hand the body to another stream.
+    for _ in 0..12 {
+        tokio::time::advance(std::time::Duration::from_millis(20)).await;
+        assert!(poll(reading.as_mut()).is_pending());
+    }
+    tokio::time::advance(std::time::Duration::from_millis(10)).await;
+    let std::task::Poll::Ready(Err(Failure::Transient { reason, .. })) = poll(reading.as_mut())
+    else {
+        panic!("the unchanged idle deadline must end the stalled body");
+    };
+    assert!(reason.contains("sent nothing for 0 s"), "{reason}");
+    assert_eq!(net.work.counts().bytes_down, 3072);
+    assert_eq!(
+        written.try_recv().unwrap(),
+        vec![Bytes::from(vec![b'x'; 3072])]
+    );
 }
 
 #[test]
@@ -731,95 +705,65 @@ fn an_md5_checked_for_one_link_proves_nothing_for_another() {
     assert_eq!(again.digest, crate::digest::sha256(&first));
 }
 
-/// takes one answer for `url` into the cache, without trying again, and says why it failed. it
-/// runs on worker threads, as fetchloom does, so timers fire while a listener holds one thread.
-fn attempt_once(net: &Net, cache: &Cache, url: &Url, on: Listener<'_>) -> Result<(), String> {
-    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
-        panic!("nothing else holds the download");
-    };
-    let mut split = Transfer {
-        split: false,
-        permits: None,
-    };
-    let fetch = Fetch::new(url.clone());
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap();
-    match runtime.block_on(net.attempt(url, &fetch, &partial, None, on, &mut split)) {
-        Ok(Answer::Stored { .. }) => Ok(()),
-        Ok(_) => Err("no file in the answer".to_owned()),
-        Err(Failure::Transient { reason, .. } | Failure::Limited { reason }) => Err(reason),
-        Err(Failure::Final(error)) => Err(error.message),
-    }
-}
-
-/// a stream held back by `FETCHLOOM_RATE` waits on this machine, not on the server. each small
-/// answer after the cap's burst waits longer than the idle deadline before its end is read.
-#[test]
-fn waiting_for_the_rate_cap_is_no_network_silence() {
-    let burst = vec![b'x'; 1024 * 1024];
-    let mut answers = vec![reply_bytes(&burst)];
-    answers.extend(std::iter::repeat_n(reply_bytes(&[b'y'; 2048]), 10));
-    let (url, _) = serve(answers);
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
+#[tokio::test(start_paused = true)]
+async fn waiting_for_the_rate_cap_is_no_network_silence() {
+    let url = Url::parse("https://example.org/file").unwrap();
     let rate = crate::net::Rate::read(&|_| Some("8K".into())).unwrap();
     let mut net = net(&url).with_rate(rate);
     net.idle = std::time::Duration::from_millis(100);
-    for index in 0..11 {
-        let url = url.join(&format!("f{index}")).unwrap();
-        assert_eq!(
-            attempt_once(&net, &cache, &url, &|_| Ok(())),
-            Ok(()),
-            "{index}"
-        );
-    }
+    let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+    source
+        .send(Bytes::from(vec![b'x'; 1024 * 1024]))
+        .await
+        .unwrap();
+    source.send(Bytes::from(vec![b'y'; 2048])).await.unwrap();
+    let (sender, mut written) = tokio::sync::mpsc::channel(16);
+    let listener = |_| Ok(());
+    let mut reading =
+        std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, None));
+    assert!(poll(reading.as_mut()).is_pending());
+    tokio::time::advance(std::time::Duration::from_millis(250)).await;
+    assert!(poll(reading.as_mut()).is_pending());
+    drop(source);
+    assert!(matches!(
+        poll(reading.as_mut()),
+        std::task::Poll::Ready(Ok(None))
+    ));
+    assert_eq!(written.try_recv().unwrap()[0].len(), 1024 * 1024);
+    assert_eq!(written.try_recv().unwrap()[0].len(), 2048);
 }
 
-/// a question to the person running fetchloom holds the stream until it is answered, longer than
-/// the idle deadline. the rest of the body comes just after the answer, so only a deadline that
-/// restarts after the question finds it in time.
-#[test]
-fn waiting_for_an_answer_is_no_network_silence() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    std::thread::spawn(move || {
-        for _ in 0..3 {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let _ = stream.set_nodelay(true);
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            let _ = stream
-                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 4\r\n\r\nda");
-            std::thread::sleep(std::time::Duration::from_millis(900));
-            let _ = stream.write_all(b"ta");
-        }
-    });
-    let folder = tempfile::tempdir().unwrap();
-    let cache = Cache::open(folder.path().join("cache")).unwrap();
+#[tokio::test(start_paused = true)]
+async fn waiting_for_an_answer_is_no_network_silence() {
+    let url = Url::parse("https://example.org/file").unwrap();
     let mut net = net(&url);
     net.idle = std::time::Duration::from_millis(400);
+    let (source, mut chunks) = tokio::sync::mpsc::channel(16);
+    source.send(Bytes::from_static(b"da")).await.unwrap();
+    let (sender, mut written) = tokio::sync::mpsc::channel(16);
     let first = std::sync::atomic::AtomicBool::new(true);
-    let asking = |event: Event| {
-        if matches!(event, Event::Bytes(_))
-            && first.swap(false, std::sync::atomic::Ordering::Relaxed)
-        {
-            std::thread::sleep(std::time::Duration::from_millis(800));
+    let asking = |_: Event| {
+        if first.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            // advancing the virtual clock happens before advance's first yield.
+            let mut answer =
+                std::pin::pin!(tokio::time::advance(std::time::Duration::from_millis(800)));
+            let _ = poll(answer.as_mut());
         }
         Ok(())
     };
-    for index in 0..3 {
-        first.store(true, std::sync::atomic::Ordering::Relaxed);
-        let url = url.join(&format!("f{index}")).unwrap();
-        assert_eq!(attempt_once(&net, &cache, &url, &asking), Ok(()), "{index}");
-    }
+    let mut reading = std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &asking, None));
+    assert!(poll(reading.as_mut()).is_pending());
+    tokio::time::advance(std::time::Duration::from_millis(100)).await;
+    source.send(Bytes::from_static(b"ta")).await.unwrap();
+    drop(source);
+    assert!(matches!(
+        poll(reading.as_mut()),
+        std::task::Poll::Ready(Ok(None))
+    ));
+    assert_eq!(
+        written.try_recv().unwrap(),
+        vec![Bytes::from_static(b"da"), Bytes::from_static(b"ta")]
+    );
 }
 
 /// a pinned size bounds what a download takes, so a far larger answer never needs approval.

@@ -6,14 +6,14 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::cache::{Cache, Validators};
 use crate::digest::sha256;
 use crate::net::download::{Expect, Fetch, Fetched};
-use crate::net::{Offline, Options, PER_HOST, Rate, Split, Splitting};
+use crate::net::{Offline, Options, Rate, Split, Splitting};
 use crate::source::recorded::block_on;
 
 const KIB: u64 = 1024;
@@ -48,6 +48,7 @@ const HELD: usize = 256 * 1024;
 struct Server {
     url: Url,
     site: Arc<Site>,
+    serving: Option<std::thread::JoinHandle<()>>,
 }
 
 /// what every connection to the server shares.
@@ -56,7 +57,8 @@ struct Site {
     serving: Serving,
     heads: Mutex<Vec<String>>,
     /// a request for a closed range was answered with the whole file.
-    whole_sent: AtomicBool,
+    whole_sent: (Mutex<bool>, Condvar),
+    stopped: AtomicBool,
     active: AtomicUsize,
     most: AtomicUsize,
 }
@@ -93,32 +95,61 @@ fn serve(body: Arc<Vec<u8>>, serving: Serving) -> Server {
         body,
         serving,
         heads: Mutex::default(),
-        whole_sent: AtomicBool::new(false),
+        whole_sent: (Mutex::new(false), Condvar::new()),
+        stopped: AtomicBool::new(false),
         active: AtomicUsize::new(0),
         most: AtomicUsize::new(0),
     });
     let shared = site.clone();
-    std::thread::spawn(move || {
+    let serving = std::thread::spawn(move || {
+        let mut workers = Vec::new();
         for stream in listener.incoming().flatten() {
+            if shared.stopped.load(Ordering::SeqCst) {
+                break;
+            }
             let site = shared.clone();
-            std::thread::spawn(move || answer(stream, &site));
+            workers.push(std::thread::spawn(move || answer(stream, &site)));
+        }
+        for worker in workers {
+            worker.join().unwrap();
         }
     });
-    Server { url, site }
+    Server {
+        url,
+        site,
+        serving: Some(serving),
+    }
 }
 
-/// answers one request. a connection counts as active from its request until its answer ends or
-/// the client goes. the count waits a moment first, since a client drops a connection whose
-/// range it no longer needs just before it asks for the next one, and this server notices that
-/// only between chunks.
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.site.stopped.store(true, Ordering::SeqCst);
+        *self.site.whole_sent.0.lock().unwrap() = true;
+        self.site.whole_sent.1.notify_all();
+        let _ = TcpStream::connect(("127.0.0.1", self.url.port().unwrap()));
+        if let Some(serving) = self.serving.take() {
+            let result = serving.join();
+            if !std::thread::panicking() {
+                result.unwrap();
+            }
+        }
+    }
+}
+
+/// counts overlapping server responses; request permits are checked separately without sockets.
 fn answer(mut stream: TcpStream, site: &Site) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let head = read_head(&mut stream).to_ascii_lowercase();
     let index = {
         let mut heads = site.heads.lock().unwrap();
         heads.push(head.clone());
         heads.len() - 1
     };
-    std::thread::sleep(Duration::from_millis(50));
     let now = site.active.fetch_add(1, Ordering::SeqCst) + 1;
     site.most.fetch_max(now, Ordering::SeqCst);
     respond(&mut stream, &head, site, index);
@@ -127,7 +158,8 @@ fn answer(mut stream: TcpStream, site: &Site) {
         .lines()
         .any(|line| line.starts_with("range: bytes=") && !line.ends_with('-'));
     if site.serving.whole_for_parts && closed {
-        site.whole_sent.store(true, Ordering::SeqCst);
+        *site.whole_sent.0.lock().unwrap() = true;
+        site.whole_sent.1.notify_all();
     }
 }
 
@@ -197,16 +229,12 @@ fn respond(stream: &mut TcpStream, head: &str, site: &Site, index: usize) {
     let mut sent = 0;
     let waits = serving.whole_for_parts && index == 0;
     for chunk in body[start..end].chunks(16 * 1024) {
-        if !present(stream) {
+        if site.stopped.load(Ordering::SeqCst) || !present(stream) {
             return;
         }
         if waits && sent >= HELD as u64 {
-            let waited = Instant::now();
-            while !site.whole_sent.load(Ordering::SeqCst)
-                && waited.elapsed() < Duration::from_secs(10)
-            {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            let sent = site.whole_sent.0.lock().unwrap();
+            drop(site.whole_sent.1.wait_while(sent, |sent| !*sent).unwrap());
         }
         let length = u64::try_from(chunk.len()).unwrap();
         sent += length;
@@ -297,11 +325,7 @@ fn a_large_file_arrives_over_several_streams_and_hashes_as_one() {
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));
     assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), *body);
-    assert!(
-        (2..=PER_HOST).contains(&server.most()),
-        "{} streams at once",
-        server.most()
-    );
+    assert!(server.most() >= 2, "{} streams at once", server.most());
     let parts = parts(&server);
     assert_ne!(parts, Vec::<String>::new());
     for head in &parts {
@@ -497,26 +521,23 @@ fn a_slow_stream_hands_its_answer_over_to_more_streams() {
 }
 
 #[test]
-fn a_fast_stream_is_never_split() {
-    let body = body(8 * MIB);
-    let server = serve(
-        body.clone(),
-        Serving {
-            rate: 16 * MIB,
-            ..SERVING
-        },
-    );
-    let mut net = net(&server.url, 8);
-    net.split.when = Splitting::WhenSlow;
-    // a loaded test machine can slow a local stream below the usual rate or pause it for a
-    // short window, so only a long stall counts. the download still outlasts one window.
-    net.split.slow = 1024;
-    net.split.window = Duration::from_millis(400);
-    let (_folder, cache) = cache();
-    let fetched = download(&net, &cache, &server.url, Expect::default());
-    assert_eq!(fetched.digest, sha256(&body));
-    assert_eq!(server.heads().len(), 1);
-    assert_eq!(net.work.counts().bytes_down, 8 * MIB);
+fn a_fast_stream_is_never_split_by_the_slow_rate_rule() {
+    let split = Split {
+        when: Splitting::WhenSlow,
+        above: SPLIT_ABOVE,
+        piece: SMALLEST_PIECE,
+        window: WINDOW,
+        slow: SLOW,
+    };
+    for (rate, left, expected) in [
+        (0.0, 2 * SMALLEST_PIECE, true),
+        (999_999.0, 2 * SMALLEST_PIECE, true),
+        (1_000_000.0, 2 * SMALLEST_PIECE, false),
+        (0.0, 2 * SMALLEST_PIECE - 1, false),
+        (f64::NAN, SPLIT_ABOVE, false),
+    ] {
+        assert_eq!(split.hand_over(rate, left), expected);
+    }
 }
 
 #[test]

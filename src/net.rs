@@ -142,6 +142,13 @@ pub(crate) struct Split {
     pub(crate) slow: u64,
 }
 
+impl Split {
+    #[expect(clippy::cast_precision_loss, reason = "a rate is an estimate")]
+    fn hand_over(self, rate: f64, remaining: u64) -> bool {
+        rate < self.slow as f64 && remaining >= 2 * self.piece
+    }
+}
+
 type Permits = (OwnedSemaphorePermit, OwnedSemaphorePermit);
 
 pub(crate) struct Net {

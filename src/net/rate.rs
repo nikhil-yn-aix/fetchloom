@@ -213,48 +213,53 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    fn poll<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> std::task::Poll<F::Output> {
+        future.poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn concurrent_chunks_share_one_rate() {
         let rate = Rate::new(4 * 1024 * 1024);
         let stop = Stop::default();
         assert!(rate.take(4 * 1024 * 1024, &stop).await);
-        let started = Instant::now();
-        let (first, second) =
-            tokio::join!(rate.take(1024 * 1024, &stop), rate.take(1024 * 1024, &stop),);
-        assert!(first && second);
-        let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_millis(450), "{elapsed:?}");
-        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+        let mut first = std::pin::pin!(rate.take(1024 * 1024, &stop));
+        let mut second = std::pin::pin!(rate.take(1024 * 1024, &stop));
+        assert!(poll(first.as_mut()).is_pending());
+        assert!(poll(second.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(249)).await;
+        assert!(poll(first.as_mut()).is_pending());
+        assert!(poll(second.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(poll(first.as_mut()), std::task::Poll::Ready(true));
+        assert!(poll(second.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(250)).await;
+        assert_eq!(poll(second.as_mut()), std::task::Poll::Ready(true));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_chunk_larger_than_the_burst_is_paced() {
         let rate = Rate::new(4 * 1024 * 1024);
         let stop = Stop::default();
-        let started = Instant::now();
-        assert!(rate.take(5 * 1024 * 1024, &stop).await);
-        let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_millis(220), "{elapsed:?}");
-        assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+        let mut chunk = std::pin::pin!(rate.take(5 * 1024 * 1024, &stop));
+        assert!(poll(chunk.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(249)).await;
+        assert!(poll(chunk.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert_eq!(poll(chunk.as_mut()), std::task::Poll::Ready(true));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn stopping_interrupts_sleepers_and_queued_chunks() {
         let rate = Rate::new(1);
         let stop = Stop::default();
         assert!(rate.take(1024 * 1024, &stop).await);
-        let waiting = async {
-            let (first, second) = tokio::join!(rate.take(100, &stop), rate.take(100, &stop));
-            assert!(!first && !second);
-        };
-        let stopping = async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            stop.ask();
-        };
-        tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(waiting, stopping);
-        })
-        .await
-        .unwrap();
+        let mut waiting =
+            std::pin::pin!(async { tokio::join!(rate.take(100, &stop), rate.take(100, &stop)) });
+        assert!(poll(waiting.as_mut()).is_pending());
+        stop.ask();
+        assert_eq!(
+            poll(waiting.as_mut()),
+            std::task::Poll::Ready((false, false))
+        );
     }
 }

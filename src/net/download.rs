@@ -194,6 +194,18 @@ struct Body {
     keep: bool,
 }
 
+trait Chunks: Send {
+    fn chunk(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Option<Bytes>, reqwest::Error>> + Send;
+}
+
+impl Chunks for reqwest::Response {
+    async fn chunk(&mut self) -> Result<Option<Bytes>, reqwest::Error> {
+        self.chunk().await
+    }
+}
+
 /// how one stream of an answer ended.
 enum Run {
     /// every byte arrived.
@@ -711,7 +723,7 @@ impl Net {
     async fn read_stream(
         &self,
         url: &Url,
-        response: &mut reqwest::Response,
+        response: &mut impl Chunks,
         sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
         reached: u64,
         on: Listener<'_>,
@@ -733,7 +745,7 @@ impl Net {
     async fn read_batches(
         &self,
         url: &Url,
-        response: &mut reqwest::Response,
+        response: &mut impl Chunks,
         sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
         batch: &mut Batch,
         mut reached: u64,
@@ -770,11 +782,8 @@ impl Net {
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
                     #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
                     let rate = moved as f64 / seconds;
-                    #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
-                    let slow = rate < self.split.slow as f64;
                     if let Some(total) = watch
-                        && slow
-                        && total.saturating_sub(reached) >= 2 * self.split.piece
+                        && self.split.hand_over(rate, total.saturating_sub(reached))
                     {
                         break Ok(Some((total, rate)));
                     }

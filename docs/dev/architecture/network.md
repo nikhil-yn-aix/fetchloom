@@ -121,6 +121,8 @@ experiment settings come from the run's `Experiments` value and are off by defau
 
 ## tests
 
+idle and byte-rate tests use fixed virtual-clock steps and in-memory response chunks. they assert pending or complete operations and exact bytes, not elapsed wall time. real HTTP tests separately cover transport, redirects and range validation.
+
 | files | cargo filter |
 |---|---|
 | [download tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/tests.rs), [split tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/split/tests.rs), [pace tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/pace/tests.rs), [credential tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/credential_tests.rs) | `cargo test --locked --lib net::` |

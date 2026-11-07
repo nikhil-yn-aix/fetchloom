@@ -283,7 +283,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use super::*;
     use crate::net::{Notice, Offline, Options, Splitting};
@@ -296,20 +296,20 @@ mod tests {
         let asked = Arc::new(Mutex::new(Vec::new()));
         let seen = asked.clone();
         std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let _entered = runtime.enter();
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
             for response in responses {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                let mut stream = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                            if Instant::now() >= deadline {
-                                return;
-                            }
-                            std::thread::sleep(Duration::from_millis(1));
-                        }
-                        Err(_) => return,
-                    }
+                let Ok(Ok((stream, _))) = runtime.block_on(tokio::time::timeout(
+                    Duration::from_secs(10),
+                    listener.accept(),
+                )) else {
+                    return;
                 };
+                let mut stream = stream.into_std().unwrap();
                 // windows hands out accepted sockets non-blocking like their listener
                 stream.set_nonblocking(false).unwrap();
                 stream

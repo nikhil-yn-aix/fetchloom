@@ -89,6 +89,7 @@ anstyle-query = "1.1"
 winapi-util = "0.1"
 
 [dev-dependencies]
+tokio = { version = "1.54", features = ["test-util"] }
 # fuzz targets over the parsers, which stay private: plain tests under cargo test, and libfuzzer
 # targets under cargo bolero
 bolero = "0.13"
