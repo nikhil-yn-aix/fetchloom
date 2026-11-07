@@ -439,7 +439,7 @@ class VariantTests(unittest.TestCase):
         self.assertEqual(result["case"], "ext4/lan/s3")
         self.assertEqual((result["rounds"], result["wins"]), (2, 2))
         self.assertEqual(result["failed"], {"base": 0, "variant": 1})
-        self.assertAlmostEqual(result["ratios"]["wall"], 2.0 / 3.0)
+        self.assertAlmostEqual(result["ratios"]["wall"], (0.5 * 0.75) ** 0.5)
         self.assertEqual(result["ratios"]["memory"], 1.0)
         self.assertIn("fetchloom+lean", ab.table([result]))
 

@@ -83,14 +83,17 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
 
-to compare a fetchloom setting accepted by the measured build, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` then prints, per case, how many paired rounds the variant won and its median wall, cpu, memory and disk over the plain build's. `FETCHLOOM_SPLIT=1` asks eligible large downloads to split from the first answer.
+to compare a fetchloom setting accepted by the measured build, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` reports each metric from matched successful rounds: the median log ratio `ln(variant) - ln(plain)`, its exponentiated ratio, a paired percentile bootstrap 95% interval, wins and metric-specific pair counts. it includes wall, cpu, memory, disk, server bytes and requests. a metric enters a pair only when both sides have finite values. zero and negative pairs retain their win/tie counts but have no log ratio. `FETCHLOOM_SPLIT=1` asks eligible large downloads to split from the first answer.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles lan \
-  --scenarios s1 --fs ext4 --rounds 7 --variant split:FETCHLOOM_SPLIT=1 \
+  --scenarios s1 --fs ext4 --rounds 20 --variant split:FETCHLOOM_SPLIT=1 \
   --out "$FL_BENCH_ROOT/results/ab/split"
-python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/split"
+python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/split" --threshold .03 \
+  --json "$FL_BENCH_ROOT/results/ab/split/comparison.json"
 ```
+
+the bootstrap uses 20,000 resamples and seed 1729 by default; `--resamples` and `--seed` change those analysis settings. seeds are separate per case, variant and metric, so adding a variant does not change another interval. a win requires the entire interval below `1 - threshold`, at least 10 positive pairs (`--min-pairs`), and no failed, unmatched or excluded metric pairs. `--threshold .03` means an upper bound strictly below 0.97. increase `--rounds` to the noise-floor recommendation; bootstrap draws do not replace measured rounds. a quick run cannot establish a win. intervals are per comparison, without a multiple-comparison correction; confirm selected winners independently.
 
 s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
 
