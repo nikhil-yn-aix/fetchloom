@@ -61,6 +61,7 @@ random names use 16 hexadecimal digits. older loose `.new` files still use the a
 | `name` | server-supplied file name, or null |
 | `validators.etag` | `ETag` string, or null |
 | `validators.last_modified` | `Last-Modified` string, or null |
+| `validators.date` | response `Date` string, or null; required in every record |
 
 partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
 

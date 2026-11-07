@@ -70,6 +70,8 @@ pub(crate) struct Stored {
 pub(crate) struct Validators {
     pub(crate) etag: Option<String>,
     pub(crate) last_modified: Option<String>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    pub(crate) date: Option<String>,
 }
 
 /// what a URL served the last time it was downloaded.
@@ -1008,6 +1010,7 @@ pub(crate) mod tests {
             validators: Validators {
                 etag: Some("\"x\"".to_owned()),
                 last_modified: Some("Tue, 01 Oct 2024 10:00:00 GMT".to_owned()),
+                date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
             },
         };
         cache.save_url_record(&record).unwrap();

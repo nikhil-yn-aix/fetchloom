@@ -39,13 +39,18 @@ pub(super) fn is_html(headers: &HeaderMap) -> bool {
         })
 }
 
-/// the validator `If-Range` can trust: a strong `ETag`, else a modification date when no `ETag`
-/// was recorded. RFC 9110 section 13.1.5 allows no weak tag, and no date beside a tag.
+/// a strong `ETag`, else a modification date whose saved response clock is a minute later.
+/// RFC 9110 section 13.1.5 allows no weak date; the minute allows for clock uncertainty.
 pub(super) fn if_range(validators: &Validators) -> Option<&str> {
-    match &validators.etag {
-        Some(tag) => (!tag.starts_with("W/")).then_some(tag.as_str()),
-        None => validators.last_modified.as_deref(),
+    if let Some(tag) = &validators.etag {
+        return (!tag.starts_with("W/")).then_some(tag.as_str());
     }
+    let modified = validators.last_modified.as_deref()?;
+    let date = httpdate::parse_http_date(validators.date.as_deref()?).ok()?;
+    let age = date
+        .duration_since(httpdate::parse_http_date(modified).ok()?)
+        .ok()?;
+    (age >= std::time::Duration::from_secs(60)).then_some(modified)
 }
 
 /// whether a response states an `ETag` or `Last-Modified` other than the one `recorded`, so its
@@ -71,6 +76,7 @@ pub(super) fn validators(headers: &HeaderMap) -> Validators {
     Validators {
         etag: text(header::ETAG),
         last_modified: text(header::LAST_MODIFIED),
+        date: text(header::DATE),
     }
 }
 
@@ -271,6 +277,7 @@ mod tests {
             let validators = Validators {
                 etag: etag.map(str::to_owned),
                 last_modified: last_modified.map(str::to_owned),
+                date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
             };
             assert_eq!(if_range(&validators), sent, "{validators:?}");
         }
@@ -331,5 +338,35 @@ mod tests {
             assert!(!safe.contains(['/', '\\']), "{safe:?}");
             assert!(!safe.ends_with(['.', ' ']), "{asked:?} became {safe:?}");
         });
+    }
+
+    #[test]
+    fn a_date_needs_a_saved_clock_before_it_can_guard_ranges() {
+        let modified = "Tue, 01 Oct 2024 10:00:00 GMT";
+        for (date, usable) in [
+            (None, false),
+            (Some(modified), false),
+            (Some("Tue, 01 Oct 2024 09:59:59 GMT"), false),
+            (Some("Tue, 01 Oct 2024 10:00:59 GMT"), false),
+            (Some("Tue, 01 Oct 2024 10:01:00 GMT"), true),
+            (Some("not a date"), false),
+        ] {
+            let mut head = headers(&[(header::LAST_MODIFIED, modified)]);
+            if let Some(date) = date {
+                head.insert(header::DATE, date.parse().unwrap());
+            }
+            let saved = validators(&head);
+            assert_eq!(
+                if_range(&saved),
+                usable.then_some(modified),
+                "date={date:?}"
+            );
+            assert_eq!(saved.last_modified.as_deref(), Some(modified));
+        }
+        let head = headers(&[
+            (header::LAST_MODIFIED, "not a date"),
+            (header::DATE, "Tue, 01 Oct 2024 10:01:00 GMT"),
+        ]);
+        assert_eq!(if_range(&validators(&head)), None);
     }
 }

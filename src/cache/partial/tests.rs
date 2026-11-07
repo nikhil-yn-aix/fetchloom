@@ -18,6 +18,7 @@ fn a_saved_partial_resumes_and_hashes_the_whole_file() {
     let validators = Validators {
         etag: Some("\"v1\"".to_owned()),
         last_modified: None,
+        ..Validators::default()
     };
     let partial = owned(&cache, url);
     let mut writer = partial

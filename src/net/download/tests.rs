@@ -319,7 +319,7 @@ fn a_resume_answered_from_another_version_starts_over() {
     ] {
         // the first answer promises 8 bytes and breaks after 4
         let cut = format!(
-            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\n{}: {}\r\n\r\naaaa",
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nDate: Thu, 03 Oct 2024 10:00:00 GMT\r\n{}: {}\r\n\r\naaaa",
             old.0, old.1
         );
         let (url, _) = serve(vec![

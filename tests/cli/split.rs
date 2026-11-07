@@ -155,3 +155,54 @@ fn saved_ranges(sandbox: &Sandbox) -> bool {
                 })
         })
 }
+
+#[test]
+fn a_date_that_does_not_distinguish_versions_is_not_resumed() -> Result {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let url = format!("http://{}/payload.bin", listener.local_addr()?);
+    let serving = std::thread::spawn(move || -> std::io::Result<Vec<String>> {
+        let mut asked = Vec::new();
+        let date = "Wed, 21 Oct 2015 07:28:00 GMT";
+        for attempt in 0..2 {
+            let (mut stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+            let mut head = Vec::new();
+            let mut byte = [0; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte)? == 1 {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).to_ascii_lowercase();
+            let response = if attempt == 0 {
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\naaaa"
+                )
+            } else if head.contains("range:") {
+                format!(
+                    "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: 4\r\nContent-Range: bytes 4-7/8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\nBBBB"
+                )
+            } else {
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nDate: {date}\r\nLast-Modified: {date}\r\n\r\nBBBBBBBB"
+                )
+            };
+            asked.push(head);
+            stream.write_all(response.as_bytes())?;
+        }
+        Ok(asked)
+    });
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["--json", "get", &url, "--no-extract", "-o", "out"])?;
+    let asked = serving.join().unwrap()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("out/payload.bin"))?,
+        b"BBBBBBBB"
+    );
+    assert!(!asked[1].contains("range:"), "{}", asked[1]);
+    assert_eq!(json(&output)?["work"]["resumes"], 0);
+    Ok(())
+}

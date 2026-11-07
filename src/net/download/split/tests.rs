@@ -583,6 +583,7 @@ fn a_resume_fetches_only_the_ranges_not_kept() {
         let validators = Validators {
             etag: Some("\"v1\"".to_owned()),
             last_modified: None,
+            ..Validators::default()
         };
         let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
             panic!("nothing else holds the download");
@@ -623,6 +624,7 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
         let validators = Validators {
             etag: Some("\"v1\"".to_owned()),
             last_modified: None,
+            ..Validators::default()
         };
         let crate::cache::Claim::Owned(partial) = cache.claim(server.url.as_str()).unwrap() else {
             panic!("nothing else holds the download");
@@ -729,6 +731,7 @@ fn a_full_reply_replaces_saved_ranges_when_prefix_empty() {
         let validators = Validators {
             etag: Some("\"v1\"".to_owned()),
             last_modified: None,
+            ..Validators::default()
         };
         let mut writer = partial
             .writer(0, Some(4 * MIB), validators, false, true)
