@@ -477,20 +477,27 @@ impl Net {
         loop {
             match cache.claim(url.as_str()) {
                 Ok(Claim::Owned(partial)) => return Ok((partial, waited)),
-                // this run may hold the link itself, finished and waiting for its batch flush
-                Ok(Claim::Busy)
-                    if cache
-                        .publish_download_of(url.as_str())
-                        .map_err(|err| local(&err))? =>
-                {
-                    waited = true;
-                    continue;
+                Ok(Claim::Busy) => {
+                    let cache = cache.clone();
+                    let waiting_for = url.as_str().to_owned();
+                    let published = tokio::task::spawn_blocking(move || {
+                        if cache.publish_download_of(&waiting_for)? {
+                            return Ok(true);
+                        }
+                        cache.publish_waiting_downloads()
+                    })
+                    .await
+                    .map_err(|err| local(&io::Error::other(err)))?
+                    .map_err(|err| local(&err))?;
+                    if published {
+                        waited = true;
+                        continue;
+                    }
+                    if !waited {
+                        on(Event::Waiting)?;
+                        waited = true;
+                    }
                 }
-                Ok(Claim::Busy) if !waited => {
-                    on(Event::Waiting)?;
-                    waited = true;
-                }
-                Ok(Claim::Busy) => {}
                 Err(err) => return Err(local(&err)),
             }
             tokio::select! {

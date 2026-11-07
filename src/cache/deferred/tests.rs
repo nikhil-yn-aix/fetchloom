@@ -213,3 +213,20 @@ fn an_early_publication_keeps_a_failed_flush_sticky() {
         io::ErrorKind::StorageFull
     );
 }
+
+#[test]
+fn flushing_waiting_claims_keeps_the_batch_open() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    assert!(!cache.publish_waiting_downloads().unwrap());
+    let first = finished(&cache, "https://example.org/first", b"first");
+    assert!(cache.publish_waiting_downloads().unwrap());
+    assert_eq!(
+        fs::read(cache.object_path(&first.digest)).unwrap(),
+        b"first"
+    );
+    let next = finished(&cache, "https://example.org/next", b"next");
+    assert!(!cache.object_path(&next.digest).exists());
+    cache.publish_downloads().unwrap();
+    assert_eq!(fs::read(cache.object_path(&next.digest)).unwrap(), b"next");
+}

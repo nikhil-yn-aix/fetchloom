@@ -71,7 +71,7 @@ a split download adds `ranges`, the pieces finished past the prefix, each with `
 
 progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 
-the `.lock` file coordinates writers; its contents are unused. gc removes an abandoned download's `.part` and `.json`, and the `.lock` of any download nobody holds, finished or abandoned, without counting it among the freed leftovers. a run that opened a `.lock` just before gc removed it notices, once it holds the lock, that the name now points elsewhere or nowhere, and opens the name again, so two runs never own one download. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
+the `.lock` file coordinates writers; its contents are unused. a run waiting for another writer first flushes and publishes its own finished downloads, so runs sharing a cold cache do not wait for each other's unpublished files. gc removes an abandoned download's `.part` and `.json`, and the `.lock` of any download nobody holds, finished or abandoned, without counting it among the freed leftovers. a run that opened a `.lock` just before gc removed it notices, once it holds the lock, that the name now points elsewhere or nowhere, and opens the name again, so two runs never own one download. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 
 ## other indexes
 

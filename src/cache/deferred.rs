@@ -196,6 +196,22 @@ impl Cache {
         std::mem::take(&mut *publishing).failed.map_or(Ok(()), Err)
     }
 
+    /// releases this run's completed claims before it waits on another run's download.
+    /// the batch stays open so later downloads still share their flushes.
+    pub(crate) fn publish_waiting_downloads(&self) -> io::Result<bool> {
+        let mut pending = lock(&self.deferred.pending);
+        let Some(batch) = pending.as_mut() else {
+            return Ok(false);
+        };
+        let group = batch.take();
+        let any = !group.finished.is_empty();
+        let mut publishing = lock(&self.deferred.publishing);
+        drop(pending);
+        self.publish_group(&mut publishing, group);
+        publishing.result()?;
+        Ok(any)
+    }
+
     /// flushes the cache's filesystem once, then puts every download of `group` in place and
     /// lets go of its claim. after a failed flush, no download takes its name.
     fn publish_group(&self, publishing: &mut Publishing, group: Group) {
