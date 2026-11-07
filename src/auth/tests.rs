@@ -430,3 +430,45 @@ fn names_people_type_find_their_account() {
         "fetchloom auth login earthdata"
     );
 }
+
+/// a key with a line break inside cannot go in a header, so it is never sent, and `auth` says
+/// so instead of the request going out without it in silence.
+#[test]
+fn a_key_a_header_cannot_carry_is_not_sendable() {
+    let home = tempfile::tempdir().unwrap();
+    let var = machine(home.path(), &[("HF_TOKEN", "hf_one\nhf_two")]);
+    let found = Account::HuggingFace.find(&var).unwrap();
+    assert!(!Account::HuggingFace.sendable(&found));
+    let var = machine(home.path(), &[("HF_TOKEN", "hf_one")]);
+    let found = Account::HuggingFace.find(&var).unwrap();
+    assert!(Account::HuggingFace.sendable(&found));
+    let login = Found {
+        origin: Origin::Keyring,
+        secret: "pw".to_owned(),
+        login: Some("ada\r\nx-other: 1".to_owned()),
+    };
+    // a login travels as base64, which any header carries
+    assert!(Account::Login("data.example.edu".into()).sendable(&login));
+}
+
+#[test]
+fn a_netrc_others_can_open_is_told_apart() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join(".netrc");
+    assert!(!netrc::too_open(&path), "a missing file is no risk");
+    netrc::save(&path, "a.example", "ada", "pw").unwrap();
+    assert!(!netrc::too_open(&path), "saved for its owner only");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(netrc::too_open(&path));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o620)).unwrap();
+        assert!(
+            netrc::too_open(&path),
+            "python's netrc refuses any access but the owner's"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!netrc::too_open(&path));
+    }
+}

@@ -36,6 +36,8 @@ const IDLE: Duration = Duration::from_secs(30);
 const REDIRECTS: usize = 10;
 /// requests running at once to one host, so no server sees fetchloom as a flood.
 const PER_HOST: usize = 4;
+/// whether the logs already said a key cannot be sent, which they say once a run.
+static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// a token from where its source keeps it, sent only to its own host and port and only over
 /// https.
@@ -260,7 +262,17 @@ impl Net {
             .filter_map(|credential| {
                 let (host, port) = key_origin(&credential.host)?;
                 let name = HeaderName::from_static(credential.header);
-                let mut value = HeaderValue::from_str(&credential.value).ok()?;
+                let Ok(mut value) = HeaderValue::from_str(&credential.value) else {
+                    // the host and header only; the value is the secret
+                    if !UNSENDABLE_TOLD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(
+                            host,
+                            header = credential.header,
+                            "a key was found but cannot be sent, since no header holds its value"
+                        );
+                    }
+                    return None;
+                };
                 value.set_sensitive(true);
                 Some(Key {
                     host,

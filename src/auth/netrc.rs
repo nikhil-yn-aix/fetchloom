@@ -4,6 +4,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::source::Var;
 
@@ -34,13 +35,36 @@ pub(crate) fn path(var: Var<'_>) -> Option<PathBuf> {
     Some(dotted)
 }
 
+/// whether the logs already said other users can open the `.netrc`, which they say once a run.
+static OPEN_TOLD: AtomicBool = AtomicBool::new(false);
+
 /// every `machine` entry with a login and a password. `default` is skipped on purpose: a login
 /// for every host would go to hosts nobody named.
 pub(crate) fn read(var: Var<'_>) -> Vec<Entry> {
-    path(var)
-        .and_then(|path| fs::read_to_string(path).ok())
+    let Some(path) = path(var) else {
+        return Vec::new();
+    };
+    if too_open(&path) && !OPEN_TOLD.swap(true, Ordering::Relaxed) {
+        tracing::warn!(path = %path.display(), "other users can open this .netrc");
+    }
+    fs::read_to_string(path)
         .map(|text| parse(&text))
         .unwrap_or_default()
+}
+
+/// whether users other than its owner may open the file, which python's netrc module refuses.
+/// only unix modes say so; elsewhere the file takes its folder's permissions.
+pub(crate) fn too_open(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o077 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
 }
 
 pub(crate) fn parse(text: &str) -> Vec<Entry> {

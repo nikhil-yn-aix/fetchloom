@@ -316,6 +316,14 @@ impl Account {
         })
     }
 
+    /// whether a request can carry this key. one with a line break or another character no
+    /// header holds is left out of every request.
+    pub(crate) fn sendable(&self, found: &Found) -> bool {
+        self.credential(found).is_none_or(|credential| {
+            reqwest::header::HeaderValue::from_str(&credential.value).is_ok()
+        })
+    }
+
     /// every host this account's key goes to. osf's download links sit on osf.io and send a
     /// person on to files.osf.io, both osf's own, which need the key for a private file.
     pub(crate) fn credentials(&self, found: &Found) -> Vec<Credential> {

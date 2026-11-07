@@ -61,9 +61,21 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     let output = &context.output;
     let mut accounts = Vec::new();
     let mut missing = Vec::new();
+    if let Some(path) = auth::netrc::path(&auth::env).filter(|path| auth::netrc::too_open(path)) {
+        output.warn(&format!(
+            "other users of this machine can open {}, which holds logins; limit it to yourself with `chmod 600 {}`",
+            path.display(),
+            path.display()
+        ));
+    }
     for account in auth::listed(&auth::env) {
         let found = account.find(&auth::env);
         let (user, valid) = match &found {
+            // asking with a key that is never sent would only say the source refused it
+            Some(found) if !account.sendable(found) => {
+                warn_unsendable(output, &account, found);
+                (None, None)
+            }
             Some(found) if !context.offline.enabled() => check(context, &account, found).await,
             _ => (None, None),
         };
@@ -543,7 +555,11 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
 pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, Error> {
     let output = &context.output;
     let account = &need.account;
-    let has_key = account.find(&auth::env).is_some();
+    let found = account.find(&auth::env);
+    if let Some(found) = found.as_ref().filter(|found| !account.sendable(found)) {
+        warn_unsendable(output, account, found);
+    }
+    let has_key = found.is_some();
     if let Some(terms) = need.terms.as_ref().filter(|_| has_key) {
         output.say(&format!("{:>11} {}", "Access", title(account)));
         output.say(&format!(
@@ -577,6 +593,19 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
     };
     sign_in(context, account, &login).await?;
     Ok(true)
+}
+
+/// says a key was found but no request can carry it, naming where it is but never the key.
+fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Found) {
+    let fix = match &found.origin {
+        Origin::Variable(name) => format!("set {name} to the key alone"),
+        _ => format!("sign in again with `{}`", account.command()),
+    };
+    output.warn(&format!(
+        "the {} key in {} is never sent, since it holds a character no request header can carry, such as a line break; {fix}",
+        title(account),
+        found.origin,
+    ));
 }
 
 fn title(account: &Account) -> String {

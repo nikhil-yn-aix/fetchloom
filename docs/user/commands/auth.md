@@ -83,6 +83,8 @@ fetchloom auth
 
 a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
 
+a key that holds a character no request header can carry, such as a line break, is never sent. `auth` and the offer to sign in after a refusal warn about it, naming where the key is but not the key. on linux and macos, `auth` also warns when other users can open the `.netrc` fetchloom reads, the file python's netrc module refuses to read then.
+
 ## signing out
 
 `fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too; where nobody can answer, as in a script, it removes the file only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable.
