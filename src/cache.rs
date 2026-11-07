@@ -670,7 +670,7 @@ pub(crate) mod tests {
 
     /// writes `bytes` over the object at `path`, as an edit through a hardlink someone made
     /// writable does.
-    fn rewrite(path: &Path, bytes: &[u8]) {
+    pub(super) fn rewrite(path: &Path, bytes: &[u8]) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         #[expect(
             clippy::permissions_set_readonly_false,

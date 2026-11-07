@@ -1,5 +1,5 @@
 use super::super::Claim;
-use super::super::tests::cache;
+use super::super::tests::{cache, rewrite, store};
 use super::*;
 use crate::cache::Validators;
 #[cfg(target_os = "linux")]
@@ -67,6 +67,26 @@ fn a_failure_in_an_early_group_is_reported_when_the_batch_ends() {
         finished(&cache, &url, url.as_bytes());
     }
     assert!(cache.publish_downloads().is_err());
+}
+
+#[test]
+fn a_download_in_a_batch_that_repairs_a_changed_object_is_new() {
+    let (_dir, cache) = cache();
+    let right = store(&cache, b"right");
+    let intact = store(&cache, b"intact");
+    rewrite(&cache.object_path(&right.digest), b"wrong");
+    deferring(&cache);
+    assert!(finished(&cache, "https://example.org/repair", b"right").new);
+    assert!(!finished(&cache, "https://example.org/intact", b"intact").new);
+    cache.publish_downloads().unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&right.digest)).unwrap(),
+        b"right"
+    );
+    assert_eq!(
+        fs::read(cache.object_path(&intact.digest)).unwrap(),
+        b"intact"
+    );
 }
 
 #[test]

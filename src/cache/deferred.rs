@@ -158,7 +158,7 @@ impl Cache {
             digest: finished.digest,
             size: finished.size,
             md5: finished.md5,
-            new: !waiting && !self.object_path(&finished.digest).exists(),
+            new: !waiting && !self.holds_intact(&finished.digest, finished.size),
         };
         batch.finished.push(finished);
         if batch.finished.len() >= GROUP {
@@ -243,6 +243,17 @@ impl Cache {
         File::open(&finished.bytes)?.sync_all()?;
         finished.publish(self)?;
         Ok(true)
+    }
+
+    /// whether publishing these bytes would keep the object already under their hash, as
+    /// `link_object` judges it, rather than put them in place as a new one.
+    fn holds_intact(&self, digest: &Sha256, size: u64) -> bool {
+        let path = self.object_path(digest);
+        let found = fs::symlink_metadata(&path);
+        matches!(
+            super::existing(&found, size, || super::hash_object(&path), digest),
+            super::Existing::Keep
+        )
     }
 }
 
