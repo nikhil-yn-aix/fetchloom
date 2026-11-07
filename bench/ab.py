@@ -99,12 +99,22 @@ def compare(rows, *, threshold=THRESHOLD, resamples=RESAMPLES, seed=1729, min_pa
     if not isinstance(min_pairs, int) or isinstance(min_pairs, bool) or min_pairs < 2:
         raise ValueError("min-pairs must be an integer of at least 2")
     cases = defaultdict(lambda: defaultdict(dict))
+    conditions = {}
     for row in rows:
         tool = row.get("tool", "")
         if row.get("warmup") or not (tool == BASE or tool.startswith(BASE + "+")):
             continue
         key = (row["filesystem"], row["profile"], row["scenario"])
-        cases[key][tool][row["round"]] = row
+        round_number = row["round"]
+        if not isinstance(round_number, int) or isinstance(round_number, bool) or round_number < 1:
+            raise ValueError(f"invalid measured round for {key}/{tool}: {round_number!r}")
+        condition = (row.get("quick"), row.get("count"), row.get("file_size"), row.get("cpu_affinity"))
+        if key in conditions and conditions[key] != condition:
+            raise ValueError(f"mixed benchmark conditions for {key}")
+        conditions[key] = condition
+        if round_number in cases[key][tool]:
+            raise ValueError(f"duplicate measured round for {key}/{tool}/{round_number}")
+        cases[key][tool][round_number] = row
     results = []
     for key in sorted(cases):
         tools = cases[key]

@@ -107,5 +107,28 @@ class PairedTests(unittest.TestCase):
             self.assertEqual(data["results"][0]["metrics"]["wall"]["n_log_pairs"], 1)
 
 
+class InputTests(unittest.TestCase):
+    def test_duplicate_round_cannot_replace_a_failure(self):
+        rows = [dict(row("fetchloom", 1), status="failed"), row("fetchloom", 1), row("fetchloom+aa", 1)]
+        for supplied in (rows, list(reversed(rows))):
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                ab.compare(supplied)
+
+    def test_paired_rows_must_have_the_same_workload(self):
+        for changes in (dict(quick=True), dict(count=2), dict(file_size=16), dict(cpu_affinity=[1])):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "conditions"):
+                ab.compare([row("fetchloom", 1), dict(row("fetchloom+aa", 1), **changes)])
+
+    def test_round_identity_is_a_positive_integer(self):
+        for number in (True, 0, -1, "1"):
+            with self.subTest(number=number), self.assertRaisesRegex(ValueError, "round"):
+                ab.compare([row("fetchloom", number), row("fetchloom+aa", number)])
+
+    def test_unmatched_rounds_are_named(self):
+        [result] = ab.compare([row("fetchloom", 1), row("fetchloom", 2), row("fetchloom+aa", 1)])
+        self.assertEqual(result["unmatched"], dict(base=[2], variant=[]))
+        self.assertEqual(result["metrics"]["wall"]["decision"], "incomplete")
+
+
 if __name__ == "__main__":
     unittest.main()
