@@ -176,7 +176,18 @@ impl Sandbox {
                 None => script.env_remove(name),
             };
         }
+        script
+            .env("SHELL", "/bin/sh")
+            .env_remove("ENV")
+            .env_remove("BASH_ENV");
         match script.output() {
+            Ok(output) if !output.status.success() => Err(format!(
+                "terminal command exited with {}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+            .into()),
             Ok(output) => Ok(Some(
                 String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
             )),
@@ -889,6 +900,27 @@ fn commands_define_their_output_environment() -> Result {
             .find(|(key, _)| *key == name)
             .and_then(|(_, value)| value);
         assert_eq!(actual, Some(std::ffi::OsStr::new(value)), "{name}");
+    }
+    Ok(())
+}
+
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_commands_report_failures() -> Result {
+    let sandbox = Sandbox::new()?;
+    match sandbox.on_a_terminal(&["--not-a-fetchloom-option"]) {
+        Ok(None) | Err(_) => Ok(()),
+        Ok(Some(screen)) => Err(format!("a failed terminal command returned success: {screen}").into()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn terminal_commands_use_a_known_shell() -> Result {
+    let sandbox = Sandbox::new()?;
+    if let Some(screen) = sandbox.on_a_terminal(&["--version"])? {
+        assert_eq!(screen.trim(), concat!("fetchloom ", env!("CARGO_PKG_VERSION")));
     }
     Ok(())
 }
