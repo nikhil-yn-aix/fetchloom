@@ -3,13 +3,13 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::super::Context;
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::place::{Method, Placer, Unlinked};
+use crate::place::{Method, Order, Placer, Unlinked};
 use crate::plan::Target;
 use crate::units;
 use crate::work::Work;
@@ -77,14 +77,41 @@ pub(super) fn put_all(
     fs::create_dir_all(folder).map_err(|err| local(folder, &err))?;
     let mut placer = Placer::in_named_folder(folder).with_threads(context.threads);
     let mut outcomes = Vec::with_capacity(targets.len());
-    for target in targets {
-        outcomes.push(put(
-            &context.work,
-            cache,
-            &mut placer,
-            target,
-            &folder.join(&target.path),
-        )?);
+    let mut orders = Vec::new();
+    for (index, target) in targets.iter().enumerate() {
+        let destination = folder.join(&target.path);
+        match clear(cache, &mut placer, target, &destination)? {
+            Cleared::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
+            Cleared::Free { object, replaced } => {
+                // told once placed below
+                outcomes.push(Outcome::AlreadyThere);
+                orders.push((index, object, destination, replaced));
+            }
+        }
+    }
+    // placed as sync places, so a copy flushed with others takes its name only after the flush
+    let results = placer.place_all(
+        orders.len(),
+        |order| Order {
+            object: orders[order].1.clone(),
+            destination: orders[order].2.clone(),
+            writable: false,
+        },
+        |_| (),
+    );
+    for ((index, _, destination, replaced), result) in orders.iter().zip(results) {
+        let (method, ()) = result.map_err(|err| local(destination, &err))?;
+        let counter = match method {
+            Method::Reflink => &context.work.reflinks,
+            Method::Hardlink => &context.work.hardlinks,
+            Method::Copy => &context.work.copies,
+        };
+        Work::add(counter, 1);
+        outcomes[*index] = if *replaced {
+            Outcome::Replaced(method)
+        } else {
+            Outcome::Placed(method)
+        };
     }
     placer
         .flush_copies()
@@ -93,18 +120,29 @@ pub(super) fn put_all(
     Ok(outcomes)
 }
 
-fn put(
-    work: &Work,
+/// whether a target's place is free for it, once what holds it is gone.
+enum Cleared {
+    AlreadyThere,
+    /// free for `object`, the cached bytes, after removing an earlier version when `replaced`.
+    Free {
+        object: PathBuf,
+        replaced: bool,
+    },
+}
+
+/// keeps a file that already holds the target's bytes, and removes an earlier version the cache
+/// still holds, so the target can be placed.
+fn clear(
     cache: &Cache,
     placer: &mut Placer,
     target: &Target,
     destination: &Path,
-) -> Result<Outcome, Error> {
+) -> Result<Cleared, Error> {
     let object = cache.find(&target.sha256, Some(target.size));
     let mut replaced = false;
     if fs::symlink_metadata(destination).is_ok() {
         if holds(destination, object.as_deref(), target)? {
-            return Ok(Outcome::AlreadyThere);
+            return Ok(Cleared::AlreadyThere);
         }
         if !replaceable(destination, cache)? {
             return Err(Error::new(
@@ -129,20 +167,7 @@ fn put(
         )
         .help("run the same command again to download it")
     })?;
-    let method = placer
-        .place(&object, destination, false)
-        .map_err(|err| local(destination, &err))?;
-    let counter = match method {
-        Method::Reflink => &work.reflinks,
-        Method::Hardlink => &work.hardlinks,
-        Method::Copy => &work.copies,
-    };
-    Work::add(counter, 1);
-    Ok(if replaced {
-        Outcome::Replaced(method)
-    } else {
-        Outcome::Placed(method)
-    })
+    Ok(Cleared::Free { object, replaced })
 }
 
 /// whether the file at `path` already holds the target's bytes. a hardlink is the cached
@@ -316,6 +341,83 @@ mod tests {
             check(folder.path(), Some(&paths)).unwrap_err().kind,
             Kind::LocalNotEmpty
         );
+    }
+
+    #[test]
+    fn every_file_is_placed_whole_and_told_in_order() {
+        use crate::cache::tests::store;
+        use crate::output::{Level, Output, Style};
+        use crate::project::lock::LockedFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let folder = dir.path().join("got");
+        let contents: [&[u8]; 5] = [b"one", b"two", b"old", b"new", b"kept"];
+        for bytes in contents {
+            store(&cache, bytes);
+        }
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("replaced.csv"), b"old").unwrap();
+        fs::write(folder.join("there.csv"), b"kept").unwrap();
+        let wanted = [
+            ("one.csv", &b"one"[..]),
+            ("deep/two.csv", b"two"),
+            ("replaced.csv", b"new"),
+            ("there.csv", b"kept"),
+        ];
+        let locked: Vec<LockedFile> = wanted
+            .iter()
+            .map(|(path, bytes)| LockedFile {
+                path: (*path).to_owned(),
+                size: bytes.len() as u64,
+                sha256: crate::digest::sha256(bytes),
+                md5: None,
+                url: format!("https://example.org/{path}"),
+                unpacks_to: None,
+            })
+            .collect();
+        let targets: Vec<Target> = locked
+            .iter()
+            .map(|file| Target {
+                dataset: "got",
+                path: file.path.clone(),
+                sha256: file.sha256,
+                size: file.size,
+                copy: false,
+                locked: file,
+            })
+            .collect();
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let context = Context::new(Output::new(style, Level::Quiet, false, false));
+
+        let outcomes = put_all(&context, &cache, &folder, &targets).unwrap();
+
+        assert!(matches!(
+            outcomes.as_slice(),
+            [
+                Outcome::Placed(_),
+                Outcome::Placed(_),
+                Outcome::Replaced(_),
+                Outcome::AlreadyThere
+            ]
+        ));
+        for (path, bytes) in wanted {
+            assert_eq!(fs::read(within(&folder, path)).unwrap(), bytes, "{path}");
+        }
+        let counts = context.work.counts();
+        assert_eq!(counts.reflinks + counts.hardlinks + counts.copies, 3);
+        for inside in [folder.clone(), folder.join("deep")] {
+            for entry in fs::read_dir(&inside).unwrap() {
+                let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+                assert!(!crate::place::is_copy_temporary(&name), "{name}");
+            }
+        }
     }
 
     #[test]

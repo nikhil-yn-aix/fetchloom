@@ -182,6 +182,7 @@ impl Placer {
 
     /// puts `object` at `destination`, which must not exist yet. creates missing parent folders.
     /// `writable` asks for a writable file, for tools that write into their inputs.
+    #[cfg(test)]
     pub(crate) fn place(
         &mut self,
         object: &Path,
