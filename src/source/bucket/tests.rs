@@ -25,7 +25,7 @@ fn resolve(text: &str, recorded: &Recorded) -> Result<Listing, Error> {
     block_on(reference(text).resolve(recorded))
 }
 
-/// a one-page S3 listing of `(key, etag)` objects, each with a size of 1.
+/// a one-page S3 listing of `(key, etag)` objects: one byte, or zero for folder markers.
 fn page(escaped: bool, objects: &[(&str, &str)]) -> Vec<u8> {
     let mut xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>b</Name>",
@@ -35,9 +35,10 @@ fn page(escaped: bool, objects: &[(&str, &str)]) -> Vec<u8> {
     }
     xml.push_str("<IsTruncated>false</IsTruncated>");
     for (key, etag) in objects {
+        let size = u8::from(!key.ends_with('/') && !key.ends_with("%2F"));
         let _ = write!(
             xml,
-            "<Contents><Key>{key}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>{etag}</ETag><Size>1</Size></Contents>"
+            "<Contents><Key>{key}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>{etag}</ETag><Size>{size}</Size></Contents>"
         );
     }
     xml.push_str("</ListBucketResult>");
@@ -438,6 +439,62 @@ fn a_prefix_without_a_slash_names_one_object_or_one_folder() {
         .map(|file| file.path.as_str())
         .collect();
     assert_eq!(paths, ["a.csv", "b/c.csv"]);
+}
+
+#[test]
+fn nonempty_folder_objects_are_not_ignored_by_s3() {
+    let url = listing_url("https://bucket.s3.amazonaws.com/", "d/");
+    for key in ["d/", "d/payload/"] {
+        let encoded = key.replace('/', "%2F");
+        let body = String::from_utf8(page(
+            true,
+            &[("d%2Fkeep.csv", "\"x\""), (&encoded, "\"x\"")],
+        ))
+        .unwrap()
+        .replace("<Size>0</Size>", "<Size>7</Size>");
+        let recorded = Recorded::default().on(&url, 200, body);
+        let error = resolve("s3://bucket/d/", &recorded).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.message.contains("nonempty object"));
+        assert!(error.message.contains(key));
+        assert_eq!(recorded.asked(), [url.clone()]);
+    }
+}
+
+#[test]
+fn nonempty_folder_objects_are_not_ignored_by_gcs() {
+    let url = STATES
+        .replace("cloud-samples-data", "bucket")
+        .replace("bigquery%2Fus-states%2F", "d%2F");
+    for key in ["d/", "d/payload/"] {
+        let body = serde_json::json!({"items": [
+            {"name": "d/keep.csv", "size": "1", "generation": "1"},
+            {"name": key, "size": "7", "generation": "1"},
+        ]});
+        let recorded = Recorded::default().on(&url, 200, body.to_string());
+        let error = resolve("gs://bucket/d/", &recorded).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.message.contains("nonempty object"));
+        assert!(error.message.contains(key));
+        assert_eq!(recorded.asked(), [url.clone()]);
+    }
+}
+
+#[test]
+fn nonempty_folder_objects_outside_the_selected_prefix_are_ignored() {
+    let url = listing_url("https://bucket.s3.amazonaws.com/", "d");
+    for (key, marker, path) in [
+        ("d%2Fkeep.csv", "different%2Fpayload%2F", "keep.csv"),
+        ("d", "d%2Fpayload%2F", "d"),
+    ] {
+        let body = String::from_utf8(page(true, &[(key, "\"x\""), (marker, "\"x\"")]))
+            .unwrap()
+            .replace("<Size>0</Size>", "<Size>7</Size>");
+        let recorded = Recorded::default().on(&url, 200, body);
+        let listing = resolve("s3://bucket/d", &recorded).unwrap();
+        assert_eq!(listing.files.len(), 1);
+        assert_eq!(listing.files[0].path, path);
+    }
 }
 
 #[test]

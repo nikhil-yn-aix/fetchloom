@@ -320,6 +320,52 @@ fn a_gcs_prefix_pins_each_object_generation() -> Result {
 }
 
 #[test]
+fn nonempty_folder_objects_are_not_ignored() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/marker-bucket.s3.amazonaws.com/";
+    let listing = s3_listing(base, "data/", None);
+    let routes = Routes::start(vec![
+        (
+            listing.clone(),
+            s3_page(
+                &[
+                    ("data/keep.csv", PARTICIPANTS),
+                    ("data/payload/", b"payload"),
+                ],
+                None,
+            ),
+        ),
+        (
+            format!("{base}data/keep.csv"),
+            file(PARTICIPANTS, &format!("\"{}\"", md5(PARTICIPANTS))),
+        ),
+    ])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "s3://marker-bucket/data/"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "source.invalid",
+        "{document}"
+    );
+    assert!(
+        document["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("data/payload/")
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    assert!(!sandbox.work().join("data.lock").exists());
+    assert!(!sandbox.work().join("data").exists());
+    assert_eq!(routes.targets(), [listing]);
+    Ok(())
+}
+
+#[test]
 fn a_private_bucket_is_refused_with_auth_required() -> Result {
     let sandbox = Sandbox::new()?;
     let denied = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";

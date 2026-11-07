@@ -152,7 +152,7 @@ impl Prefix {
             Store::S3 => s3::list(self, api).await?,
             Store::Gcs => gcs::list(self, api).await?,
         };
-        let files = self.files(objects);
+        let files = self.files(objects)?;
         if files.is_empty() {
             return Err(Error::new(
                 Kind::ReferenceUnresolved,
@@ -171,9 +171,9 @@ impl Prefix {
         })
     }
 
-    /// the dataset's files. an object whose key ends in `/` only marks a folder, and keys
-    /// that merely start with a prefix not ending in `/` belong to other folders.
-    fn files(&self, mut objects: Vec<Object>) -> Vec<Remote> {
+    /// the dataset's files. zero-byte keys ending in `/` mark folders; nonempty ones cannot
+    /// name files. keys that merely start with a bare prefix belong to other folders.
+    fn files(&self, mut objects: Vec<Object>) -> Result<Vec<Remote>, Error> {
         let remote = |object: Object, path: &str| Remote {
             path: path.to_owned(),
             size: Some(object.size),
@@ -187,7 +187,7 @@ impl Prefix {
         } else {
             if let Some(at) = objects.iter().position(|object| object.key == self.key) {
                 let name = self.key.rsplit('/').next().unwrap_or(&self.key);
-                return vec![remote(objects.swap_remove(at), name)];
+                return Ok(vec![remote(objects.swap_remove(at), name)]);
             }
             format!("{}/", self.key)
         };
@@ -195,7 +195,19 @@ impl Prefix {
             .into_iter()
             .filter_map(|object| {
                 let path = object.key.strip_prefix(&folder)?.to_owned();
-                (!path.is_empty() && !path.ends_with('/')).then(|| remote(object, &path))
+                if object.key.ends_with('/') {
+                    return (object.size != 0).then(|| {
+                        Err(Error::new(
+                            Kind::SourceInvalid,
+                            format!(
+                                "{self} holds the nonempty object \"{}\", whose trailing / cannot name a file",
+                                object.key.escape_debug()
+                            ),
+                        )
+                        .help("ask the bucket's owner to rename the object without a final /, or name a prefix that leaves it out"))
+                    });
+                }
+                (!path.is_empty()).then(|| Ok(remote(object, &path)))
             })
             .collect()
     }

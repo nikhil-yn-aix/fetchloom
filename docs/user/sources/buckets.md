@@ -29,7 +29,7 @@ S3 buckets are listed with ListObjectsV2, up to 1,000 keys a page, following con
 
 cloud storage buckets are listed through the JSON API at `storage.googleapis.com/storage/v1/b/<bucket>/o`, following page tokens.
 
-keys ending in `/` only mark folders and are skipped. the 100,000-object listing limit applies before `--select` and `--exclude`, so name a narrower prefix inside a large bucket. a prefix that holds no objects fails with `reference.unresolved`.
+zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty object ending in `/` cannot name a file on disk, so the listing fails with `source.invalid` before selection or downloads. ask the owner to rename it, or choose a prefix that leaves it out. the 100,000-object listing limit applies before `--select` and `--exclude`, so name a narrower prefix inside a large bucket. a prefix that holds no objects fails with `reference.unresolved`.
 
 ## pins
 
