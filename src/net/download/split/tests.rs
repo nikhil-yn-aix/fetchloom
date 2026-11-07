@@ -639,6 +639,97 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
     }
 }
 
+/// a file far below the usual threshold splits once a slow stream proves it slow, with the sizes
+/// `FETCHLOOM_EXP_SPLIT_SMALL` sets, and keeps every check a large file gets.
+#[test]
+fn a_slow_small_file_splits_once_the_threshold_is_lowered() {
+    let body = body(2 * MIB);
+    let slow = Serving {
+        rate: 768 * KIB,
+        ..SERVING
+    };
+    let small = crate::net::split_sizes(Some(MIB));
+    let usual = crate::net::split_sizes(None);
+    for (serving, sizes, why) in [
+        (slow, small, "lowered"),
+        (slow, usual, "usual"),
+        (
+            Serving {
+                whole_for_parts: true,
+                ..slow
+            },
+            small,
+            "a whole answer to a range",
+        ),
+    ] {
+        let server = serve(body.clone(), serving);
+        let mut net = net(&server.url, 8);
+        net.split.when = Splitting::WhenSlow;
+        (net.split.above, net.split.piece) = sizes;
+        net.split.slow = SLOW;
+        net.split.window = Duration::from_millis(200);
+        let (_folder, cache) = cache();
+        let fetched = download(&net, &cache, &server.url, Expect::default());
+        assert_eq!(fetched.digest, sha256(&body), "{why}");
+        let heads = server.heads();
+        let parts = parts(&server);
+        match why {
+            "lowered" => {
+                assert!(server.most() >= 2, "{why}: {} at once", server.most());
+                assert_eq!(heads.len() - parts.len(), 1, "{why}: started over");
+                for head in &parts {
+                    assert!(head.contains("if-range: \"v1\""), "{why}: {head}");
+                }
+            }
+            "usual" => assert_eq!(heads.len(), 1, "{why}: split"),
+            _ => {
+                assert_eq!(parts.len(), 1, "{why}: asked again after a 200");
+                assert_eq!(net.work.counts().retries, 0, "{why}");
+            }
+        }
+    }
+}
+
+/// a cap raised by `FETCHLOOM_EXP_PER_HOST` lets more downloads from one host run at once, and
+/// still no more than it.
+#[test]
+fn a_raised_host_cap_runs_more_downloads_at_once() {
+    let body = body(256 * KIB);
+    let server = serve(
+        body.clone(),
+        Serving {
+            rate: 256 * KIB,
+            ..SERVING
+        },
+    );
+    let mut net = net(&server.url, 8);
+    net.split.when = Splitting::Never;
+    net.per_host = 6;
+    let net = Arc::new(net);
+    let (_folder, cache) = cache();
+    let fetched = block_on(async {
+        let mut tasks = tokio::task::JoinSet::new();
+        for file in 0..8 {
+            let (net, cache) = (net.clone(), cache.clone());
+            let mut url = server.url.clone();
+            url.set_query(Some(&format!("file={file}")));
+            tasks.spawn(async move {
+                let fetch = Fetch::new(url);
+                net.download(&fetch, &cache, &|_| Ok(())).await
+            });
+        }
+        tasks.join_all().await
+    });
+    for fetched in fetched {
+        assert_eq!(fetched.unwrap().digest, sha256(&body));
+    }
+    let most = server.most();
+    assert!(
+        (PER_HOST + 1..=6).contains(&most),
+        "{most} downloads at once"
+    );
+}
+
 #[test]
 fn a_finished_stream_takes_half_of_the_largest_range_left() {
     let mut board = Board::new(vec![(0, 100)]);

@@ -331,7 +331,7 @@ async fn each(
     let mut results: Vec<Option<Result<Fetched, Error>>> =
         std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
-    let mut queue = jobs.into_iter().enumerate();
+    let mut queue = Queue::new(jobs, context.interleave.then(|| 2 * net.per_host()));
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.jobs * 2;
     let mut done = 0;
@@ -379,6 +379,9 @@ async fn each(
         let Some(joined) = tasks.join_next().await else {
             break;
         };
+        if let Ok((index, _)) = &joined {
+            queue.ended(*index);
+        }
         match joined {
             Ok((index, Ok(fetched))) => {
                 results[index] = Some(Ok(fetched));
@@ -406,6 +409,82 @@ async fn each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// the jobs not started yet, with their places in the list.
+enum Queue {
+    /// in the list's order.
+    InOrder(std::iter::Enumerate<std::vec::IntoIter<Job>>),
+    /// by host. the first job in the list whose host has fewer than `most` started jobs goes
+    /// next, so a host whose jobs fill its slots lets another host's jobs take the free ones.
+    /// when every host is that busy, the first job in the list goes anyway.
+    Spread {
+        /// by host, in the order hosts first appear: the jobs waiting and the jobs started.
+        hosts: Vec<(std::collections::VecDeque<(usize, Job)>, usize)>,
+        /// the host of each started job.
+        started: HashMap<usize, usize>,
+        most: usize,
+    },
+}
+
+impl Queue {
+    /// the jobs in the list's order, or spread over their hosts with up to `spread` started
+    /// jobs a host.
+    fn new(jobs: Vec<Job>, spread: Option<usize>) -> Queue {
+        let Some(most) = spread else {
+            return Queue::InOrder(jobs.into_iter().enumerate());
+        };
+        let mut names: HashMap<String, usize> = HashMap::new();
+        let mut hosts: Vec<(std::collections::VecDeque<(usize, Job)>, usize)> = Vec::new();
+        for (index, job) in jobs.into_iter().enumerate() {
+            let at = *names
+                .entry(crate::net::slot_host(&job.fetch.from))
+                .or_insert_with(|| {
+                    hosts.push(Default::default());
+                    hosts.len() - 1
+                });
+            hosts[at].0.push_back((index, job));
+        }
+        Queue::Spread {
+            hosts,
+            started: HashMap::new(),
+            most,
+        }
+    }
+
+    fn next(&mut self) -> Option<(usize, Job)> {
+        let (hosts, started, most) = match self {
+            Queue::InOrder(jobs) => return jobs.next(),
+            Queue::Spread {
+                hosts,
+                started,
+                most,
+            } => (hosts, started, *most),
+        };
+        let first = |room: bool| {
+            hosts
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, running))| !room || *running < most)
+                .filter_map(|(at, (waiting, _))| waiting.front().map(|(index, _)| (*index, at)))
+                .min()
+        };
+        let (_, at) = first(true).or_else(|| first(false))?;
+        let (waiting, running) = &mut hosts[at];
+        let (index, job) = waiting.pop_front()?;
+        *running += 1;
+        started.insert(index, at);
+        Some((index, job))
+    }
+
+    /// the job at `index` ended, so its host has room for another.
+    fn ended(&mut self, index: usize) {
+        if let Queue::Spread { hosts, started, .. } = self
+            && let Some(at) = started.remove(&index)
+        {
+            hosts[at].1 -= 1;
+        }
+    }
 }
 
 /// how many failed files one error names. the rest are counted.
@@ -742,5 +821,102 @@ mod tests {
                 "downloaded files stay in the cache. fix the errors above, then run the same command again"
             )
         );
+    }
+
+    /// two hosts on this machine, 127.0.0.1 and ::1, that hold each answer for `hold` and log
+    /// which host each request reached, in order. none without an IPv6 loopback.
+    fn two_hosts(
+        hold: std::time::Duration,
+    ) -> Option<([Url; 2], Arc<std::sync::Mutex<Vec<usize>>>)> {
+        use std::io::{Read, Write};
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut urls = Vec::new();
+        for (host, address) in ["127.0.0.1:0", "[::1]:0"].into_iter().enumerate() {
+            let listener = std::net::TcpListener::bind(address).ok()?;
+            let at = listener.local_addr().unwrap();
+            urls.push(Url::parse(&format!("http://{at}/")).unwrap());
+            let log = log.clone();
+            std::thread::spawn(move || {
+                for mut stream in listener.incoming().flatten() {
+                    let log = log.clone();
+                    std::thread::spawn(move || {
+                        let mut head = Vec::new();
+                        let mut byte = [0; 1];
+                        while !head.ends_with(b"\r\n\r\n")
+                            && stream.read(&mut byte).is_ok_and(|read| read == 1)
+                        {
+                            head.push(byte[0]);
+                        }
+                        log.lock().unwrap().push(host);
+                        std::thread::sleep(hold);
+                        let head = String::from_utf8_lossy(&head).into_owned();
+                        let path = head.split(' ').nth(1).unwrap_or_default();
+                        let answer = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{path}",
+                            path.len()
+                        );
+                        let _ = stream.write_all(answer.as_bytes());
+                    });
+                }
+            });
+        }
+        Some((urls.try_into().ok()?, log))
+    }
+
+    /// a project whose first host has more files than the queue holds runs the second host's
+    /// files beside them when hosts are interleaved, and only after most of them otherwise.
+    #[test]
+    fn interleaved_hosts_fill_the_download_slots_from_the_start() {
+        let Some((hosts, log)) = two_hosts(std::time::Duration::from_millis(500)) else {
+            eprintln!("skipped: this machine has no IPv6 loopback");
+            return;
+        };
+        let urls: Vec<Url> = (0..20)
+            .map(|file| hosts[0].join(&format!("a{file}")).unwrap())
+            .chain((0..8).map(|file| hosts[1].join(&format!("b{file}")).unwrap()))
+            .collect();
+        for interleave in [true, false] {
+            log.lock().unwrap().clear();
+            let mut context = Context::new(Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                },
+                Level::Quiet,
+                false,
+                false,
+            ));
+            context.interleave = interleave;
+            let net = context.net_with(Vec::new());
+            for host in &hosts {
+                net.typed(host);
+            }
+            let net = Arc::new(net);
+            let folder = tempfile::tempdir().unwrap();
+            let cache = Cache::open(folder.path().join("cache")).unwrap();
+            let jobs = urls
+                .iter()
+                .map(|url| Job {
+                    fetch: Fetch::new(url.clone()),
+                    label: url.path().to_owned(),
+                    dataset: None,
+                    again: None,
+                })
+                .collect();
+            let fetched =
+                crate::source::recorded::block_on(each(&context, &net, &cache, jobs, false))
+                    .unwrap();
+            for (fetched, url) in fetched.iter().zip(&urls) {
+                let digest = crate::digest::sha256(url.path().as_bytes());
+                assert_eq!(fetched.as_ref().unwrap().digest, digest, "{url}");
+            }
+            let first = log.lock().unwrap()[..8].to_vec();
+            let second = first.iter().filter(|host| **host == 1).count();
+            let expected = if interleave { 4 } else { 0 };
+            assert_eq!(second, expected, "interleave {interleave}: {first:?}");
+        }
     }
 }

@@ -127,9 +127,9 @@ pub(crate) enum Splitting {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Split {
     pub(crate) when: Splitting,
-    /// the smallest file split.
+    /// the smallest file split, which `FETCHLOOM_EXP_SPLIT_SMALL` lowers.
     pub(crate) above: u64,
-    /// the smallest piece a stream takes from another.
+    /// the smallest piece a stream takes from another, which shrinks with a lowered `above`.
     pub(crate) piece: u64,
     /// how long a rate is measured before and after a stream is added.
     pub(crate) window: Duration,
@@ -146,6 +146,8 @@ pub(crate) struct Net {
     credentials: Vec<Key>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// requests at once to one host, which `FETCHLOOM_EXP_PER_HOST` changes from four.
+    per_host: usize,
     paces: pace::Paces,
     rate: Option<Arc<Rate>>,
     split: Split,
@@ -284,6 +286,7 @@ impl Net {
             })
             .filter(|key| seen.insert((key.host.clone(), key.port, key.name.clone())))
             .collect();
+        let (above, piece) = split_sizes(crate::exp::number("SPLIT_SMALL"));
         Net {
             wire: OnceLock::new(),
             offline: options.offline,
@@ -291,13 +294,14 @@ impl Net {
             credentials,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
+            per_host: per_host(crate::exp::number("PER_HOST")),
             paces: pace::Paces::default(),
             rate: None,
             idle: IDLE,
             split: Split {
                 when: options.split,
-                above: download::SPLIT_ABOVE,
-                piece: download::SMALLEST_PIECE,
+                above,
+                piece,
                 window: download::WINDOW,
                 slow: download::SLOW,
             },
@@ -510,9 +514,36 @@ impl Net {
     fn slots(&self, url: &Url) -> Arc<Semaphore> {
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
-            .entry(host(url).to_ascii_lowercase())
-            .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
+            .entry(slot_host(url))
+            .or_insert_with(|| Arc::new(Semaphore::new(self.per_host)))
             .clone()
+    }
+
+    /// requests that may run at once to one host.
+    pub(crate) fn per_host(&self) -> usize {
+        self.per_host
+    }
+}
+
+/// the name a download's host slots go by, so downloads that share it share the slots.
+pub(crate) fn slot_host(url: &Url) -> String {
+    host(url).to_ascii_lowercase()
+}
+
+/// the per-host cap: four, unless `wanted` names another from 1 to 256.
+fn per_host(wanted: Option<u64>) -> usize {
+    wanted
+        .and_then(|wanted| usize::try_from(wanted).ok())
+        .filter(|wanted| (1..=256).contains(wanted))
+        .unwrap_or(PER_HOST)
+}
+
+/// the smallest file split and the smallest piece a stream takes. a threshold below the usual
+/// one lets smaller files split, and their pieces shrink with it so a file still splits in four.
+fn split_sizes(small: Option<u64>) -> (u64, u64) {
+    match small.filter(|above| (1..download::SPLIT_ABOVE).contains(above)) {
+        Some(above) => (above, (above / 4).clamp(1, download::SMALLEST_PIECE)),
+        None => (download::SPLIT_ABOVE, download::SMALLEST_PIECE),
     }
 }
 
@@ -630,5 +661,46 @@ mod tests {
         assert!(block_on(net.send_apart(&url, |request| request)).is_ok());
         let heads = serving.join().unwrap();
         assert!(heads[1].contains("cookie: session=abc"), "{}", heads[1]);
+    }
+
+    #[test]
+    fn the_host_cap_and_the_split_threshold_change_only_when_asked() {
+        assert_eq!(per_host(None), PER_HOST);
+        assert_eq!(per_host(Some(0)), PER_HOST);
+        assert_eq!(per_host(Some(257)), PER_HOST);
+        assert_eq!(per_host(Some(8)), 8);
+        let usual = (download::SPLIT_ABOVE, download::SMALLEST_PIECE);
+        assert_eq!(split_sizes(None), usual);
+        assert_eq!(split_sizes(Some(0)), usual);
+        assert_eq!(split_sizes(Some(download::SPLIT_ABOVE)), usual);
+        assert_eq!(split_sizes(Some(1 << 20)), (1 << 20, 256 << 10));
+        assert_eq!(
+            split_sizes(Some(48 << 20)),
+            (48 << 20, download::SMALLEST_PIECE)
+        );
+    }
+
+    #[test]
+    fn a_host_gets_as_many_slots_as_its_cap() {
+        for cap in [PER_HOST, 6] {
+            let options = Options {
+                offline: Offline::No,
+                jobs: 8,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            };
+            let mut net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
+            net.per_host = cap;
+            let url = Url::parse("https://example.org/data.csv").unwrap();
+            let held: Vec<_> = std::iter::from_fn(|| net.try_permit(&url))
+                .take(8)
+                .collect();
+            assert_eq!(held.len(), cap);
+            let other = Url::parse("https://Example.org/other.csv").unwrap();
+            assert!(
+                net.try_permit(&other).is_none(),
+                "a host is one host in any case"
+            );
+        }
     }
 }

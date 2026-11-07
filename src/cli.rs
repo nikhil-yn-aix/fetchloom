@@ -49,6 +49,8 @@ struct Context {
     threads: Threads,
     /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
     split: net::Splitting,
+    /// spreads queued downloads over their hosts, as `FETCHLOOM_EXP_INTERLEAVE` asks.
+    interleave: bool,
     work: Arc<Work>,
     stop: Arc<Stop>,
     /// the account a failed command needed, kept so a person at the terminal can sign in and
@@ -71,6 +73,7 @@ impl Context {
             rate: None,
             threads: Threads::default(),
             split: net::Splitting::WhenSlow,
+            interleave: false,
             work: Arc::default(),
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
@@ -351,6 +354,7 @@ pub(crate) fn run() -> ExitCode {
     );
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
+    context.interleave = crate::exp::on("INTERLEAVE");
     if args.version {
         let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
         // what a bug report needs: which build, on which system
