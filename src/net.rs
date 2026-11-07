@@ -345,12 +345,9 @@ impl Net {
     }
 
     /// the experiment settings supplied for this run.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "network switch consumers arrive during the a/b period"
-        )
+    #[allow(
+        dead_code,
+        reason = "network switch consumers arrive during the a/b period"
     )]
     pub(crate) fn exp(&self) -> &Experiments {
         &self.exp

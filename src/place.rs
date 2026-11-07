@@ -173,12 +173,9 @@ impl Placer {
     }
 
     /// the experiment settings supplied for this placement.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "placement switch consumers arrive during the a/b period"
-        )
+    #[allow(
+        dead_code,
+        reason = "placement switch consumers arrive during the a/b period"
     )]
     pub(crate) fn experiments(&self) -> &Experiments {
         &self.exp

@@ -36,10 +36,7 @@ impl Experiments {
     }
 
     /// whether `name` is present, nonempty and not `0`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "switch consumers arrive during the a/b period")
-    )]
+    #[allow(dead_code, reason = "switch consumers arrive during the a/b period")]
     pub(crate) fn on(&self, name: &str) -> bool {
         self.0
             .get(name)
@@ -47,12 +44,9 @@ impl Experiments {
     }
 
     /// the trimmed decimal value of `name`, when it fits in a `u64`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "numeric switch consumers arrive during the a/b period"
-        )
+    #[allow(
+        dead_code,
+        reason = "numeric switch consumers arrive during the a/b period"
     )]
     pub(crate) fn number(&self, name: &str) -> Option<u64> {
         self.0.get(name)?.trim().parse().ok()
