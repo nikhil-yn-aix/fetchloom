@@ -332,3 +332,40 @@ fn errors_messages_a_broken_lock_has_no_unusable_fix() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn errors_messages_flag_help_uses_the_same_palette() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flag = sandbox
+        .command(&["--color", "always", "get", "--help"])
+        .env("FETCHLOOM_COLORS", "accent=magenta")
+        .output()?;
+    let named = sandbox
+        .command(&["--color", "always", "help", "get"])
+        .env("FETCHLOOM_COLORS", "accent=magenta")
+        .output()?;
+    assert!(text(&named.stdout)?.contains("\u{1b}[35m"));
+    assert!(
+        text(&flag.stdout)?.contains("\u{1b}[35m"),
+        "flag help used no magenta"
+    );
+    assert!(!text(&flag.stdout)?.contains("\u{1b}[36m"));
+    assert_eq!(flag.stdout, named.stdout);
+    Ok(())
+}
+
+#[test]
+fn errors_messages_flag_help_warns_about_invalid_palette_entries() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flag = sandbox
+        .command(&["--color", "always", "get", "--help"])
+        .env("FETCHLOOM_COLORS", "accent=magenta:done=teal")
+        .output()?;
+    let named = sandbox
+        .command(&["--color", "always", "help", "get"])
+        .env("FETCHLOOM_COLORS", "accent=magenta:done=teal")
+        .output()?;
+    assert!(text(&named.stderr)?.contains("FETCHLOOM_COLORS"));
+    assert_eq!(flag.stderr, named.stderr, "the flag-help warning was lost");
+    Ok(())
+}

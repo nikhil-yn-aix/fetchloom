@@ -71,6 +71,8 @@ JSON is one completed document, not a stream of progress events. it holds schema
 
 `-v` prints work summaries; `-vv` enables debug events. `FETCHLOOM_TRACE` writes a Chrome trace through a guard that must live until command work ends. trace output is separate from the JSON contract.
 
+flag help initializes the same palette as the `help` command. both apply `FETCHLOOM_COLORS` and warn about unreadable entries before printing help.
+
 ## invariants and traps
 
 - do not print directly from command handlers. renderer calls preserve stream routing and progress synchronization.

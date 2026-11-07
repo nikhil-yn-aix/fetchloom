@@ -17,7 +17,9 @@ use crate::output::{ColorChoice, Level, Output, Style};
 /// or with the detail and colors the options clap read ask for.
 pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
-        crate::output::help(&err.render().to_string(), args::color());
+        let color = args::color();
+        let _output = Output::new(Style::detect(color), Level::Normal, false, false);
+        crate::output::help(&err.render().to_string(), color);
         return ExitCode::SUCCESS;
     }
     let read = args::Args::command()
