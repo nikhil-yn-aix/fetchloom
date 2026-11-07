@@ -1553,3 +1553,19 @@ fn pipelined_copy_keeps_all_bytes_when_its_reader_is_refused() {
         assert_eq!(fs::read(destination).unwrap(), bytes);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn readonly_windows_placement_tries_hardlinks_before_clones() {
+    let (folder, object) = cache(true);
+    if !makes_hardlinks(folder.path()) {
+        return;
+    }
+    let root = folder.path().join("data");
+    let mut placer = Placer::new(&root);
+    assert_eq!(
+        placer.place(&object, &root.join("file"), false).unwrap(),
+        Method::Hardlink
+    );
+    assert!(is_read_only(&root.join("file")));
+}

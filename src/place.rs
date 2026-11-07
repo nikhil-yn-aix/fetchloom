@@ -373,6 +373,17 @@ impl Placer {
     ) -> io::Result<Put<Metadata>> {
         check_stop(&self.stop)?;
         let location = Arc::new(self.location(destination, false, true)?);
+        let early_hardlink = cfg!(windows)
+            && !writable
+            && self.synced.is_none()
+            && self.can_hardlink.load(Ordering::Relaxed);
+        if early_hardlink {
+            check_object(object)?;
+            match location.hard_link(object) {
+                Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
+                Err(error) => self.learn(Method::Hardlink, error)?,
+            }
+        }
         let mut buffered = false;
         if self.can_reflink.load(Ordering::Relaxed) {
             let metadata = check_object(object)?;
@@ -392,7 +403,8 @@ impl Placer {
             }
         }
         // sync clients break hardlinks or upload every link as a full file.
-        if !buffered
+        if !early_hardlink
+            && !buffered
             && self.can_hardlink.load(Ordering::Relaxed)
             && !writable
             && self.synced.is_none()

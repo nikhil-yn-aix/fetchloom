@@ -61,7 +61,7 @@ unwanted tracked files are removed only if unchanged. an edited unwanted file le
 
 ### choose a filesystem method
 
-new placements try reflink, hardlink, then copy. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks. on macos a reflink is an apfs clone made with `fclonefileat`; hfs+ and other disks without clones fall back to hardlinks or copies.
+new placements try reflink, hardlink, then copy, except read-only placements on windows try hardlinks first to reuse an already scanned file. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks. on macos a reflink is an apfs clone made with `fclonefileat`; hfs+ and other disks without clones fall back to hardlinks or copies.
 
 `Placer` remembers refused methods. its capability probes use the opened root. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`. owned worker partitions allocate for their own items rather than retaining unused capacity from the remaining batch.
 
@@ -133,3 +133,7 @@ the per-file `canonicalize` call is absent in both settings: containment removed
 ## macos copy flush experiment
 
 `FETCHLOOM_EXP_PLACE_MAC_BATCH=1` seals each copy with plain `fsync`, retains one original writer handle for the batch, then issues one `F_FULLFSYNC` before publishing any copy. a filesystem that rejects full-drive flushing keeps the per-file `fsync` guarantee, as cache batches do. a flush error publishes none of the waiting copies. nested filesystems keep per-file full flushing. apfs clones never enter this copy path and need no payload flush. unset or zero retains `sync_all` per copy. native wall-time measurement is still required; xcheck only checks the platform code.
+
+## windows copy durability
+
+copies are written and flushed through their original handles, without reopening them to write. `FlushFileBuffers` remains per file and precedes publication; independent placement workers can flush their own files concurrently. no filesystem-wide batch guarantee is assumed on windows. writable and sync-client placements still skip hardlinks. native ntfs, refs/dev drive and exfat measurements remain separate from cross-compilation.
