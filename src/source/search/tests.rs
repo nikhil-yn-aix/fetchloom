@@ -178,28 +178,47 @@ fn oversized_pages_are_limited_to_three_matches_each() {
 
 #[test]
 fn sources_are_asked_concurrently() {
+    use std::future::{Future as _, poll_fn};
+    use std::pin::pin;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Waker};
+
     struct Together {
         recorded: Recorded,
-        barrier: tokio::sync::Barrier,
+        started: AtomicUsize,
+        can_answer: AtomicBool,
     }
     impl Api for Together {
         async fn get(&self, url: &url::Url) -> Result<crate::net::Response, Error> {
-            self.barrier.wait().await;
+            self.started.fetch_add(1, Ordering::Relaxed);
+            poll_fn(|_| {
+                if self.can_answer.load(Ordering::Relaxed) {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
             self.recorded.get(url).await
         }
     }
     let api = Together {
         recorded: recorded(),
-        barrier: tokio::sync::Barrier::new(3),
+        started: AtomicUsize::new(0),
+        can_answer: AtomicBool::new(false),
     };
     let result = block_on(async {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            search(&api, "iris", &[], LIMIT),
-        )
-        .await
+        let mut pending = pin!(search(&api, "iris", &[], LIMIT));
+        assert!(
+            pending
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        assert_eq!(api.started.load(Ordering::Relaxed), 3);
+        api.can_answer.store(true, Ordering::Relaxed);
+        pending.await
     })
-    .unwrap()
     .unwrap();
     assert_eq!(result.candidates.len(), 9);
 }
