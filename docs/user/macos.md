@@ -45,7 +45,7 @@ sync clients break hardlinks or upload each one as a whole file, so fetchloom sk
 | `~/Library/CloudStorage/Dropbox*` | dropbox, one folder per account |
 | folders named in dropbox's `~/.dropbox/info.json` | dropbox, such as an older `~/Dropbox` |
 
-names under `~/Library` compare without case, as apfs compares them, and a folder reached through a link counts as the folder it leads to. other clients in `~/Library/CloudStorage`, such as google drive, are not recognized. a folder synced some other way is recognized only when its path leads into one of the folders above. a project outside synced storage lets fetchloom try every link; [placement](concepts.md#placement) explains the order.
+the client prefixes above and names under `~/Library` compare without case, as apfs compares them, and a folder reached through a link counts as the folder it leads to. other clients in `~/Library/CloudStorage`, such as google drive, are not recognized. a folder synced some other way is recognized only when its path leads into one of the folders above. a project outside synced storage lets fetchloom try every link; [placement](concepts.md#placement) explains the order.
 
 ## names
 

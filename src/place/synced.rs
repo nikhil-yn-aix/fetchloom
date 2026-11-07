@@ -86,10 +86,10 @@ fn mac_roots(home: &Path) -> Vec<(PathBuf, &'static str)> {
     };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let client = if name.starts_with("OneDrive") {
+        let name = name.to_string_lossy().to_ascii_lowercase();
+        let client = if name.starts_with("onedrive") {
             "onedrive"
-        } else if name.starts_with("Dropbox") {
+        } else if name.starts_with("dropbox") {
             "dropbox"
         } else {
             continue;
@@ -222,6 +222,27 @@ mod tests {
                 "icloud drive"
             )]
         );
+    }
+
+    #[test]
+    fn mac_client_prefixes_ignore_case() {
+        let home = tempfile::tempdir().unwrap();
+        let cloud = home.path().join("Library/CloudStorage");
+        let clients = [
+            ("onedrive-personal", "onedrive"),
+            ("DROPBOX-school", "dropbox"),
+            ("oNeDrIvE-lab", "onedrive"),
+            ("dRoPbOx-work", "dropbox"),
+        ];
+        for (folder, _) in clients {
+            fs::create_dir_all(cloud.join(folder)).unwrap();
+        }
+        fs::create_dir_all(cloud.join("GoogleDrive-ada")).unwrap();
+        let found = mac_roots(home.path());
+        assert_eq!(found.len(), clients.len() + 1);
+        for (folder, client) in clients {
+            assert!(found.contains(&(cloud.join(folder), client)), "{found:?}");
+        }
     }
 
     #[cfg(target_os = "macos")]
