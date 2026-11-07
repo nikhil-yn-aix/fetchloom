@@ -661,6 +661,27 @@ fn gcs_pages_list_generations_and_md5_hashes() {
 }
 
 #[test]
+fn missing_gcs_generations_are_refused() {
+    let url = STATES
+        .replace("cloud-samples-data", "bucket")
+        .replace("bigquery%2Fus-states%2F", "d%2F");
+    for explicit_null in [false, true] {
+        let mut body = serde_json::json!({"items": [
+            {"name": "d/keep.csv", "size": "1"},
+        ]});
+        if explicit_null {
+            body["items"][0]["generation"] = serde_json::Value::Null;
+        }
+        let recorded = Recorded::default().on(&url, 200, body.to_string());
+        let error = resolve("gs://bucket/d/", &recorded).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.message.contains("generation"));
+        assert!(error.message.contains("d/keep.csv"));
+        assert_eq!(recorded.asked(), [url.clone()]);
+    }
+}
+
+#[test]
 fn malformed_gcs_pages_are_invalid_listings() {
     let change = |key: &str, value: serde_json::Value| {
         let mut page: serde_json::Value =

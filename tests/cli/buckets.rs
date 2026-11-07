@@ -388,6 +388,52 @@ fn soap_objects_download_through_path_style_urls() -> Result {
 }
 
 #[test]
+fn missing_gcs_generations_are_refused_before_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let listing = "/storage.googleapis.com/storage/v1/b/generation-bucket/o?prefix=data%2F&fields=items%28name%2Csize%2Cmd5Hash%2Cgeneration%29%2CnextPageToken";
+    let page = serde_json::json!({"items": [
+        {"name": "data/keep.csv", "size": PARTICIPANTS.len().to_string()},
+    ]});
+    let routes = Routes::start(vec![
+        (
+            listing.to_owned(),
+            reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                &serde_json::to_vec(&page)?,
+            ),
+        ),
+        (
+            "/storage.googleapis.com/generation-bucket/data/keep.csv".to_owned(),
+            file(PARTICIPANTS, "\"v1\""),
+        ),
+    ])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "gs://generation-bucket/data/"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["kind"], "source.invalid",
+        "{document}"
+    );
+    assert!(
+        document["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("generation")
+    );
+    assert!(!sandbox.work().join("data.toml").exists());
+    assert!(!sandbox.work().join("data.lock").exists());
+    assert!(!sandbox.work().join("data").exists());
+    assert_eq!(routes.targets(), [listing]);
+    Ok(())
+}
+
+#[test]
 fn a_private_bucket_is_refused_with_auth_required() -> Result {
     let sandbox = Sandbox::new()?;
     let denied = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";

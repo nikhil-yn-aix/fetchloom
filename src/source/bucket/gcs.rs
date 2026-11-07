@@ -95,15 +95,16 @@ fn object(prefix: &Prefix, objects_at: &Url, item: Item) -> Result<Object, Error
         })
         .transpose()?;
     let mut url = object_url(objects_at, &item.name);
-    if let Some(generation) = &item.generation {
-        if generation.is_empty() || !generation.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err(prefix.invalid(&format!(
-                "the generation of \"{}\" is not a number",
-                item.name
-            )));
-        }
-        url.set_query(Some(&format!("generation={generation}")));
+    let generation = item.generation.as_deref().ok_or_else(|| {
+        prefix.invalid(&format!("the object \"{}\" has no generation", item.name))
+    })?;
+    if generation.is_empty() || !generation.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(prefix.invalid(&format!(
+            "the generation of \"{}\" is not a number",
+            item.name
+        )));
     }
+    url.set_query(Some(&format!("generation={generation}")));
     Ok(Object {
         key: item.name,
         size,

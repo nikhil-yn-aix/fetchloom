@@ -40,7 +40,7 @@ zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty
 
 an ETag with a `-` belongs to an object uploaded in parts and is not an MD5 of its bytes, so such files are pinned by SHA-256 and size alone. a stated MD5 is checked against the downloaded bytes.
 
-a cloud storage URL keeps the object's generation. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not. ListObjectsV2 states no object versions, so an S3 URL serves whatever the key holds now; sync refuses bytes that differ from the locked SHA-256. `lock --upgrade` lists the prefix again.
+a cloud storage URL keeps the object's generation. a listing with a missing, empty or nonnumeric generation fails with `source.invalid`; fetchloom does not replace it with an unversioned URL. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not. ListObjectsV2 states no object versions, so an S3 URL serves whatever the key holds now; sync refuses bytes that differ from the locked SHA-256. `lock --upgrade` lists the prefix again.
 
 ## access and limits
 
