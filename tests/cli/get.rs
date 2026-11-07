@@ -1007,3 +1007,69 @@ fn a_folder_reached_through_a_link_is_not_filled_twice() -> Result {
     );
     Ok(())
 }
+
+#[test]
+fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
+    for listed in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let first = Server::start(
+            "/data.csv",
+            vec![
+                file(IRIS, "\"v1\""),
+                reply("304 Not Modified", &[("ETag", "\"v1\"")], b""),
+            ],
+        )?;
+        let second = Server::start(
+            "/data.tsv",
+            vec![
+                file(WINE, "\"w1\""),
+                reply("304 Not Modified", &[("ETag", "\"w1\"")], b""),
+            ],
+        )?;
+        fs::write(
+            sandbox.work().join("links.txt"),
+            format!("{}\n{}\n", first.url, second.url),
+        )?;
+        let args = if listed {
+            vec!["--json", "get", "-i", "links.txt", "-o", "downloads"]
+        } else {
+            vec![
+                "--json",
+                "get",
+                first.url.as_str(),
+                second.url.as_str(),
+                "-o",
+                "downloads",
+            ]
+        };
+        for again in [false, true] {
+            let output = sandbox.run(&args)?;
+            assert!(
+                output.status.success(),
+                "listed={listed}, again={again}: {}",
+                text(&output.stdout)?
+            );
+            let document = json(&output)?;
+            let items = document["result"]["items"].as_array().ok_or("no items")?;
+            assert_eq!(items.len(), 2);
+            assert!(items.iter().all(|item| item["status"] == "ok"));
+            let parent = sandbox.work().join("downloads");
+            for (index, folder, name, bytes) in [
+                (0, "data", "data.csv", IRIS),
+                (1, "data-2", "data.tsv", WINE),
+            ] {
+                assert_eq!(
+                    items[index]["folder"],
+                    parent.join(folder).display().to_string()
+                );
+                assert_eq!(fs::read(parent.join(folder).join(name))?, bytes);
+            }
+            if again {
+                assert_eq!(document["work"]["bytes_down"], 0);
+            }
+        }
+        assert_eq!(first.requests().len(), 2);
+        assert_eq!(second.requests().len(), 2);
+    }
+    Ok(())
+}

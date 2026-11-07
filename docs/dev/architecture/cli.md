@@ -42,7 +42,7 @@ network clients are created only where commands need them. `Net` delays TLS root
 | `lock` | resolve changed entries and learn pins; already pinned files need not fill the cache |
 | `lock --check` | compare specs without network access or mutation locking |
 | `path` | answer directly when the dataset is ready; otherwise hold, reread and sync before answering |
-| `get` | share download, archive and placement machinery without writing project metadata |
+| `get` | share download, archive and placement machinery without writing project metadata; a lone link prechecks its known folder, while batches check final names and collision suffixes after downloading |
 | `status` | inspect local state without taking the mutation lock |
 | `list` | read manifest and lock without scanning placements or taking the mutation lock |
 | `search` | query public catalogs concurrently; return canonical references without downloading datasets |

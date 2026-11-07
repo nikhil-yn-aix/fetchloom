@@ -52,6 +52,8 @@ links given together, on the command line or with `-i`, share one run. fetchloom
 
 with several links, each must be a link, a DOI or an id; a bare word among them is a usage error. `--select`, `--exclude` and `--no-extract` apply to every link. two links named alike each get a folder: `iris`, then `iris-2`, so no link's files replace another's.
 
+batch destination checks use those final folders, after downloads have supplied filenames. rerunning the same ordered batch reuses its suffixed folders. a refused destination can leave downloaded bytes in the cache.
+
 a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a run where the first link was fetched before and the second answers 404:
 
 ```text

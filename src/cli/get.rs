@@ -425,9 +425,8 @@ async fn resolve_all(
         .collect())
 }
 
-/// the files a resolved link keeps, the downloads they need, and the folder checked before any
-/// byte arrives, so a refusal costs no download. an archive never unpacked here is checked once
-/// its files are known, after the download.
+/// the files a resolved link keeps and the downloads they need. a lone link checks its known
+/// destination before downloading; batches check once final names and suffixes are known.
 fn prepare(
     cache: &Cache,
     args: &Get,
@@ -442,16 +441,19 @@ fn prepare(
     }
     let extract = !args.no_extract;
     let (names, foreseen) = foresee(cache, &files, extract);
-    check(
-        &folder_for(
-            chosen,
-            parent,
-            &listing,
-            &parsed,
-            &unwrapped(&files, &names),
-        ),
-        foreseen.as_deref(),
-    )?;
+    // a batch's final folder can gain a suffix or a server-provided name after downloading.
+    if args.input_file.is_none() && args.links.len() == 1 {
+        check(
+            &folder_for(
+                chosen,
+                parent,
+                &listing,
+                &parsed,
+                &unwrapped(&files, &names),
+            ),
+            foreseen.as_deref(),
+        )?;
+    }
     let jobs: Vec<Job> = files
         .iter()
         .zip(&names)
