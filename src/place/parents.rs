@@ -236,6 +236,7 @@ impl Location {
                             identity: self.parent.identity,
                             retained: retained.then(|| self.parent.clone()),
                             hidden,
+                            published: false,
                             name: self.name.clone(),
                         },
                         File::from(file),
@@ -259,6 +260,7 @@ pub(super) struct Staged {
     // only synchronous reflinks retain a parent; queued copies share just the root descriptor.
     retained: Option<Parent>,
     hidden: String,
+    published: bool,
     name: OsString,
 }
 
@@ -274,16 +276,24 @@ impl Staged {
         Ok(parent)
     }
 
-    pub(super) fn publish(self) -> io::Result<Metadata> {
+    pub(super) fn publish(mut self) -> io::Result<Metadata> {
         let parent = self.parent()?;
-        publish(&parent, &self.hidden, &self.name, false)?;
+        self.name_in(&parent)?;
         metadata(&parent, &self.name)
+    }
+
+    fn name_in(&mut self, parent: &File) -> io::Result<()> {
+        publish(parent, &self.hidden, &self.name, false)?;
+        self.published = true;
+        Ok(())
     }
 }
 
 impl Drop for Staged {
     fn drop(&mut self) {
-        if let Ok(parent) = self.parent() {
+        if !self.published
+            && let Ok(parent) = self.parent()
+        {
             let _ = native::unlinkat(&parent, self.hidden.as_str(), AtFlags::empty());
         }
     }
@@ -494,6 +504,23 @@ mod tests {
                 assert!(result.is_err());
             }
         }
+    }
+
+    #[test]
+    fn publication_releases_ownership_of_the_hidden_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let parents = Parents::default();
+        let location = parents
+            .locate(dir.path(), &dir.path().join("file"), true, false, false)
+            .unwrap();
+        let (mut staged, mut file) = location.create(0o600, true).unwrap();
+        file.write_all(b"placed").unwrap();
+        let hidden = dir.path().join(&staged.hidden);
+        staged.name_in(&location.parent.file).unwrap();
+        fs::write(&hidden, b"another owner").unwrap();
+        drop(staged);
+        assert_eq!(fs::read(hidden).unwrap(), b"another owner");
+        assert_eq!(fs::read(dir.path().join("file")).unwrap(), b"placed");
     }
 
     #[test]
