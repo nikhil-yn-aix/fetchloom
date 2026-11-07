@@ -63,6 +63,29 @@ fn the_hugging_face_token_is_found_where_its_tools_look() {
         found(&[("HF_TOKEN_PATH", named), ("HF_TOKEN", "hf_env")]).as_deref(),
         Some("hf_env")
     );
+    // huggingface_hub still reads the older variable, after HF_TOKEN and before any file
+    assert_eq!(
+        found(&[
+            ("HF_TOKEN_PATH", named),
+            ("HUGGING_FACE_HUB_TOKEN", "hf_old")
+        ])
+        .as_deref(),
+        Some("hf_old")
+    );
+    assert_eq!(
+        found(&[("HUGGING_FACE_HUB_TOKEN", "hf_old"), ("HF_TOKEN", "hf_env")]).as_deref(),
+        Some("hf_env")
+    );
+    // as there, a blank HF_TOKEN still hides the older variable
+    assert_eq!(
+        found(&[("HF_TOKEN", " "), ("HUGGING_FACE_HUB_TOKEN", "hf_old")]).as_deref(),
+        Some("hf_cache")
+    );
+    let var = machine(root, &[("HUGGING_FACE_HUB_TOKEN", "hf_old")]);
+    assert_eq!(
+        Account::HuggingFace.find(&var).map(|found| found.origin),
+        Some(Origin::Variable("HUGGING_FACE_HUB_TOKEN"))
+    );
 }
 
 #[test]
