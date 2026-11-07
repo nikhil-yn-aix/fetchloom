@@ -11,6 +11,7 @@
 | `.fetchloom/owner` | JSON identifying the modifying command, shared by windows and WSL |
 | `.fetchloom/owner.<pid>.<16 hex digits>.tmp` | owner record being written before hardlink publication; a hard kill can leave this file behind |
 | `.fetchloom/state` | compact JSON describing tracked placements |
+| `.fetchloom/data.toml.recovery.<16 hex digits>`, `.fetchloom/data.lock.recovery.<16 hex digits>` | exact pre-add metadata, retained if rollback fails |
 | `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
@@ -61,3 +62,5 @@ a record from another os is never reclaimed by its age or pid. delete it only af
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
 
 a file whose `look.modified` is not older than the state file's own modification time is hashed before its look is trusted, since both times come from one filesystem clock and a coarse clock hides an edit made in the same tick. when the data folder sits on another device than `.fetchloom/`, its clock may keep a coarser step, as fat's two seconds, so there a file must be more than two seconds older than the state to skip hashing. a hash that differs counts as an edit. a sync that finds such files unchanged writes the state again, which settles them.
+
+recovery files are written and flushed before add changes existing metadata. errors name complete recovery files rather than printing their contents. on unix they start with mode `0600`; windows uses the metadata folder's permissions, so keep that folder private. successful adds and complete rollbacks remove their copies. a hard kill can leave unannounced or incomplete recovery files from preparation; compare them with the current metadata before using them.

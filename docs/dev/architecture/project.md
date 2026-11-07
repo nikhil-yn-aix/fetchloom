@@ -42,6 +42,8 @@ waiting commands poll every 200 ms, report the holder once and remain cancellabl
 
 metadata writes stage in `.fetchloom` when it exists, otherwise beside their destination. they flush the new file and rename it into place. on unix, they then flush the destination directory and, when different, the staging directory. first creation of `.fetchloom` also flushes the project root. a directory-flush error after rename reports that the new file is already visible but its publication could not be confirmed durable. the manifest and lock remain separate replacements, not one transaction. the owner record has separate claim-and-publication rules because two OS environments must not both acquire it.
 
+before a new add changes metadata, it saves exact recovery copies with exclusive names. the copies must be flushed before the first metadata replacement. a failed restoration retains them and reports their paths; their contents never enter diagnostics. a guard removes them on success or complete rollback.
+
 payload durability belongs to [placement](placing.md#copy-durability). writing state only after copied bytes are flushed is part of the sync contract, not something `write_state` can enforce by itself.
 
 ## invariants and traps

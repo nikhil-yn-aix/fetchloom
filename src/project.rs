@@ -270,6 +270,49 @@ impl Project {
             .map_err(|err| Error::io(format_args!("could not write {name}"), &err))
     }
 
+    /// saves exact metadata before a command changes it, without exposing recovery text in logs.
+    /// on unix only the owner may read the new file; elsewhere it inherits the folder's access.
+    ///
+    /// # Errors
+    /// fails before the caller changes metadata if the recovery copy cannot be written and flushed.
+    pub(crate) fn backup(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, Error> {
+        let folder = self.inner()?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let (path, file) = loop {
+            let path = folder.join(format!("{name}.recovery.{:016x}", fastrand::u64(..)));
+            match options.open(&path) {
+                Ok(file) => break (path, file),
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => {
+                    return Err(Error::io(
+                        format_args!("could not save a recovery copy of {name}"),
+                        &err,
+                    ));
+                }
+            }
+        };
+        let flushed = fill(file, bytes).and_then(|()| {
+            // unix can flush the new recovery name; windows only flushes the file.
+            #[cfg(unix)]
+            File::open(&folder)?.sync_all()?;
+            Ok(())
+        });
+        if let Err(err) = flushed {
+            let _ = fs::remove_file(&path);
+            return Err(Error::io(
+                format_args!("could not save a recovery copy of {name}"),
+                &err,
+            ));
+        }
+        Ok(path)
+    }
+
     pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;

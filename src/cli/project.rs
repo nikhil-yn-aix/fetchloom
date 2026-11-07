@@ -71,6 +71,53 @@ struct Addition {
     entry: manifest::Entry,
 }
 
+enum BeforeFile<'a> {
+    Absent,
+    Saved { text: &'a str, backup: PathBuf },
+}
+
+struct BeforeAdd<'a> {
+    files: [(&'static str, BeforeFile<'a>); 2],
+    keep: bool,
+}
+
+impl<'a> BeforeAdd<'a> {
+    fn save(project: &Project, before: (Option<&'a str>, Option<&'a str>)) -> Result<Self, Error> {
+        let mut saved = Self {
+            files: [
+                (manifest::FILE, BeforeFile::Absent),
+                (lock::FILE, BeforeFile::Absent),
+            ],
+            keep: false,
+        };
+        for ((name, previous), text) in saved.files.iter_mut().zip([before.0, before.1]) {
+            if let Some(text) = text {
+                *previous = BeforeFile::Saved {
+                    text,
+                    backup: project.backup(name, text.as_bytes())?,
+                };
+            }
+        }
+        Ok(saved)
+    }
+}
+
+impl Drop for BeforeAdd<'_> {
+    fn drop(&mut self) {
+        if self.keep {
+            return;
+        }
+        for (_, previous) in &self.files {
+            if let BeforeFile::Saved { backup, .. } = previous
+                && let Err(err) = std::fs::remove_file(backup)
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::debug!(%err, path = %backup.display(), "could not remove a recovery copy");
+            }
+        }
+    }
+}
+
 pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let adding = discover_add(context, dry_run).await?;
@@ -131,8 +178,10 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     if dry_run {
         return preview_add(&work, &new_manifest, old, name, addition.listing).await;
     }
-    project.write(manifest::FILE, updated.as_bytes())?;
-    let before = (adding.text.as_deref(), lock_text.as_deref());
+    let mut before = BeforeAdd::save(project, (adding.text.as_deref(), lock_text.as_deref()))?;
+    project
+        .write(manifest::FILE, updated.as_bytes())
+        .map_err(|error| restore(project, &mut before, &name, error))?;
     // data.toml as just written and data.lock as read, for the state to record as synced
     let seen = Seen {
         manifest: digest::sha256(updated.as_bytes()),
@@ -142,7 +191,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         &work,
         &new_manifest,
         old,
-        before,
+        &mut before,
         &seen,
         &name,
         addition.listing,
@@ -288,7 +337,7 @@ async fn sync_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<Lock>,
-    before: (Option<&str>, Option<&str>),
+    before: &mut BeforeAdd<'_>,
     seen: &Seen,
     name: &str,
     listing: Listing,
@@ -338,17 +387,12 @@ fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
 }
 
 /// restores both project files after a failed add, including their original absence.
-fn restore(
-    project: &Project,
-    (manifest, lock): (Option<&str>, Option<&str>),
-    name: &str,
-    mut failure: Error,
-) -> Error {
+fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure: Error) -> Error {
     let mut complete = true;
-    for (file, before) in [(manifest::FILE, manifest), (lock::FILE, lock)] {
+    for (file, before) in &saved.files {
         let restored = match before {
-            Some(text) => project.write(file, text.as_bytes()),
-            None => match std::fs::remove_file(project.root.join(file)) {
+            BeforeFile::Saved { text, .. } => project.write(file, text.as_bytes()),
+            BeforeFile::Absent => match std::fs::remove_file(project.root.join(file)) {
                 Ok(()) => Ok(()),
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(err) => Err(Error::io(format!("could not remove {file}"), &err)),
@@ -361,15 +405,15 @@ fn restore(
                 failure = failure.detail(help);
             }
             failure = match before {
-                Some(text) => failure
-                    .detail(format!("restore {file} from this backup text (decode it as a JSON string):"))
-                    .detail(serde_json::Value::String(text.to_owned()).to_string()),
-                None => failure.detail(format!(
+                BeforeFile::Saved { backup, .. } => failure
+                    .detail(format!("restore {file} from the recovery copy at {}", backup.display())),
+                BeforeFile::Absent => failure.detail(format!(
                     "remove the {name} dataset entry from {file}, or remove {file} if it holds nothing else"
                 )),
             };
         }
     }
+    saved.keep = !complete;
     failure.detail(if complete {
         "restored data.toml and data.lock to their state before add"
     } else {

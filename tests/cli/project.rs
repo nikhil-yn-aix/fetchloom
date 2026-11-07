@@ -1094,11 +1094,19 @@ fn failed_add_reports_manifest_and_lock_rollback_and_recovery() -> Result {
             assert!(!sandbox.work().join("data.lock").exists());
             if let Some(before) = before {
                 assert!(
-                    details.contains("restore data.toml from this backup text"),
+                    details.contains("restore data.toml from the recovery copy"),
                     "{details}"
                 );
+                let backups = fs::read_dir(sandbox.work().join(".fetchloom"))?
+                    .collect::<std::io::Result<Vec<_>>>()?;
                 assert!(
-                    details.contains(&serde_json::to_string(before)?),
+                    backups.iter().any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("data.toml.recovery.")
+                            && fs::read_to_string(entry.path()).is_ok_and(|text| text == before)
+                    }),
                     "{details}"
                 );
             } else {
@@ -1361,11 +1369,19 @@ fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result 
     assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before_manifest);
     assert!(stderr.contains("could not restore data.lock"), "{stderr}");
     assert!(
-        stderr.contains("restore data.lock from this backup text"),
+        stderr.contains("restore data.lock from the recovery copy"),
         "{stderr}"
     );
+    let backups =
+        fs::read_dir(sandbox.work().join(".fetchloom"))?.collect::<std::io::Result<Vec<_>>>()?;
     assert!(
-        stderr.contains(&serde_json::to_string(&before_lock)?),
+        backups.iter().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("data.lock.recovery.")
+                && fs::read_to_string(entry.path()).is_ok_and(|text| text == before_lock)
+        }),
         "{stderr}"
     );
     Ok(())
@@ -1422,6 +1438,77 @@ fn manifest_citations_do_not_echo_reference_secrets() -> Result {
             let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
             assert!(shown.contains("data.toml:1"), "{shown}");
             assert!(!shown.contains("EM_CANARY"), "{shown}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn rollback_recovery_keeps_exact_private_files_without_echoing_secrets() -> Result {
+    for machine in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let before = "# https://example.org/?token=EM_CANARY\n[datasets]\n";
+        let manifest = sandbox.work().join("data.toml");
+        fs::write(&manifest, before)?;
+        let blocked = manifest.clone();
+        let mut response = vec![crate::support::Part::Action(Box::new(move || {
+            fs::remove_file(&blocked).unwrap();
+            fs::create_dir(&blocked).unwrap();
+        }))];
+        response.extend(reply("403 Forbidden", &[], b"denied"));
+        let server = Server::start("/a.csv", vec![response])?;
+        let mut args = vec!["add", server.url.as_str(), "--as", "a"];
+        if machine {
+            args.push("--json");
+        }
+        let output = sandbox.run(&args)?;
+        assert!(!output.status.success());
+        let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+        assert!(shown.contains("could not restore data.toml"), "{shown}");
+        assert!(!shown.contains("EM_CANARY"), "{shown}");
+        let backups = fs::read_dir(sandbox.work().join(".fetchloom"))?
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("data.toml.recovery.")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1, "{shown}");
+        assert_eq!(fs::read_to_string(backups[0].path())?, before);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(backups[0].path())?.permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn completed_adds_and_rollbacks_remove_recovery_copies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &first)?;
+    for (name, response, success) in [
+        ("second", file(b"second\n", "\"v2\""), true),
+        ("denied", reply("403 Forbidden", &[], b"denied"), false),
+    ] {
+        let server = Server::start("/next.csv", vec![response])?;
+        let output = sandbox.run(&["add", &server.url, "--as", name])?;
+        assert_eq!(
+            output.status.success(),
+            success,
+            "{}",
+            text(&output.stderr)?
+        );
+        for entry in fs::read_dir(sandbox.work().join(".fetchloom"))? {
+            assert!(!entry?.file_name().to_string_lossy().contains(".recovery."));
         }
     }
     Ok(())
