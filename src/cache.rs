@@ -162,6 +162,8 @@ impl Cache {
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
+            #[cfg(target_os = "macos")]
+            exclude_native_backup_and_indexing(&cache.root)?;
             cache.write_atomically(&tag, TAG.as_bytes())?;
         }
         Ok(cache)
@@ -478,6 +480,31 @@ impl Cache {
             return (result, true);
         }
         (self.volume.hard_link(source, path), false)
+    }
+}
+
+#[cfg(target_os = "macos")]
+const BACKUP_EXCLUSION: &str = "com.apple.metadata:com_apple_backup_excludeItem";
+
+#[cfg(target_os = "macos")]
+fn exclude_native_backup_and_indexing(root: &Path) -> io::Result<()> {
+    match rustix::fs::setxattr(
+        root,
+        BACKUP_EXCLUSION,
+        b"com.apple.backupd",
+        rustix::fs::XattrFlags::CREATE,
+    ) {
+        Ok(()) | Err(rustix::io::Errno::EXIST | rustix::io::Errno::NOTSUP) => {}
+        Err(err) => return Err(err.into()),
+    }
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(root.join(".metadata_never_index"))
+    {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -1097,6 +1124,23 @@ pub(crate) mod tests {
         );
         assert!(source.exists());
         assert!(!destination.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_marks_the_root_once_for_backup_and_indexing() {
+        let (_dir, cache) = cache();
+        let marker = cache.root.join(".metadata_never_index");
+        assert_eq!(fs::read(&marker).unwrap(), b"");
+        let mut value = [0; 64];
+        match rustix::fs::getxattr(&cache.root, BACKUP_EXCLUSION, &mut value[..]) {
+            Ok(size) => assert_eq!(&value[..size], b"com.apple.backupd"),
+            Err(rustix::io::Errno::NOTSUP) => {}
+            Err(err) => panic!("backup exclusion could not be read: {err}"),
+        }
+        fs::write(&marker, b"kept").unwrap();
+        Cache::open(cache.root.clone()).unwrap();
+        assert_eq!(fs::read(marker).unwrap(), b"kept");
     }
 
     #[test]

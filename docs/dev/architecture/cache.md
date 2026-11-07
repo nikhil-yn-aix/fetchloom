@@ -39,6 +39,8 @@ flowchart TD
     root --> gclock["gc.lock: shared by runs, exclusive for gc"]
 ```
 
+first initialization writes `CACHEDIR.TAG` on every platform. on macos it also creates `.metadata_never_index` and sets `com.apple.metadata:com_apple_backup_excludeItem` to `com.apple.backupd` when extended attributes are supported. these root markers are not rewritten on subsequent opens.
+
 `Cache::locate` uses `FETCHLOOM_CACHE`, otherwise the platform cache location. there is no layout-marker file. the [cache-folder reference](../../user/reference/cache-folder.md) owns record paths and user-facing recovery rules.
 
 ### safe object access
@@ -66,6 +68,8 @@ URL records and partial checkpoints serialize the original URL as `sha256:<diges
 `CACHE_RENAME_NOREPLACE` is off by default. on linux, it replaces a new object's hardlink and unlink with `renameat_with(RENAME_NOREPLACE)`. an existing destination still follows the same hash-and-repair policy. `EINVAL`, `ENOSYS` and `EOPNOTSUPP` fall back to the existing publication path and disable native attempts for that cache handle and its clones for the rest of the run. other errors remain errors; a removed destination folder is recreated as before. dry runs never attempt the native move.
 
 both settings keep payload flushes, damage marks, repair directory flushes and download claims in their existing order. the experiment promises no stronger persistence for a fresh digest name. fixed-input tests cover both settings, intact and damaged destinations, unsupported calls and operational failures. its wall-time gain is left to the declared a/b cases; a smaller syscall count alone does not establish one.
+
+on macos, each archive member gets plain `fsync` while its original writer is open; after every member validates, the archive batch issues one `F_FULLFSYNC` before publishing any member. standalone new objects and downloads use `File::sync_all` on their original writer, which requests a full flush on macos. filesystems that refuse `F_FULLFSYNC` retain the plain-fsync limit described by the batch implementation.
 
 ### partial ownership and checkpoints
 
