@@ -71,7 +71,11 @@ impl<'a> Guard<'a> {
     pub(super) fn entry(&mut self) -> Result<(), Error> {
         self.check_stopped()?;
         self.entries += 1;
-        if self.entries > self.limits.members {
+        self.check_entries(self.entries)
+    }
+
+    pub(super) fn check_entries(&self, entries: u64) -> Result<(), Error> {
+        if entries > self.limits.members {
             return Err(refused(format!(
                 "the archive holds more than {}, the most fetchloom unpacks from one archive",
                 units::count(self.limits.members, "entry", "entries")

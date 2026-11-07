@@ -11,7 +11,7 @@ use crate::{name, units};
 
 /// the longest path an entry may have, in bytes, both as the archive spells it and in NFC. linux
 /// takes no longer path either.
-const LONGEST_PATH: usize = 4096;
+pub(super) const LONGEST_PATH: usize = 4096;
 
 /// the most one archive's names may take: each entry counts the length of its path, and each
 /// folder or file seen for the first time its own name plus [`PER_NAME`].

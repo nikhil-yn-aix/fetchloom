@@ -1,6 +1,8 @@
 //! zip archives, read through their central directory. every entry is checked before the first
 //! byte is written.
 
+mod directory;
+
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
@@ -30,9 +32,14 @@ pub(super) fn unpack(
         .map_err(|err| unreadable(archive, &err))?
         .len();
     guard.meter().cap_at(size);
+    let mut file = BufReader::with_capacity(BUFFER, file);
+    directory::check(&mut file, guard)?;
+    let position = file
+        .stream_position()
+        .map_err(|error| unreadable(archive, &error))?;
     let source = Source {
-        file: BufReader::with_capacity(BUFFER, file),
-        position: 0,
+        file,
+        position,
         meter: guard.meter(),
     };
     let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err))?;
@@ -146,7 +153,15 @@ fn repeated_name(archive: &Path, directory: u64) -> Option<String> {
 
 /// the name of the one entry a zip holds, when it holds exactly one and that one is a file.
 pub(super) fn sole_member(archive: &Path) -> Option<String> {
-    let file = BufReader::new(File::open(archive).ok()?);
+    let mut file = BufReader::new(File::open(archive).ok()?);
+    let limits = crate::archive::Limits {
+        members: 1,
+        ..crate::archive::Limits::default()
+    };
+    let meter = Meter::default();
+    let never = |_: u64| false;
+    let guard = Guard::new(&limits, &never, &meter);
+    directory::check(&mut file, &guard).ok()?;
     let zip = ZipArchive::new(file).ok()?;
     if zip.len() != 1 {
         return None;
@@ -476,5 +491,74 @@ mod tests {
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("200 times"), "{}", error.message);
         scratch.assert_empty();
+    }
+
+    #[test]
+    fn directory_entry_limit_precedes_later_directory_damage() {
+        let mut bytes = zip_of(&[("first", b"1"), ("second", b"2")]);
+        let headers = signatures(&bytes, *b"PK\x01\x02");
+        bytes[headers[1]] = b'Q';
+        let limits = crate::archive::Limits {
+            members: 1,
+            ..crate::archive::Limits::default()
+        };
+        let error = Scratch::new()
+            .unpack_with(Format::Zip, &bytes, &limits, &|_| false)
+            .unwrap_err();
+        assert!(
+            error.message.contains("more than 1 entry"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn directory_name_limit_precedes_later_directory_damage() {
+        let name = "x".repeat(4097);
+        let mut bytes = zip_of(&[(&name, b"1"), ("second", b"2")]);
+        let headers = signatures(&bytes, *b"PK\x01\x02");
+        bytes[headers[1]] = b'Q';
+        let error = Scratch::new().refuse(Format::Zip, &bytes);
+        assert!(
+            error.message.contains("longer than 4,096 bytes"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn footer_signatures_inside_a_member_are_not_directory_metadata() {
+        let mut payload = vec![0; 22];
+        payload[..4].copy_from_slice(b"PK\x05\x06");
+        payload[8..12].copy_from_slice(&[2, 0, 2, 0]);
+        payload[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        let zip = zip_with(
+            ZipWriter::new(Cursor::new(Vec::new())),
+            &[("data", &payload)],
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+        );
+        let scratch = Scratch::new();
+        let result = scratch.unpack(Format::Zip, &zip.into_inner()).unwrap();
+        scratch.assert_stored(&result.members[0], &payload);
+    }
+
+    #[test]
+    fn an_empty_zip_ignores_footer_shaped_prefixes() {
+        let mut bytes = vec![0; 23];
+        bytes[1..5].copy_from_slice(b"PK\x05\x06");
+        bytes[9..13].copy_from_slice(&[2, 0, 2, 0]);
+        bytes.extend(zip_of(&[]));
+        assert_eq!(
+            ::zip::ZipArchive::new(Cursor::new(&bytes)).unwrap().len(),
+            0
+        );
+        let limits = crate::archive::Limits {
+            members: 1,
+            ..crate::archive::Limits::default()
+        };
+        let unpacked = Scratch::new()
+            .unpack_with(Format::Zip, &bytes, &limits, &|_| false)
+            .unwrap();
+        assert_eq!(unpacked.members.len(), 0);
     }
 }

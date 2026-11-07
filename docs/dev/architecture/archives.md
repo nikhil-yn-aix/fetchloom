@@ -25,7 +25,7 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 
 `by_name` selects zip and tar names, including supported compressed tar endings. `.npz` and `.xlsx` stay whole even though they are zip containers. `detect` then inspects bytes; a misleading extension cannot force a decoder. `7z` and `rar` are recognized as unsupported and left packed.
 
-zip checks its central directory before reading members. tar reads sequentially, including gzip, xz, zstd and bzip2 decoding. both pass names and member bodies through the same guard.
+zip first bounds central-directory entry counts, raw path lengths and 256 MiB of directory/ZIP64 metadata work before the decoder collects entries. a separate footer scan reads at most 65,558 bytes. wrapper probes use the same preflight with a one-entry ceiling. zip then checks decoded names and entry kinds before reading members. tar reads sequentially, including gzip, xz, zstd and bzip2 decoding. both pass names and member bodies through the same guard.
 
 ### validate before publication
 

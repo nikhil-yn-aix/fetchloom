@@ -62,7 +62,7 @@ sync preserves local conflicts unless forced. status differences and kept confli
 
 extraction is enabled for `.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst`, `.tar.bz2`, `.tgz`, `.txz`, `.tzst`, `.tbz` and `.tbz2`, ignoring case. the bytes choose the decoder.
 
-other names stay intact, including `.fastq.gz`, `.xlsx`, `.npz`, `.pt` and extensionless downloads. `.7z`, `.rar` and recognized names containing unsupported bytes stay packed with a warning. unsafe or damaged supported archives fail extraction. nested archives are not unpacked recursively.
+other names stay intact, including `.fastq.gz`, `.xlsx`, `.npz`, `.pt` and extensionless downloads. `.7z`, `.rar` and recognized names containing unsupported bytes stay packed with a warning. unsafe or damaged supported archives fail extraction. nested archives are not unpacked recursively. zip directories are checked before their entries are collected: at most 1,000,000 entries, 4,096-byte paths and 256 MiB of directory metadata work. a refused archive can still be kept packed.
 
 use `--no-extract` with `add` or `get`, or `extract = false` in an existing manifest entry, to keep packed bytes. select and exclude patterns match the listed archive, not its members.
 
