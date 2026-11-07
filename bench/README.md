@@ -4,7 +4,7 @@ this suite measures time to checked files, cache reuse, no-op work and interrupt
 
 ## requirements
 
-use linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. the client and nginx share a kernel but use separate network namespaces. all measured files, caches and logs live under `/srv/fl-bench`, not a windows mount. leave at least 30 GiB free. do not run other benchmarks at the same time: dropping page caches affects the whole machine.
+use linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. the client and nginx share a kernel but use separate network namespaces. all measured files, caches and logs live under `FL_BENCH_ROOT` (default `/srv/fl-bench`), not a windows mount. leave at least 30 GiB free. do not run other benchmarks at the same time: dropping page caches affects the whole machine.
 
 on Ubuntu 24.04, these are the native package pins used by the smoke test:
 
@@ -16,11 +16,12 @@ apt-get install -y \
   git-annex=10.20240129-1build1 git=1:2.43.0-1ubuntu7.4 \
   iproute2=6.1.0-1ubuntu6.4 xfsprogs=6.6.0-1ubuntu2.1 \
   e2fsprogs=1.47.0-2.4~exp1ubuntu4.1 unzip=6.0-28ubuntu4.1 \
-  openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 python3-venv \
+  openssl=3.0.13-0ubuntu3.15 python3=3.12.3-0ubuntu2.1 \
   time=1.9-0.2build1
+systemctl disable --now nginx
 ```
 
-use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner and the chart renderer import only the standard library. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it.
+the lab starts its own nginx in a network namespace; disable the system service after installation. use an Ubuntu package snapshot if a pin has left the mirror. python clients share one environment, pinned in [pyproject.toml](pyproject.toml) and locked with every transitive version and hash in [uv.lock](uv.lock); each measured command has its own empty home and cache. the runner and the chart renderer import only the standard library. install [uv](https://docs.astral.sh/uv/getting-started/installation/) where root can run it. uv creates the environment without `python3-venv`; `FL_BENCH_VENV` selects its path (default `/opt/fl-bench/venv`).
 
 ## build the measured executable
 
@@ -35,16 +36,18 @@ in WSL, open that shell from powershell at the repository root with `wsl --cd $P
 
 ## setup
 
-use a root shell in the same checkout for setup and runs. from powershell at the repository root, `wsl --cd $PWD.Path --user root` opens one in the default WSL distribution. on native linux, enter the same checkout after switching to your root shell. set the binary path in that shell:
+use a root shell in the same checkout for setup and runs. from powershell at the repository root, `wsl --cd $PWD.Path --user root` opens one in the default WSL distribution. on native linux, enter the same checkout after switching to your root shell. set the binary and lab paths in that shell. keep both `FL_BENCH_` variables set for setup, tests, runs and teardown; with sudo, pass them explicitly through `sudo env`:
 
 ```sh
 benchmark_binary="$(realpath target/release/fetchloom)"
 "$benchmark_binary" --version
+export FL_BENCH_ROOT="${FL_BENCH_ROOT:-/srv/fl-bench}"
+export FL_BENCH_VENV="${FL_BENCH_VENV:-/opt/fl-bench/venv}"
 python3 bench/lab.py setup
 export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
-export TMPDIR=/srv/fl-bench/scratch
-UV_PROJECT_ENVIRONMENT=/opt/fl-bench/venv uv sync --project bench --locked
+export TMPDIR="$FL_BENCH_ROOT/scratch"
+UV_PROJECT_ENVIRONMENT="$FL_BENCH_VENV" UV_PYTHON_DOWNLOADS=never uv sync --project bench --locked
 python3 -m unittest discover -s bench -p 'test_*.py'
 ```
 
@@ -59,12 +62,12 @@ full lab and live runs. ext4 runs every scenario on every profile it applies to.
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7 \
-  --fs ext4 --seed 1729 --out /srv/fl-bench/results/full/lab-ext4
+  --fs ext4 --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-ext4"
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan --scenarios s5,s6 \
-  --fs xfs --seed 1729 --out /srv/fl-bench/results/full/lab-xfs
+  --fs xfs --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-xfs"
 python3 bench/live.py --fetchloom "$benchmark_binary" \
-  --seed 1729 --out /srv/fl-bench/results/full/live
+  --seed 1729 --out "$FL_BENCH_ROOT/results/full/live"
 ```
 
 there are 5 measured rounds on lan and home and 7 on far and poor, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
@@ -73,9 +76,9 @@ smoke tests use 12 files per set, a 2 MiB large file and one measured round. s7 
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --quick \
-  --profiles lan,home --fs ext4 --out /srv/fl-bench/results/quick/lab
+  --profiles lan,home --fs ext4 --out "$FL_BENCH_ROOT/results/quick/lab"
 python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
-  --out /srv/fl-bench/results/quick/live
+  --out "$FL_BENCH_ROOT/results/quick/live"
 ```
 
 a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
@@ -85,8 +88,8 @@ to compare a change behind a fetchloom setting, add `--variant label:FETCHLOOM_X
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles lan \
   --scenarios s3 --fs ext4 --rounds 7 --variant lean:FETCHLOOM_EXP_LEAN_PARTIAL=1 \
-  --out /srv/fl-bench/results/ab/lean
-python3 bench/ab.py /srv/fl-bench/results/ab/lean
+  --out "$FL_BENCH_ROOT/results/ab/lean"
+python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/lean"
 ```
 
 s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
@@ -100,9 +103,9 @@ the full dataverse TSV/TAB representation difference is reported as a content mi
 ## render and keep results
 
 ```sh
-python3 bench/render.py /srv/fl-bench/results/full
+python3 bench/render.py "$FL_BENCH_ROOT/results/full"
 mkdir -p bench/results
-cp -a /srv/fl-bench/results/full bench/results/
+cp -a "$FL_BENCH_ROOT/results/full" bench/results/
 ```
 
 rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scenario in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. it first removes every SVG card already in that folder, so no card, including a `hero-*` card, outlives the results that produced it. a card's title states the result, including when another tool wins. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
@@ -111,7 +114,7 @@ rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per scena
 
 ## teardown
 
-copy wanted results first. teardown removes the namespace, its nginx processes, hosts entry, CA, mounts, images, fixtures and every file under `/srv/fl-bench`, including results.
+copy wanted results first. teardown removes the namespace, its nginx processes, hosts entry, CA, mounts, images, fixtures and every file under `FL_BENCH_ROOT`, including results.
 
 ```sh
 python3 bench/lab.py teardown
@@ -119,7 +122,7 @@ python3 bench/lab.py setup
 python3 bench/lab.py teardown
 ```
 
-the second setup checks the lifecycle is repeatable. the package environment under `/opt/fl-bench/venv` is not part of lab state and is kept for another run.
+the second setup checks the lifecycle is repeatable. the package environment at `FL_BENCH_VENV` is not part of lab state and is kept for another run.
 
 ## add a client
 

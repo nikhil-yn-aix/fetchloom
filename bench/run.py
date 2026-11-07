@@ -205,7 +205,7 @@ def metadata(args, adapters):
                                                          "e2fsprogs", "unzip", "openssl", "time"], text=True).splitlines(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
                 installed_packages=subprocess.check_output(
-                    ["/opt/fl-bench/venv/bin/python", "-c",
+                    [str(lab.VENV / "bin" / "python"), "-c",
                      "import importlib.metadata as m\n"
                      "print('\\n'.join(sorted(f'{d.name}=={d.version}' for d in m.distributions())))"],
                     text=True).splitlines())
@@ -329,7 +329,7 @@ def main():
     if args.rounds is not None and args.rounds < 1 or args.timeout <= 0:
         parser.error("rounds and timeout must be positive")
     if not args.out.resolve().is_relative_to(lab.ROOT):
-        parser.error("write results under /srv/fl-bench; copy them out after measurement")
+        parser.error(f"write results under {lab.ROOT}; copy them out after measurement")
     if not (lab.ROOT / "owned.json").exists():
         parser.error("run lab.py setup first")
     if len({label for label, _ in args.variant}) != len(args.variant):

@@ -119,7 +119,7 @@ lab cases run 5 rounds on lan and home and 7 on far and poor, after one warmup r
 
 the full comparison has not been published. do not use quick smoke timings as performance results or create the generated results page by hand.
 
-each run writes `meta.json` and `runs.jsonl` under `/srv/fl-bench/results/` on the linux filesystem. copy wanted results into the ignored `bench/results/` before teardown. measuring on a windows-mounted worktree would mix filesystem overhead into the lab. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables of the results page, once published, so every published number traces back to a results file.
+each run writes `meta.json` and `runs.jsonl` under `$FL_BENCH_ROOT/results/` (default `/srv/fl-bench/results/`) on the linux filesystem. copy wanted results into the ignored `bench/results/` before teardown. measuring on a windows-mounted worktree would mix filesystem overhead into the lab. `bench/render.py` turns them into the charts under `docs/assets/bench/` and the tables of the results page, once published, so every published number traces back to a results file.
 
 ## not measured
 

@@ -6,6 +6,39 @@ import fixtures
 import lab
 
 
+class LabPathTests(unittest.TestCase):
+    def paths(self, **settings):
+        import json
+        from pathlib import Path
+        import subprocess
+        import sys
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("FL_BENCH_ROOT", "FL_BENCH_VENV")}
+        env.update(settings)
+        probe = """import json, tempfile
+from pathlib import Path
+import lab, live, tools
+with tempfile.TemporaryDirectory() as folder:
+    work = Path(folder)
+    pooch = tools.Pooch("fetchloom").command(dict(id="s1", files=[]), work)[0]
+    zenodo = live.command("zenodo_get", dict(native="1", select=[]), work, "fetchloom")[0]
+    print(json.dumps([str(lab.ROOT), lab.environment()["TMPDIR"],
+                      lab.environment()["PATH"].split(":")[0], pooch, live.PYTHON, zenodo]))
+"""
+        return json.loads(subprocess.check_output([sys.executable, "-c", probe],
+                                                  cwd=Path(lab.__file__).parent, env=env, text=True))
+
+    def test_lab_paths_default_to_the_documented_locations(self):
+        self.assertEqual(self.paths(), ["/srv/fl-bench", "/srv/fl-bench/scratch",
+                                        "/opt/fl-bench/venv/bin", "/opt/fl-bench/venv/bin/python",
+                                        "/opt/fl-bench/venv/bin/python", "/opt/fl-bench/venv/bin/zenodo_get"])
+
+    def test_lab_paths_follow_the_environment_overrides(self):
+        self.assertEqual(self.paths(FL_BENCH_ROOT="/data/lab", FL_BENCH_VENV="/data/venv"),
+                         ["/data/lab", "/data/lab/scratch", "/data/venv/bin",
+                          "/data/venv/bin/python", "/data/venv/bin/python", "/data/venv/bin/zenodo_get"])
+
+
 class FixtureTests(unittest.TestCase):
     def test_seed_controls_entropy(self):
         a = fixtures.content(17, "a", 4096)
@@ -235,7 +268,7 @@ class MeasurementTests(unittest.TestCase):
     def test_dvc_keeps_its_site_cache_in_the_measured_folder(self):
         from pathlib import Path
         import tools
-        work = Path("/srv/fl-bench/fs/ext4/work")
+        work = lab.ROOT / "fs" / "ext4" / "work"
         env = tools.Dvc("fetchloom").env(work)
         self.assertTrue(Path(env["DVC_SITE_CACHE_DIR"]).is_relative_to(work))
 

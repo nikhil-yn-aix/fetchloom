@@ -209,7 +209,7 @@ class Pooch(Tool):
     name = "pooch"
 
     def version(self):
-        return subprocess.check_output(["/opt/fl-bench/venv/bin/python", "-c",
+        return subprocess.check_output([str(lab.VENV / "bin" / "python"), "-c",
                                         "import pooch; print(pooch.__version__)"], text=True).strip()
 
     def command(self, scenario, workdir):
@@ -222,7 +222,7 @@ class Pooch(Tool):
                           "    pooch.retrieve(url=item['url'], known_hash='sha256:' + item['sha256'],\n"
                           "                   fname=item['name'], path=os.environ['POOCH_CACHE'],\n"
                           f"                   processor={processor})\n")
-        return ["/opt/fl-bench/venv/bin/python", str(source)]
+        return [str(lab.VENV / "bin" / "python"), str(source)]
 
     def outputs(self, scenario, workdir):
         root = workdir / "cache" / "pooch"

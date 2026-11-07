@@ -11,7 +11,8 @@ import subprocess
 import time
 import urllib.request
 
-ROOT = Path("/srv/fl-bench")
+ROOT = Path(os.environ.get("FL_BENCH_ROOT", "/srv/fl-bench"))
+VENV = Path(os.environ.get("FL_BENCH_VENV", "/opt/fl-bench/venv"))
 NS = "flb-srv"
 CLIENT = "flb-client"
 SERVER = "flb-server"
@@ -84,7 +85,7 @@ def environment():
                XDG_CACHE_HOME=str(ROOT / "cache"), DVC_NO_ANALYTICS="true",
                GIT_AUTHOR_NAME="benchmark", GIT_AUTHOR_EMAIL="bench@localhost",
                GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost")
-    env["PATH"] = "/opt/fl-bench/venv/bin:" + env["PATH"]
+    env["PATH"] = str(VENV / "bin") + os.pathsep + env["PATH"]
     env["NO_PROXY"] = env["no_proxy"] = "lab.flb,10.77.0.2,localhost,127.0.0.1"
     return env
 

@@ -18,7 +18,7 @@ import run
 import tools
 
 SERVICES = ("zenodo", "huggingface", "kaggle", "figshare", "dataverse")
-PYTHON = "/opt/fl-bench/venv/bin/python"
+PYTHON = str(lab.VENV / "bin" / "python")
 
 
 def compare(first, second):
@@ -157,12 +157,12 @@ def command(name, dataset, work, fetchloom):
             argv += ["--select", pattern]
         return argv
     if name == "zenodo_get":
-        argv = ["/opt/fl-bench/venv/bin/zenodo_get", dataset["native"], "-o", str(dest)]
+        argv = [str(lab.VENV / "bin" / "zenodo_get"), dataset["native"], "-o", str(dest)]
         for pattern in dataset["select"]:
             argv += ["--glob", pattern]
         return argv
     if name == "hf":
-        argv = ["/opt/fl-bench/venv/bin/hf", "download", dataset["native"], "--repo-type", "dataset",
+        argv = [str(lab.VENV / "bin" / "hf"), "download", dataset["native"], "--repo-type", "dataset",
                 "--revision", dataset["revision"], "--include", *dataset["select"], "--local-dir", str(dest)]
         checks = work / "SHA256SUMS"
         checks.write_text("".join(f"{digest}  {dest / filename}\n"
@@ -200,7 +200,7 @@ def main():
     args = parser.parse_args()
     lab.require_root()
     if not args.out.resolve().is_relative_to(lab.ROOT):
-        parser.error("write results under /srv/fl-bench")
+        parser.error(f"write results under {lab.ROOT}")
     if not (lab.ROOT / "owned.json").exists():
         parser.error("run lab.py setup first")
     lock = lab.exclusive()
