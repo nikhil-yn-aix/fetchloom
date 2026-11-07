@@ -129,18 +129,13 @@ fn parse(text: &str) -> Option<u64> {
     if !digits(whole) || (number.contains('.') && !digits(fraction)) {
         return None;
     }
-    let scale = 10_u128.checked_pow(u32::try_from(fraction.len()).ok()?)?;
-    let whole = whole.parse::<u128>().ok()?.checked_mul(scale)?;
-    let fraction = if fraction.is_empty() {
-        0
-    } else {
-        fraction.parse::<u128>().ok()?
-    };
-    let bytes = whole
-        .checked_add(fraction)?
-        .checked_mul(1024_u128.pow(power))?
-        / scale;
-    u64::try_from(bytes).ok().filter(|bytes| *bytes > 0)
+    let multiplier = 1024_u64.pow(power);
+    let whole = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
+    // carry decimal digits from the right so rounding needs no precision-sized integer.
+    let fraction = fraction.bytes().rev().fold(0, |tail, digit| {
+        (tail + u64::from(digit - b'0') * multiplier) / 10
+    });
+    whole.checked_add(fraction).filter(|bytes| *bytes > 0)
 }
 
 #[cfg(test)]
@@ -164,6 +159,27 @@ mod tests {
         assert!(Rate::read(&|_| None).unwrap().is_none());
         assert!(Rate::read(&|_| Some("".into())).unwrap().is_none());
         assert!(Rate::read(&|_| Some("2.5M".into())).unwrap().is_some());
+    }
+
+    #[test]
+    fn fractional_precision_does_not_change_the_rounded_rate() {
+        let zeros = "0".repeat(128);
+        let nines = "9".repeat(128);
+        for (text, expected) in [
+            (format!("1.{zeros}"), Some(1)),
+            (format!("1.{nines}"), Some(1)),
+            (format!("0.0009765625{zeros}K"), Some(1)),
+            (format!("0.0009765624{nines}K"), None),
+            (format!("0.0009765625{zeros}1K"), Some(1)),
+            (format!("0.{nines}T"), Some((1 << 40) - 1)),
+            (format!("16777215.{nines}T"), Some(u64::MAX)),
+            (format!("18446744073709551615.{nines}"), Some(u64::MAX)),
+            (format!("16777216.{zeros}T"), None),
+            (format!("18446744073709551616.{zeros}"), None),
+            (format!("{zeros}1.{zeros}M"), Some(1 << 20)),
+        ] {
+            assert_eq!(parse(&text), expected, "{text}");
+        }
     }
 
     #[test]
