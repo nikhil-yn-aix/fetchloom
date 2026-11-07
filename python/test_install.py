@@ -26,7 +26,7 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "shell installer coverage runs on linux")
-class InstallerChecks(unittest.TestCase):
+class LocalRelease(unittest.TestCase):
     def setUp(self):
         targets = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
         arch = targets.get(platform.machine())
@@ -86,6 +86,9 @@ class InstallerChecks(unittest.TestCase):
         return subprocess.run(["sh", str(ROOT / "install.sh"), "0.1.0"], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
 
+
+
+class InstallerChecks(LocalRelease):
     def test_matching_archive_is_installed(self):
         executable = self.package()
         result = self.install()
@@ -118,3 +121,40 @@ class InstallerChecks(unittest.TestCase):
         profile = self.profile.read_text()
         self.assertTrue(profile.startswith("# existing profile\n"))
         self.assertEqual(profile.count('export PATH="$HOME/.local/bin:$PATH"'), 1)
+
+
+class InstallerDestinationTests(LocalRelease):
+    def test_directory_destination_is_refused_without_overwriting_its_contents(self):
+        self.package()
+        self.bin.unlink()
+        self.bin.mkdir()
+        member = self.bin / "fetchloom"
+        member.write_bytes(b"existing data must stay\n")
+        result = self.install()
+        with self.subTest("exit status"):
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        with self.subTest("existing directory member"):
+            self.assertEqual(member.read_bytes(), b"existing data must stay\n")
+        with self.subTest("clear diagnostic"):
+            self.assertIn("directory", result.stderr)
+        self.assertFalse((self.home / "executed").exists())
+        self.assertEqual(self.profile.read_text(), "# existing profile\n")
+
+    def test_symlink_to_directory_is_refused_without_overwriting_its_target(self):
+        self.package()
+        self.bin.unlink()
+        outside = self.root / "outside"
+        outside.mkdir()
+        member = outside / "fetchloom"
+        member.write_bytes(b"existing data must stay\n")
+        self.bin.symlink_to(outside, target_is_directory=True)
+        result = self.install()
+        with self.subTest("exit status"):
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        with self.subTest("file outside the install directory"):
+            self.assertEqual(member.read_bytes(), b"existing data must stay\n")
+        with self.subTest("clear diagnostic"):
+            self.assertIn("directory", result.stderr)
+        self.assertTrue(self.bin.is_symlink())
+        self.assertFalse((self.home / "executed").exists())
+        self.assertEqual(self.profile.read_text(), "# existing profile\n")

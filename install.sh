@@ -19,6 +19,12 @@ fail() {
     exit 1
 }
 
+check_destination() {
+    if [ -d "$bin_dir/fetchloom" ]; then
+        fail "$bin_dir/fetchloom is a directory or a link to one. nothing was installed"
+    fi
+}
+
 if command -v curl > /dev/null 2>&1; then
     download() {
         curl --proto "$protocols" --tlsv1.2 --fail --silent --show-error --location --retry 3 \
@@ -92,6 +98,7 @@ else
     release=$repository/releases/latest/download
 fi
 
+check_destination
 mkdir -p "$bin_dir"
 # staged beside the destination, so moving each program into place is a rename
 work=$bin_dir/.fetchloom-install-$$
@@ -130,6 +137,7 @@ folder=$work/${asset%.tar.gz}
 # in place
 installed=$("$folder/fetchloom" --version) ||
     fail "the downloaded fetchloom does not run on this machine. nothing was installed"
+check_destination
 mv -f "$folder/fetchloom" "$bin_dir/fetchloom"
 echo "installed $installed in $bin_dir"
 
