@@ -141,4 +141,41 @@ mod tests {
             .replace(r#","writable":true"#, "");
         assert!(State::parse(unrecorded.as_bytes()).files.is_empty());
     }
+
+    #[test]
+    fn an_unknown_version_drops_placement_and_sync_claims() {
+        let mut state = State::default();
+        state.files.insert(
+            "data/iris/iris.csv".to_owned(),
+            Placed {
+                dataset: "iris".to_owned(),
+                sha256: digest::sha256(b"good"),
+                method: Method::Hardlink,
+                look: Look {
+                    size: 4,
+                    modified: 42,
+                },
+                writable: false,
+                checked: 43,
+            },
+        );
+        state.synced = Some(Synced {
+            manifest: digest::sha256(b"manifest"),
+            lock: digest::sha256(b"lock"),
+            complete: true,
+        });
+        let mut stored: serde_json::Value = serde_json::from_slice(&state.render()).unwrap();
+        for version in [0, VERSION + 1, u32::MAX] {
+            stored["version"] = serde_json::json!(version);
+            let read = State::parse(&serde_json::to_vec(&stored).unwrap());
+            assert!(
+                read.files.is_empty(),
+                "version {version} cannot vouch for files"
+            );
+            assert!(
+                read.synced.is_none(),
+                "version {version} cannot claim a complete sync"
+            );
+        }
+    }
 }
