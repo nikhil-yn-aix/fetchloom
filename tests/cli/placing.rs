@@ -663,7 +663,7 @@ fn add_and_a_syncing_path_leave_the_project_settled() -> Result {
     assert!(settled()?, "{}", fs::read_to_string(&state)?);
 
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
-    fs::remove_file(&placed)?;
+    delete(&placed)?;
     let path = sandbox.run(&["path", "iris"])?;
     assert_eq!(path.status.code(), Some(0), "{}", text(&path.stderr)?);
     assert!(placed.is_file());
@@ -694,7 +694,7 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     // a missing file sends the sync through every phase
-    fs::remove_file(sandbox.work().join("data").join("iris").join("iris.csv"))?;
+    delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
     let trace = sandbox.folder("traces")?.join("sync.json");
     let output = sandbox
         .command(&["sync"])
