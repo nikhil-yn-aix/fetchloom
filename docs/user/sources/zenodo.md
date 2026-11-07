@@ -25,7 +25,7 @@ patterns match listed paths. listing limits and access checks apply before filte
 
 ## pins
 
-`resolved` is `zenodo:` followed by the concrete record id. download URLs use the record's API file-content endpoint. fetchloom checks stated MD5 while learning SHA-256 and size.
+`resolved` is `zenodo:` followed by the concrete record id. the answer must name the requested record, or identify the requested concept as the parent of that record. unrelated record ids are refused. download URLs use the record's API file-content endpoint. fetchloom checks stated MD5 while learning SHA-256 and size.
 
 source metadata keeps its casing. the iris record supplies `license = "cc-by-4.0"`. hashes and sizes identify the selected bytes; they do not guarantee that the host will keep serving them.
 

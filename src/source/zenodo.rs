@@ -71,6 +71,13 @@ impl Record {
         if answer.id == 0 {
             return Err(self.invalid("the record has no concrete id"));
         }
+        let concept = answer
+            .conceptrecid
+            .as_deref()
+            .and_then(|id| id.parse::<u64>().ok());
+        if answer.id != self.id && concept != Some(self.id) {
+            return Err(self.invalid("the record or concept id does not match"));
+        }
         match answer.metadata.access_right.as_str() {
             "open" => (),
             // zenodo lists a restricted record's files only to an account allowed to read them
@@ -124,6 +131,7 @@ impl Record {
 #[derive(Deserialize)]
 struct Answer {
     id: u64,
+    conceptrecid: Option<String>,
     metadata: Metadata,
     doi: Option<String>,
     files: Vec<File>,
@@ -242,6 +250,35 @@ mod tests {
         let pinned = block_on(listing.resolved.resolve(&recorded)).unwrap();
         assert_eq!(pinned.files, listing.files);
         assert_eq!(recorded.asked(), [concept, IRIS]);
+    }
+
+    #[test]
+    fn answers_must_match_the_requested_record_or_concept() {
+        for (requested, id, concept, valid) in [
+            ("3608990", 3_608_991, Some("3608989"), false),
+            ("3608989", 3_608_990, Some("9999999"), false),
+            ("3608989", 3_608_990, None, false),
+            ("3608989", 3_608_990, Some("not an id"), false),
+            ("3608990", 3_608_990, None, true),
+            ("3608989", 3_608_990, Some("3608989"), true),
+        ] {
+            let url = format!("https://zenodo.org/api/records/{requested}");
+            let body = changed(|value| {
+                value["id"] = id.into();
+                value["conceptrecid"] = concept.into();
+            });
+            let recorded = Recorded::default().on(&url, 200, body);
+            let reference = Reference::parse(&format!("zenodo:{requested}"))
+                .unwrap()
+                .reference;
+            let result = block_on(reference.resolve(&recorded));
+            if valid {
+                assert_eq!(result.unwrap().resolved.to_string(), format!("zenodo:{id}"));
+            } else {
+                assert_eq!(result.unwrap_err().kind, Kind::SourceInvalid, "{requested}");
+            }
+            assert_eq!(recorded.asked(), [url]);
+        }
     }
 
     #[test]

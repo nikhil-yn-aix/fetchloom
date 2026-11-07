@@ -42,7 +42,7 @@ DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's h
 
 ### keep listing and transfer separate
 
-`Listing.resolved` names the version to resolve again where the source supports one. each `Remote` carries a relative path, URL and any known size, SHA-256 or MD5. unavailable entries retain their paths and reasons so filters can explicitly leave them out. `Listing.warnings` carries what a person should know about a listing that is not an error, such as the components an OSF project leaves out; `tell_resolved` in cli/sync.rs prints each one as a warning after the `Resolved` line, so it shows without `-vv` and reaches `--json` `warnings`.
+`Listing.resolved` names the version to resolve again where the source supports one. zenodo accepts a different concrete id only when the answer names the requested concept id; an unrelated record is an invalid listing. each `Remote` carries a relative path, URL and any known size, SHA-256 or MD5. unavailable entries retain their paths and reasons so filters can explicitly leave them out. `Listing.warnings` carries what a person should know about a listing that is not an error, such as the components an OSF project leaves out; `tell_resolved` in cli/sync.rs prints each one as a warning after the `Resolved` line, so it shows without `-vv` and reaches `--json` `warnings`.
 
 listings accept at most 100,000 files per dataset before selection; OSF's walk also counts folders. pagination is handled in the adapter and each page is parsed once. this cap does not bound total project size or the number of members inside archives.
 
