@@ -48,6 +48,56 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     );
 }
 
+#[tokio::test]
+async fn an_uncontended_claim_rechecks_bytes_published_after_the_cache_miss() {
+    let bytes = b"data";
+    let digest = crate::digest::sha256(bytes);
+    let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc").unwrap();
+    for expect in [
+        Expect {
+            sha256: Some(digest),
+            size: Some(4),
+            ..Expect::default()
+        },
+        Expect {
+            md5: Some(md5),
+            size: Some(4),
+            ..Expect::default()
+        },
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = Cache::open(directory.path().join("cache")).unwrap();
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/published",
+            server.local_addr().unwrap()
+        ))
+        .unwrap();
+        let net = net(&url);
+        let fetch = Fetch {
+            expect,
+            ..Fetch::new(url.clone())
+        };
+        assert!(net.in_cache(&fetch, &cache).is_none());
+
+        crate::cache::tests::store(&cache, bytes);
+        cache
+            .save_stated_md5(&md5, url.as_str(), &digest, 4)
+            .unwrap();
+        // publication wins before the first claim attempt, so no contention was observed.
+        let fetched = tokio::select! {
+            result = net.claim_and_download(&fetch, &cache, None, &|_| Ok(())) => result.unwrap(),
+            _ = server.accept() => panic!("a newly claimed download fetched bytes already published after its cache miss"),
+        };
+        assert_eq!(fetched.origin, Origin::Cache);
+        assert_eq!(fetched.digest, digest);
+        assert_eq!(fetched.size, 4);
+        assert_eq!(net.work.counts().requests, 0);
+        assert_eq!(net.work.counts().bytes_down, 0);
+        assert_eq!(net.work.counts().cache_hits, 1);
+    }
+}
+
 #[test]
 fn a_pinned_sha256_leaves_no_md5_to_compute() {
     let md5 = Md5::from_hex("8d777f385d3dfec8815d20f7496026dc");

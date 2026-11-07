@@ -113,6 +113,8 @@ experiment settings come from the run's `Experiments` value and are off by defau
 
 ## invariants and traps
 
+- a pinned cache miss is rechecked while holding the URL claim, including an uncontended claim. otherwise a completed publication between lookup and acquisition can cause a duplicate body request.
+
 - keep byte processing off async workers and queues bounded. a queue size is not a bound on total project memory.
 - hold the partial claim until the writer and hash worker stop using its file.
 - range support without version proof is insufficient for joining bytes.

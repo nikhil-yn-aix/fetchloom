@@ -205,7 +205,9 @@ fn check_shared_cache_syncs(
             releases.push(release);
         }
         response.extend(file(body, "\"v1\""));
-        servers.push(Server::start(&format!("/part{index}.csv"), vec![response])?);
+        let mut responses = vec![response];
+        responses.extend((1..processes).map(|_| file(body, "\"v1\"")));
+        servers.push(Server::start(&format!("/part{index}.csv"), responses)?);
         if warm {
             let digest = sha256(body);
             let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
@@ -255,7 +257,7 @@ fn check_shared_cache_syncs(
         }
         fs::write(project.join("data.toml"), manifest)?;
         fs::write(project.join("data.lock"), lock)?;
-        let mut command = sandbox.command_in(&project, &["--json", "sync"]);
+        let mut command = sandbox.command_in(&project, &["--json", "-vv", "sync"]);
         command
             .env("FETCHLOOM_JOBS", "1")
             .env("FETCHLOOM_THREADS", "1")
@@ -275,15 +277,33 @@ fn check_shared_cache_syncs(
         assert_eq!(owned, (0..processes).map(|index| index * 2).collect());
     }
     drop(releases);
+    let mut children = Vec::new();
     for run in syncing {
-        let output = run.finish()?;
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{}\n{}",
-            text(&output.stdout)?,
-            text(&output.stderr)?
+        let pid = run.child.as_ref().ok_or("missing sync child")?.id();
+        children.push((pid, run.finish()?));
+    }
+    let requests: Vec<_> = servers
+        .iter()
+        .map(|server| (&server.url, server.requests()))
+        .collect();
+    if children.iter().any(|(_, output)| !output.status.success())
+        || requests
+            .iter()
+            .any(|(_, requests)| requests.len() != usize::from(!warm))
+    {
+        let mut story = format!(
+            "switches={switches:?}, warm={warm}, overlapping={overlapping}\nrequests={requests:#?}\n"
         );
+        for (index, (pid, output)) in children.iter().enumerate() {
+            writeln!(
+                story,
+                "project {index} pid {pid} exit {:?}\n{}\n{}",
+                output.status.code(),
+                text(&output.stdout)?,
+                text(&output.stderr)?
+            )?;
+        }
+        return Err(story.into());
     }
     for (project, order) in projects {
         for (slot, body) in order.into_iter().enumerate() {

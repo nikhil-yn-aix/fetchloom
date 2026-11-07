@@ -323,15 +323,24 @@ impl Net {
         self.typed
             .check(&fetch.from)
             .map_err(|reason| failure::refused(&fetch.from, &reason))?;
+        self.claim_and_download(fetch, cache, known, on).await
+    }
+
+    async fn claim_and_download(
+        &self,
+        fetch: &Fetch,
+        cache: &Cache,
+        known: Option<UrlRecord>,
+        on: Listener<'_>,
+    ) -> Result<Fetched, Error> {
         let (partial, waited) = self.claim(&fetch.url, cache, on).await?;
-        if waited {
-            // the other download may have finished what this one came for
-            if let Some(found) = self.in_cache(fetch, cache) {
-                return Ok(found);
-            }
-            if let Some(record) = fetch.revalidate.then(|| remembered(cache, fetch)).flatten() {
-                return Ok(fetched(record, Origin::Cache));
-            }
+        // another run can publish between the lookup and a claim that never reports contention.
+        if let Some(found) = self.in_cache(fetch, cache) {
+            return Ok(found);
+        }
+        if waited && let Some(record) = fetch.revalidate.then(|| remembered(cache, fetch)).flatten()
+        {
+            return Ok(fetched(record, Origin::Cache));
         }
         self.transfer(fetch, cache, &partial, known, on).await
     }
