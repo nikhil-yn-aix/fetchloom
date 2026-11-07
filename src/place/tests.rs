@@ -469,6 +469,79 @@ fn a_synced_folder_gets_a_copy_instead_of_a_hardlink() {
     assert_eq!(method, Method::Copy);
 }
 
+/// the names in `folder` other than the cached object's.
+fn placed_names(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "object")
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn a_clone_is_made_under_a_hidden_name_and_named_only_once_complete() {
+    use std::io::Write as _;
+    let (folder, _object) = cache(true);
+    let destination = folder.path().join("placed.csv");
+    let mut named_while_filled = None;
+
+    let published = publish_new(
+        &destination,
+        |temporary| File::create_new(temporary),
+        |mut file| {
+            named_while_filled = Some(fs::symlink_metadata(&destination).is_ok());
+            file.write_all(CONTENTS.as_bytes())
+        },
+    )
+    .unwrap();
+
+    drop(published);
+    assert_eq!(
+        named_while_filled,
+        Some(false),
+        "a cut-off clone would stay"
+    );
+    assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+    assert_eq!(placed_names(folder.path()), ["placed.csv"]);
+}
+
+#[test]
+fn a_clone_never_replaces_a_file_that_took_its_name() {
+    let (folder, _object) = cache(true);
+    let destination = folder.path().join("placed.csv");
+
+    let error = publish_new(
+        &destination,
+        |temporary| File::create_new(temporary),
+        |_| fs::write(&destination, "edited by hand"),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&destination).unwrap(), "edited by hand");
+    assert_eq!(placed_names(folder.path()), ["placed.csv"]);
+}
+
+#[test]
+fn a_reflink_the_volume_refuses_leaves_no_hidden_file() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let mut placer = Placer::starting_at(root.clone(), Method::Reflink, None);
+
+    placer
+        .place(&object, &root.join("placed.csv"), true)
+        .unwrap();
+
+    assert_eq!(placed_names(&root), ["placed.csv"]);
+    assert_eq!(
+        fs::read_to_string(root.join("placed.csv")).unwrap(),
+        CONTENTS
+    );
+    assert!(!is_read_only(&root.join("placed.csv")));
+}
+
 #[test]
 fn the_whole_ladder_never_copies_within_one_volume() {
     let (folder, object) = cache(true);

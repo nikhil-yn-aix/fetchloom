@@ -226,9 +226,9 @@ impl Placer {
     fn put(&self, object: &Path, destination: &Path, writable: bool) -> io::Result<Method> {
         if self.can_reflink.load(Ordering::Relaxed) {
             check_object(object)?;
-            match reflink_copy::reflink(object, destination) {
-                Ok(()) => {
-                    seal(destination, writable)?;
+            match reflink(object, destination, writable) {
+                Ok(sealed) => {
+                    sealed?;
                     return Ok(Method::Reflink);
                 }
                 Err(error) => self.learn(Method::Reflink, error)?,
@@ -571,36 +571,159 @@ fn copy(
     threads: Threads,
     flush: bool,
 ) -> io::Result<()> {
-    let destination = std::path::absolute(destination)?;
-    let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
-    let destination = parent.join(destination.file_name().unwrap_or_default());
-    let (temporary, claimed) = loop {
-        let temporary = parent.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..)));
-        match crate::volume::create_hidden(&temporary) {
-            Ok(file) => break (temporary, file),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(err),
-        }
-    };
-    let temporary = tempfile::TempPath::try_from_path(temporary)?;
-    // publishing clears windows attributes, so seal through the claimed handle afterward.
-    #[cfg(windows)]
-    let staged_writable = true;
-    #[cfg(not(windows))]
-    let staged_writable = writable;
-    fill(object, &claimed, staged_writable, threads)?;
+    let (staged, file) = stage_copy(object, destination, writable, threads)?;
     if flush {
-        claimed.sync_all()?;
+        file.sync_all()?;
     }
-    temporary
-        .persist_noclobber(&destination)
-        .map_err(|error| error.error)?;
+    staged.publish()?;
     #[cfg(windows)]
-    undo_on_error(set_file_writable(&claimed, writable), &destination)?;
+    undo_on_error(set_file_writable(&file, writable), destination)?;
     Ok(())
 }
 
-/// whether a file has the reserved name of an unfinished placement copy.
+/// copies `object` into a new hidden file beside `destination`, to be published once complete.
+fn stage_copy(
+    object: &Path,
+    destination: &Path,
+    writable: bool,
+    threads: Threads,
+) -> io::Result<(Staged, File)> {
+    let (staged, file) = Staged::claim(destination, crate::volume::create_hidden)?;
+    // publishing clears windows attributes, so seal through the claimed handle afterward.
+    fill(object, &file, cfg!(windows) || writable, threads)?;
+    Ok((staged, file))
+}
+
+/// a new file under a hidden name in its destination's folder, which takes the destination's
+/// name only once complete, so an interrupted placement never leaves part of a file where the
+/// project expects one. a hidden file an interrupted process leaves is swept by the next sync.
+struct Staged {
+    temporary: tempfile::TempPath,
+    destination: PathBuf,
+}
+
+impl Staged {
+    /// makes a file with `create` under a fresh hidden name beside `destination`. `create` must
+    /// fail with `AlreadyExists` when the name is taken, and remove what it made when it fails.
+    fn claim(
+        destination: &Path,
+        create: impl Fn(&Path) -> io::Result<File>,
+    ) -> io::Result<(Staged, File)> {
+        let destination = std::path::absolute(destination)?;
+        let parent = fs::canonicalize(destination.parent().unwrap_or_else(|| Path::new(".")))?;
+        let destination = parent.join(destination.file_name().unwrap_or_default());
+        loop {
+            let temporary = parent.join(format!(".fetchloom-{:016x}.copy", fastrand::u64(..)));
+            match create(&temporary) {
+                Ok(file) => {
+                    let temporary = tempfile::TempPath::try_from_path(temporary)?;
+                    return Ok((
+                        Staged {
+                            temporary,
+                            destination,
+                        },
+                        file,
+                    ));
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    /// gives the file its destination's name, failing when that name exists.
+    fn publish(self) -> io::Result<()> {
+        self.temporary
+            .persist_noclobber(&self.destination)
+            .map_err(|error| error.error)
+    }
+}
+
+/// makes a file with `create` under a hidden name beside `destination`, fills it with `write`,
+/// and only then gives it the destination's name, failing when that name exists.
+#[cfg(any(target_os = "linux", windows, test))]
+fn publish_new(
+    destination: &Path,
+    create: impl Fn(&Path) -> io::Result<File>,
+    write: impl FnOnce(&File) -> io::Result<()>,
+) -> io::Result<File> {
+    let (staged, file) = Staged::claim(destination, create)?;
+    write(&file)?;
+    staged.publish()?;
+    Ok(file)
+}
+
+/// clones `object` to `destination`, failing when `destination` exists. the outer result says
+/// whether the clone was made, the inner whether it was then made writable or read-only as asked.
+/// the clone is made under a hidden name with its final mode and named only once complete, as a
+/// copy is, since an interrupted clone would leave an empty file where the project expects one.
+#[cfg(target_os = "linux")]
+fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let source = read_unfollowed(object)?;
+    let mode = writable_as(source.metadata()?.permissions(), writable).mode() & 0o7777;
+    let create = |temporary: &Path| {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(temporary)
+    };
+    let cloned = publish_new(destination, create, |file| {
+        // the umask may have cleared bits of the mode asked for
+        if file.metadata()?.permissions().mode() & 0o7777 != mode {
+            file.set_permissions(Permissions::from_mode(mode))?;
+        }
+        rustix::fs::ioctl_ficlone(file, &source).map_err(io::Error::from)
+    })?;
+    Ok(undo_on_error(
+        set_file_writable(&cloned, writable),
+        destination,
+    ))
+}
+
+/// clones `object` to `destination` on a volume that clones, as refs does, failing when
+/// `destination` exists. the outer result says whether the clone was made, the inner whether it
+/// was then made writable or read-only as asked. the clone is made under a hidden name and named
+/// only once complete, as a copy is, since an interrupted clone would leave a file of zeros where
+/// the project expects one.
+#[cfg(windows)]
+fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_READ_ATTRIBUTES: u32 = 0x80;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+    // reflink-copy clones only into a file it creates itself
+    let create = |temporary: &Path| {
+        reflink_copy::reflink(object, temporary)?;
+        fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(temporary)
+            .inspect_err(|_| {
+                let _ = fs::remove_file(temporary);
+            })
+    };
+    let cloned = publish_new(destination, create, |_| Ok(()))?;
+    // publishing clears windows attributes, so seal through the handle afterward
+    Ok(undo_on_error(
+        set_file_writable(&cloned, writable),
+        destination,
+    ))
+}
+
+/// clones `object` to `destination`, failing when `destination` exists. the outer result says
+/// whether the clone was made, the inner whether it was then made writable or read-only as asked.
+/// macos makes an apfs clone in one call, which never leaves a partial file.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn reflink(object: &Path, destination: &Path, writable: bool) -> io::Result<io::Result<()>> {
+    reflink_copy::reflink(object, destination)?;
+    Ok(seal(destination, writable))
+}
+
+/// whether a file has the reserved name of a copy or clone placement left unfinished.
 pub(crate) fn is_copy_temporary(name: &str) -> bool {
     name.strip_prefix(".fetchloom-")
         .and_then(|name| name.strip_suffix(".copy"))
@@ -703,10 +826,12 @@ fn overlapped(mut input: File, mut output: &File) -> io::Result<()> {
 
 /// makes a new reflink at `destination` writable or read-only, as asked. a hardlink is never
 /// sealed, because its flag is the object's.
+#[cfg(not(any(target_os = "linux", windows)))]
 fn seal(destination: &Path, writable: bool) -> io::Result<()> {
     undo_on_error(set_writable(destination, writable), destination)
 }
 
+#[cfg(not(any(target_os = "linux", windows)))]
 fn set_writable(path: &Path, writable: bool) -> io::Result<()> {
     let permissions = writable_as(fs::metadata(path)?.permissions(), writable);
     fs::set_permissions(path, permissions)
