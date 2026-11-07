@@ -47,6 +47,8 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 
 local placement, cache verification and archive workers use one fallible scoped-thread helper. refused work stays owned until the caller joins it; started workers finish normally and results preserve input order. archive readers store inline when no writer starts, and close their queue before joining fallback consumers. job panics still propagate.
 
+tokio reports a refused runtime worker by panicking during construction. the CLI catches only that known startup failure and reports `local.io` (exit 50), without the bug banner. release builds unwind so this path can clean up and emit JSON; unrelated panics retain their normal failure path.
+
 linux copies can use the kernel's `copy_file_range` through `io::copy`. `FETCHLOOM_JOBS` controls network work and does not replace these local budgets. listings, plans and member records still grow with file count.
 
 ### volume, errors and cancellation

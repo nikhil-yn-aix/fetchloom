@@ -1,5 +1,7 @@
 //! the optional ceiling on local worker groups.
 
+use std::any::Any;
+use std::cell::Cell;
 use std::ffi::OsString;
 use std::io;
 use std::num::NonZeroUsize;
@@ -134,6 +136,45 @@ pub(crate) fn refuse_after(successful: usize) -> Refusing {
     Refusing(REFUSE_AFTER.replace(Some(successful)))
 }
 
+thread_local! {
+    static STARTING_RUNTIME: Cell<bool> = const { Cell::new(false) };
+}
+
+struct StartingRuntime(bool);
+
+impl Drop for StartingRuntime {
+    fn drop(&mut self) {
+        STARTING_RUNTIME.set(self.0);
+    }
+}
+
+/// tokio panics on worker-start failures rather than returning its builder's I/O result.
+pub(crate) fn start_runtime<T>(start: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let _starting = StartingRuntime(STARTING_RUNTIME.replace(true));
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(start)) {
+        Ok(result) => result,
+        Err(panic) => match runtime_failure(panic.as_ref()) {
+            Some(reason) => Err(io::Error::other(format!(
+                "cannot spawn a runtime worker: {reason}"
+            ))),
+            None => std::panic::resume_unwind(panic),
+        },
+    }
+}
+
+/// whether the entry-point panic hook should leave this failure to `start_runtime`.
+pub(crate) fn expected_runtime_failure(panic: &(dyn Any + Send)) -> bool {
+    STARTING_RUNTIME.get() && runtime_failure(panic).is_some()
+}
+
+fn runtime_failure(panic: &(dyn Any + Send)) -> Option<&str> {
+    panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())?
+        .strip_prefix("OS can't spawn worker thread: ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,5 +284,36 @@ mod tests {
     #[should_panic(expected = "job failed")]
     fn a_started_worker_does_not_hide_job_panics() {
         thread::scope(|scope| scoped(scope, || panic!("job failed")).join());
+    }
+
+    #[test]
+    fn runtime_thread_refusal_becomes_an_io_error() {
+        let message =
+            "OS can't spawn worker thread: Resource temporarily unavailable (os error 11)";
+        assert!(!expected_runtime_failure(&message));
+        let result: io::Result<()> = start_runtime(|| {
+            assert!(expected_runtime_failure(&message));
+            std::panic::panic_any(message);
+        });
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("cannot spawn a runtime worker"));
+        assert!(!expected_runtime_failure(&message));
+    }
+
+    #[test]
+    fn runtime_errors_and_unrelated_panics_are_not_reclassified() {
+        let result: io::Result<()> = start_runtime(|| Err(io::ErrorKind::PermissionDenied.into()));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        let result = std::panic::catch_unwind(|| {
+            let _: io::Result<()> = start_runtime(|| std::panic::panic_any("another bug"));
+        });
+        assert_eq!(
+            result.unwrap_err().downcast_ref::<&str>(),
+            Some(&"another bug")
+        );
+        assert!(!expected_runtime_failure(
+            &"OS can't spawn worker thread: refused"
+        ));
     }
 }

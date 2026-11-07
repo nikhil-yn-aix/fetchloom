@@ -605,11 +605,13 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
 /// installs interruption handling before either synchronous or asynchronous work starts.
 fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Error> {
     let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(context.threads.limit(workers))
-        .enable_all()
-        .build()
-        .map_err(|err| Error::io("could not start", &err))?;
+    let runtime = crate::threads::start_runtime(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(context.threads.limit(workers))
+            .enable_all()
+            .build()
+    })
+    .map_err(|err| Error::io("could not start", &err))?;
     let mut signal = Box::pin(tokio::signal::ctrl_c());
     // polling once installs the OS listener before a synchronous scan can occupy this thread.
     let already_stopped = runtime

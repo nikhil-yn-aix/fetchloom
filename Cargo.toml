@@ -133,5 +133,6 @@ opt-level = 3
 [profile.release]
 codegen-units = 1
 lto = "fat"
-panic = "abort"
+# tokio panics on worker-start failures; unwind lets the CLI report that I/O failure.
+panic = "unwind"
 strip = true

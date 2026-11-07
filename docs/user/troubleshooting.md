@@ -98,3 +98,7 @@ a failed `add` attempts to restore both `data.toml` and `data.lock`. if either r
 if `remove` changed metadata but could not delete files, fix the reported local error and run sync to finish removal.
 
 an interrupted project command can leave an owner record. only delete the exact owner path named by a waiting command after confirming that its owning process has ended. records from another operating system are never reclaimed by age or pid. [project state](reference/project-folder.md#owner-record) explains the locking rules.
+
+### the system cannot start another worker
+
+local placement, cache verification and archive work fall back to the calling thread when the OS refuses a worker. if the async runtime itself cannot start, fetchloom reports `local.io` (exit 50), including in JSON. reduce `FETCHLOOM_THREADS` or raise the process or container's thread limit, then retry. this is a resource failure, not a corrupt cache.

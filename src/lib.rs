@@ -25,6 +25,25 @@ mod work;
 
 /// runs fetchloom with the arguments of the current process and returns its exit code.
 #[must_use]
+#[expect(
+    clippy::print_stderr,
+    reason = "a crashing program has nothing but stderr left to say it on"
+)]
 pub fn main() -> std::process::ExitCode {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let rust = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if threads::expected_runtime_failure(info.payload()) {
+                return;
+            }
+            eprintln!(
+                "fetchloom stopped on a bug of its own, not anything you did. please report it at \
+                 https://github.com/nikhil-yn-aix/fetchloom/issues with the command you ran and the \
+                 output of `fetchloom --version -v`. what it said:"
+            );
+            rust(info);
+        }));
+    });
     cli::run()
 }
