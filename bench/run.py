@@ -241,9 +241,9 @@ def one_run(tool, case, workdir, out, number, warmup, timeout):
         row["command"] = exact_command(argv, workdir)
         row["command"]["cwd"] = str(tool.cwd(workdir))
         row["environment"] = {key: value for key, value in tool.env(workdir).items()
-                              if key in ("HOME", "XDG_CACHE_HOME", "FETCHLOOM_CACHE", "POOCH_CACHE",
-                                         "TMPDIR", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "DVC_NO_ANALYTICS",
-                                         "DVC_SITE_CACHE_DIR")}
+                              if key.startswith("FETCHLOOM_") or key in (
+                                  "HOME", "XDG_CACHE_HOME", "POOCH_CACHE", "TMPDIR", "REQUESTS_CA_BUNDLE",
+                                  "SSL_CERT_FILE", "DVC_NO_ANALYTICS", "DVC_SITE_CACHE_DIR")}
         if cold:
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))
@@ -302,6 +302,13 @@ def case_rng(seed, fs, case):
     return random.Random(f"{seed}/{fs}/{case['profile']}/{case['id']}")
 
 
+def variant_choice(value):
+    try:
+        return tools.variant(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
@@ -313,6 +320,9 @@ def main():
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--out", type=Path, default=lab.ROOT / "results" / "lab")
     parser.add_argument("--only-tools", type=lambda x: csv_choices(x, tuple(t.name for t in tools.CLASSES)))
+    parser.add_argument("--variant", action="append", default=[], type=variant_choice,
+                        help="label:FETCHLOOM_X=1,... runs fetchloom again with these settings, "
+                             "shuffled into the same rounds; repeatable")
     parser.add_argument("--timeout", type=float, default=1200)
     args = parser.parse_args()
     lab.require_root()
@@ -322,11 +332,14 @@ def main():
         parser.error("write results under /srv/fl-bench; copy them out after measurement")
     if not (lab.ROOT / "owned.json").exists():
         parser.error("run lab.py setup first")
+    if len({label for label, _ in args.variant}) != len(args.variant):
+        parser.error("each variant needs its own label")
     lock = lab.exclusive()
     args.fetchloom = args.fetchloom.resolve()
-    adapters = tools.available(args.fetchloom)
+    adapters = tools.available(args.fetchloom, args.variant)
     if args.only_tools:
-        adapters = {name: adapters[name] for name in args.only_tools}
+        adapters = {name: tool for name, tool in adapters.items()
+                    if name in args.only_tools or isinstance(tool, tools.Variant)}
     cases = [case for case in fixtures.case_specs(args.profiles, args.scenarios, args.quick)
              if any(tool.supports(case) for tool in adapters.values())]
     if not cases:
@@ -356,7 +369,7 @@ def main():
             preparation_errors = {}
             for name in eligible:
                 try:
-                    case = fixtures.prepare_native(case, args.fetchloom, [name])
+                    case = fixtures.prepare_native(case, args.fetchloom, [eligible[name].prepared_as])
                 except Exception as error:
                     preparation_errors[name] = f"native preparation failed: {error}"
             rounds = 1 if args.quick else args.rounds or ROUNDS[case["profile"]]

@@ -80,6 +80,15 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 a campaign may also be run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice. `--only-tools fetchloom,curl` narrows the lab adapters. `--services zenodo,huggingface` narrows live services. a new output directory is required for every invocation. a failed command, timeout or wrong hash is a failed record, not a short timing. unsupported combinations are omitted: s3 to s6 use lan, and s7 uses home. a default 20-minute timeout applies to each measured command.
 
+to compare a change behind a fetchloom setting, add `--variant label:FETCHLOOM_X=1` (repeatable). the variant syncs the same prepared project with that environment and is shuffled into the same rounds as the plain build, so both see the same machine and network drift. `python3 bench/ab.py <out>` then prints, per case, how many paired rounds the variant won and its median wall, cpu, memory and disk over the plain build's.
+
+```sh
+python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles lan \
+  --scenarios s3 --fs ext4 --rounds 7 --variant lean:FETCHLOOM_EXP_LEAN_PARTIAL=1 \
+  --out /srv/fl-bench/results/ab/lean
+python3 bench/ab.py /srv/fl-bench/results/ab/lean
+```
+
 s5 fills that client's cache from s2 before each run. s6 runs the same s2 workflow once before timing. DVC uses one shared cache directory and pooch returns its shared cached paths. datalad's clone, of the prepared dataset or for s5 of the first project, is made before the clock starts, like DVC's project copy. cache population is outside the clock. prepared download inputs, DVC repositories and URL-registered annex datasets are built once, before the runs.
 
 live runs check a separately downloaded reference against the public manifest, then compare the clients' file SHA-256s and layouts. quick inputs are zenodo's iris record, one hugging face iris CSV, kaggle's iris dataset, the two sub-KiB figshare files and the sub-KiB dataverse file. inaccessible services and anonymous kaggle refusals have recorded skip reasons. the hugging face and kaggle commands include the expected SHA-256 check because their download APIs have no such option. live results have no speed ratios.

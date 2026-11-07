@@ -41,6 +41,10 @@ class Tool:
     def supports(self, scenario):
         return scenario["id"] in self.scenarios
 
+    @property
+    def prepared_as(self):
+        return self.name
+
     def cwd(self, workdir):
         return workdir
 
@@ -116,6 +120,40 @@ class Fetchloom(Tool):
                     for item in scenario["members"]]
         return [(workdir / "project" / "data" / f"f{i:05}" / item["name"], item["sha256"])
                 for i, item in enumerate(scenario["files"])]
+
+
+class Variant(Fetchloom):
+    """fetchloom with extra environment, measured beside the plain build in the same rounds."""
+
+    def __init__(self, fetchloom, label, settings):
+        super().__init__(fetchloom)
+        self.name = f"fetchloom+{label}"
+        self.settings = dict(settings)
+
+    @property
+    def prepared_as(self):
+        return Fetchloom.name
+
+    def populate(self, scenario, workdir):
+        for name in ("data.toml", "data.lock"):
+            shutil.copyfile(Path(scenario["prepared"]) / Fetchloom.name / name, workdir / "project" / name)
+
+    def env(self, workdir):
+        return {**super().env(workdir), **self.settings}
+
+
+def variant(value):
+    """parses `label:KEY=VALUE,KEY=VALUE`, where every key is a fetchloom setting."""
+    label, _, pairs = value.partition(":")
+    if not label or not all(c.islower() or c.isdigit() or c == "-" for c in label):
+        raise ValueError("a variant needs a lowercase label before ':'")
+    settings = {}
+    for pair in pairs.split(","):
+        key, sep, setting = pair.partition("=")
+        if not sep or not key.startswith("FETCHLOOM_") or key == "FETCHLOOM_CACHE" or key in settings:
+            raise ValueError(f"{pair!r} is not a distinct FETCHLOOM_ setting other than the cache")
+        settings[key] = setting
+    return label, settings
 
 
 class Curl(Tool):
@@ -237,5 +275,9 @@ class Datalad(Tool):
 CLASSES = (Fetchloom, Curl, Aria2c, Wget, Pooch, Dvc, Datalad)
 
 
-def available(fetchloom):
-    return {cls.name: cls(fetchloom) for cls in CLASSES}
+def available(fetchloom, variants=()):
+    adapters = {cls.name: cls(fetchloom) for cls in CLASSES}
+    for label, settings in variants:
+        tool = Variant(fetchloom, label, settings)
+        adapters[tool.name] = tool
+    return adapters

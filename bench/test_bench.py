@@ -264,5 +264,56 @@ class MeasurementTests(unittest.TestCase):
         self.assertEqual(result, {"requests": 3, "bytes_served": 20, "file_bytes_served": 13})
 
 
+class VariantTests(unittest.TestCase):
+    def test_a_variant_names_only_distinct_fetchloom_settings(self):
+        import tools
+        self.assertEqual(tools.variant("lean-2:FETCHLOOM_EXP_A=1,FETCHLOOM_EXP_B=x=y"),
+                         ("lean-2", {"FETCHLOOM_EXP_A": "1", "FETCHLOOM_EXP_B": "x=y"}))
+        for bad in ("FETCHLOOM_EXP_A=1", "Lean:FETCHLOOM_EXP_A=1", "lean:PATH=/x", "lean:FETCHLOOM_EXP_A",
+                    "lean:FETCHLOOM_CACHE=/elsewhere", "lean:FETCHLOOM_EXP_A=1,FETCHLOOM_EXP_A=2"):
+            with self.assertRaises(ValueError, msg=bad):
+                tools.variant(bad)
+
+    def test_a_variant_syncs_the_plain_builds_project_with_its_settings(self):
+        from pathlib import Path
+        import tools
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            prepared = root / "prepared"
+            (prepared / "fetchloom").mkdir(parents=True)
+            for name in ("data.toml", "data.lock"):
+                (prepared / "fetchloom" / name).write_text(name)
+            adapters = tools.available("/bin/fetchloom", [("lean", {"FETCHLOOM_EXP_LEAN": "1"})])
+            plain, lean = adapters["fetchloom"], adapters["fetchloom+lean"]
+            self.assertEqual(lean.prepared_as, "fetchloom")
+            work = root / "work"
+            (work / "project").mkdir(parents=True)
+            lean.populate(dict(prepared=str(prepared)), work)
+            self.assertEqual((work / "project" / "data.lock").read_text(), "data.lock")
+            self.assertEqual(lean.command({}, work), plain.command({}, work))
+            self.assertEqual(lean.env(work)["FETCHLOOM_EXP_LEAN"], "1")
+            self.assertEqual(lean.env(work)["FETCHLOOM_CACHE"], plain.env(work)["FETCHLOOM_CACHE"])
+            self.assertNotIn("FETCHLOOM_EXP_LEAN", plain.env(work))
+
+    def test_a_comparison_pairs_passed_rounds_and_skips_warmups(self):
+        import ab
+        def row(tool, number, wall, status="passed", warmup=False):
+            return dict(tool=tool, filesystem="ext4", profile="lan", scenario="s3", round=number,
+                        warmup=warmup, status=status, wall_seconds=wall, user_seconds=1, sys_seconds=1,
+                        maxrss_bytes=100, disk_bytes=10)
+        rows = [row("fetchloom", 0, 1.0, warmup=True), row("fetchloom+lean", 0, 99.0, warmup=True),
+                row("fetchloom", 1, 2.0), row("fetchloom+lean", 1, 1.0),
+                row("fetchloom", 2, 4.0), row("fetchloom+lean", 2, 3.0),
+                row("fetchloom", 3, 1.0), row("fetchloom+lean", 3, 9.0, status="failed"),
+                row("curl", 1, 0.1)]
+        [result] = ab.compare(rows)
+        self.assertEqual(result["case"], "ext4/lan/s3")
+        self.assertEqual((result["rounds"], result["wins"]), (2, 2))
+        self.assertEqual(result["failed"], {"base": 0, "variant": 1})
+        self.assertAlmostEqual(result["ratios"]["wall"], 2.0 / 3.0)
+        self.assertEqual(result["ratios"]["memory"], 1.0)
+        self.assertIn("fetchloom+lean", ab.table([result]))
+
+
 if __name__ == "__main__":
     unittest.main()
