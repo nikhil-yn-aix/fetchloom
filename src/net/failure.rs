@@ -12,6 +12,9 @@ use crate::units;
 use crate::work::Work;
 
 pub(crate) const ATTEMPTS: u32 = 5;
+/// tries one request gets in all, however often progress earned tries back, so a server that
+/// sends a few bytes before every break still ends.
+const MOST_TRIES: u32 = 50;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
 /// how many times a request waits for a rate limit to reset before those waits count as tries.
 const LIMITED: u32 = 10;
@@ -33,7 +36,10 @@ pub(super) enum Failure {
 pub(super) struct Retry<'a> {
     net: &'a Net,
     url: &'a Url,
+    /// tries since the last one that made progress.
     attempt: u32,
+    /// tries in all.
+    tries: u32,
     limited: u32,
 }
 
@@ -43,8 +49,15 @@ impl<'a> Retry<'a> {
             net,
             url,
             attempt: 1,
+            tries: 1,
             limited: 0,
         }
+    }
+
+    /// a try moved the download on, so the tries count again from the first, up to
+    /// [`MOST_TRIES`] in all.
+    pub(super) fn progressed(&mut self) {
+        self.attempt = 1;
     }
 
     /// counts a try a rate limit refused. the next one waits for the limit to reset and does not
@@ -67,11 +80,12 @@ impl<'a> Retry<'a> {
         asked: Option<Duration>,
         has_copy: bool,
     ) -> Result<(), Error> {
-        if self.attempt >= ATTEMPTS {
-            return Err(gave_up(self.url, &reason, has_copy));
+        if self.attempt >= ATTEMPTS || self.tries >= MOST_TRIES {
+            return Err(gave_up(self.url, self.tries, &reason, has_copy));
         }
         let wait = backoff(self.attempt, asked).map_err(|asked| rate_limited(self.url, asked))?;
         self.attempt += 1;
+        self.tries += 1;
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
         Work::add(&self.net.work.retries, 1);
         (self.net.notify)(Notice::Retrying {
@@ -274,8 +288,8 @@ pub(super) fn interrupted(url: &Url) -> Error {
     )
 }
 
-fn gave_up(url: &Url, reason: &str, has_copy: bool) -> Error {
-    let message = format!("gave up on {} after {ATTEMPTS} tries: {reason}", host(url));
+fn gave_up(url: &Url, tries: u32, reason: &str, has_copy: bool) -> Error {
+    let message = format!("gave up on {} after {tries} tries: {reason}", host(url));
     let later = if has_copy {
         "run the same command again later, or add --offline to use the copy downloaded earlier"
     } else {
@@ -511,7 +525,7 @@ mod tests {
     fn exhausting_retries_only_suggests_offline_when_a_copy_exists() {
         let url = Url::parse("https://example.org/list").unwrap();
         for has_copy in [false, true] {
-            let error = gave_up(&url, "connection broke", has_copy);
+            let error = gave_up(&url, ATTEMPTS, "connection broke", has_copy);
             assert_eq!(error.kind, Kind::NetworkUnreachable);
             assert!(error.message.contains("5 tries"));
             assert!(error.message.contains("connection broke"));
@@ -543,10 +557,10 @@ mod tests {
     #[test]
     fn running_out_of_tries_says_whose_side_the_trouble_is_on() {
         let url = Url::parse("https://example.org/list").unwrap();
-        let limited = gave_up(&url, "example.org answered 429", false);
+        let limited = gave_up(&url, ATTEMPTS, "example.org answered 429", false);
         assert_eq!(limited.kind, Kind::NetworkRateLimited);
         assert!(limited.help.unwrap().contains("limiting requests"));
-        let down = gave_up(&url, "example.org answered 503", true);
+        let down = gave_up(&url, ATTEMPTS, "example.org answered 503", true);
         assert_eq!(down.kind, Kind::NetworkStatus);
         let help = down.help.unwrap();
         assert!(
@@ -584,5 +598,40 @@ mod tests {
         assert_eq!(error.kind, Kind::NetworkUnreachable);
         assert!(error.help.unwrap().contains("--offline"));
         assert_eq!(net.work.counts().retries, 1);
+    }
+
+    #[test]
+    fn progress_earns_tries_back_but_never_past_the_most_in_all() {
+        use crate::net::{Options, Splitting};
+        use crate::source::recorded::block_on;
+        use std::sync::Arc;
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(|_| {}),
+        );
+        net.stop.ask();
+        let mut retry = Retry::new(&net, &url);
+        retry.attempt = ATTEMPTS;
+        retry.progressed();
+        let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
+        assert_eq!(error.kind, Kind::Interrupted, "progress earned another try");
+        retry.progressed();
+        retry.tries = MOST_TRIES;
+        let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkUnreachable);
+        assert!(
+            error.message.contains(&format!("after {MOST_TRIES} tries")),
+            "{}",
+            error.message
+        );
     }
 }

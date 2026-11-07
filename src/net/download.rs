@@ -304,11 +304,37 @@ impl Net {
         // answers did not match
         let mut split = true;
         let mut retry = Retry::new(self, &fetch.url);
+        // how far into the file the bytes held reach, so a try that got further than any before
+        // earns the tries back, while one that only fetches the same bytes again does not
+        let held = AtomicU64::new(0);
+        let mut furthest = 0;
+        let watched = |event: Event| {
+            match &event {
+                Event::Started { resumed, .. } => held.store(*resumed, Ordering::Relaxed),
+                Event::Bytes(bytes) => {
+                    held.fetch_add(*bytes, Ordering::Relaxed);
+                }
+                Event::Waiting | Event::WebPage { .. } => {}
+            }
+            on(event)
+        };
         loop {
-            match self
-                .attempt(&from, fetch, partial, validators.as_ref(), on, &mut split)
-                .await
-            {
+            let answer = self
+                .attempt(
+                    &from,
+                    fetch,
+                    partial,
+                    validators.as_ref(),
+                    &watched,
+                    &mut split,
+                )
+                .await;
+            let reached = held.load(Ordering::Relaxed);
+            if reached > furthest {
+                furthest = reached;
+                retry.progressed();
+            }
+            match answer {
                 Ok(Answer::NotModified) => {
                     return known
                         .map(|record| fetched(record, Origin::NotModified))

@@ -79,7 +79,7 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 | body idle timeout | 30 s between chunks, not counting time held back on this machine by the rate cap, the writer or a question; no total download deadline |
 | redirects | at most 10 per attempt |
 | metadata body | at most 64 MiB |
-| transient attempts | 5 including the first |
+| transient attempts | 5 including the first; a download try that leaves more of the file held than any try before counts them from the first again, up to 50 tries in all |
 | retry delay | jittered exponential backoff; `Retry-After` is a floor; more than 60 s fails |
 | quota wait | reset within 120 s; at most 10 waits per request before consuming attempts |
 | diversion pages | at most 3, each at most 4 MiB |

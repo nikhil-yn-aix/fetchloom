@@ -301,6 +301,43 @@ fn a_resume_answered_from_another_version_starts_over() {
     }
 }
 
+/// a link that breaks again and again still finishes a file while every try moves it on, as a
+/// long download over a connection that drops every few minutes does.
+#[test]
+fn tries_that_move_the_file_on_earn_the_tries_back() {
+    let body = "abcdefg";
+    let total = body.len();
+    // every answer brings one byte and breaks, more times than a request has tries
+    let mut responses = vec![
+        format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {total}\r\nETag: \"v1\"\r\n\r\na"
+        )
+        .into_bytes(),
+    ];
+    for at in 1..total {
+        responses.push(
+            format!(
+                "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nContent-Length: {}\r\n\
+                 Content-Range: bytes {at}-{}/{total}\r\nETag: \"v1\"\r\n\r\n{}",
+                total - at,
+                total - 1,
+                &body[at..=at]
+            )
+            .into_bytes(),
+        );
+    }
+    assert!(responses.len() > crate::net::ATTEMPTS as usize);
+    let (url, asked) = serve(responses);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url);
+    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    let stored = fs::read(cache.object_path(&fetched.digest)).unwrap();
+    assert_eq!(stored, body.as_bytes());
+    assert_eq!(asked.lock().unwrap().len(), total);
+    assert_eq!(net.work.counts().retries, total as u64 - 1);
+}
+
 /// zenodo serves files with neither an `ETag` nor a `Last-Modified`, but states each file's MD5,
 /// which proves the joined bytes as a pinned SHA-256 does.
 #[test]
