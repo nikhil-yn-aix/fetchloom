@@ -1260,3 +1260,14 @@ fn a_stop_during_copy_publication_keeps_only_completed_files() {
     assert_eq!(destinations.iter().filter(|path| path.exists()).count(), 1);
     assert_eq!(placed_names(folder.path()), ["0.csv"]);
 }
+
+#[test]
+fn a_parent_component_cannot_escape_the_placement_root() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let mut placer = Placer::new(&root, folder.path());
+    let escaped = root.join("../escaped.csv");
+    let result = placer.place(&object, &escaped, false);
+    assert!(result.is_err());
+    assert!(!folder.path().join("escaped.csv").exists());
+}
