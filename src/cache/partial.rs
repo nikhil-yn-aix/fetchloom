@@ -166,7 +166,11 @@ impl Partial {
         md5: bool,
         keep: bool,
     ) -> io::Result<PartialWriter> {
-        let file = Arc::new(self.open(offset, keep)?);
+        let lean = self.cache.experiments().on("CACHE_LEAN_PARTIAL")
+            && offset == 0
+            && !keep
+            && length.is_some_and(|length| length <= SMALL);
+        let file = Arc::new(self.open(offset, keep, lean)?);
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -182,7 +186,11 @@ impl Partial {
             })?;
         }
         let sha256 = hasher.sha256_so_far();
-        let recorded = self.recorded().filter(|record| record.received == offset);
+        let recorded = if lean {
+            None
+        } else {
+            self.recorded().filter(|record| record.received == offset)
+        };
         if offset > 0 && recorded.as_ref().map(|record| record.sha256) != Some(sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -203,6 +211,7 @@ impl Partial {
             _lock: self.lock.clone(),
             prefix: offset,
             pending: Vec::with_capacity(BUFFER),
+            lean,
             runs: Vec::new(),
             read_back: 0,
             saved: Instant::now(),
@@ -236,7 +245,16 @@ impl Partial {
     /// otherwise a download from the first byte removes their name and makes a new file there: a
     /// read-only one was sealed by a run that did not finish publishing, and may already be a
     /// second name of the object, which must never become writable.
-    fn open(&self, offset: u64, keep: bool) -> io::Result<File> {
+    fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<File> {
+        if lean
+            && let Ok(file) = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&self.bytes)
+        {
+            return Ok(file);
+        }
         // windows reports no link count in metadata, so a second name is asked for apart
         let kept = open_unfollowed(&self.bytes, false).ok().filter(|file| {
             file.metadata().is_ok_and(|metadata| continuable(&metadata))
@@ -363,6 +381,7 @@ pub(crate) struct PartialWriter {
     prefix: u64,
     /// the end of the prefix, not yet in the file.
     pending: Vec<u8>,
+    lean: bool,
     /// what other streams wrote past the prefix, by start.
     runs: Vec<Run>,
     /// bytes read back from the file to hash them, since another stream wrote them.
@@ -518,6 +537,9 @@ impl PartialWriter {
     /// in case a power cut kept the record but lost some bytes.
     pub(crate) fn save(&mut self) -> io::Result<()> {
         self.flush_pending()?;
+        if self.lean && self.runs.is_empty() && self.record.length == Some(self.prefix) {
+            return Ok(());
+        }
         self.record.received = self.prefix;
         self.record.sha256 = self.hasher.sha256_so_far(self.prefix)?;
         self.record.ranges = self
@@ -559,6 +581,7 @@ impl PartialWriter {
             bytes,
             record_path,
             record,
+            lean,
             _lock: lock,
             ..
         } = self;
@@ -571,7 +594,11 @@ impl PartialWriter {
         }
         // sealed through the handle that wrote it: by name, a link swapped in since would be
         // sealed in its place
-        let mut permissions = file.metadata()?.permissions();
+        let mut permissions = if lean && metadata.len() == prefix {
+            metadata.permissions()
+        } else {
+            file.metadata()?.permissions()
+        };
         permissions.set_readonly(true);
         file.set_permissions(permissions)?;
         let finished = Finished {

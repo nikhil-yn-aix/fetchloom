@@ -71,6 +71,8 @@ a download joins a group flush only when its writing handle belongs to the files
 
 an early publication for another download of the same URL uses the original batch flush handle and the same publication lock. a failed batch flush prevents early publication too. discarding a partial waits for that publication before its path can be reused.
 
+the default-off `CACHE_LEAN_PARTIAL` experiment skips the closing checkpoint for a complete, known-size download of at most 1 MiB started at offset 0 without kept ranges. interrupted or slow small downloads still checkpoint their incomplete prefixes. exclusive creation and shared finishing metadata remove redundant filesystem calls; sealing and the durability flush are unchanged.
+
 `HashPipe` shares the writer's original file handle through `Arc<File>` instead of duplicating an OS handle per download. positioned reads and writes leave the shared file cursor unused. it drains before the handle is flushed or its claim is released; a new download has one write-open and one final close. see the [download pipeline](network.md#download-pipeline) for prefix barriers and final flush ordering.
 
 ### retention and cleanup

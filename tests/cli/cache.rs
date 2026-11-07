@@ -621,3 +621,23 @@ fn unreadable_change_marks_stop_a_settled_sync() -> Result {
     assert_eq!(fs::read(state_path)?, state);
     Ok(())
 }
+
+#[test]
+fn small_downloads_keep_their_bytes_with_lean_partials() -> Result {
+    for enabled in ["0", "1"] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start("/abc.bin", vec![file(b"abc", "\"v1\"")])?;
+        let output = sandbox
+            .command(&["--json", "get", &server.url])
+            .env("FETCHLOOM_EXP_CACHE_LEAN_PARTIAL", enabled)
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        assert_eq!(fs::read(sandbox.work().join("abc/abc.bin"))?, b"abc");
+        let object = sandbox
+            .cache()
+            .join("objects/ba/7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(fs::read(&object)?, b"abc");
+        assert!(fs::metadata(object)?.permissions().readonly());
+    }
+    Ok(())
+}
