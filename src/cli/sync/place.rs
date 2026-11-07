@@ -600,9 +600,9 @@ fn decide(
             let same = look.size == target.size
                 && Sha256::of_file(destination).map_err(|err| local(destination, &err))?
                     == target.sha256;
-            Ok(if same {
+            Ok(if same && (!target.copy || now_writable(destination)) {
                 Action::Adopt(*look)
-            } else if force {
+            } else if same || force {
                 Action::Replace
             } else {
                 Action::Leave(Reason::Foreign)

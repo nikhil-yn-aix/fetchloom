@@ -55,7 +55,7 @@ flowchart TD
 | replace | old managed data is superseded, an unchanged alias is proven damaged, a tracked mode must change, or force permits replacement |
 | leave | preserve an edited or foreign file and report why it stayed |
 
-untracked equal files are adopted. a tracked changed file holding the target bytes recovers an interruption between placement and state writing; if writable mode is required but the file is read-only, that tracked file is replaced. adoption detects when the existing file is the cache object under another name and records it as a hardlink.
+equal files are adopted only when their writable mode fits the dataset. a read-only file whose bytes match is replaced when `copy = true`, whether tracked or untracked; differing untracked bytes still require force. a tracked changed file holding the target bytes can recover an interruption between placement and state writing. adoption detects when the existing file is the cache object under another name and records it as a hardlink.
 
 unwanted tracked files are removed only if unchanged. an edited unwanted file leaves the state but stays on disk as an extra file. replacement and removal recheck size and time immediately before deleting, so an edit made while downloads ran is preserved.
 

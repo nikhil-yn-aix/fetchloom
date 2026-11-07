@@ -1513,3 +1513,39 @@ fn completed_adds_and_rollbacks_remove_recovery_copies() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn equal_untracked_read_only_files_get_the_requested_writable_copy() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = {:?}\ncopy = true\n", server.url),
+    )?;
+    let locked = sandbox.run(&["lock"])?;
+    assert!(locked.status.success(), "{}", text(&locked.stderr)?);
+    let target = sandbox.work().join("data/iris/iris.csv");
+    fs::create_dir_all(target.parent().ok_or("target has no parent")?)?;
+    let foreign = sandbox.work().join("original.csv");
+    fs::write(&foreign, IRIS)?;
+    let mut permissions = fs::metadata(&foreign)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&foreign, permissions)?;
+    fs::hard_link(&foreign, &target)?;
+
+    let synced = sandbox.run(&["--json", "--offline", "sync"])?;
+    assert!(synced.status.success(), "{}", text(&synced.stdout)?);
+    assert_eq!(fs::read(&target)?, IRIS);
+    assert!(!fs::metadata(&target)?.permissions().readonly());
+    assert!(!same_file::is_same_file(&target, &foreign)?);
+    assert_eq!(fs::read(&foreign)?, IRIS);
+    assert!(fs::metadata(&foreign)?.permissions().readonly());
+    let status = sandbox.run(&["--json", "status"])?;
+    assert!(status.status.success(), "{}", text(&status.stdout)?);
+    assert_eq!(json(&status)?["result"]["outdated"], serde_json::json!([]));
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
