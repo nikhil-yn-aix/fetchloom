@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Cache, Checked, Freed, Needed};
+use crate::cache::{Access, Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
@@ -101,7 +101,8 @@ struct Removals {
 }
 
 /// frees what no project needs. a dry run sweeps a cache that records each removal instead of
-/// making it, so it decides exactly as a real sweep does.
+/// making it, so it decides exactly as a real sweep does. it takes no lock and so never waits,
+/// while a real sweep waits until no other run uses the cache.
 pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collected, Error> {
     let cache = if dry_run {
         let cache = super::peek_cache()?;
@@ -110,7 +111,17 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         }
         cache.pretending()
     } else {
-        open_cache()?
+        super::hold_cache(
+            super::open_unheld()?,
+            Access::Exclusive,
+            &context.stop,
+            &|| {
+                context.output.step(
+                    "Waiting",
+                    "for other fetchloom runs to finish with the cache",
+                );
+            },
+        )?
     };
     let Found {
         needed, projects, ..

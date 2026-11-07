@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::cache::Cache;
+use crate::cache::{Access, Cache};
 use crate::error::{Error, Kind};
 use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
@@ -206,8 +206,53 @@ fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error
         })
 }
 
-/// the cache this machine uses, created on first use.
+/// the cache this machine uses, created on first use and held shared until the last clone is
+/// dropped, so `cache gc` waits for this run.
 fn open_cache() -> Result<Cache, Error> {
+    let unset = Stop::default();
+    let (output, stop) = match WAITS.get() {
+        Some((output, stop)) => (Some(output.as_ref()), stop.as_ref()),
+        None => (None, &unset),
+    };
+    hold_cache(open_unheld()?, Access::Shared, stop, &|| {
+        if let Some(output) = output {
+            output.step(
+                "Waiting",
+                "for `fetchloom cache gc` to finish with the cache",
+            );
+        }
+    })
+}
+
+/// what a run that waits for the cache tells and listens to: the command's output and stop
+/// signal, once they exist. `open_cache` is called where neither is at hand.
+static WAITS: std::sync::OnceLock<(Arc<Output>, Arc<Stop>)> = std::sync::OnceLock::new();
+
+/// holds `cache` for `access`, calling `waiting` once if another run makes this one wait.
+fn hold_cache(
+    cache: Cache,
+    access: Access,
+    stop: &Stop,
+    waiting: &dyn Fn(),
+) -> Result<Cache, Error> {
+    let root = cache.root().to_path_buf();
+    cache.hold(access, stop, waiting).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            return Error::new(
+                Kind::Interrupted,
+                "stopped while waiting for another fetchloom",
+            );
+        }
+        Error::io(
+            format_args!("could not lock the cache at {}", root.display()),
+            &err,
+        )
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    })
+}
+
+/// the cache this machine uses, created on first use, without the cache-wide lock.
+fn open_unheld() -> Result<Cache, Error> {
     let root = cache_root()?;
     if root.exists() && !root.is_dir() {
         return Err(Error::new(
@@ -363,6 +408,7 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     };
     let entered = runtime.enter();
     let context = Arc::new(context);
+    let _ = WAITS.set((Arc::clone(&context.output), Arc::clone(&context.stop)));
     let mut outcome = match command.clone() {
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),

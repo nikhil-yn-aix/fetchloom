@@ -53,6 +53,10 @@ removing a cache object leaves placed files intact. removed bytes are not necess
 
 gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failed paths in `result.not_removed`, alongside the error. close programs holding those paths or fix permissions, then retry. already absent paths do not count as failed removals.
 
+### runs that use the cache
+
+every command that opens the cache to work with it, such as `add`, `sync`, `get`, `cache` and `cache verify`, holds the empty `gc.lock` file in the cache folder with a shared OS lock while it works, and `cache gc` takes that lock alone, as cargo and uv lock their caches. so gc never removes an object that a running command has found and is about to place. while another command uses the cache, gc prints `Waiting for other fetchloom runs to finish with the cache` and starts once they have; a command started during gc waits for it in the same way. ctrl-c stops either wait. dry runs, `cache gc --dry-run` among them, take no lock and never wait, so what a gc dry run lists can differ from what a gc run later frees. a filesystem without file locks leaves the cache unlocked.
+
 ### reminder
 
 fetchloom deletes nothing from the cache on its own, apart from a packed archive no project needs once its files are unpacked. freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when files gc would free total 1 GiB or more, says so once:

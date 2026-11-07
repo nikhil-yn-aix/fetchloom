@@ -13,6 +13,7 @@ objects are read-only files named by their content digest. the cache owns public
 | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs) | root layout, object lookup, URL and MD5 records | `Cache`, `Stored`, `Validators`, `UrlRecord`, `find`, `verify`, `write_hint`, `link_object` |
 | [object.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/object.rs) | staged object sealing and batch durability | `NewObject`, `Sealed`, `Batch`, `seal`, `publish`, `syncfs_reports_errors` |
 | [deferred.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/deferred.rs) | downloads waiting for a group flush before they take their names | `Finished`, `defer_downloads`, `publish_downloads`, `publish_download_of` |
+| [held.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/held.rs) | the cache-wide lock that keeps gc apart from runs using the cache | `Access`, `hold` |
 | [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
 | [partial/hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | ordered prefix hashing on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
 | [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
@@ -35,6 +36,7 @@ flowchart TD
     root --> projects["projects: registered project roots"]
     root --> tmp["tmp: private writes and archive staging"]
     root --> tag["CACHEDIR.TAG"]
+    root --> gclock["gc.lock: shared by runs, exclusive for gc"]
 ```
 
 `Cache::locate` uses `FETCHLOOM_CACHE`, otherwise the platform cache location. there is no layout-marker file. the [cache-folder reference](../../user/reference/cache-folder.md) owns record paths and user-facing recovery rules.
@@ -61,7 +63,7 @@ resume accepts only writable plain files; on unix they must belong to the curren
 
 ### retention and cleanup
 
-successful sync registers the project root. gc follows registered manifests and locks, including needed archive members. unreadable registrations or project inputs stop gc; only a missing manifest makes a project stale. unneeded objects and unpack records become eligible after 24 hours by modification time, or immediately with `cache gc --now`. the CLI passes zero object grace to `sweep_with_stop` only for `--now`, otherwise `GRACE`; abandoned downloads keep the full day and active partial locks are respected. removing their cache names does not remove placed hardlinks, reflinks or copies.
+successful sync registers the project root. gc follows registered manifests and locks, including needed archive members. unreadable registrations or project inputs stop gc; only a missing manifest makes a project stale. a project's first sync registers it only after placing, and `get` never registers, so registration alone cannot protect what a running command is about to place: every command that opens the cache through `cli::open_cache` holds `gc.lock` in the cache root with a shared lock for as long as any clone of that `Cache` lives, and gc takes it exclusive through `Cache::hold`, polling so ctrl-c can end the wait. dry runs read the cache unopened and take no lock. unneeded objects and unpack records become eligible after 24 hours by modification time, or immediately with `cache gc --now`. the CLI passes zero object grace to `sweep_with_stop` only for `--now`, otherwise `GRACE`; abandoned downloads keep the full day and active partial locks are respected. removing their cache names does not remove placed hardlinks, reflinks or copies.
 
 archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation.
 

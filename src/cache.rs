@@ -2,6 +2,7 @@
 
 mod changed;
 mod deferred;
+mod held;
 mod object;
 mod partial;
 mod staging;
@@ -21,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use changed::{Doubt, may_follow};
+pub(crate) use held::Access;
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{NewObject, Sealed};
@@ -47,6 +49,8 @@ pub(crate) struct Cache {
     volume: Arc<Volume>,
     /// downloads waiting for a flush that covers them, shared by every clone.
     deferred: Arc<deferred::Deferred>,
+    /// the cache-wide lock this run holds, let go when the last clone is dropped.
+    held: Option<Arc<File>>,
 }
 
 #[derive(Debug)]
@@ -129,6 +133,7 @@ impl Cache {
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
+            held: None,
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -164,6 +169,7 @@ impl Cache {
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
             deferred: Arc::default(),
+            held: None,
         })
     }
 
