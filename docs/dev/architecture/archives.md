@@ -51,7 +51,7 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 |---|---|
 | 1,000,000 entries | files and folders exposed by the decoder |
 | 1 TiB unpacked | actual member bytes across one archive |
-| 200:1 expansion | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB |
+| 200:1 expansion | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB; zip rereads cannot raise the denominator past the physical archive size |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
 | 256 MiB xz decoder memory | what an xz header asks for, checked before decoding |
 | 128 MiB zstd window | what a zstd frame header asks for; frames past it, as `zstd --long=28` and above write them, are still detected as archives and refused |

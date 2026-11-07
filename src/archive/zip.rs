@@ -25,6 +25,11 @@ pub(super) fn unpack(
     keep: &mut Keep<'_>,
 ) -> Result<(), Error> {
     let file = File::open(archive).map_err(|err| unreadable(archive, &err))?;
+    let size = file
+        .metadata()
+        .map_err(|err| unreadable(archive, &err))?
+        .len();
+    guard.meter().cap_at(size);
     let source = Source {
         file: BufReader::with_capacity(BUFFER, file),
         position: 0,
@@ -428,5 +433,48 @@ mod tests {
         assert_eq!(paths, ["nested/data.csv", "readme.md"]);
         scratch.assert_stored(&unpacked.members[0], b"x,y\n1,2\n");
         scratch.assert_stored(&unpacked.members[1], b"readme\n");
+    }
+
+    #[test]
+    fn overlapping_members_cannot_expand_past_the_archive_ratio() {
+        let payload = vec![b'x'; 64 << 10];
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file(
+                "member-0000.bin",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(&payload).unwrap();
+        for index in 1..512 {
+            writer
+                .shallow_copy_file("member-0000.bin", &format!("member-{index:04}.bin"))
+                .unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let limits = crate::archive::Limits::default();
+        assert!((payload.len() as u64) * 512 > bytes.len() as u64 * limits.ratio);
+        assert!(
+            ::zip::ZipArchive::new(Cursor::new(&bytes))
+                .unwrap()
+                .has_overlapping_files()
+                .unwrap()
+        );
+        let scratch = Scratch::new();
+        let path = scratch.file("shared.zip", &bytes);
+        let result = crate::archive::unpack(
+            &path,
+            Format::Zip,
+            &limits,
+            &scratch.cache,
+            &|_| false,
+            Some(0),
+        );
+        let Err(error) = result else {
+            panic!("shared zip data bypassed the archive's physical expansion limit");
+        };
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert!(error.message.contains("200 times"), "{}", error.message);
+        scratch.assert_empty();
     }
 }

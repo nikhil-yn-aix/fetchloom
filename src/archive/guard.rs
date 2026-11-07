@@ -17,11 +17,20 @@ const RATIO_FLOOR: u64 = 4 << 20;
 #[derive(Default)]
 pub(super) struct Meter {
     compressed: Cell<u64>,
+    ceiling: Cell<Option<u64>>,
 }
 
 impl Meter {
+    /// seeks may reread compressed bytes, but cannot make the physical archive larger.
+    pub(super) fn cap_at(&self, bytes: u64) {
+        self.ceiling.set(Some(bytes));
+        self.compressed.set(self.compressed.get().min(bytes));
+    }
+
     pub(super) fn count(&self, read: usize) {
-        self.compressed.set(self.compressed.get() + read as u64);
+        let total = self.compressed.get().saturating_add(read as u64);
+        self.compressed
+            .set(total.min(self.ceiling.get().unwrap_or(u64::MAX)));
     }
 }
 
@@ -159,6 +168,16 @@ mod tests {
         let mut buffer = [0; 1024];
         guard.copy("x", &mut &bytes[..], &mut out, &mut buffer)?;
         Ok(out)
+    }
+
+    #[test]
+    fn a_seekable_meter_never_exceeds_its_file() {
+        let meter = Meter::default();
+        meter.count(5);
+        meter.cap_at(3);
+        assert_eq!(meter.compressed.get(), 3);
+        meter.count(usize::MAX);
+        assert_eq!(meter.compressed.get(), 3);
     }
 
     #[test]
