@@ -61,6 +61,12 @@ repairs flush both changed directories after replacement and before writing the 
 
 URL records and partial checkpoints serialize the original URL as `sha256:<digest>`, while their live structs keep the URL needed for requests and deferred publication. lookup requires the matching fingerprint, rejects records copied from another URL, and restores the original string only in memory. reads do not alter validators, prefix hashes or range hashes. see the [cache-folder reference](../../user/reference/cache-folder.md#url-and-partial-records).
 
+### publication experiment
+
+`CACHE_RENAME_NOREPLACE` is off by default. on linux, it replaces a new object's hardlink and unlink with `renameat_with(RENAME_NOREPLACE)`. an existing destination still follows the same hash-and-repair policy. `EINVAL`, `ENOSYS` and `EOPNOTSUPP` fall back to the existing publication path and disable native attempts for that cache handle and its clones for the rest of the run. other errors remain errors; a removed destination folder is recreated as before. dry runs never attempt the native move.
+
+both settings keep payload flushes, damage marks, repair directory flushes and download claims in their existing order. the experiment promises no stronger persistence for a fresh digest name. fixed-input tests cover both settings, intact and damaged destinations, unsupported calls and operational failures. its wall-time gain is left to the declared a/b cases; a smaller syscall count alone does not establish one.
+
 ### partial ownership and checkpoints
 
 partials use a separate OS lock file so windows' mandatory locks do not prevent reads through the final object name. before waiting for another process, a run flushes and publishes its own completed downloads without closing the batch. otherwise two runs could each wait for claims held by the other run's final incomplete group. this flush runs on a blocking worker, outside the async runtime. if locking is unavailable, the writer uses private files under `tmp` and loses cross-run resumption. gc removes the lock files nobody holds while holding each one, so `partial/` does not keep one file per URL ever fetched. a claimer that opened a lock file before gc removed it would lock a file with no name, so `claim` checks after locking that the path still names the locked file, by device and inode on unix and by volume serial and file index on windows, and opens the path again when it does not.

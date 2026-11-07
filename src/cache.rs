@@ -47,6 +47,8 @@ const FOLDERS: [&str; 8] = [
 pub(crate) struct Cache {
     root: PathBuf,
     exp: Experiments,
+    #[cfg(target_os = "linux")]
+    no_replace: Arc<NoReplace>,
     /// which folders under `objects/`, by the first byte of their hashes, this run has seen to be
     /// real folders.
     checked: Arc<[AtomicBool; 256]>,
@@ -155,6 +157,8 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             exp: Experiments::default(),
+            #[cfg(target_os = "linux")]
+            no_replace: Arc::default(),
         };
         let tag = cache.root.join("CACHEDIR.TAG");
         if !tag.exists() {
@@ -192,6 +196,8 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
             exp: Experiments::default(),
+            #[cfg(target_os = "linux")]
+            no_replace: Arc::default(),
         })
     }
 
@@ -199,6 +205,11 @@ impl Cache {
     pub(crate) fn pretending(&self) -> Cache {
         Cache {
             volume: Arc::new(Volume::pretend(self.root.join("tmp"))),
+            #[cfg(target_os = "linux")]
+            no_replace: Arc::new(NoReplace {
+                unavailable: AtomicBool::new(true),
+                ..NoReplace::default()
+            }),
             ..self.clone()
         }
     }
@@ -384,14 +395,16 @@ impl Cache {
         })
     }
 
-    /// links `source` to `path` unless the object is there already, then removes `source`. says
-    /// whether the link is new. a file at `path` that does not hold these bytes, such as one an
+    /// publishes `source` at `path` unless the object is there already, then removes `source`.
+    /// says whether the object is new. a file at `path` that does not hold these bytes, such as one an
     /// edit through a writable hardlink changed, is marked as changed and replaced, since keeping
     /// it would place the edit in every project instead of these bytes. one that cannot be read
     /// stays: nothing shows it changed.
     fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
         let volume = &self.volume;
-        let new = match volume.hard_link(source, path) {
+        let (published, renamed) = self.link_or_rename_new(source, path);
+        let new = match published {
+            Ok(()) if renamed => return Ok(true),
             Ok(()) => true,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
             // something removed the object's folder since this run checked it
@@ -401,6 +414,7 @@ impl Cache {
                 }
                 return self.link_new(source, path, digest, size);
             }
+            Err(err) if renamed => return Err(err),
             // a filesystem without hardlinks gets a plain rename, guarded by a check
             Err(_) if path.exists() => false,
             Err(_) => match volume.rename(source, path) {
@@ -452,6 +466,66 @@ impl Cache {
         }
         volume.remove(source)?;
         Ok(new)
+    }
+
+    /// tries the switched native move before the unchanged hardlink fallback. the boolean says
+    /// the operation was a rename, so success already removed the source name.
+    fn link_or_rename_new(&self, source: &Path, path: &Path) -> (io::Result<()>, bool) {
+        #[cfg(target_os = "linux")]
+        if self.experiments().on("CACHE_RENAME_NOREPLACE")
+            && let Some(result) = self.no_replace.try_rename(source, path)
+        {
+            return (result, true);
+        }
+        (self.volume.hard_link(source, path), false)
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct NoReplace {
+    unavailable: AtomicBool,
+    rename: fn(&Path, &Path) -> io::Result<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl Default for NoReplace {
+    fn default() -> Self {
+        Self {
+            unavailable: AtomicBool::new(false),
+            rename: |source, path| {
+                rustix::fs::renameat_with(
+                    rustix::fs::CWD,
+                    source,
+                    rustix::fs::CWD,
+                    path,
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )?;
+                Ok(())
+            },
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl NoReplace {
+    fn try_rename(&self, source: &Path, path: &Path) -> Option<io::Result<()>> {
+        use rustix::io::Errno;
+
+        if self.unavailable.load(Ordering::Relaxed) {
+            return None;
+        }
+        match (self.rename)(source, path) {
+            Err(err)
+                if [Errno::INVAL, Errno::NOSYS, Errno::NOTSUP]
+                    .iter()
+                    .any(|unsupported| err.raw_os_error() == Some(unsupported.raw_os_error())) =>
+            {
+                self.unavailable.store(true, Ordering::Relaxed);
+                None
+            }
+            result => Some(result),
+        }
     }
 }
 
@@ -814,6 +888,215 @@ pub(crate) mod tests {
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(fs::read(path).unwrap(), b"good");
         assert_eq!(cache.marks().unwrap()[&digest].replacement, None);
+    }
+
+    #[test]
+    fn publication_settings_preserve_new_existing_and_damaged_objects() {
+        for enabled in ["0", "1"] {
+            let (_dir, cache) = cache();
+            let cache = cache
+                .with_experiments(Experiments::default().with("CACHE_RENAME_NOREPLACE", enabled));
+            let stored = store(&cache, b"good");
+            assert!(stored.new);
+            let path = cache.object_path(&stored.digest);
+            let first = cache.root.join("first");
+            let linked = fs::hard_link(&path, &first).is_ok();
+            assert!(!store(&cache, b"good").new);
+            if linked {
+                assert!(same_file::is_same_file(&path, &first).unwrap());
+            }
+            rewrite(&path, b"evil");
+            seal(&path);
+            assert!(store(&cache, b"good").new);
+            assert_eq!(fs::read(&path).unwrap(), b"good");
+            assert!(cache.marks().unwrap()[&stored.digest].replacement.is_some());
+            if linked {
+                assert_eq!(fs::read(&first).unwrap(), b"evil");
+                assert!(fs::metadata(&first).unwrap().permissions().readonly());
+            }
+            assert_eq!(fs::read_dir(cache.root.join("tmp")).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn racing_publications_keep_one_new_name_with_either_setting() {
+        for enabled in ["0", "1"] {
+            let (dir, cache) = cache();
+            if !hardlinks(dir.path()) {
+                return;
+            }
+            let cache = cache
+                .with_experiments(Experiments::default().with("CACHE_RENAME_NOREPLACE", enabled));
+            let ready = || {
+                let mut object = cache.new_object().unwrap();
+                object.write_all(b"good").unwrap();
+                object.seal(true).unwrap()
+            };
+            let (first, second) = (ready(), ready());
+            let barrier = std::sync::Barrier::new(3);
+            let results = std::thread::scope(|scope| {
+                let first = scope.spawn(|| {
+                    barrier.wait();
+                    first.publish(&cache).unwrap()
+                });
+                let second = scope.spawn(|| {
+                    barrier.wait();
+                    second.publish(&cache).unwrap()
+                });
+                barrier.wait();
+                [first.join().unwrap(), second.join().unwrap()]
+            });
+            assert_eq!(results.iter().filter(|stored| stored.new).count(), 1);
+            assert_eq!(
+                fs::read(cache.object_path(&results[0].digest)).unwrap(),
+                b"good"
+            );
+            assert_eq!(fs::read_dir(cache.root.join("tmp")).unwrap().count(), 0);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    thread_local! {
+        static NATIVE_ERROR: std::cell::Cell<Option<rustix::io::Errno>> = const { std::cell::Cell::new(None) };
+        static NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[cfg(target_os = "linux")]
+    fn injected_rename(source: &Path, path: &Path) -> io::Result<()> {
+        NATIVE_CALLS.set(NATIVE_CALLS.get() + 1);
+        match NATIVE_ERROR.get() {
+            Some(error) => Err(error.into()),
+            None => (NoReplace::default().rename)(source, path),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_publication_is_switched_and_remembers_unsupported_calls() {
+        use rustix::io::Errno;
+        for error in [
+            None,
+            Some(Errno::INVAL),
+            Some(Errno::NOSYS),
+            Some(Errno::NOTSUP),
+        ] {
+            for enabled in ["0", "1"] {
+                let (_dir, cache) = cache();
+                let mut cache = cache.with_experiments(
+                    Experiments::default().with("CACHE_RENAME_NOREPLACE", enabled),
+                );
+                cache.no_replace = Arc::new(NoReplace {
+                    rename: injected_rename,
+                    ..NoReplace::default()
+                });
+                NATIVE_ERROR.set(error);
+                NATIVE_CALLS.set(0);
+                for (run, bytes) in [
+                    (&cache, b"first".as_slice()),
+                    (&cache.clone(), b"second".as_slice()),
+                ] {
+                    let stored = store(run, bytes);
+                    assert!(stored.new);
+                    assert_eq!(fs::read(run.object_path(&stored.digest)).unwrap(), bytes);
+                }
+                assert!(!store(&cache, b"first").new);
+                assert_eq!(
+                    NATIVE_CALLS.get(),
+                    if enabled == "0" {
+                        0
+                    } else if cache.no_replace.unavailable.load(Ordering::Relaxed) {
+                        1
+                    } else {
+                        3
+                    }
+                );
+                if error.is_some() || enabled == "0" {
+                    assert_eq!(
+                        cache.no_replace.unavailable.load(Ordering::Relaxed),
+                        enabled == "1" && error.is_some()
+                    );
+                }
+                assert_eq!(fs::read_dir(cache.root.join("tmp")).unwrap().count(), 0);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_publication_errors_leave_existing_names_untouched() {
+        use rustix::io::Errno;
+        for error in [Errno::IO, Errno::ACCESS, Errno::XDEV] {
+            let (_dir, cache) = cache();
+            let mut cache =
+                cache.with_experiments(Experiments::default().with("CACHE_RENAME_NOREPLACE", "1"));
+            cache.no_replace = Arc::new(NoReplace {
+                rename: injected_rename,
+                ..NoReplace::default()
+            });
+            let source = cache.root.join("tmp/source");
+            let destination = cache.root.join("objects/destination");
+            fs::write(&source, b"good").unwrap();
+            fs::write(&destination, b"keep").unwrap();
+            NATIVE_ERROR.set(Some(error));
+            NATIVE_CALLS.set(0);
+            let result = cache.link_new(&source, &destination, &digest::sha256(b"good"), 4);
+            assert_eq!(
+                result.unwrap_err().raw_os_error(),
+                Some(error.raw_os_error())
+            );
+            assert_eq!(NATIVE_CALLS.get(), 1);
+            assert!(!cache.no_replace.unavailable.load(Ordering::Relaxed));
+            assert_eq!(fs::read(source).unwrap(), b"good");
+            assert_eq!(fs::read(destination).unwrap(), b"keep");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_no_replace_preserves_existing_files_and_links() {
+        let (_dir, cache) = cache();
+        let source = cache.root.join("tmp/source");
+        let destination = cache.root.join("objects/destination");
+        let outside = cache.root.join("outside");
+        fs::write(&source, b"good").unwrap();
+        fs::write(&outside, b"keep").unwrap();
+        for linked in [false, true] {
+            if linked {
+                std::os::unix::fs::symlink(&outside, &destination).unwrap();
+            } else {
+                fs::write(&destination, b"keep").unwrap();
+            }
+            let Some(result) = NoReplace::default().try_rename(&source, &destination) else {
+                return;
+            };
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+            assert_eq!(fs::read(&source).unwrap(), b"good");
+            assert_eq!(fs::read(&destination).unwrap(), b"keep");
+            if linked {
+                assert_eq!(fs::read_link(&destination).unwrap(), outside);
+            }
+            fs::remove_file(&destination).unwrap();
+        }
+        assert_eq!(fs::read(outside).unwrap(), b"keep");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_publication_keeps_dry_runs_read_only() {
+        let (_dir, cache) = cache();
+        let cache = cache
+            .with_experiments(Experiments::default().with("CACHE_RENAME_NOREPLACE", "1"))
+            .pretending();
+        let source = cache.root.join("tmp/source");
+        let destination = cache.root.join("objects/destination");
+        fs::write(&source, b"good").unwrap();
+        assert!(
+            cache
+                .link_new(&source, &destination, &digest::sha256(b"good"), 4)
+                .is_err()
+        );
+        assert!(source.exists());
+        assert!(!destination.exists());
     }
 
     #[test]

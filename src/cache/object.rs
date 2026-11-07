@@ -1,6 +1,6 @@
 //! new objects written in one go, such as the members of an archive. each is created read-only in
-//! `tmp/`, written and hashed in one pass, flushed and closed, then linked into place, so putting
-//! it in the cache costs two calls to the filesystem.
+//! `tmp/`, written and hashed in one pass, flushed and closed, then published through the cache's
+//! new-object policy. the optional linux no-replace rename removes the separate source unlink.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
