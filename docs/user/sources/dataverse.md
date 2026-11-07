@@ -16,6 +16,8 @@ fetchloom get dataverse:dataverse.harvard.edu/file:6867336
 | a dataset or file page | read its dataset or file reference |
 | a `doi:` or `hdl:` persistent id on a dataverse host | resolve the published dataset or file version |
 
+a pasted link keeps its supplied `version`. drafts, empty values and non-version text are errors, never a request for the latest version. omit `version` to use the newest published version.
+
 ## pins
 
 resolved dataset references contain the host, persistent id and `@major.minor` version. resolved file references contain the host, numeric file id and version. a file PID is converted to its numeric id.

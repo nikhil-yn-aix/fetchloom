@@ -77,7 +77,7 @@ impl Dataset {
     }
 
     /// a dataset or file page on any install, without fetching its HTML.
-    pub(super) fn from_link(url: &Url) -> Option<Dataset> {
+    pub(super) fn from_link(url: &Url) -> Option<Result<Dataset, Error>> {
         let page = url.path_segments()?.next_back()?;
         if !matches!(page, "dataset.xhtml" | "citation" | "file.xhtml") {
             return None;
@@ -99,12 +99,18 @@ impl Dataset {
         } else {
             query("persistentId")?
         };
-        Dataset::parse(&format!("{host}/{id}"))
-            .ok()
-            .map(|dataset| Dataset {
-                version: query("version").filter(|version| is_version(version)),
-                ..dataset
-            })
+        let mut reference = format!("{host}/{id}");
+        if let Some(version) = query("version") {
+            if !is_version(&version) {
+                return Some(Err(malformed(
+                    url.as_str(),
+                    "a dataverse link with version=1.0 or version=:latest-published",
+                )));
+            }
+            reference.push('@');
+            reference.push_str(&version);
+        }
+        Some(Dataset::parse(&reference))
     }
 
     /// the install's host name, without its port.

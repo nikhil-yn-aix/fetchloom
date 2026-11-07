@@ -427,12 +427,15 @@ fn link(text: &str) -> Result<Parsed, Error> {
         .or_else(|| {
             figshare::Article::from_link(&url)
                 .map(|article| parsed(Reference::Figshare(article), None))
-        })
-        .or_else(|| {
-            dataverse::Dataset::from_link(&url)
-                .map(|dataset| parsed(Reference::Dataverse(dataset), None))
-        })
-        .or_else(|| osf::Node::from_link(&url).map(|node| parsed(Reference::Osf(node), None)))
+        });
+    if let Some(routed) = routed {
+        return Ok(routed);
+    }
+    if let Some(dataset) = dataverse::Dataset::from_link(&url) {
+        return dataset.map(|dataset| parsed(Reference::Dataverse(dataset), None));
+    }
+    let routed = osf::Node::from_link(&url)
+        .map(|node| parsed(Reference::Osf(node), None))
         .or_else(|| {
             hf::Repo::from_link(&url).map(|(repo, file, folder)| Parsed {
                 reference: Reference::HuggingFace(repo),

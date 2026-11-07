@@ -323,3 +323,61 @@ fn an_install_on_another_port_keeps_its_port_in_the_account() {
         );
     }
 }
+
+#[test]
+fn pasted_versions_are_not_discarded() {
+    for page in [
+        "dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP",
+        "citation?persistentId=doi:10.7910/DVN/TJCLKP",
+        "file.xhtml?fileId=6867336",
+        "file.xhtml?persistentId=doi:10.7910/DVN/27245/DMEVUB",
+    ] {
+        for version in ["release-1", "", ":draft", ":DRAFT", "DRAFT"] {
+            let url = format!("https://dataverse.harvard.edu/{page}&version={version}");
+            let error = Reference::parse(&url).unwrap_err();
+            assert_eq!(error.kind, Kind::ReferenceInvalid, "{url}");
+            assert!(error.help.is_some(), "{url}");
+        }
+    }
+}
+
+#[test]
+fn pasted_published_versions_keep_their_one_request_pin() {
+    for (page, endpoint, fixture, pinned) in [
+        (
+            "dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP&version=5.0",
+            VERSION,
+            "dataverse/version.json",
+            "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0",
+        ),
+        (
+            "file.xhtml?fileId=6867336&version=5.0",
+            "https://dataverse.harvard.edu/api/files/6867336/versions/5.0?returnDatasetVersion=true",
+            "dataverse/file.json",
+            "dataverse:dataverse.harvard.edu/file:6867336@5.0",
+        ),
+        (
+            "dataset.xhtml?persistentId=doi:10.7910/DVN/TJCLKP&version=:latest-published",
+            LATEST,
+            "dataverse/version.json",
+            "dataverse:dataverse.harvard.edu/doi:10.7910/DVN/TJCLKP@5.0",
+        ),
+    ] {
+        let recorded = Recorded::default().fixture(endpoint, fixture);
+        let reference = Reference::parse(&format!("https://dataverse.harvard.edu/{page}"))
+            .unwrap()
+            .reference;
+        assert_eq!(
+            Reference::parse(&reference.to_string()).unwrap().reference,
+            reference
+        );
+        let listing = block_on(reference.resolve(&recorded)).unwrap();
+        assert_eq!(listing.resolved.to_string(), pinned);
+        assert_eq!(recorded.asked(), [endpoint]);
+    }
+    let doi = Reference::parse(
+        "https://doi.org/10.1234/dataset.xhtml?persistentId=doi:10.1/X&version=bad",
+    )
+    .unwrap();
+    assert_eq!(doi.reference.to_string(), "doi:10.1234/dataset.xhtml");
+}
