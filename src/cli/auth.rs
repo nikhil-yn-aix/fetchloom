@@ -61,6 +61,10 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
     let output = &context.output;
     let mut accounts = Vec::new();
     let mut missing = Vec::new();
+    // this command tells each problem itself, account by account
+    context
+        .cautioned
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(path) = auth::netrc::path(&auth::env).filter(|path| auth::netrc::too_open(path)) {
         output.warn(&format!(
             "other users of this machine can open {}, which holds logins; limit it to yourself with `chmod 600 {}`",

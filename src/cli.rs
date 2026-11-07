@@ -56,6 +56,8 @@ struct Context {
     needed: std::sync::Mutex<Option<crate::auth::Need>>,
     /// a key signed in with during this command but not saved, which the run again still uses.
     unsaved: std::sync::Mutex<Vec<net::Credential>>,
+    /// whether this run has already warned about keys it cannot use safely or at all.
+    cautioned: std::sync::atomic::AtomicBool,
 }
 
 impl Context {
@@ -73,6 +75,7 @@ impl Context {
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
             unsaved: std::sync::Mutex::default(),
+            cautioned: std::sync::atomic::AtomicBool::default(),
         }
     }
 
@@ -85,7 +88,36 @@ impl Context {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         credentials.extend(crate::auth::credentials(&crate::auth::env));
+        self.caution(&credentials);
         self.net_with(credentials)
+    }
+
+    /// warns once per run about a `.netrc` other users can open and about keys no request header
+    /// can carry, so a command that quietly signs in without them says why.
+    fn caution(&self, credentials: &[net::Credential]) {
+        if self
+            .cautioned
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        if let Some(path) = crate::auth::netrc::path(&crate::auth::env)
+            .filter(|path| crate::auth::netrc::too_open(path))
+        {
+            self.output.warn(&format!(
+                "other users of this machine can open {}, which holds logins; limit it to yourself with `chmod 600 {}`",
+                path.display(),
+                path.display()
+            ));
+        }
+        for credential in credentials {
+            if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
+                self.output.warn(&format!(
+                    "a key for {} is never sent, since it holds a character no request header can carry, such as a line break; `fetchloom auth` shows where it is kept",
+                    credential.host
+                ));
+            }
+        }
     }
 
     /// the network with only `credentials`, as checking one key needs.
@@ -688,6 +720,37 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_no_header_can_carry_is_told_once_per_run() {
+        let context = Context::new(Output::new(
+            crate::output::Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            true,
+            false,
+        ));
+        context.unsaved.lock().unwrap().push(net::Credential {
+            host: "lab.example.org".to_owned(),
+            header: "authorization",
+            value: "Bearer abc\ndef".to_owned(),
+            every_hop: false,
+        });
+        let _ = context.net();
+        let _ = context.net();
+        let told = context.output.told();
+        let about = told
+            .iter()
+            .filter(|text| text.contains("a key for lab.example.org is never sent"))
+            .count();
+        assert_eq!(about, 1, "{told:?}");
+        assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
+    }
 
     #[test]
     fn a_key_kept_out_of_files_still_serves_the_command() {

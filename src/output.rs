@@ -175,6 +175,15 @@ impl Output {
         }
     }
 
+    /// the warnings told so far, for tests.
+    #[cfg(test)]
+    pub(crate) fn told(&self) -> Vec<String> {
+        self.warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) fn warn(&self, text: &str) {
         self.warnings
             .lock()
