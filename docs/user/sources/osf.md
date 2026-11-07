@@ -31,7 +31,7 @@ explicitly expired storage redirects can be refreshed. locked 404 or 410 downloa
 
 `fetchloom auth login osf` or `OSF_TOKEN` supplies the source credential. it is not stored in the manifest, lock, logs or JSON output.
 
-the folder walk covers osfstorage. source access rules and listing-size limits still apply. fetchloom does not grant account access or guarantee permanent hosting of the locked bytes.
+the folder walk covers osfstorage. it refuses unsafe names before descending into a folder, with control characters escaped in the error. source access rules and listing-size limits still apply. fetchloom does not grant account access or guarantee permanent hosting of the locked bytes.
 
 the walk does not enter a project's components, which keep their files in storage of their own. when a project has components, fetchloom warns once the project resolves, giving their number, and `--json` lists the warning in `warnings`; add each component you need as its own dataset, by its id, as in `osf:<id>`.
 

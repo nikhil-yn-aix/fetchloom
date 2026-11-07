@@ -155,3 +155,26 @@ fn nested_folders_join_each_parent_instead_of_trusting_materialized_paths() {
     );
     assert_eq!(recorded.asked(), [NODE, FIRST, SURVEYS, AUDIT]);
 }
+
+#[test]
+fn unsafe_osf_paths_are_escaped_before_the_walk_stops() {
+    for entry in [0, 1] {
+        for control in ['\u{202e}', '\u{2066}', '\n', '\u{1b}'] {
+            let path = format!("report{control}txt.exe");
+            let body = changed_page(|value| {
+                value["data"][entry]["attributes"]["name"] = path.clone().into();
+            });
+            let recorded = paged(body);
+            let reference = Reference::parse("osf:ytpuq").unwrap().reference;
+            let error = block_on(reference.resolve(&recorded)).unwrap_err();
+            assert_eq!(error.kind, Kind::SourceInvalid);
+            assert!(
+                !error.message.contains(control),
+                "raw control in rejected path: {:?}",
+                error.message
+            );
+            assert!(error.message.contains(&path.escape_debug().to_string()));
+            assert_eq!(recorded.asked(), [NODE, FIRST]);
+        }
+    }
+}

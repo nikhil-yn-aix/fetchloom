@@ -140,7 +140,7 @@ impl Walk {
             format!("{parent}/{}", entry.attributes.name)
         };
         if let Some(reason) = crate::name::escapes(&path) {
-            return Err(node.invalid(&format!("the path \"{path}\" {reason}")));
+            return Err(node.invalid(&format!("the path \"{}\" {reason}", path.escape_debug())));
         }
         match entry.attributes.kind {
             EntryKind::File => self.files.push(entry.remote(node, path)?),
