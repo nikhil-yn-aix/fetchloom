@@ -30,7 +30,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 
 ### parse before resolving
 
-`Reference::parse` recognizes identifiers and known pasted-link shapes. dataverse link parsing returns explicit errors for invalid version queries, so routing cannot discard the version or fall back to downloading the page. `Parsed.file` keeps an individual file selection embedded in a link. an unrecognized page on a known source host fails instead of being mistaken for a plain downloadable file.
+`Reference::parse` recognizes identifiers and known pasted-link shapes. dataverse link parsing returns explicit errors for invalid version queries, so routing cannot discard the version or fall back to downloading the page. figshare distinguishes a modern article type segment from legacy title/id links, then reads the id and version by position rather than guessing from their values. `Parsed.file` keeps an individual file selection embedded in a link. an unrecognized page on a known source host fails instead of being mistaken for a plain downloadable file.
 
 github and gitlab file-page URLs are normalized to raw URLs before ordinary URL resolution. [URL references](../../user/sources/urls-and-dois.md) owns accepted forms and HTML warnings.
 

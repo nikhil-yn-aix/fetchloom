@@ -51,23 +51,39 @@ impl Article {
             .filter(|part| !part.is_empty())
             .collect();
         let after = parts.iter().position(|part| *part == "articles")? + 1;
-        let numbers: Vec<u64> = parts[after..]
-            .iter()
-            .rev()
-            .map_while(|part| part.parse().ok())
-            .collect();
-        match numbers.as_slice() {
-            // a link ends in the article id, or in the id and then a version number
-            [version, id, ..] if *version < 10_000 => Some(Article {
-                id: *id,
-                version: Some(u32::try_from(*version).ok()?),
-            }),
-            [id, ..] => Some(Article {
-                id: *id,
-                version: None,
-            }),
-            [] => None,
-        }
+        let article = match &parts[after..] {
+            [kind, rest @ ..]
+                if rest.len() >= 2
+                    && matches!(
+                        *kind,
+                        "figure"
+                            | "online_resource"
+                            | "preprint"
+                            | "book"
+                            | "conference_contribution"
+                            | "media"
+                            | "dataset"
+                            | "poster"
+                            | "journal_contribution"
+                            | "presentation"
+                            | "thesis"
+                            | "software"
+                    ) =>
+            {
+                rest
+            }
+            other => other,
+        };
+        // modern links add a type before the title; a numeric title is still a title.
+        let (id, version) = match article {
+            [_, id, version] => (*id, Some(version.parse().ok()?)),
+            [_, id] | [id] => (*id, None),
+            _ => return None,
+        };
+        Some(Article {
+            id: id.parse().ok()?,
+            version,
+        })
     }
 
     /// asks the articles API for the article's files.

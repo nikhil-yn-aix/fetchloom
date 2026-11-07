@@ -290,3 +290,78 @@ fn embargoed_articles_explain_why_downloads_are_unavailable() {
     assert_eq!(error.kind, Kind::AuthRequired);
     assert!(error.help.is_some());
 }
+
+#[test]
+fn numeric_titles_and_large_versions_keep_the_article_identity() {
+    for (path, expected) in [
+        ("dataset/2024/1234", "figshare:1234"),
+        ("journal_contribution/2024/1234", "figshare:1234"),
+        ("online_resource/2024/1234", "figshare:1234"),
+        ("dataset/title/34744689/10000", "figshare:34744689@10000"),
+        (
+            "dataset/2024/34744689/4294967295",
+            "figshare:34744689@4294967295",
+        ),
+        ("title/34744689/10000", "figshare:34744689@10000"),
+        ("title/34744689/1", "figshare:34744689@1"),
+        ("code/34744689/1", "figshare:34744689@1"),
+        ("paper/34744689/1", "figshare:34744689@1"),
+        ("fileset/34744689/1", "figshare:34744689@1"),
+        ("metadata/34744689/1", "figshare:34744689@1"),
+        ("title/34744689", "figshare:34744689"),
+        ("2024/1234", "figshare:1234"),
+        ("34744689", "figshare:34744689"),
+    ] {
+        for host in ["figshare.com", "tandf.figshare.com"] {
+            let url = format!("https://{host}/articles/{path}");
+            let parsed = Reference::parse(&url).unwrap();
+            assert_eq!(parsed.reference.to_string(), expected, "{url}");
+            assert_eq!(
+                Reference::parse(expected).unwrap().reference,
+                parsed.reference
+            );
+        }
+    }
+    for path in [
+        "dataset/title/34744689/4294967296",
+        "dataset/title/34744689/not-a-version",
+        "dataset/title/34744689/1/2",
+    ] {
+        let error = Reference::parse(&format!("https://figshare.com/articles/{path}")).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid, "{path}");
+    }
+}
+
+#[test]
+fn parsed_versions_request_only_the_named_article_version() {
+    for (path, id, version, endpoint) in [
+        (
+            "dataset/2024/1234",
+            1234,
+            1,
+            "https://api.figshare.com/v2/articles/1234",
+        ),
+        (
+            "dataset/title/34744689/10000",
+            34_744_689,
+            10000,
+            "https://api.figshare.com/v2/articles/34744689/versions/10000",
+        ),
+    ] {
+        let body = changed(|value| {
+            value["id"] = id.into();
+            value["version"] = version.into();
+        });
+        let recorded = Recorded::default().on(endpoint, 200, body);
+        let reference = Reference::parse(&format!("https://figshare.com/articles/{path}"))
+            .unwrap()
+            .reference;
+        let listing = block_on(reference.resolve(&recorded)).unwrap();
+        assert_eq!(
+            listing.resolved.to_string(),
+            format!("figshare:{id}@{version}")
+        );
+        assert_eq!(listing.files.len(), 2);
+        assert_eq!(recorded.asked(), [endpoint]);
+    }
+}

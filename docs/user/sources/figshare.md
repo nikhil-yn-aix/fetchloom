@@ -15,6 +15,8 @@ fetchloom get figshare:34744689@1
 | a figshare article link | resolve the article and pin its version |
 | an institutional figshare article link | use the article resolver for that host |
 
+article links keep the title, article id and optional version in their own path positions. a numeric title does not become an id, and an explicit version stays attached to that article. modern type/title/id links and older title/id links are accepted.
+
 use `--select` or `--exclude` with quoted [patterns](../reference/data-toml.md#patterns) to choose listed files. filters do not bypass access checks or listing-size limits.
 
 a file figshare lists as a link to another site has no stored bytes. it is listed as an entry fetchloom cannot download, so the rest of the article can still be fetched with `--exclude` for that path.
