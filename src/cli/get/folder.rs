@@ -67,6 +67,20 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
     .help("choose another folder with -o, or empty this one"))
 }
 
+/// a generated name cannot grant the root-link exception an explicit output folder gets.
+pub(super) fn check_generated_root(folder: &Path) -> Result<(), Error> {
+    match fs::symlink_metadata(folder) {
+        Ok(metadata) => crate::place::found_folder(
+            folder,
+            &metadata,
+            crate::place::FolderUse::Place { make: false },
+        )
+        .map_err(|err| local(folder, &err)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(local(folder, &err)),
+    }
+}
+
 pub(super) fn put_all(
     context: &Context,
     cache: &Cache,

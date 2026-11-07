@@ -570,6 +570,9 @@ async fn finish(
     } else {
         unclaimed(folder, taken)
     };
+    if chosen.is_none() {
+        folder::check_generated_root(&folder)?;
+    }
     tell_fetched(context, &paths, &fetched, &files, elapsed);
     vouch(&folder, &paths, &fetched, sha256, taken)?;
     let mut locked: Vec<LockedFile> = files

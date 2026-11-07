@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, file, json, reply, text};
+use crate::support::{Result, Sandbox, Server, file, json, link_folder, reply, text};
 
 const PATH: &str = "/files/data.csv";
 
@@ -168,6 +168,65 @@ fn an_unknown_help_topic_never_shows_the_token() -> Result {
         assert_eq!(output.status.code(), Some(2), "{shown}");
         assert!(!shown.contains("abc123"), "{shown}");
         assert!(shown.contains("token=***"), "{shown}");
+    }
+    Ok(())
+}
+
+fn marker_zip() -> Result<Vec<u8>> {
+    use std::io::Write as _;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("marker.txt", zip::write::SimpleFileOptions::default())?;
+    zip.write_all(b"harmless marker")?;
+    Ok(zip.finish()?.into_inner())
+}
+
+#[test]
+fn wave1_generated_output_roots_refuse_links_outside_the_working_directory() -> Result {
+    for archive in [false, true] {
+        for multiple in [false, true] {
+            let sandbox = Sandbox::new()?;
+            let outside = sandbox.folder("outside")?;
+            let root = if multiple {
+                sandbox.work().join("chosen")
+            } else {
+                sandbox.work()
+            };
+            fs::create_dir_all(&root)?;
+            if !link_folder(&outside, &root.join("payload")) {
+                return Ok(());
+            }
+            let body = if archive {
+                marker_zip()?
+            } else {
+                b"harmless marker".to_vec()
+            };
+            let path = if archive {
+                "/payload.zip"
+            } else {
+                "/payload.csv"
+            };
+            let server = Server::start(path, vec![file(&body, "\"v1\"")])?;
+            let other = Server::start("/other.csv", vec![file(b"other", "\"v2\"")])?;
+            let args = if multiple {
+                vec![
+                    "--json",
+                    "get",
+                    server.url.as_str(),
+                    other.url.as_str(),
+                    "-o",
+                    "chosen",
+                ]
+            } else {
+                vec!["--json", "get", server.url.as_str()]
+            };
+            let output = sandbox.run(&args)?;
+            assert!(
+                !outside.join("marker.txt").exists() && !outside.join("payload.csv").exists(),
+                "generated root escaped: archive={archive}, multiple={multiple}, output={}",
+                text(&output.stdout)?
+            );
+            assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+        }
     }
     Ok(())
 }

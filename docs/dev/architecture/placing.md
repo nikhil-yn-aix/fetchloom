@@ -85,7 +85,7 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 
 - never clear a known hardlink's read-only flag to remove it. that flag belongs to every name of the file.
 - reject traversal, metadata destinations and unsafe folder chains before writing; deletion rechecks its parents after downloads.
-- a project's data root must be real. the folder explicitly supplied to `get` may itself be a link, but its child folders must be real.
+- a project's data root must be real. the folder explicitly supplied to `get` may itself be a link, but its child folders must be real. `get::finish` also rejects a linked generated root after the final output name is known, including generated children of a multi-link `-o` parent.
 - path checks are not a sandbox against concurrent directory swaps.
 - adopting an untracked equal file makes it managed; a later removal can delete it if unchanged.
 - read each placed file's size and time immediately after placement, not after the whole batch.

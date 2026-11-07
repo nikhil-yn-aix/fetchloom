@@ -85,7 +85,7 @@ unrelated top-level entries are refused. fetchloom ignores its own leftover copy
 
 other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. there is no `get --force`. choose a different folder to protect your files.
 
-the output folder itself may link elsewhere. links below it are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
+the output folder explicitly chosen with `-o` for a single link may itself link elsewhere. automatically named folders, including each link's folder inside a multi-link `-o` parent, must be real folders. links below an output folder are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
 
 ## exit codes
 
