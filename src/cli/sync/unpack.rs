@@ -285,11 +285,20 @@ impl Loop<'_> {
             .collect())
     }
 
-    /// drops from the cache each archive this run unpacked, now that its files are in, unless
-    /// something on this machine still needs its own bytes.
+    /// drops archives whose members are now cached, including records reused after an earlier
+    /// failed run, unless something on this machine still needs their packed bytes.
     pub(in crate::cli) fn drop_unpacked(&self, lock: &Lock) {
-        let unpacked =
+        let mut unpacked =
             std::mem::take(&mut *self.unpacked.lock().unwrap_or_else(PoisonError::into_inner));
+        unpacked.extend(
+            lock.datasets
+                .iter()
+                .flat_map(|dataset| &dataset.files)
+                .filter(|file| file.unpacks_to.is_some())
+                .map(|file| file.sha256),
+        );
+        unpacked.sort_unstable();
+        unpacked.dedup();
         drop_archives(&self.cache, &unpacked, Some(lock));
     }
 }

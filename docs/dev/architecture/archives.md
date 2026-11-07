@@ -68,7 +68,7 @@ native filesystem errors while reading cached archives remain `local.io`, with t
 
 members are sorted by path and hashed as a tree of names, sizes and digests. `data.lock` pins the tree hash while the cache stores the full member list. `unpack_cached` records a tree only when it matches the expected tree or no tree was pinned yet.
 
-when a locked tree differs, or decoding fails with an archive error, the sync layer checks whether the packed object itself was damaged. damaged bytes are marked and fetched again. an intact archive that produces another tree fails rather than silently changing the pin. an intact damaged archive keeps its original source error; repair is attempted only when the cached bytes changed. packed objects can be dropped only when current and registered locks no longer require them.
+when a locked tree differs, or decoding fails with an archive error, the sync layer checks whether the packed object itself was damaged. damaged bytes are marked and fetched again. an intact archive that produces another tree fails rather than silently changing the pin. an intact damaged archive keeps its original source error; repair is attempted only when the cached bytes changed. packed objects can be dropped only when current and registered locks no longer require them. successful syncs also consider archives whose cached member records were reused from an earlier failed operation.
 
 ## invariants and traps
 

@@ -590,3 +590,30 @@ fn a_cached_archive_with_crc_damage_is_fetched_again() -> Result {
     assert_eq!(server.requests().len(), requests + 1);
     Ok(())
 }
+
+#[test]
+fn sync_drops_an_archive_extracted_by_a_failed_get() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let server = Server::start(PATH, (0..3).map(|_| file(&zip, "\"z1\"")).collect())?;
+    let taken = sandbox.work().join("dataset");
+    fs::create_dir(&taken)?;
+    fs::write(taken.join("notes.txt"), b"mine")?;
+    let refused = sandbox.run(&["get", &server.url])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stderr)?
+    );
+    assert!(zip_object(&sandbox.cache()).exists());
+    assert!(sandbox.cache().join("unpacked").join(ZIP_SHA256).is_file());
+    let added = sandbox.run(&["add", &server.url])?;
+    ok(&added)?;
+    holds_the_archive(&sandbox.work().join("data").join("dataset"))?;
+    assert!(
+        !zip_object(&sandbox.cache()).exists(),
+        "placed cached members left their packed archive behind"
+    );
+    Ok(())
+}
