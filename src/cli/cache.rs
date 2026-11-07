@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::Serialize;
@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::{Context, open_cache};
 use crate::cache::{Access, Cache, Checked, Freed, Needed};
 use crate::error::{Error, Kind};
+use crate::output::Output;
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
 use crate::stop::Stop;
@@ -374,7 +375,13 @@ pub(super) fn remind(context: &Context) {
     let Some(root) = Cache::locate(&|name| std::env::var_os(name)) else {
         return;
     };
-    if !root.join("objects").is_dir() {
+    remind_at(&context.output, &root, &context.stop);
+}
+
+/// the reminder for the cache at `root`, which [`open_cache`] opens too.
+fn remind_at(output: &Output, root: &Path, stop: &Stop) {
+    // its only output is a hint, so with hints hidden, as by `-q`, it reads nothing at all
+    if !output.shows_hints() || !root.join("objects").is_dir() {
         return;
     }
     let marker = root.join("reminded");
@@ -394,10 +401,10 @@ pub(super) fn remind(context: &Context) {
     }
     let Ok(cache) = open_cache() else { return };
     // gc would forget a project out of reach, so the number would mislead
-    let Ok(Some(needed)) = needed_by_all(&cache, None, &context.stop) else {
+    let Ok(Some(needed)) = needed_by_all(&cache, None, stop) else {
         return;
     };
-    let Ok(scan) = cache.scan_objects(&context.stop) else {
+    let Ok(scan) = cache.scan_objects(stop) else {
         return;
     };
     // only what gc would free and what frees disk space: past its day, and not also a file a
@@ -415,7 +422,7 @@ pub(super) fn remind(context: &Context) {
         .map(|object| object.size)
         .sum();
     if freeable >= REMIND_FROM {
-        context.output.hint(&format!(
+        output.hint(&format!(
             "the cache holds {} no project needs; `fetchloom cache gc` frees it",
             units::size(freeable)
         ));
@@ -550,7 +557,30 @@ mod tests {
     use super::*;
     use crate::cache::Member;
     use crate::cache::tests::store;
+    use crate::output::{Level, Style};
     use crate::project::lock::{Locked, LockedFile};
+
+    #[test]
+    fn a_reminder_nobody_would_see_reads_nothing() {
+        let style = Style {
+            color: false,
+            unicode: true,
+            interactive: true,
+            watched: true,
+            links: false,
+        };
+        let quiet = Output::new(style, Level::Quiet, false, false);
+        let unhinted = Output::new(style, Level::Normal, false, false).without_hints(true);
+        for output in [quiet, unhinted] {
+            let folder = tempfile::tempdir().unwrap();
+            fs::create_dir(folder.path().join("objects")).unwrap();
+            remind_at(&output, folder.path(), &Stop::default());
+            assert!(
+                !folder.path().join("reminded").exists(),
+                "the reminder ran though its hint could not show"
+            );
+        }
+    }
 
     #[test]
     fn an_archive_stays_needed_while_a_file_it_unpacked_to_is_missing() {

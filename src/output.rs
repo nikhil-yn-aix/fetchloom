@@ -212,9 +212,14 @@ impl Output {
     }
 
     pub(crate) fn hint(&self, text: &str) {
-        if self.hints && self.tells(Level::Normal) {
+        if self.shows_hints() {
             self.line(&hint_line(text, self.style.color));
         }
+    }
+
+    /// whether a hint would print, so work done only to find one can be skipped.
+    pub(crate) fn shows_hints(&self) -> bool {
+        self.hints && self.tells(Level::Normal)
     }
 
     /// the step a person usually takes after a run that worked, such as committing data.lock.

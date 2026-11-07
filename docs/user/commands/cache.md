@@ -65,7 +65,7 @@ fetchloom deletes nothing from the cache on its own, apart from a packed archive
   hint: the cache holds 3.2 GiB no project needs; `fetchloom cache gc` frees it
 ```
 
-scripts, CI and coding agents never see it, since it only runs when a person can read it. the first run only starts the weekly clock.
+scripts, CI and coding agents never see it, since it only runs when a person can read it. with `-q` or `FETCHLOOM_NO_HINTS=1`, which hide hints, it does not read the cache at all. the first run only starts the weekly clock.
 
 ### dry run
 
