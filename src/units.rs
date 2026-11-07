@@ -47,17 +47,18 @@ pub(crate) fn speed(per_second: f64) -> String {
     format!("{value:.1} {}/s", UNITS[unit])
 }
 
-/// a duration: `41 ms` below a second, `3.2 s` below a minute, `4 min 05 s` above.
+/// a duration: `41 ms` below a second, `3.2 s` below a minute, `4 min 05 s` above. a time that
+/// rounds to a whole minute is told in minutes.
 pub(crate) fn duration(elapsed: Duration) -> String {
     let millis = elapsed.as_millis();
     if millis < 1000 {
         return format!("{millis} ms");
     }
     let seconds = elapsed.as_secs_f64();
-    if seconds < 60.0 {
+    if seconds < 59.95 {
         return format!("{seconds:.1} s");
     }
-    let whole = elapsed.as_secs();
+    let whole = elapsed.as_secs().max(60);
     format!("{} min {:02} s", whole / 60, whole % 60)
 }
 
@@ -145,6 +146,14 @@ mod tests {
         assert_eq!(duration(Duration::from_millis(41)), "41 ms");
         assert_eq!(duration(Duration::from_millis(3240)), "3.2 s");
         assert_eq!(duration(Duration::from_secs(245)), "4 min 05 s");
+        assert_eq!(duration(Duration::from_millis(59_949)), "59.9 s");
+        for rounded_up in [59_950, 59_999] {
+            assert_eq!(
+                duration(Duration::from_millis(rounded_up)),
+                "1 min 00 s",
+                "{rounded_up} ms rounds into the next unit"
+            );
+        }
     }
 
     #[test]
