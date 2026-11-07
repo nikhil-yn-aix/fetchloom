@@ -51,7 +51,7 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_CACHE     the cache folder, instead of the system's cache folder
   FETCHLOOM_OFFLINE   1 works offline, as --offline does
   FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default.
-                      one host still gets at most 4 at once
+                      each initial host gets at most 4 at once
   FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
   FETCHLOOM_THREADS   a cap on local worker threads, 1 to 256
   FETCHLOOM_SPLIT     0 never splits a slow download into parts, 1 always does
