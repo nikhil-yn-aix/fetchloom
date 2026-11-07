@@ -160,7 +160,18 @@ pub(crate) struct Proxies {
     matcher: Matcher,
     /// for each host looked up, why it was refused, if it was.
     looked_up: Mutex<HashMap<String, Option<String>>>,
+    #[cfg(test)]
+    test_lookup: Option<TestLookup>,
 }
+
+#[cfg(test)]
+pub(super) type LookupFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
+#[cfg(test)]
+type TestLookup = Arc<dyn Fn(String, u16) -> LookupFuture + Send + Sync>;
+
+#[cfg(test)]
+mod proxy_tests;
 
 impl Proxies {
     /// the proxies in the environment and, where reqwest reads them, the system settings.
@@ -168,6 +179,8 @@ impl Proxies {
         Proxies {
             matcher: Matcher::from_system(),
             looked_up: Mutex::default(),
+            #[cfg(test)]
+            test_lookup: None,
         }
     }
 
@@ -200,11 +213,31 @@ impl Proxies {
             refused
         } else {
             let port = url.port_or_known_default().unwrap_or(443);
-            let refused = private_address(&name, port).await;
+            let refused = self.lookup(&name, port).await;
             self.lock().insert(name, refused.clone());
             refused
         };
         refused.map_or(Ok(()), |reason| Err(Refused(reason)))
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_lookup(
+        proxy: &str,
+        lookup: impl Fn(String, u16) -> LookupFuture + Send + Sync + 'static,
+    ) -> Proxies {
+        Proxies {
+            matcher: Matcher::builder().all(proxy.to_owned()).build(),
+            looked_up: Mutex::default(),
+            test_lookup: Some(Arc::new(lookup)),
+        }
+    }
+
+    async fn lookup(&self, name: &str, port: u16) -> Option<String> {
+        #[cfg(test)]
+        if let Some(lookup) = &self.test_lookup {
+            return lookup(name.to_owned(), port).await;
+        }
+        private_address(name, port).await
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<String>>> {
