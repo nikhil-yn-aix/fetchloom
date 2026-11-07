@@ -14,6 +14,7 @@ import fixtures
 import lab
 
 SCENARIOS = ("s2", "s3", "s5")
+DEFAULT_CASES = tuple(f"ext4/lan/{scenario}" for scenario in SCENARIOS)
 
 
 def disjoint(cpus, build_cpus):
@@ -21,10 +22,20 @@ def disjoint(cpus, build_cpus):
         raise ValueError("measurement and build CPU lists must be nonempty and disjoint")
 
 
-def campaign_command(binary, output, cpus, rounds, seed):
+def case_choice(value):
+    parts = value.split("/")
+    if len(parts) != 3 or parts[0] not in ("ext4", "xfs") or parts[1] not in lab.PROFILES or parts[2] not in fixtures.ALL_SCENARIOS:
+        raise argparse.ArgumentTypeError("case must be filesystem/profile/scenario")
+    if not fixtures.case_specs([parts[1]], [parts[2]], False):
+        raise argparse.ArgumentTypeError("scenario does not use this network profile")
+    return value
+
+
+def campaign_command(binary, output, cpus, rounds, seed, case=None):
+    fs, profile, scenarios = case.split("/") if case else ("ext4", "lan", ",".join(SCENARIOS))
     return [sys.executable, "-B", str(Path(__file__).with_name("run.py")), "--fetchloom", str(binary),
-            "--only-tools", "fetchloom", "--profiles", "lan", "--scenarios", ",".join(SCENARIOS),
-            "--fs", "ext4", "--rounds", str(rounds), "--seed", str(seed),
+            "--only-tools", "fetchloom", "--profiles", profile, "--scenarios", scenarios,
+            "--fs", fs, "--rounds", str(rounds), "--seed", str(seed),
             "--variant", "aa:FETCHLOOM_EXP_NONE=1", "--cpus", ",".join(map(str, cpus)), "--out", str(output)]
 
 
@@ -45,10 +56,11 @@ def build_load(args):
         raise ValueError("compiler target does not belong to this island check")
     with lab.affinity(args.cpus):
         clean, build = build_commands(args.cargo, args.target, args.jobs)
+        env = dict(os.environ, CARGO_TARGET_DIR=str(args.target), CARGO_BUILD_JOBS=str(args.jobs))
         iteration = 0
         while True:
-            subprocess.run(clean, cwd=args.worktree, check=True)
-            with subprocess.Popen(build, cwd=args.worktree) as process:
+            subprocess.run(clean, cwd=args.worktree, env=env, check=True)
+            with subprocess.Popen(build, cwd=args.worktree, env=env) as process:
                 write_state(args.ready, dict(pid=os.getpid(), compiler_pid=process.pid,
                                              cpu_affinity=sorted(os.sched_getaffinity(0)),
                                              iteration=iteration, command=build))
@@ -73,9 +85,10 @@ def stop(process, signum=signal.SIGTERM):
     lab.end_group(process.pid)
 
 
-def campaign(args, output, load=None):
-    command = campaign_command(args.fetchloom, output, args.cpus, args.rounds, args.seed)
-    with (args.out / (output.name + ".log")).open("w") as log:
+def campaign_case(args, output, load=None, case=None):
+    command = campaign_command(args.fetchloom, output, args.cpus, args.rounds, args.seed, case)
+    log_path = args.out / f"{output.parent.name}-{output.name}.log"
+    with log_path.open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             while True:
@@ -89,20 +102,27 @@ def campaign(args, output, load=None):
             if load is not None and load.poll() is not None:
                 raise RuntimeError(f"compiler load ended during measurement; exit {load.returncode}")
             if code:
-                raise RuntimeError(f"benchmark command failed with exit {code}; see {output.name}.log")
+                raise RuntimeError(f"benchmark command failed with exit {code}; see {log_path}")
         finally:
             stop(process, signal.SIGINT)
     rows = [json.loads(line) for line in (output / "runs.jsonl").read_text().splitlines() if line.strip()]
     return ab.compare(rows, seed=args.seed)
 
 
-def compare_noise(quiet, loaded, baseline, *, effect=.03, noise_multiple=2, rounds=20):
+def campaign(args, output, load=None):
+    results = []
+    for case in args.cases:
+        print(f"{output.name}: {case}", flush=True)
+        results.extend(campaign_case(args, output / case.replace("/", "-"), load, case))
+    return results
+
+
+def compare_noise(quiet, loaded, baseline, *, effect=.03, noise_multiple=2, rounds=20, cases=DEFAULT_CASES):
     reference = {f"{r['fs']}/{r['profile']}/{r['scenario']}": r for r in baseline}
     campaigns = [{r["case"]: r for r in records if r["variant"] == "fetchloom+aa"}
                  for records in (quiet, loaded)]
     results = []
-    for scenario in SCENARIOS:
-        key = f"ext4/lan/{scenario}"
+    for key in cases:
         old = reference[key]["metrics"]["wall"]
         sigma = old["log_ratio_robust_sd"]
         if sigma is None or sigma < 0 or not math.isfinite(sigma):
@@ -127,8 +147,22 @@ def compare_noise(quiet, loaded, baseline, *, effect=.03, noise_multiple=2, roun
         ratio = after["plain_median"] / before["plain_median"] if before["plain_median"] and after["plain_median"] else None
         if ratio is None or abs(ratio - 1) > effect:
             reasons.append("loaded versus quiet-island central wall time changed beyond the chosen band")
+        widths = [wall["bootstrap_95_median_ratio"][1] - wall["bootstrap_95_median_ratio"][0]
+                  if wall["bootstrap_95_median_ratio"] is not None else None for wall in arms]
+        old_bounds = old.get("bootstrap_95_median_ratio")
+        old_width = old_bounds[1] - old_bounds[0] if old_bounds is not None else None
+        width_limit = max(noise_multiple * max(widths[0] or 0, old_width or 0), effect / 3)
+        if widths[1] is None or widths[1] > width_limit:
+            reasons.append("loaded A/A interval width exceeds the quiet/historical limit")
+        biases = [wall["median_ratio"] - 1 if wall.get("median_ratio") is not None else None for wall in arms]
+        if None in biases or abs(biases[1] - biases[0]) > effect / 3:
+            reasons.append("loaded A/A bias shifted by more than one third of the effect margin")
         historical = old["plain_median"]
         results.append(dict(case=key, passed=not reasons, reasons=reasons,
+                            quiet_interval_width=widths[0], loaded_interval_width=widths[1],
+                            phase2_interval_width=old_width, allowed_interval_width=width_limit,
+                            quiet_aa_bias=biases[0], loaded_aa_bias=biases[1],
+                            phase2_aa_bias=old["median_ratio"] - 1 if old.get("median_ratio") is not None else None,
                             phase2_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
                             phase2_plain_median=historical, quiet_island=before, loaded_island=after,
                             loaded_over_quiet_island=ratio,
@@ -138,6 +172,9 @@ def compare_noise(quiet, loaded, baseline, *, effect=.03, noise_multiple=2, roun
 
 def check(args):
     lab.require_root()
+    args.cases = args.cases or list(DEFAULT_CASES)
+    if len(set(args.cases)) != len(args.cases):
+        raise ValueError("choose distinct cases")
     disjoint(args.cpus, args.build_cpus)
     if args.rounds < 10 or args.jobs < 1 or args.jobs > len(args.build_cpus):
         raise ValueError("use at least 10 rounds and 1 to the build CPU count jobs")
@@ -157,12 +194,13 @@ def check(args):
         raise ValueError("output and compiler target must be new paths")
     baseline = json.loads(args.noise.read_text())
     keys = {(r["fs"], r["profile"], r["scenario"]) for r in baseline}
-    if any(("ext4", "lan", scenario) not in keys for scenario in SCENARIOS):
-        raise ValueError("noise.json must contain ext4/lan s2, s3 and s5")
+    if any(tuple(case.split("/")) not in keys for case in args.cases):
+        raise ValueError("noise.json must contain every selected case")
     args.out.mkdir(parents=True)
     args.target.mkdir(parents=True)
     write_state(args.target / ".fl-bench-island.json", dict(output=str(args.out), worktree=str(args.worktree)))
     report = dict(cpu_affinity=list(args.cpus), build_cpu_affinity=list(args.build_cpus), rounds=args.rounds,
+                  selected_cases=args.cases,
                   seed=args.seed, effect=args.effect, noise_multiple=args.noise_multiple,
                   quiet_noise=str(args.noise.resolve()), quiet_noise_sha256=fixtures.sha256(args.noise),
                   binary=str(args.fetchloom), binary_sha256=fixtures.sha256(args.fetchloom),
@@ -190,7 +228,7 @@ def check(args):
             loaded = campaign(args, args.out / "loaded-island", load)
             report["build_end"] = json.loads(ready.read_text())
         report["cases"] = compare_noise(quiet, loaded, baseline, effect=args.effect,
-                                       noise_multiple=args.noise_multiple, rounds=args.rounds)
+                                       noise_multiple=args.noise_multiple, rounds=args.rounds, cases=args.cases)
         report["passed"] = all(r["passed"] for r in report["cases"])
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
@@ -209,6 +247,8 @@ def main():
     inspect.add_argument("--cpus", required=True, type=lab.cpu_choice)
     inspect.add_argument("--build-cpus", required=True, type=lab.cpu_choice)
     inspect.add_argument("--noise", required=True, type=Path)
+    inspect.add_argument("--case", action="append", dest="cases", type=case_choice,
+                         help="repeat filesystem/profile/scenario; default ext4/lan s2,s3,s5")
     inspect.add_argument("--out", required=True, type=Path)
     inspect.add_argument("--worktree", required=True, type=Path, help="checkout used only as compiler input")
     inspect.add_argument("--target", required=True, type=Path, help="new, dedicated compiler target directory")

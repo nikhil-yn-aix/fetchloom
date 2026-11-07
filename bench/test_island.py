@@ -153,6 +153,22 @@ class IslandCheckTests(unittest.TestCase):
         self.assertEqual(build[-2:], ["--target-dir", "/private-target"])
         self.assertIn("--locked", build)
 
+    def test_selected_cases_do_not_expand_into_a_cartesian_matrix(self):
+        import island
+        cases = ("ext4/lan/s3", "ext4/lan/s4", "xfs/lan/s4", "ext4/lan/s1", "ext4/home/s2")
+        for case in cases:
+            self.assertEqual(island.case_choice(case), case)
+            fs, profile, scenario = case.split("/")
+            command = island.campaign_command(Path("/binary"), Path("/results"), (0, 1), 10, 17, case)
+            self.assertEqual(command[command.index("--fs") + 1], fs)
+            self.assertEqual(command[command.index("--profiles") + 1], profile)
+            self.assertEqual(command[command.index("--scenarios") + 1], scenario)
+            self.assertEqual(command[command.index("--rounds") + 1], "10")
+        import argparse
+        for bad in ("ext4/home/s3", "ntfs/lan/s3", "ext4/unknown/s1", "lan/s3"):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                island.case_choice(bad)
+
     def test_progress_updates_replace_a_complete_json_file(self):
         import island
         with tempfile.TemporaryDirectory() as folder:
@@ -178,11 +194,11 @@ class IslandCheckTests(unittest.TestCase):
             return dict(case=f"ext4/lan/{scenario}", variant="fetchloom+aa", failed=dict(base=0, variant=0),
                         unmatched=dict(base=[], variant=[]), metrics=dict(wall=dict(n_log_pairs=20,
                         missing_metric_pairs=0, nonpositive_pairs=0, bootstrap_95_median_ratio=[.99, 1.01],
-                        log_ratio_robust_sd=.01, plain_median=1)))
+                        log_ratio_robust_sd=.01, plain_median=1, median_ratio=1)))
         quiet = [result(s) for s in island.SCENARIOS]
         loaded = [result(s) for s in island.SCENARIOS]
         baseline = [dict(fs="ext4", profile="lan", scenario=s,
-                         metrics=dict(wall=dict(log_ratio_robust_sd=.01, plain_median=1))) for s in island.SCENARIOS]
+                         metrics=dict(wall=dict(log_ratio_robust_sd=.01, plain_median=1, median_ratio=1))) for s in island.SCENARIOS]
         self.assertTrue(all(r["passed"] for r in island.compare_noise(quiet, loaded, baseline)))
         loaded[0]["metrics"]["wall"]["plain_median"] = 1.2
         loaded[1]["metrics"]["wall"]["log_ratio_robust_sd"] = .1
