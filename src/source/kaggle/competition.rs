@@ -117,8 +117,10 @@ impl Competition {
                 .filter(|file| file.size.is_some_and(|size| size <= PROBE))
         {
             let response = api.get(&smallest.url).await?;
-            if response.status == 403 {
-                return Err(named.rules(Some(&response)));
+            match response.status {
+                401 => return Err(named.sign_in(&response)),
+                403 => return Err(named.rules(Some(&response))),
+                _ => {}
             }
         }
         Ok(Listing {
@@ -509,6 +511,25 @@ mod tests {
         assert_eq!(
             (need.account, need.terms),
             (crate::auth::Account::Kaggle, None)
+        );
+    }
+
+    #[test]
+    fn an_unauthenticated_probe_stops_before_returning_files() {
+        let smallest = download("gender_submission.csv").to_string();
+        let recorded = Recorded::default()
+            .fixture(&about("titanic"), "kaggle/titanic-competition.json")
+            .fixture(&files("titanic"), "kaggle/titanic-files.json")
+            .on(&smallest, 401, fixture_bytes("kaggle/unauthenticated.json"));
+        let error = block_on(competition("titanic").resolve(&recorded)).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(error.details, ["kaggle says: Unauthenticated"]);
+        assert!(error.help.unwrap().contains("fetchloom auth login kaggle"));
+        let need = error.need.unwrap();
+        assert_eq!((need.account, need.terms), (Account::Kaggle, None));
+        assert_eq!(
+            recorded.asked(),
+            [about("titanic"), files("titanic"), smallest]
         );
     }
 
