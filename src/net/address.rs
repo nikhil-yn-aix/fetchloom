@@ -296,6 +296,7 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || ip.is_multicast()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
+                || documentation(ip)
                 || site_local(ip)
                 || ip
                     .to_ipv4()
@@ -305,6 +306,12 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                 || local_nat64(ip)
         }
     }
+}
+
+// IPv6 documentation classification is still unstable in std.
+fn documentation(ip: Ipv6Addr) -> bool {
+    let [first, second, ..] = ip.segments();
+    (first == 0x2001 && second == 0x0db8) || (first == 0x3fff && second & 0xf000 == 0)
 }
 
 /// whether `ip` sits in `fec0::/10`, the site-local addresses IPv6 gave up but some networks
@@ -454,3 +461,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod classification;
