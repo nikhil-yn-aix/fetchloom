@@ -169,6 +169,37 @@ impl Location {
         .map_err(Into::into)
     }
 
+    pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
+        let mode = if readonly { 0o444 } else { 0o600 };
+        native::openat(
+            &self.parent.file,
+            &self.name,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_bits_truncate(mode),
+        )
+        .map(File::from)
+        .map_err(Into::into)
+    }
+
+    pub(super) fn create_folder(&self) -> io::Result<()> {
+        native::mkdirat(
+            &self.parent.file,
+            &self.name,
+            Mode::from_bits_truncate(0o777),
+        )
+        .map_err(Into::into)
+    }
+
+    pub(super) fn rename_to(&self, target: &Location) -> io::Result<()> {
+        native::renameat(
+            &self.parent.file,
+            &self.name,
+            &target.parent.file,
+            &target.name,
+        )
+        .map_err(Into::into)
+    }
+
     pub(super) fn remove_file(&self) -> io::Result<()> {
         native::unlinkat(&self.parent.file, &self.name, AtFlags::empty()).map_err(Into::into)
     }

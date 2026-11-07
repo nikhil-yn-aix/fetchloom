@@ -67,6 +67,10 @@ impl Volume {
         }
     }
 
+    pub(crate) fn is_pretending(&self) -> bool {
+        self.pretended.is_some()
+    }
+
     /// the paths a pretending volume would have removed, in order. empty for a real volume.
     pub(crate) fn pretended(&self) -> Vec<PathBuf> {
         self.pretended.as_ref().map_or_else(Vec::new, |paths| {

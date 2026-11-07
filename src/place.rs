@@ -546,6 +546,50 @@ impl Placer {
         Ok(())
     }
 
+    /// checks a parent without caching the result or creating anything.
+    pub(crate) fn check_parent(&self, path: &Path) -> io::Result<()> {
+        self.location(path, false, false).map(drop)
+    }
+
+    /// creates one new folder below the pinned root; existing names are refused.
+    pub(crate) fn create_folder(&self, path: &Path) -> io::Result<()> {
+        check_stop(&self.stop)?;
+        self.location(path, false, false)?.create_folder()
+    }
+
+    /// creates a new file through its parent, with a writable handle even when its mode is read-only.
+    pub(crate) fn create_file(&self, path: &Path, readonly: bool) -> io::Result<File> {
+        check_stop(&self.stop)?;
+        self.location(path, false, false)?.create_file(readonly)
+    }
+
+    /// renames between two checked parents below the pinned root.
+    pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        check_stop(&self.stop)?;
+        self.location(from, false, false)?
+            .rename_to(&self.location(to, false, false)?)
+    }
+
+    /// deletes a temporary file through its parent; it is not a recorded placement.
+    pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
+        check_stop(&self.stop)?;
+        let location = self.location(path, false, false)?;
+        #[cfg(unix)]
+        {
+            location.remove_file()
+        }
+        #[cfg(windows)]
+        {
+            Volume::new(location.root_path().to_path_buf()).remove(location.path())
+        }
+    }
+
+    /// removes an empty folder without following a replacement link.
+    pub(crate) fn delete_folder(&self, path: &Path) -> io::Result<()> {
+        check_stop(&self.stop)?;
+        self.location(path, false, false)?.remove_dir()
+    }
+
     fn location(&self, destination: &Path, make: bool, reuse: bool) -> io::Result<Location> {
         let (destination, _) = self.within(destination)?;
         self.parents.locate(

@@ -34,13 +34,17 @@ struct Temporary {
     volume: Arc<Volume>,
     published: bool,
     // a member may outlive the caller's staging handle while a writer finishes sealing it
-    _staging: Option<Arc<Staging>>,
+    staging: Option<Arc<Staging>>,
 }
 
 impl Drop for Temporary {
     fn drop(&mut self) {
         if !self.published {
-            let _ = self.volume.remove(&self.path);
+            if let Some(staging) = &self.staging {
+                let _ = staging.remove_member(&self.path);
+            } else {
+                let _ = self.volume.remove(&self.path);
+            }
         }
     }
 }
@@ -81,7 +85,11 @@ impl Cache {
     ) -> io::Result<NewObject> {
         loop {
             let path = folder.join(format!("{:016x}.new", fastrand::u64(..)));
-            match create_sealed(&path) {
+            let created = staging.as_ref().map_or_else(
+                || create_sealed(&path),
+                |staging| staging.create_member(&path),
+            );
+            match created {
                 Ok(file) => {
                     return Ok(NewObject {
                         file,
@@ -89,7 +97,7 @@ impl Cache {
                             path,
                             volume: Arc::clone(&self.volume),
                             published: false,
-                            _staging: staging,
+                            staging,
                         },
                         hasher: Hasher::default(),
                         written: 0,
@@ -235,6 +243,9 @@ impl Sealed {
             digest,
             size,
         } = self;
+        if let Some(staging) = &temp.staging {
+            staging.check_member_parent(&temp.path)?;
+        }
         let stored = cache.link_object(&temp.path, digest, size, None)?;
         // linking moved or removed the file, and whatever has its name now is not ours to touch
         temp.published = true;

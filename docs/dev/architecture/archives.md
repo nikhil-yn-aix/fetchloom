@@ -74,7 +74,7 @@ when a locked tree differs, or decoding fails with an archive error, the sync la
 
 - no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.
 - a refused archive may leave its downloaded packed object in the cache.
-- staging cleanup must respect held locks. age alone cannot identify a live writer when locking works.
+- staging cleanup must respect held locks. age alone cannot identify a live writer when locking works. staging folders, lock-file changes, member creation and cleanup use the placement parent resolver under the cache root. a link swapped in for a staging parent cannot redirect those mutations. publication rechecks the member parent before delegating to the cache's object policy; that path-based cache policy remains a separate concurrency boundary. dry-run sweeps still record proposed removals without deleting files.
 - decoder opens still use archive paths after cache lookup. do not extend the cache's no-follow hashing guarantee into a claim of protection against all concurrent path swaps.
 - member-byte limits count actual output, not sizes declared by an untrusted header. exact byte and ratio ceilings are accepted; the next byte is refused. an interrupted member read is retried without counting or losing bytes, and every decoder counts compressed input through the guard's own meter.
 

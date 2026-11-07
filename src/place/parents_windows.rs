@@ -95,6 +95,24 @@ impl Location {
         self.metadata()
     }
 
+    pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
+        const FILE_ATTRIBUTE_READONLY: u32 = 1;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        if readonly {
+            options.attributes(FILE_ATTRIBUTE_READONLY);
+        }
+        options.open(&self.path)
+    }
+
+    pub(super) fn create_folder(&self) -> io::Result<()> {
+        fs::create_dir(&self.path)
+    }
+
+    pub(super) fn rename_to(&self, target: &Location) -> io::Result<()> {
+        fs::rename(&self.path, &target.path)
+    }
+
     pub(super) fn remove_dir(&self) -> io::Result<()> {
         fs::remove_dir(&self.path)
     }
