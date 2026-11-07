@@ -129,3 +129,7 @@ on linux, `FETCHLOOM_EXP_PLACE_SMALL_COPY_BYTES` sets a maximum file size for bu
 `FETCHLOOM_EXP_PLACE_PARENT_FD=1` retains up to 128 verified parent handles on unix. both settings use the same anchored resolver; enabling reuse skips repeated parent opens and identity reads during placement. removal and pruning still reopen parents without following links, and eviction bounds the open-handle budget. queued copies retain the root and parent identity, not a handle per copy. windows already holds directory handles to prevent replacement and does not use this unix cache.
 
 the per-file `canonicalize` call is absent in both settings: containment removed its repeated `readlink` walk. cached handles continue to refer to the original directory if another process renames it; they never follow the replacement link.
+
+## macos copy flush experiment
+
+`FETCHLOOM_EXP_PLACE_MAC_BATCH=1` seals each copy with plain `fsync`, retains one original writer handle for the batch, then issues one `F_FULLFSYNC` before publishing any copy. a filesystem that rejects full-drive flushing keeps the per-file `fsync` guarantee, as cache batches do. a flush error publishes none of the waiting copies. nested filesystems keep per-file full flushing. apfs clones never enter this copy path and need no payload flush. unset or zero retains `sync_all` per copy. native wall-time measurement is still required; xcheck only checks the platform code.

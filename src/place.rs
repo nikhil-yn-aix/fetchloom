@@ -82,6 +82,8 @@ pub(crate) struct Placer {
     batch: std::sync::OnceLock<Option<File>>,
     #[cfg(target_os = "linux")]
     unflushed: AtomicBool,
+    #[cfg(target_os = "macos")]
+    copy_flush: std::sync::Mutex<Option<File>>,
 }
 
 #[cfg(test)]
@@ -189,6 +191,8 @@ impl Placer {
             batch: std::sync::OnceLock::new(),
             #[cfg(target_os = "linux")]
             unflushed: AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            copy_flush: std::sync::Mutex::new(None),
         }
     }
 
@@ -403,8 +407,10 @@ impl Placer {
         let flush = !self.batches_copies();
         #[cfg(unix)]
         let flush = flush || location.other_device();
+        #[cfg(target_os = "macos")]
+        let flush = flush || !batch;
         let put = if batch && !flush {
-            let (staged, _) = stage_copy_at(
+            let (staged, file) = stage_copy_at(
                 object,
                 &location,
                 writable,
@@ -412,6 +418,18 @@ impl Placer {
                 &self.stop,
                 buffered,
             )?;
+            #[cfg(target_os = "macos")]
+            {
+                rustix::fs::fsync(&file)?;
+                let mut first = self
+                    .copy_flush
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if first.is_none() {
+                    *first = Some(file.try_clone()?);
+                }
+            }
+            drop(file);
             Put::Waiting(staged)
         } else {
             let metadata = copy_at(
@@ -449,8 +467,16 @@ impl Placer {
             .is_some()
     }
 
-    #[cfg(not(target_os = "linux"))]
-    #[expect(clippy::unused_self, reason = "only linux batches copies")]
+    #[cfg(target_os = "macos")]
+    fn batches_copies(&self) -> bool {
+        self.experiments().on("PLACE_MAC_BATCH")
+    }
+
+    #[cfg(windows)]
+    #[expect(
+        clippy::unused_self,
+        reason = "windows flushes each file before naming it"
+    )]
     fn batches_copies(&self) -> bool {
         false
     }
@@ -468,11 +494,27 @@ impl Placer {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    pub(crate) fn flush_copies(&self) -> io::Result<()> {
+        let first = self
+            .copy_flush
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(first) = first {
+            match rustix::fs::fcntl_fullfsync(&first) {
+                Err(rustix::io::Errno::NOTSUP | rustix::io::Errno::INVAL) => {}
+                result => result?,
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
     #[expect(
         clippy::unused_self,
         clippy::unnecessary_wraps,
-        reason = "other systems flush each copy as it is made"
+        reason = "windows flushes each copy as it is made"
     )]
     pub(crate) fn flush_copies(&self) -> io::Result<()> {
         Ok(())
