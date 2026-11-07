@@ -32,6 +32,8 @@ command handlers order effects across modules. `Context` reads settings once and
 
 network clients are created only where commands need them. `Net` delays TLS roots and proxy setup until the first request. version and help paths avoid that work.
 
+help routing reads short-option bundles from clap metadata. `-qh` still requests help, and attached or following values of `-C` do not become command names. help and JSON flags are found before `--`, including after malformed arguments.
+
 ### command boundaries
 
 | command path | ordering that matters |

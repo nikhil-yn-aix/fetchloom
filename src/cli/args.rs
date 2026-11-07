@@ -243,50 +243,61 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
 /// the command a line asking for `-h` or `--help` is about, as `help` takes it, or nothing when
 /// it asks for no help.
 fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
-    let words: Vec<_> = line
-        .iter()
-        .skip(1)
-        .take_while(|word| *word != "--")
-        .collect();
-    if !words.iter().any(|word| *word == "--help" || *word == "-h") {
-        return None;
-    }
     let mut topic = Vec::new();
     let mut current = command;
-    // the value of an option such as -C or --color is no command name
-    let takes_value = |owner: &clap::Command, word: &str| {
-        owner.get_arguments().any(|arg| {
-            arg.get_action().takes_values()
-                && (word
-                    .strip_prefix("--")
-                    .is_some_and(|long| arg.get_long() == Some(long))
-                    || (word.len() == 2
-                        && word
-                            .strip_prefix('-')
-                            .and_then(|short| short.chars().next())
-                            == arg.get_short()
-                        && arg.get_short().is_some()))
-        })
-    };
+    let mut asked = false;
     let mut value_next = false;
-    for word in words.into_iter().map_while(|word| word.to_str()) {
+    let mut names = true;
+    for word in line.iter().skip(1).take_while(|word| *word != "--") {
+        asked |= word == "--help" || word == "-h";
         if std::mem::take(&mut value_next) {
             continue;
         }
+        let Some(word) = word.to_str() else {
+            names = false;
+            continue;
+        };
         if word.starts_with('-') {
-            value_next =
-                !word.contains('=') && (takes_value(command, word) || takes_value(current, word));
+            let (help, value) = help_option(command, current, word);
+            asked |= help;
+            value_next = value;
             continue;
         }
-        match current.find_subcommand(word) {
-            Some(sub) if sub.get_name() != "help" => {
-                topic.push(sub.get_name().to_owned());
-                current = sub;
+        if names {
+            match current.find_subcommand(word) {
+                Some(sub) if sub.get_name() != "help" => {
+                    topic.push(sub.get_name().to_owned());
+                    current = sub;
+                }
+                _ => names = false,
             }
-            _ => break,
         }
     }
-    Some(topic)
+    asked.then_some(topic)
+}
+
+/// whether an option asks for help or consumes the next word. a value inside a short bundle,
+/// such as the folder in `-qChome`, is neither another option nor a command name.
+fn help_option(root: &clap::Command, current: &clap::Command, word: &str) -> (bool, bool) {
+    let arguments = || current.get_arguments().chain(root.get_arguments());
+    if let Some(long) = word.strip_prefix("--") {
+        let next = !long.contains('=')
+            && arguments()
+                .any(|arg| arg.get_long() == Some(long) && arg.get_action().takes_values());
+        return (word == "--help", next);
+    }
+    let mut shorts = word.trim_start_matches('-').chars();
+    let mut asked = false;
+    while let Some(short) = shorts.next() {
+        let Some(arg) = arguments().find(|arg| arg.get_short() == Some(short)) else {
+            break;
+        };
+        asked |= matches!(arg.get_action(), ArgAction::Help);
+        if arg.get_action().takes_values() {
+            return (asked, shorts.as_str().is_empty());
+        }
+    }
+    (asked, false)
 }
 
 pub(super) fn command() -> clap::Command {
@@ -780,6 +791,22 @@ mod tests {
             "{help}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn bundled_help_does_not_read_an_option_value_as_flags() {
+        let root = Args::command();
+        let get = root.find_subcommand("get").unwrap();
+        for (word, expected) in [
+            ("-qh", (true, false)),
+            ("-qC", (false, true)),
+            ("-qCcache", (false, false)),
+            ("-qCh", (false, false)),
+            ("-oh", (false, false)),
+            ("--output=--help", (false, false)),
+        ] {
+            assert_eq!(super::help_option(&root, get, word), expected, "{word}");
+        }
     }
 
     #[test]

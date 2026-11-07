@@ -369,3 +369,51 @@ fn errors_messages_flag_help_warns_about_invalid_palette_entries() -> Result {
     assert_eq!(flag.stderr, named.stderr, "the flag-help warning was lost");
     Ok(())
 }
+
+#[test]
+fn errors_messages_bundled_help_uses_json_and_the_right_command() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (args, expected) in [
+        (&["--json", "-qh"][..], None),
+        (&["get", "--json", "-qh"][..], Some("get")),
+        (
+            &["-qC", "cache", "get", "--help", "--json"][..],
+            Some("get"),
+        ),
+        (&["-qCcache", "get", "--help", "--json"][..], Some("get")),
+    ] {
+        let output = sandbox.run(args)?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        let document = crate::support::json(&output)?;
+        assert_eq!(document["command"], "help");
+        if let Some(expected) = expected {
+            let commands = document["result"]["commands"]
+                .as_array()
+                .ok_or("missing help commands")?;
+            assert_eq!(commands.len(), 1, "{args:?}: {document}");
+            assert_eq!(commands[0]["name"], expected, "{args:?}: {document}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn errors_messages_help_skips_bundled_directory_values() -> Result {
+    let sandbox = Sandbox::new()?;
+    for args in [
+        &["-qC", "cache", "get", "--help", "--json"][..],
+        &["-qCcache", "get", "--help", "--json"][..],
+    ] {
+        let output = sandbox.run(args)?;
+        let document = crate::support::json(&output)?;
+        let commands = document["result"]["commands"]
+            .as_array()
+            .ok_or("missing help commands")?;
+        assert_eq!(commands[0]["name"], "get", "{args:?}: {document}");
+    }
+    Ok(())
+}
