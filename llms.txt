@@ -26,7 +26,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [figshare](docs/user/sources/figshare.md): article links, explicit versions, numeric titles, portal-page refusal and download restrictions
 - [dataverse](docs/user/sources/dataverse.md): published dataset and file pins, explicit link versions and installation-scoped access
 - [public cloud buckets](docs/user/sources/buckets.md): anonymous `s3://` and `gs://` prefixes, listing, pins and the public-only rule
-- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules and patterns
+- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, secret-URL rejection and credential-safe diagnostic citations
 - [data.lock](docs/user/reference/data-lock.md): lock fields, source records and hash encodings
 - [JSON output](docs/user/reference/json-output.md): schema, command results, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions

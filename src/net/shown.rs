@@ -1,4 +1,4 @@
-//! links as fetchloom shows them. a query value that grants access by itself, such as a token or
+//! links as fetchloom shows them. a query or fragment value that grants access, such as a token or
 //! the signature of a presigned storage link, never reaches a message or a log.
 
 use std::borrow::Cow;
@@ -18,9 +18,12 @@ const SECRET_ENDINGS: [&str; 7] = [
     "apikey",
 ];
 
-/// the first query key of `url` whose value grants access, when it has one.
+/// the first query or fragment key of `url` whose value grants access, when it has one.
 pub(crate) fn secret(url: &Url) -> Option<String> {
     url.query_pairs()
+        .chain(url::form_urlencoded::parse(
+            url.fragment().unwrap_or_default().as_bytes(),
+        ))
         .map(|(key, _)| key)
         .find(|key| is_secret(key))
         .map(|key| key.to_ascii_lowercase())
@@ -48,7 +51,7 @@ impl fmt::Display for Shown<'_> {
     }
 }
 
-/// masks a login and secret query values in a reference, even when it is not a valid URL yet.
+/// masks a login and secret query or fragment values, even before a reference is a valid URL.
 pub(crate) fn mask_query(text: &str) -> Cow<'_, str> {
     let text = mask_login(text);
     if let Cow::Owned(masked) = mask_secret_values(&text) {
@@ -81,11 +84,22 @@ fn mask_login(text: &str) -> Cow<'_, str> {
 }
 
 fn mask_secret_values(text: &str) -> Cow<'_, str> {
-    let (head, fragment) = text.find('#').map_or((text, ""), |at| text.split_at(at));
-    let Some((address, query)) = head.split_once('?') else {
+    let (head, fragment) = text.split_once('#').unwrap_or((text, ""));
+    let (address, query) = head.split_once('?').unwrap_or((head, ""));
+    let masked_query = mask_pairs(query);
+    let masked_fragment = mask_pairs(fragment);
+    if matches!(masked_query, Cow::Borrowed(_)) && matches!(masked_fragment, Cow::Borrowed(_)) {
         return Cow::Borrowed(text);
-    };
-    let pairs = url::form_urlencoded::parse(query.as_bytes());
+    }
+    let query_separator = if head.contains('?') { "?" } else { "" };
+    let fragment_separator = if text.contains('#') { "#" } else { "" };
+    Cow::Owned(format!(
+        "{address}{query_separator}{masked_query}{fragment_separator}{masked_fragment}"
+    ))
+}
+
+fn mask_pairs(text: &str) -> Cow<'_, str> {
+    let pairs = url::form_urlencoded::parse(text.as_bytes());
     if !pairs.clone().any(|(key, _)| is_secret(&key)) {
         return Cow::Borrowed(text);
     }
@@ -99,8 +113,7 @@ fn mask_secret_values(text: &str) -> Cow<'_, str> {
     });
     let mut encoded = url::form_urlencoded::Serializer::new(String::new());
     encoded.extend_pairs(pairs);
-    let query = encoded.finish();
-    Cow::Owned(format!("{address}?{query}{fragment}"))
+    Cow::Owned(encoded.finish())
 }
 
 #[cfg(test)]
@@ -178,6 +191,51 @@ mod tests {
         for key in ["rlkey", "resourcekey", "dl", "raw", "key"] {
             let url = Url::parse(&format!("https://example.org/a.csv?{key}=1")).unwrap();
             assert_eq!(secret(&url), None, "{key}");
+        }
+    }
+
+    #[test]
+    fn fragment_credentials_are_masked_and_not_shareable() {
+        for (text, expected) in [
+            (
+                "https://example.org/a#access_token=hidden&page=2",
+                "https://example.org/a#access_token=***&page=2",
+            ),
+            (
+                "https://example.org/a?download=1#%74oken=hidden",
+                "https://example.org/a?download=1#token=***",
+            ),
+            (
+                "https://example.org/a?token=hidden#client_secret=hidden",
+                "https://example.org/a?token=***#client_secret=***",
+            ),
+            (
+                "https://example.org/a?#TOKEN=hidden",
+                "https://example.org/a?#TOKEN=***",
+            ),
+        ] {
+            let url = Url::parse(text).unwrap();
+            assert!(secret(&url).is_some(), "{text}");
+            assert_eq!(mask_query(text), expected);
+            assert_eq!(Shown(&url).to_string(), expected);
+        }
+        assert_eq!(
+            mask_query("https://example.org:bad/a#token=hidden"),
+            "https://example.org:bad/a#token=***"
+        );
+    }
+
+    #[test]
+    fn fragment_navigation_without_credentials_is_unchanged() {
+        for text in [
+            "https://example.org/a#chapter-2",
+            "https://example.org/a?download=1#page=2",
+            "https://example.org/a#/route?index=2",
+            "https://example.org/a?#",
+        ] {
+            assert!(matches!(mask_query(text), Cow::Borrowed(_)));
+            assert_eq!(Shown(&Url::parse(text).unwrap()).to_string(), text);
+            assert_eq!(secret(&Url::parse(text).unwrap()), None);
         }
     }
 }
