@@ -306,6 +306,13 @@ async fn check(
         return (None, None);
     };
     let net = context.net_with(vec![credential]);
+    // a dataverse host came from the person, through --host or their own earlier sign-in, so it
+    // may be on a private network, as `add` allows
+    if let Account::Dataverse(_) = account
+        && let Some(host) = check.url.host_str()
+    {
+        net.trust([host.to_owned()]);
+    }
     match net.get(&check.url).await {
         Ok(response) if (200..300).contains(&response.status) => {
             let user = response
@@ -595,5 +602,55 @@ fn variable(account: &Account) -> &'static str {
         Account::HuggingFace => "HF_TOKEN",
         Account::Kaggle => "KAGGLE_API_TOKEN",
         Account::Login(_) => "NETRC",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    use super::*;
+    use crate::output::{Level, Output, Style};
+    use crate::source::recorded::block_on;
+
+    fn context() -> Arc<Context> {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        Arc::new(Context::new(Output::new(style, Level::Quiet, false, false)))
+    }
+
+    /// a dataverse host a person typed may be on a private network, as `add` allows, so its key
+    /// is checked there instead of the check being skipped.
+    #[test]
+    fn a_dataverse_key_is_checked_on_the_private_host_the_person_typed() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let context = context();
+        let stop = context.stop.clone();
+        let (reached, heard) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if listener.accept().is_ok() {
+                // the server speaks no TLS, so the retries its failed handshake starts can stop
+                stop.ask();
+                let _ = reached.send(());
+            }
+        });
+        let account = Account::parse("dataverse", Some(&format!("127.0.0.1:{port}"))).unwrap();
+        let found = Found {
+            origin: Origin::Keyring,
+            secret: "key".to_owned(),
+            login: None,
+        };
+        assert_eq!(block_on(check(&context, &account, &found)), (None, None));
+        assert!(
+            heard.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the key was never checked on the host the person typed"
+        );
     }
 }
