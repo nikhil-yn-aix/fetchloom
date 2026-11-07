@@ -39,6 +39,8 @@ pub(crate) struct Survey {
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
+    /// files under the hidden names placement stages files in, by their paths in the project.
+    temporaries: Vec<String>,
 }
 
 impl Survey {
@@ -47,16 +49,18 @@ impl Survey {
     pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
         let started = nanos(SystemTime::now());
         let (state, written) = project.state();
+        let (disk, temporaries) = scan(&project.root, data_dir);
         let mut survey = Survey {
             threads,
             started,
             state,
-            disk: scan(&project.root, data_dir),
+            disk,
             listed: HashMap::new(),
             elsewhere: HashSet::new(),
             vouched: HashSet::new(),
             edited: HashSet::new(),
             needs_writing: false,
+            temporaries,
         };
         let other_device = !survey.state.files.is_empty()
             && apart(&project.root.join(data_dir), &project.own_folder());
@@ -203,6 +207,14 @@ impl Survey {
                 placed.look.size = u64::MAX;
             }
         }
+    }
+
+    /// the files an interrupted placement left under the hidden names it stages files in, which
+    /// no record claims. only placement makes such names.
+    pub(crate) fn leftovers(&self) -> impl Iterator<Item = &String> {
+        self.temporaries
+            .iter()
+            .filter(|path| !self.state.files.contains_key(*path))
     }
 
     /// files placed as hardlinks whose object the cache marked as changed after fetchloom last
@@ -381,11 +393,13 @@ fn apart(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// every file under the data folder and how it looks, by its path in the project. links are
-/// neither followed nor touched.
-fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
+/// every file under the data folder and how it looks, by its path in the project, and the paths
+/// of those under the hidden names placement stages files in. links are neither followed nor
+/// touched.
+fn scan(root: &Path, data_dir: &str) -> (HashMap<String, Look>, Vec<String>) {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut found = HashMap::new();
+    let mut temporaries = Vec::new();
     let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
     while let Some((folder, relative)) = folders.pop() {
         let Ok(entries) = fs::read_dir(&folder) else {
@@ -395,18 +409,23 @@ fn scan(root: &Path, data_dir: &str) -> HashMap<String, Look> {
             let Ok(kind) = entry.file_type() else {
                 continue;
             };
-            let path = format!("{relative}/{}", entry.file_name().to_string_lossy());
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let path = format!("{relative}/{name}");
             if kind.is_dir() {
                 folders.push((entry.path(), path));
             } else if kind.is_file()
                 && let Ok(metadata) = entry.metadata()
             {
+                if place::is_copy_temporary(&name) {
+                    temporaries.push(path.clone());
+                }
                 found.insert(path, Look::of(&metadata));
             }
         }
     }
     span.record("files", found.len());
-    found
+    (found, temporaries)
 }
 
 /// hashes the objects behind hardlinks someone edited, before anything downloads. an edit

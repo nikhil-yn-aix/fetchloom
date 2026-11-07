@@ -341,6 +341,7 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
+        sweep(project, &mut placer, &survey, &wanted);
         let (todo, adopted) = settle(
             project,
             &mut placer,
@@ -442,6 +443,7 @@ pub(crate) fn untouched(
         || !survey.edited.is_empty()
         || !survey.elsewhere.is_empty()
         || !survey.vouched.is_empty()
+        || survey.leftovers().next().is_some()
         || state
             .files
             .iter()
@@ -645,6 +647,21 @@ fn remove_unwanted(
     Ok(changed)
 }
 
+/// deletes what an interrupted placement left under the hidden names it stages files in. the
+/// project lock keeps any other sync from staging files meanwhile. a leftover that changed since
+/// the scan, or that cannot be deleted, stays for a later sync.
+fn sweep(project: &Project, placer: &mut Placer, survey: &Survey, wanted: &HashSet<&str>) {
+    for path in survey.leftovers() {
+        let file = project.root.join(path);
+        if !wanted.contains(path.as_str())
+            && now(&file).is_some_and(|look| survey.disk.get(path) == Some(&look))
+            && let Err(err) = placer.remove(&file, false, None)
+        {
+            tracing::debug!(%path, %err, "could not delete a leftover of a placement");
+        }
+    }
+}
+
 /// what becomes of each file fetchloom placed that no dataset needs now. the files of a dataset
 /// with an archive this machine never unpacked stay, since nothing tells which of them it still
 /// needs.
@@ -845,6 +862,82 @@ mod tests {
             );
             assert_eq!(checked, started, "{name} did not record the survey's start");
         }
+    }
+
+    fn quiet() -> Output {
+        Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        )
+    }
+
+    /// a project whose weather folder holds a copy an interrupted sync left behind, and a file
+    /// of someone's own named much like it.
+    fn interrupted(dir: &Path) -> (Project, Manifest, std::path::PathBuf, std::path::PathBuf) {
+        let project = Project {
+            root: dir.join("project"),
+        };
+        let folder = project.root.join("data").join("weather");
+        fs::create_dir_all(&folder).unwrap();
+        let leftover = folder.join(".fetchloom-0123456789abcdef.copy");
+        fs::write(&leftover, b"station,").unwrap();
+        let own = folder.join(".fetchloom-notes.copy");
+        fs::write(&own, b"mine").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                .unwrap();
+        (project, manifest, leftover, own)
+    }
+
+    #[test]
+    fn a_copy_an_interrupted_sync_left_behind_is_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let (project, manifest, leftover, own) = interrupted(dir.path());
+        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let placing = Placing {
+            project: &project,
+            manifest: &manifest,
+            targets: Vec::new(),
+            unknown: Vec::new(),
+            actions: Vec::new(),
+            survey,
+        };
+
+        placing
+            .apply(&quiet(), &Work::default(), &cache, None, None)
+            .unwrap();
+
+        assert!(!leftover.exists());
+        assert_eq!(fs::read(&own).unwrap(), b"mine");
+    }
+
+    #[test]
+    fn a_leftover_copy_keeps_a_settled_sync_from_skipping_its_sweep() {
+        let dir = tempfile::tempdir().unwrap();
+        let (project, manifest, _, _) = interrupted(dir.path());
+        let mut survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let seen = Seen {
+            manifest: crate::digest::sha256(b"data.toml"),
+            lock: Some(crate::digest::sha256(b"data.lock")),
+        };
+        survey.state.synced = Some(Synced {
+            manifest: seen.manifest,
+            lock: crate::digest::sha256(b"data.lock"),
+            complete: true,
+        });
+
+        let found = untouched(&project, &manifest, &survey, &seen, false).unwrap();
+
+        assert!(found.is_none(), "a settled sync would leave the copy");
     }
 
     #[test]

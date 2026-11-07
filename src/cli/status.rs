@@ -143,13 +143,23 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
         list.push(target.path.clone());
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    status.extra = survey
-        .disk
-        .into_keys()
-        .filter(|path| !wanted.contains(path.as_str()))
-        .collect();
-    status.extra.sort();
+    status.extra = extra(&survey, &wanted);
     Ok(status)
+}
+
+/// the files in the data folder that no dataset places, sorted. what an interrupted placement
+/// left under the hidden names it stages files in is not listed, as `get` never counts it,
+/// since the next sync deletes it.
+fn extra(survey: &Survey, wanted: &HashSet<&str>) -> Vec<String> {
+    let leftovers: HashSet<&String> = survey.leftovers().collect();
+    let mut extra: Vec<String> = survey
+        .disk
+        .keys()
+        .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
+        .cloned()
+        .collect();
+    extra.sort();
+    extra
 }
 
 impl Status {
@@ -304,5 +314,31 @@ mod tests {
         );
         assert_eq!(value["removed"], serde_json::json!(["old"]));
         assert_eq!(value["edited"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_copy_an_interrupted_sync_left_behind_is_not_extra() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let folder = project.root.join("data").join("weather");
+        std::fs::create_dir_all(&folder).unwrap();
+        for name in [
+            "table.csv",
+            ".fetchloom-0123456789abcdef.copy",
+            ".fetchloom-notes.copy",
+        ] {
+            std::fs::write(folder.join(name), name).unwrap();
+        }
+        let survey = Survey::read(&project, "data", Threads::default());
+
+        assert_eq!(
+            extra(&survey, &HashSet::new()),
+            [
+                "data/weather/.fetchloom-notes.copy",
+                "data/weather/table.csv"
+            ]
+        );
     }
 }

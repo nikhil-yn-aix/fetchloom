@@ -16,6 +16,8 @@
 
 inside a git repository, `add` adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
 
+inside the data folder, a file being copied or cloned into place is first written to a hidden `.fetchloom-<16 hex digits>.copy` beside its destination and then renamed. a hard kill can leave one behind; `status` does not list it, and the next `sync` deletes it.
+
 ## owner record
 
 | field | value |
