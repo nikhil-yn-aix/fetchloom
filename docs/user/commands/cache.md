@@ -16,7 +16,7 @@ fetchloom cache gc [options]
 fetchloom cache verify [options]
 ```
 
-`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. `cache check` is another name for `cache verify`. [global options](README.md#global-options) apply to all three forms.
+`cache gc --now` also frees unneeded objects and unpack records less than a day old. `cache gc --dry-run`, or `-n`, shows what gc would free and deletes nothing. [global options](README.md#global-options) apply to all three forms.
 
 ## inspect
 

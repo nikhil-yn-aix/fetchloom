@@ -15,7 +15,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `auth status` reports `auth` and `cache check` reports `cache verify`. `completions` with `--json` is always a usage error, since a script is not JSON |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `auth status` reports `auth`. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |

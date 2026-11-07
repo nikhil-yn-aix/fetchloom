@@ -531,7 +531,7 @@ pub(crate) enum CacheAction {
     Gc(Gc),
 
     /// check cached files and mark changed files for replacement
-    #[command(alias = "check", override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
+    #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
 }
 
@@ -792,6 +792,33 @@ mod tests {
             "{help}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn cache_verify_has_one_name_and_auth_status_reports_auth() {
+        assert_eq!(
+            Args::try_parse_from(["fetchloom", "cache", "check"])
+                .unwrap_err()
+                .kind(),
+            clap::error::ErrorKind::InvalidSubcommand
+        );
+        for line in [
+            &["fetchloom", "auth"][..],
+            &["fetchloom", "auth", "status"][..],
+        ] {
+            assert_eq!(
+                Args::try_parse_from(line).unwrap().command.unwrap().name(),
+                "auth"
+            );
+        }
+        assert_eq!(
+            Args::try_parse_from(["fetchloom", "cache", "verify"])
+                .unwrap()
+                .command
+                .unwrap()
+                .name(),
+            "cache verify"
+        );
     }
 
     #[test]
