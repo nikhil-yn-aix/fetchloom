@@ -3,6 +3,8 @@
 //! what changed.
 
 mod canonical;
+#[cfg(test)]
+mod model_tests;
 
 use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
