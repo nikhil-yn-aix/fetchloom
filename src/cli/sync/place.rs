@@ -968,7 +968,7 @@ mod tests {
             .unwrap()
             .set_modified(fixed)
             .unwrap();
-        let survey = Survey::read(&project, "data", crate::threads::Threads::default());
+        let survey = surveyed(&project);
         let root = project.root.join("data");
         let outside = dir.path().join("outside");
         fs::create_dir(&outside).unwrap();
