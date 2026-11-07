@@ -153,19 +153,26 @@ fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: 
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let mut kept = amount;
+    let mut kept = std::borrow::Cow::Borrowed(amount);
     loop {
-        let shown = line(bar, kept);
+        let shown = line(bar, &kept);
         if console::measure_text_width(&shown) <= width {
             return shown;
         }
         if kept.is_empty() {
             break;
         }
-        kept = kept
-            .rsplit_once(" · ")
-            .or_else(|| kept.split_once('/'))
-            .map_or("", |(head, _)| head);
+        let shorter = match kept.rsplit_once(" · ") {
+            Some((head, _)) => head.to_owned(),
+            // a fraction that shares one unit, as in 1.0/4.0 MiB, keeps that unit
+            None => kept
+                .split_once('/')
+                .map_or_else(String::new, |(done, total)| match total.rsplit_once(' ') {
+                    Some((_, unit)) if !done.contains(' ') => format!("{done} {unit}"),
+                    _ => done.to_owned(),
+                }),
+        };
+        kept = shorter.into();
     }
     let shown = line("", "");
     if console::measure_text_width(&shown) <= width {
@@ -479,6 +486,27 @@ mod tests {
         let wide = render("iris.csv", "Downloading", bar, amount, 128, false);
         assert!(wide.contains("512 KiB/s"), "{wide}");
         assert!(wide.contains("6 s left"), "{wide}");
+    }
+
+    #[test]
+    fn narrow_progress_never_shows_a_number_without_its_unit() {
+        let amount = "1.0/4.0 MiB · 512 KiB/s · 6 s left";
+        for width in 0..=80 {
+            let line = render("iris.csv", "Downloading", "", amount, width, false);
+            let counter = line.rsplit(' ').next().unwrap_or_default();
+            assert!(
+                !counter.starts_with(|c: char| c.is_ascii_digit()),
+                "{width}: {line}"
+            );
+        }
+        assert_eq!(
+            render("iris.csv", "Downloading", "", amount, 28, false),
+            "Downloading iris.csv 1.0 MiB"
+        );
+        assert_eq!(
+            render("iris.csv", "Downloading", "", "512 KiB/4.0 MiB", 28, false),
+            "Downloading iris.csv 512 KiB"
+        );
     }
 
     #[test]
