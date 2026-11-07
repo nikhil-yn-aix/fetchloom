@@ -538,7 +538,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
         "Signed out",
         &format!("of {} \u{b7} removed from {removed}", title(&account)),
     );
-    // the source's tools also read an older place, which may hold a key of its own
+    // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
         output.warn(&format!(
             "a {} key is still read from {}; run `fetchloom auth logout {}` again to remove it too",

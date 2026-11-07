@@ -67,23 +67,25 @@ fn auth_status_lists_every_account_like_plain_auth() -> Result {
 }
 
 #[test]
-fn logout_says_when_an_older_key_still_signs_in() -> Result {
+fn logout_names_another_configured_key_that_remains() -> Result {
     let sandbox = Sandbox::new()?;
-    let home = home(&sandbox);
-    for (folder, token) in [
-        (home.join(".cache").join("huggingface"), "hf_new\n"),
-        (home.join(".huggingface"), "hf_old\n"),
-    ] {
-        std::fs::create_dir_all(&folder)?;
-        std::fs::write(folder.join("token"), token)?;
-    }
-    let first = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
+    let folder = home(&sandbox).join(".kaggle");
+    std::fs::create_dir_all(&folder)?;
+    std::fs::write(folder.join("access_token"), "KGAT_current\n")?;
+    std::fs::write(
+        folder.join("kaggle.json"),
+        r#"{"username":"ada","key":"api-key"}"#,
+    )?;
+    let first = sandbox.run(&["auth", "logout", "kaggle", "--yes"])?;
     let stderr = text(&first.stderr)?;
     assert!(first.status.success(), "{stderr}");
     assert!(stderr.contains("is still read from"), "{stderr}");
-    let second = sandbox.run(&["auth", "logout", "hf", "--yes"])?;
+    assert!(!folder.join("access_token").exists());
+    assert!(folder.join("kaggle.json").exists());
+    let second = sandbox.run(&["auth", "logout", "kaggle", "--yes"])?;
+    assert!(second.status.success(), "{}", text(&second.stderr)?);
     assert!(!text(&second.stderr)?.contains("is still read from"));
-    assert!(!home.join(".huggingface").join("token").exists());
+    assert!(!folder.join("kaggle.json").exists());
     Ok(())
 }
 
