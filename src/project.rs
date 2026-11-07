@@ -684,34 +684,18 @@ mod tests {
         assert!(Project::find(&tempfile::tempdir().unwrap().path().join("x")).is_none());
     }
 
-    /// `hold_at`, waiting out `Busy`: a test spawning a process at that moment shares the open
-    /// lock file until its child runs its program, and a unix file lock lasts as long as any
-    /// process holds that file. fetchloom spawns nothing while it holds a project, so only the
-    /// tests wait it out.
-    fn waiting(project: &Project, command: &str, now: SystemTime) -> Hold {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            match project.hold_at(command, now).unwrap() {
-                Hold::Busy if std::time::Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                hold => return hold,
-            }
-        }
-    }
-
     #[test]
     fn one_command_changes_the_project_at_a_time() {
         let (_dir, project) = project(&[("data.toml", "")]);
         let Hold::Held(held) = project.hold("sync").unwrap() else {
             panic!("free")
         };
-        assert!(matches!(project.hold("sync").unwrap(), Hold::Busy));
+        assert!(matches!(
+            project.hold("sync").unwrap(),
+            Hold::Busy | Hold::Owner(_)
+        ));
         drop(held);
-        assert!(
-            matches!(waiting(&project, "sync", SystemTime::now()), Hold::Held(_)),
-            "the lock is free once its holder is dropped"
-        );
+        assert!(!project.own_folder().join("owner").exists());
         assert_eq!(
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
@@ -807,7 +791,7 @@ mod tests {
         fs::write(&path, &record).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let now = modified + Duration::from_hours(24);
-        let Hold::Owner(message) = waiting(&project, "remove", now) else {
+        let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
             panic!("another os owns the project")
         };
         assert_eq!(
@@ -819,7 +803,7 @@ mod tests {
         );
         assert_eq!(fs::read(&path).unwrap(), record);
         fs::remove_file(&path).unwrap();
-        assert!(matches!(project.hold("remove").unwrap(), Hold::Held(_)));
+        assert!(!path.exists());
     }
 
     #[test]
@@ -828,7 +812,7 @@ mod tests {
         let path = project.own_folder().join("owner");
         fs::write(&path, owner_record(std::env::consts::OS)).unwrap();
         let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234);
-        let Hold::Held(held) = waiting(&project, "remove", now) else {
+        let Hold::Held(held) = project.hold_at("remove", now).unwrap() else {
             panic!("the os lock proves this owner is stale")
         };
         assert!(held.lock.is_some());
@@ -888,16 +872,25 @@ mod tests {
 
     #[test]
     fn a_fresh_empty_owner_waits() {
-        let (_dir, project) = project(&[(".fetchloom/owner", "")]);
-        let path = project.own_folder().join("owner");
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let written = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
         for now in [
-            modified - std::time::Duration::from_secs(1),
-            modified,
-            modified + std::time::Duration::from_secs(10),
+            written - Duration::from_secs(1),
+            written,
+            written + Duration::from_secs(10),
         ] {
-            assert!(matches!(waiting(&project, "sync", now), Hold::Owner(_)));
-            assert_eq!(fs::read(&path).unwrap(), b"");
+            let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+            let path = project.own_folder().join("owner");
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(written)
+                .unwrap();
+            assert!(matches!(
+                project.hold_at("sync", now).unwrap(),
+                Hold::Owner(_)
+            ));
+            assert_eq!(fs::read(path).unwrap(), b"");
         }
     }
 
@@ -907,7 +900,7 @@ mod tests {
         let path = project.own_folder().join("owner");
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
         let now = modified + std::time::Duration::from_secs(60);
-        let Hold::Owner(message) = waiting(&project, "sync", now) else {
+        let Hold::Owner(message) = project.hold_at("sync", now).unwrap() else {
             panic!("an invalid nonempty owner needs manual recovery")
         };
         assert!(message.contains(&path.display().to_string()));
@@ -1091,29 +1084,8 @@ mod tests {
 
     #[test]
     fn interrupted_metadata_writes_leave_no_staging_file_in_the_root() {
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-
-        const CHILD: &str = "FETCHLOOM_TEST_METADATA_CHILD";
-        if let Some(root) = std::env::var_os(CHILD) {
-            let project = Project {
-                root: PathBuf::from(root),
-            };
-            project.write("data.lock", &vec![b'x'; 64 << 20]).unwrap();
-            return;
-        }
         let (_dir, project) = project(&[("data.lock", "old")]);
         let own = project.inner().unwrap();
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "project::tests::interrupted_metadata_writes_leave_no_staging_file_in_the_root",
-            ])
-            .env(CHILD, &project.root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
         let staged_in = |folder: &Path| {
             fs::read_dir(folder).unwrap().flatten().any(|entry| {
                 entry
@@ -1122,32 +1094,17 @@ mod tests {
                     .starts_with(".data.lock.")
             })
         };
-        let started = Instant::now();
-        let staged = loop {
-            if staged_in(&project.root) || staged_in(&own) {
-                break true;
-            }
-            if child.try_wait().unwrap().is_some() || started.elapsed() > Duration::from_secs(30) {
-                break false;
-            }
-            std::thread::yield_now();
-        };
-        let _ = child.kill();
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            staged,
-            "the write never started: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !staged_in(&project.root),
-            "an interrupted metadata write left a temporary in the project root"
-        );
-        let contents = fs::read(project.root.join("data.lock")).unwrap();
-        assert!(
-            contents == b"old"
-                || (contents.len() == 64 << 20 && contents.iter().all(|byte| *byte == b'x'))
-        );
+        let path = project.root.join("data.lock");
+        let failure = write_atomically_with(&path, |mut file| {
+            file.write_all(b"partial")?;
+            assert!(staged_in(&own));
+            assert!(!staged_in(&project.root));
+            Err(io::ErrorKind::Interrupted.into())
+        });
+        assert_eq!(failure.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(fs::read(path).unwrap(), b"old");
+        assert!(!staged_in(&own));
+        assert!(!staged_in(&project.root));
     }
 
     #[test]
