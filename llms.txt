@@ -54,3 +54,5 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [roadmap](docs/dev/roadmap.md): future work
 
 placement cancellation: the first ctrl-c stops new placements and removals and checks between copy blocks. completed files stay; unpublished copies are discarded. sync records completed placements as incomplete so the next run can finish.
+
+get preflights every target in an output folder before removing earlier versions. a later conflict or missing cached object preserves earlier files.

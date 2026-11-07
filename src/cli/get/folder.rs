@@ -11,6 +11,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::place::{Method, Order, Placer, Unlinked};
 use crate::plan::Target;
+use crate::project::state::Look;
 use crate::units;
 use crate::work::Work;
 
@@ -99,12 +100,29 @@ pub(super) fn put_all(
     for (index, target) in targets.iter().enumerate() {
         context.stop.check()?;
         let destination = folder.join(&target.path);
-        match clear(cache, &mut placer, target, &destination)? {
-            Cleared::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
-            Cleared::Free { object, replaced } => {
+        match inspect(cache, &mut placer, target, &destination)? {
+            Checked::AlreadyThere => outcomes.push(Outcome::AlreadyThere),
+            Checked::Place { object, before } => {
                 // told once placed below
                 outcomes.push(Outcome::AlreadyThere);
-                orders.push((index, object, destination, replaced));
+                orders.push((index, object, destination, before));
+            }
+        }
+    }
+    for (_, _, destination, before) in &orders {
+        context.stop.check()?;
+        if let Some(before) = before {
+            match fs::symlink_metadata(destination) {
+                Ok(metadata)
+                    if crate::volume::is_plain(&metadata) && Look::of(&metadata) == *before =>
+                {
+                    placer
+                        .remove(destination, false, None)
+                        .map_err(|error| local(destination, &error))?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(local(destination, &error)),
+                Ok(_) => return Err(occupied(destination)),
             }
         }
     }
@@ -119,7 +137,7 @@ pub(super) fn put_all(
         |_| (),
     );
     let mut failure = None;
-    for ((index, _, destination, replaced), result) in orders.iter().zip(results) {
+    for ((index, _, destination, before), result) in orders.iter().zip(results) {
         let (method, ()) = match result {
             Ok(done) => done,
             Err(err) => {
@@ -133,7 +151,7 @@ pub(super) fn put_all(
             Method::Copy => &context.work.copies,
         };
         Work::add(counter, 1);
-        outcomes[*index] = if *replaced {
+        outcomes[*index] = if before.is_some() {
             Outcome::Replaced(method)
         } else {
             Outcome::Placed(method)
@@ -150,46 +168,43 @@ pub(super) fn put_all(
     Ok(outcomes)
 }
 
-/// whether a target's place is free for it, once what holds it is gone.
-enum Cleared {
+/// a read-only decision made before any destination is removed.
+enum Checked {
     AlreadyThere,
-    /// free for `object`, the cached bytes, after removing an earlier version when `replaced`.
-    Free {
+    Place {
         object: PathBuf,
-        replaced: bool,
+        before: Option<Look>,
     },
 }
 
-/// keeps a file that already holds the target's bytes, and removes an earlier version the cache
-/// still holds, so the target can be placed.
-fn clear(
+fn inspect(
     cache: &Cache,
     placer: &mut Placer,
     target: &Target,
     destination: &Path,
-) -> Result<Cleared, Error> {
-    let object = cache.find(&target.sha256, Some(target.size));
-    let mut replaced = false;
-    if fs::symlink_metadata(destination).is_ok() {
-        if holds(destination, object.as_deref(), target)? {
-            return Ok(Cleared::AlreadyThere);
-        }
-        if !replaceable(destination, cache)? {
-            return Err(Error::new(
-                Kind::LocalNotEmpty,
-                format!(
-                    "{} already exists with other contents",
-                    destination.display()
-                ),
-            )
-            .help("move it away to fetch this file, or choose another folder with -o"));
-        }
-        // get keeps no record of how it placed a file, so only the volume says how to remove it
-        placer
-            .remove(destination, false, None)
-            .map_err(|err| local(destination, &err))?;
-        replaced = true;
+) -> Result<Checked, Error> {
+    if let Err(error) = placer.check_folders(destination, false)
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        return Err(local(destination, &error));
     }
+    let object = cache.find(&target.sha256, Some(target.size));
+    let before = match fs::symlink_metadata(destination) {
+        Ok(metadata) => {
+            if !crate::volume::is_plain(&metadata) {
+                return Err(occupied(destination));
+            }
+            if holds(destination, object.as_deref(), target)? {
+                return Ok(Checked::AlreadyThere);
+            }
+            if !replaceable(destination, cache)? {
+                return Err(occupied(destination));
+            }
+            Some(Look::of(&metadata))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(local(destination, &error)),
+    };
     let object = object.ok_or_else(|| {
         Error::new(
             Kind::LocalIo,
@@ -197,7 +212,18 @@ fn clear(
         )
         .help("run the same command again to download it")
     })?;
-    Ok(Cleared::Free { object, replaced })
+    Ok(Checked::Place { object, before })
+}
+
+fn occupied(destination: &Path) -> Error {
+    Error::new(
+        Kind::LocalNotEmpty,
+        format!(
+            "{} already exists with other contents",
+            destination.display()
+        ),
+    )
+    .help("move it away to fetch this file, or choose another folder with -o")
 }
 
 /// whether the file at `path` already holds the target's bytes. a hardlink is the cached
@@ -448,6 +474,58 @@ mod tests {
                 assert!(!crate::place::is_copy_temporary(&name), "{name}");
             }
         }
+    }
+
+    #[test]
+    fn preflight_preserves_old_files_when_a_later_object_is_missing() {
+        use crate::cache::tests::store;
+        use crate::output::{Level, Output, Style};
+        use crate::project::lock::LockedFile;
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        store(&cache, b"old");
+        let first = store(&cache, b"new");
+        let folder = dir.path().join("got");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("a"), b"old").unwrap();
+        let locked: Vec<_> = [("a", first.digest), ("b", crate::digest::sha256(b"lost"))]
+            .into_iter()
+            .map(|(path, sha256)| LockedFile {
+                path: path.into(),
+                sha256,
+                size: if path == "a" { 3 } else { 4 },
+                md5: None,
+                url: format!("https://example.org/{path}"),
+                unpacks_to: None,
+            })
+            .collect();
+        let targets: Vec<_> = locked
+            .iter()
+            .map(|file| Target {
+                dataset: "got",
+                path: file.path.clone(),
+                sha256: file.sha256,
+                size: file.size,
+                copy: false,
+                locked: file,
+            })
+            .collect();
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let result = put_all(&context, &cache, &folder, &targets);
+        assert!(matches!(result, Err(error) if error.kind == Kind::LocalIo));
+        assert_eq!(fs::read(folder.join("a")).unwrap(), b"old");
+        assert!(!folder.join("b").exists());
     }
 
     #[test]

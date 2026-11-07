@@ -85,7 +85,7 @@ a list always runs as several links, even when it holds one, so `-o` names the f
 
 unrelated top-level entries are refused. fetchloom ignores its own leftover copy files; nested extras below an expected folder can remain. matching files stay.
 
-other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. there is no `get --force`. choose a different folder to protect your files.
+before removing any earlier version, get checks every target in that output folder and the cached bytes it needs. a later conflict or a missing cached object leaves earlier files in place. other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. there is no `get --force`. choose a different folder to protect your files.
 
 the output folder explicitly chosen with `-o` for a single link may itself link elsewhere. automatically named folders, including each link's folder inside a multi-link `-o` parent, must be real folders. links below an output folder are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
 

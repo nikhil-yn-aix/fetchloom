@@ -1579,3 +1579,31 @@ fn a_new_project_reseals_an_object_made_writable_through_a_link() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+#[test]
+fn a_later_get_conflict_preserves_earlier_files() -> Result {
+    use std::io::Write as _;
+    let sandbox = Sandbox::new()?;
+    let original = Server::start("/a.csv", vec![crate::support::file(b"old-a", "\"old\"")])?;
+    let fetched = sandbox.run(&["get", &original.url, "-o", "out"])?;
+    assert!(fetched.status.success(), "{}", text(&fetched.stderr)?);
+    fs::write(sandbox.work().join("out/b.csv"), b"foreign")?;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [("a.csv", b"new-a"), ("b.csv", b"new-b")] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
+        zip.write_all(bytes)?;
+    }
+    let bytes = zip.finish()?.into_inner();
+    let archive = Server::start("/files.zip", vec![crate::support::file(&bytes, "\"new\"")])?;
+    let output = sandbox.run(&["get", &archive.url, "-o", "out", "--json"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    let document = crate::support::json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "local.not_empty");
+    assert_eq!(fs::read(sandbox.work().join("out/b.csv"))?, b"foreign");
+    assert_eq!(
+        fs::read(sandbox.work().join("out/a.csv")).ok().as_deref(),
+        Some(b"old-a".as_slice()),
+        "{document}"
+    );
+    Ok(())
+}
