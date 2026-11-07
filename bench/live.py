@@ -213,6 +213,7 @@ def main():
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--out", type=Path, default=lab.ROOT / "results" / "live")
     parser.add_argument("--timeout", type=float, default=1200)
+    parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""))
     args = parser.parse_args()
     lab.require_root()
     if not args.out.resolve().is_relative_to(lab.ROOT):
@@ -226,7 +227,9 @@ def main():
     args.profiles = ["live"]
     args.fetchloom = args.fetchloom.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
+    server_cpus = lab.pin_server(args.cpus)
     meta = run.metadata(args, {"fetchloom": tools.Fetchloom(args.fetchloom)})
+    meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
     meta.update(kind="live", datasets=[], rounds=1 if args.quick else 5)
     meta["tool_versions"].update(versions(args.services))
     rng = random.Random(args.seed)
@@ -274,7 +277,7 @@ def main():
                                                  "HF_HOME", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_XET_CACHE",
                                                  "KAGGLEHUB_CACHE", "HF_TOKEN_PATH", "HF_HUB_DISABLE_IMPLICIT_TOKEN",
                                                  "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "HF_HUB_DISABLE_TELEMETRY")}
-                row.update(run.measure(argv, work, env, logfile, args.timeout))
+                row.update(run.measure(argv, work, env, logfile, args.timeout, cpus=args.cpus))
                 os.sync()
                 row["free_before_bytes"] = before
                 row["free_after_bytes"] = run.free_bytes(work)

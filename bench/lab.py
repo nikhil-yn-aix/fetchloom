@@ -1,5 +1,6 @@
 """Root-owned, disposable Linux network and filesystem lab."""
 import argparse
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -29,6 +30,71 @@ PROFILES = {
     "poor": (300, 3, 10, 1024 * 1024, 20),
 }
 PREPARE_TIMEOUT = 1200
+
+
+def cpu_list(value, available=None):
+    available = set(os.sched_getaffinity(0) if available is None else available)
+    if not value or not value.strip():
+        if not available:
+            raise ValueError("no CPUs are available")
+        return tuple(sorted(available))
+    chosen = set()
+    for part in value.split(","):
+        match = re.fullmatch(r"(\d+)(?:-(\d+))?", part.strip())
+        if not match:
+            raise ValueError("CPUs must be a comma-separated list such as 0-3,8")
+        first = int(match[1])
+        last = int(match[2]) if match[2] is not None else first
+        if last < first or last - first >= len(available):
+            raise ValueError("CPU range is reversed or exceeds the available CPUs")
+        chosen.update(range(first, last + 1))
+    if not chosen <= available:
+        raise ValueError(f"CPUs are not available: {sorted(chosen - available)}")
+    return tuple(sorted(chosen))
+
+
+def cpu_choice(value):
+    try:
+        return cpu_list(value)
+    except (ValueError, AttributeError, OSError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
+@contextmanager
+def affinity(cpus):
+    if cpus is None:
+        yield
+        return
+    previous = os.sched_getaffinity(0)
+    os.sched_setaffinity(0, cpus)
+    try:
+        yield
+    finally:
+        os.sched_setaffinity(0, previous)
+
+
+def pin_server(cpus, proc=Path("/proc")):
+    """pin the lab's existing nginx threads; future workers inherit the master's mask."""
+    cpus = tuple(sorted(cpus))
+    pids = subprocess.check_output(["ip", "netns", "pids", NS], text=True).split()
+    masks = {}
+    for pid in pids:
+        try:
+            root = proc / pid
+            if (root / "comm").read_text().strip() != "nginx":
+                continue
+            for thread in sorted((root / "task").iterdir(), key=lambda path: int(path.name)):
+                tid = int(thread.name)
+                os.sched_setaffinity(tid, cpus)
+                actual = sorted(os.sched_getaffinity(tid))
+                if actual != list(cpus):
+                    raise RuntimeError(f"nginx thread {tid} has CPU mask {actual}, expected {list(cpus)}")
+                masks[str(tid)] = actual
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    if not masks:
+        raise RuntimeError("no lab nginx processes could be pinned; run lab.py setup first")
+    return masks
 
 
 def end_group(pgid, grace=0):
@@ -135,7 +201,7 @@ def drop_caches(files):
                 pass
 
 
-def setup(image_gib=12):
+def setup(image_gib=12, cpus=None):
     require_root()
     if (ROOT / "owned.json").exists():
         teardown()
@@ -197,7 +263,8 @@ http {{
 }}
 '''
         (ROOT / "nginx.conf").write_text(config)
-        call(["ip", "netns", "exec", NS, "nginx", "-c", ROOT / "nginx.conf"])
+        with affinity(cpus):
+            call(["ip", "netns", "exec", NS, "nginx", "-c", ROOT / "nginx.conf"])
         for fs in ("ext4", "xfs"):
             image = ROOT / "images" / f"{fs}.img"
             with image.open("wb") as f:
@@ -250,9 +317,10 @@ def main():
     parser.add_argument("action", choices=("setup", "teardown", "profile"))
     parser.add_argument("--profile", choices=PROFILES, default="lan")
     parser.add_argument("--image-gib", type=int, default=12)
+    parser.add_argument("--cpus", type=cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""))
     args = parser.parse_args()
     if args.action == "setup":
-        setup(args.image_gib)
+        setup(args.image_gib, args.cpus)
     elif args.action == "teardown":
         teardown()
     else:

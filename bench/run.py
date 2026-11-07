@@ -37,7 +37,7 @@ def verify(outputs):
     return failures
 
 
-def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
+def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None):
     if not os.access(TIME, os.X_OK):
         raise RuntimeError(f"{TIME} is missing; install GNU time")
     usage_file = Path(f"{logfile}.usage")
@@ -45,13 +45,15 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
     launcher = [TIME, "-o", str(usage_file), "-f", "%M %x", *(str(x) for x in argv)]
     log = os.open(logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     home = os.getcwd()
+    effective_cpus = sorted(cpus if cpus is not None else os.sched_getaffinity(0))
     try:
         os.chdir(cwd)
-        start = time.monotonic()
-        # a child made by fork starts from this process's peak memory and pays to unmap it. GNU time
-        # is spawned without a copy of this process, and only the command it starts is reported.
-        pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
-                             file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
+        # affinity is inherited at spawn, before the client can execute or create workers.
+        with lab.affinity(cpus):
+            start = time.monotonic()
+            # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory.
+            pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
+                                 file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
     finally:
         os.chdir(home)
         os.close(log)
@@ -108,7 +110,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None):
         lab.end_group(pid, signalled + 5 - time.monotonic())
     result = dict(wall_seconds=now - start, user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime,
                   maxrss_bytes=None, exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
-                  interruption_sent=interrupted)
+                  interruption_sent=interrupted, cpu_affinity=effective_cpus)
     try:
         report = usage_file.read_text().splitlines()
         usage_file.unlink()
@@ -251,7 +253,7 @@ def exact_command(argv, workdir):
     return result
 
 
-def one_run(tool, case, workdir, out, number, warmup, timeout):
+def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
     row = dict(kind="lab", tool=tool.name, scenario=case["id"], profile=case["profile"],
                filesystem=workdir.parent.name, round=number, warmup=warmup, quick=case["quick"],
                count=case["count"], file_size=case["size"], status="failed")
@@ -277,12 +279,12 @@ def one_run(tool, case, workdir, out, number, warmup, timeout):
         before = settled_free_bytes(workdir)
         row["free_before_bytes"] = before
         if case["id"] == "s7":
-            first = measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10)
+            first = measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10, cpus=cpus)
             row["first_attempt"] = first
             argv = tool.command(case, workdir)
             row["resume_command"] = exact_command(argv, workdir)
             row["resume_command"]["cwd"] = str(tool.cwd(workdir))
-        row.update(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout))
+        row.update(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus))
         if case["id"] == "s7":
             row["user_seconds"] += first["user_seconds"]
             row["sys_seconds"] += first["sys_seconds"]
@@ -348,6 +350,8 @@ def main():
                         help="label:FETCHLOOM_X=1,... runs fetchloom again with these settings, "
                              "shuffled into the same rounds; repeatable")
     parser.add_argument("--timeout", type=float, default=1200)
+    parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""),
+                        help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
     args = parser.parse_args()
     lab.require_root()
     if args.rounds is not None and args.rounds < 1 or args.timeout <= 0:
@@ -371,7 +375,9 @@ def main():
     for fs in args.fs:
         if not os.path.ismount(lab.ROOT / "fs" / fs):
             parser.error(f"{fs} is not mounted")
+    server_cpus = lab.pin_server(args.cpus)
     meta = metadata(args, adapters)
+    meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
     meta_path = args.out / "meta.json"
     estimate = 0
     for case in cases:
@@ -413,7 +419,7 @@ def main():
                                    error=preparation_errors[name])
                         append(args.out / "runs.jsonl", row)
                     else:
-                        row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout)
+                        row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus)
                     meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
                     failed = row["status"] != "passed"
                     failures += failed
