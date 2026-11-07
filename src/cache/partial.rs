@@ -559,7 +559,11 @@ impl PartialWriter {
 
     /// puts the finished file into the cache under its hash. a download with bytes missing
     /// before its end fails with [`io::ErrorKind::InvalidData`].
-    pub(crate) fn finish(mut self) -> io::Result<Stored> {
+    pub(crate) fn finish(self) -> io::Result<Stored> {
+        self.finish_with(File::sync_all)
+    }
+
+    fn finish_with(mut self, sync: impl FnOnce(&File) -> io::Result<()>) -> io::Result<Stored> {
         self.flush_pending()?;
         if !self.runs.is_empty() {
             return Err(io::Error::new(
@@ -614,7 +618,7 @@ impl PartialWriter {
         match cache.defer(finished, &metadata) {
             Ok(stored) => Ok(stored),
             Err(finished) => {
-                file.sync_all()?;
+                sync(&file)?;
                 drop(file);
                 (*finished).publish(&cache)
             }

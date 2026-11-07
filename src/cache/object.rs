@@ -134,6 +134,14 @@ impl Batch {
         self.device == metadata.dev()
     }
 
+    pub(super) fn supports_local_fsync(&self) -> io::Result<bool> {
+        let kind = rustix::fs::fstatfs(&self.file)?.f_type;
+        // linux/magic.h; rustix exposes statfs but names only a subset of its filesystem kinds.
+        const EXT4: rustix::fs::FsWord = 0xef53;
+        const XFS: rustix::fs::FsWord = 0x5846_5342;
+        Ok(matches!(kind, EXT4 | XFS))
+    }
+
     /// flushes everything written to the cache's filesystem. each call reports a write-back
     /// error since the one before, so a batch may flush more than once.
     pub(crate) fn flush(&self) -> io::Result<()> {

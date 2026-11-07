@@ -43,6 +43,8 @@ pub(super) struct Deferred {
 struct Pending {
     #[cfg(target_os = "linux")]
     batch: Arc<super::object::Batch>,
+    #[cfg(target_os = "linux")]
+    local_fsync: bool,
     finished: Vec<Finished>,
     /// the digest of every download in this batch, so a large batch is not searched once for
     /// each download.
@@ -137,6 +139,8 @@ impl Cache {
             let mut pending = lock(&self.deferred.pending);
             *lock(&self.deferred.publishing) = Publishing::default();
             *pending = Some(Pending {
+                local_fsync: self.experiments().on("CACHE_LOCAL_FSYNC")
+                    && batch.supports_local_fsync()?,
                 batch: Arc::new(batch),
                 finished: Vec::new(),
                 digests: HashSet::new(),
@@ -169,7 +173,7 @@ impl Cache {
             return Err(Box::new(finished));
         };
         #[cfg(target_os = "linux")]
-        if !batch.batch.covers(metadata) {
+        if !batch.batch.covers(metadata) || (batch.local_fsync && finished.size <= 1 << 20) {
             return Err(Box::new(finished));
         }
         #[cfg(not(target_os = "linux"))]
