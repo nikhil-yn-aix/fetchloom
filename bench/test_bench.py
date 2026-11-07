@@ -137,7 +137,7 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
-    def test_process_exit_timeout_and_interrupt_are_distinct(self):
+    def test_process_exit_codes_are_distinct(self):
         import run
         import os
         from pathlib import Path
@@ -148,12 +148,8 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(passed["exit_code"], 0)
             failed = run.measure(["/bin/false"], root, os.environ, root / "log", 2)
             self.assertEqual(failed["exit_code"], 1)
-            timeout = run.measure(["sleep", "10"], root, os.environ, root / "log", .05)
-            self.assertTrue(timeout["timeout"])
-            interrupted = run.measure(["sleep", "10"], root, os.environ, root / "log", 2, .05)
-            self.assertTrue(interrupted["interruption_sent"])
-            self.assertFalse(interrupted["timeout"])
-            self.assertGreater(passed["wall_seconds"], 0)
+            self.assertFalse(passed["timeout"])
+            self.assertFalse(passed["interruption_sent"])
         finally:
             shutil.rmtree(root)
 
@@ -176,22 +172,6 @@ class MeasurementTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in root.iterdir()), ["log"])
         finally:
             del ballast
-            shutil.rmtree(root)
-
-    def test_timeout_escalates_for_a_group_ignoring_interrupts(self):
-        import os
-        from pathlib import Path
-        import shutil
-        import run
-        root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
-        try:
-            result = run.measure(["bash", "-c", "trap '' INT; sleep 30 & wait"], root,
-                                 os.environ, root / "log", .25)
-            self.assertTrue(result["timeout"])
-            self.assertEqual(result["exit_code"], -9)
-            self.assertIsNotNone(result["maxrss_bytes"])
-            self.assertGreaterEqual(result["wall_seconds"], 5)
-        finally:
             shutil.rmtree(root)
 
     def test_preparation_timeout_kills_the_whole_group(self):

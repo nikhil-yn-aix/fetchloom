@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -37,45 +38,58 @@ def verify(outputs):
     return failures
 
 
+def positive_seconds(value):
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("deadline must be a finite positive number of seconds") from None
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError("deadline must be a finite positive number of seconds")
+    return result
+
+
+def seconds_choice(value):
+    try:
+        return positive_seconds(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
+
+
 def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None):
+    timeout = positive_seconds(timeout)
+    if interrupt_after is not None:
+        interrupt_after = positive_seconds(interrupt_after)
     if not os.access(TIME, os.X_OK):
         raise RuntimeError(f"{TIME} is missing; install GNU time")
-    usage_file = Path(f"{logfile}.usage")
+    usage_file = Path(f"{logfile}.usage").resolve()
     usage_file.unlink(missing_ok=True)
     launcher = [TIME, "-o", str(usage_file), "-f", "%M %x", *(str(x) for x in argv)]
-    log = os.open(logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     home = os.getcwd()
     effective_cpus = sorted(cpus if cpus is not None else os.sched_getaffinity(0))
-    try:
-        os.chdir(cwd)
-        # affinity is inherited at spawn, before the client can execute or create workers.
-        with lab.affinity(cpus):
-            start = time.monotonic()
-            # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory.
-            pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
-                                 file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
-    finally:
-        os.chdir(home)
-        os.close(log)
     interrupted = False
     timed_out = False
     signalled = None
     stage = 0
+    pid = None
+    waited = False
+    handler_set = False
+    previous_handler = signal.getsignal(signal.SIGALRM)
 
     def alarm(_signal, _frame):
         nonlocal interrupted, timed_out, signalled, stage
         stage += 1
         if stage == 1:
-            signalled = time.monotonic()
-            interrupted = interrupt_after is not None and interrupt_after < timeout
-            timed_out = not interrupted
+            now = time.monotonic()
             try:
                 os.killpg(pid, signal.SIGINT)
             except ProcessLookupError:
                 return
+            signalled = now
+            interrupted = interrupt_after is not None and interrupt_after < timeout
+            timed_out = not interrupted
             signal.setitimer(signal.ITIMER_REAL, 5)
         elif stage == 2:
-            # GNU time ignores SIGINT and survives this, so it can still report the killed command
+            # GNU time survives so it can report the killed command's status and usage.
             for member in group(pid):
                 if member != pid:
                     try:
@@ -89,28 +103,55 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
             except ProcessLookupError:
                 pass
 
-    previous_handler = signal.signal(signal.SIGALRM, alarm)
-    signal.setitimer(signal.ITIMER_REAL, min(timeout, interrupt_after) if interrupt_after is not None else timeout)
     try:
+        log = os.open(logfile, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.chdir(cwd)
+            # affinity is inherited before the client can execute or create workers.
+            with lab.affinity(cpus):
+                start = time.monotonic()
+                # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory.
+                pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
+                                     file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
+        finally:
+            try:
+                os.chdir(home)
+            finally:
+                os.close(log)
+        signal.signal(signal.SIGALRM, alarm)
+        handler_set = True
+        deadline = min(timeout, interrupt_after) if interrupt_after is not None else timeout
+        signal.setitimer(signal.ITIMER_REAL, max(1e-6, deadline - (time.monotonic() - start)))
         _, status, usage = os.wait4(pid, 0)
+        waited = True
         now = time.monotonic()
     except BaseException:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        os.wait4(pid, 0)
+        if pid is not None:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            if not waited:
+                try:
+                    os.wait4(pid, 0)
+                except ChildProcessError:
+                    pass
+            lab.end_group(pid)
         usage_file.unlink(missing_ok=True)
         raise
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        if handler_set:
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+            finally:
+                signal.signal(signal.SIGALRM, previous_handler)
     # a shell may exit before a child handles SIGINT; keep the next run isolated.
     if signalled is not None:
         lab.end_group(pid, signalled + 5 - time.monotonic())
     result = dict(wall_seconds=now - start, user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime,
                   maxrss_bytes=None, exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
-                  interruption_sent=interrupted, cpu_affinity=effective_cpus)
+                  interruption_sent=interrupted, cpu_affinity=effective_cpus,
+                  timeout_seconds=timeout, interrupt_after_seconds=interrupt_after)
     try:
         report = usage_file.read_text().splitlines()
         usage_file.unlink()
@@ -349,7 +390,7 @@ def main():
     parser.add_argument("--variant", action="append", default=[], type=variant_choice,
                         help="label:FETCHLOOM_X=1,... runs fetchloom again with these settings, "
                              "shuffled into the same rounds; repeatable")
-    parser.add_argument("--timeout", type=float, default=1200)
+    parser.add_argument("--timeout", type=seconds_choice, default=1200)
     parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""),
                         help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
     args = parser.parse_args()

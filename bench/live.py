@@ -212,7 +212,7 @@ def main():
     parser.add_argument("--services", type=lambda x: run.csv_choices(x, SERVICES), default=list(SERVICES))
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--out", type=Path, default=lab.ROOT / "results" / "live")
-    parser.add_argument("--timeout", type=float, default=1200)
+    parser.add_argument("--timeout", type=run.seconds_choice, default=1200)
     parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""))
     args = parser.parse_args()
     lab.require_root()
