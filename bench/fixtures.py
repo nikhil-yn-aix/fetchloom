@@ -43,6 +43,23 @@ def case_specs(profiles, scenarios, quick):
     return cases
 
 
+def identity(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def read_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def write_json(path, value):
+    pending = path.with_suffix(path.suffix + ".new")
+    pending.write_text(json.dumps(value, indent=2) + "\n")
+    pending.replace(path)
+
+
 def build(case, seed):
     key = f"{seed}-{'quick' if case['quick'] else 'full'}-{case['profile']}-{case['base']}"
     if case["id"] == "s7" and case["quick"]:
@@ -50,8 +67,14 @@ def build(case, seed):
     target = lab.ROOT / "www" / key
     manifest = target / "manifest.json"
     case = dict(case, key=key)
-    if manifest.exists():
-        return dict(case, **json.loads(manifest.read_text()))
+    signature = dict(seed=seed, generator=sha256(Path(__file__)),
+                     **{name: case[name] for name in ("base", "profile", "quick", "size", "count")})
+    previous = read_json(manifest)
+    if (isinstance(previous, dict) and previous.get("fixture_signature") == signature
+            and previous.get("server_dir") == str(target)):
+        return dict(case, **previous)
+    if target.exists():
+        shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
     files = []
     for index in range(case["count"]):
@@ -78,8 +101,8 @@ def build(case, seed):
                 z.writestr(info, (target / item["name"]).read_bytes())
         files = [dict(name=archive.name, sha256=sha256(archive), size=archive.stat().st_size,
                       url=f"https://lab.flb/{key}/{archive.name}")]
-    data = dict(files=files, members=members, server_dir=str(target))
-    manifest.write_text(json.dumps(data, indent=2) + "\n")
+    data = dict(files=files, members=members, server_dir=str(target), fixture_signature=signature)
+    write_json(manifest, data)
     return dict(case, **data)
 
 
@@ -89,7 +112,13 @@ def prepare_native(case, fetchloom, names):
     env = lab.environment()
     for tool in names:
         target = root / tool
-        if (target / ".ready").exists():
+        signature = dict(tool=tool, fixture=identity({name: case.get(name) for name in
+                                                     ("key", "files", "members", "fixture_signature")}),
+                         harness={name: sha256(Path(__file__).with_name(name)) for name in
+                                  ("fixtures.py", "lab.py", "tools.py", "uv.lock")})
+        if tool == "fetchloom":
+            signature["executable"] = sha256(fetchloom)
+        if read_json(target / ".ready") == signature:
             continue
         if target.exists():
             shutil.rmtree(target)
@@ -135,6 +164,6 @@ def prepare_native(case, fetchloom, names):
                 run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)
                 run(["datalad", "save", "-m", "prepare benchmark inputs"])
                 run(["git", "annex", "drop", "--force", "--all"])
-            (target / ".ready").write_text("1\n")
+            write_json(target / ".ready", signature)
     case["prepared"] = str(root)
     return case
