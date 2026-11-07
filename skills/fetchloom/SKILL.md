@@ -45,8 +45,10 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | 20 | `network.*`, `offline.missing` | retry later, or drop `--offline` |
 | 30 | `integrity.mismatch` | from `add`, `sync` or `get`: the source changed its bytes; tell the user, do not force. from `cache verify`: a file in the cache was edited, often through a project's `data/`; `fetchloom sync --force` puts the pinned bytes back, so ask the user first |
 | 40 | `auth.required` | ask the user to sign in in their own terminal with the command in `help`, or to accept terms at the page in `help` |
-| 50 | `local.*`, `project.invalid` | a disk, permission or file conflict, or a broken data.toml; report the message |
+| 50 | `local.*`, `project.invalid` | a local I/O or resource failure, file conflict, or broken data.toml; report the cause |
 | 130 | `interrupted` | the run was stopped; run it again |
+
+`cache gc` failures retain successful counts and `result.not_removed`; `cache verify` uses `result.unreadable`. these entries contain `path`, `kind`, `os_code` and `message`. use the original cause before suggesting permission changes. unreadable cache change marks stop sync and get: repair storage or access, verify and retry; never delete the marks to bypass the refusal.
 
 `fetchloom help --json` lists every command and option, for anything this page leaves out.
 

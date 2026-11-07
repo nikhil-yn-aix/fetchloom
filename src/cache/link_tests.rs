@@ -226,7 +226,7 @@ fn a_swept_folder_swapped_for_a_link_keeps_what_it_points_at() {
         freed
             .not_removed
             .iter()
-            .any(|path| path.ends_with("old.tmp"))
+            .any(|failure| failure.path.ends_with("old.tmp"))
     );
 }
 
@@ -251,7 +251,7 @@ fn a_staging_folder_reached_through_a_swapped_tmp_keeps_its_files() {
 
     assert_eq!(fs::read(&payload).unwrap(), b"keep these bytes");
     assert!(stage.join("lock").exists());
-    assert_ne!(freed.not_removed, Vec::<std::path::PathBuf>::new());
+    assert_ne!(freed.not_removed, []);
 }
 
 #[cfg(unix)]

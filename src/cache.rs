@@ -2,6 +2,7 @@
 
 mod changed;
 mod deferred;
+mod failure;
 mod held;
 mod object;
 mod partial;
@@ -22,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 
 pub(crate) use changed::{Doubt, may_follow};
+pub(crate) use failure::Failure;
 pub(crate) use held::Access;
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
@@ -837,7 +839,7 @@ pub(crate) mod tests {
         assert_eq!(checked.bytes, 3);
         assert_eq!(checked.changed, []);
         assert_eq!(checked.stuck, []);
-        assert_eq!(checked.unreadable, Vec::<PathBuf>::new());
+        assert_eq!(checked.unreadable, []);
         assert_eq!(cache.projects(), Vec::<PathBuf>::new());
 
         let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);

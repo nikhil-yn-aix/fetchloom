@@ -92,8 +92,8 @@ fn unreadable_objects_have_their_own_report() -> Result {
             assert_eq!(document["result"]["bytes"], 3);
             assert_eq!(document["result"]["changed"], serde_json::json!([]));
             assert_eq!(
-                document["result"]["unreadable"],
-                serde_json::json!([object])
+                document["result"]["unreadable"][0]["path"],
+                serde_json::json!(object)
             );
             document["warnings"]
                 .as_array()
@@ -219,7 +219,10 @@ fn verify_reports_unenumerable_object_folders() -> Result {
     let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(output.status.code(), Some(50), "{document}");
     assert_eq!(document["errors"][0]["kind"], "local.io");
-    assert_eq!(document["result"]["unreadable"], serde_json::json!([fan]));
+    assert_eq!(
+        document["result"]["unreadable"][0]["path"],
+        serde_json::json!(fan)
+    );
     assert_eq!(document["result"]["objects"], 0);
     Ok(())
 }
@@ -444,8 +447,8 @@ fn gc_reports_refused_removals_to_people_and_scripts() -> Result {
             let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(document["errors"][0]["kind"], "local.io");
             assert_eq!(
-                document["result"]["not_removed"],
-                serde_json::json!([object])
+                document["result"]["not_removed"][0]["path"],
+                serde_json::json!(object)
             );
             assert_eq!(document["result"]["objects"], 0);
             assert_eq!(document["result"]["bytes"], 0);

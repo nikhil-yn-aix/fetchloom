@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Freed, Needed};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed};
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
@@ -34,11 +34,8 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         needed, projects, ..
     } = needed_with(&cache, None, &context.stop, false)?;
     let scan = cache.scan_objects(&context.stop)?;
-    if let Some(path) = scan.unreadable.first() {
-        return Err(
-            Error::new(Kind::LocalIo, format!("cannot inspect {}", path.display()))
-                .help("check the cache folder's permissions, then run the command again"),
-        );
+    if let Some(failure) = scan.unreadable.first() {
+        return Err(failure.error("cannot inspect"));
     }
     let objects = scan.objects;
     let bytes: u64 = objects.iter().map(|object| object.size).sum();
@@ -137,8 +134,8 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         return Ok(tell_dry_gc(context, freed, cache.pretended()));
     }
     let output = &context.output;
-    for path in &freed.not_removed {
-        output.warn(&format!("could not read or remove {}; close programs using it or check its permissions, then run the command again", path.display()));
+    for failure in &freed.not_removed {
+        warn_failure(output, "could not read or remove", failure);
     }
     let kept = kept(&freed);
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
@@ -174,9 +171,17 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
                 format!("cannot format the cache result: {err}"),
             )
         })?;
-        return Err(Error::new(Kind::LocalIo, format!("{} in the cache could not be read or removed", units::count(freed.not_removed.len() as u64, "item", "items")))
-            .help("close programs using these paths or check their permissions, then run the command again")
-            .with_result(result));
+        return Err(with_failures(
+            Error::new(
+                Kind::LocalIo,
+                format!(
+                    "{} in the cache could not be read or removed",
+                    units::count(freed.not_removed.len() as u64, "item", "items")
+                ),
+            ),
+            &freed.not_removed,
+        )
+        .with_result(result));
     }
     output.done(
         "Cleaned",
@@ -212,11 +217,12 @@ fn kept(freed: &Freed) -> Option<String> {
 /// says what a sweep that only pretended would have freed, naming each path with `-v`.
 fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collected {
     let output = &context.output;
-    for path in &freed.not_removed {
-        output.warn(&format!(
-            "could not read {}; gc would leave it in the cache",
-            path.display()
-        ));
+    for failure in &freed.not_removed {
+        warn_failure(
+            output,
+            "could not read; gc would leave this in the cache:",
+            failure,
+        );
     }
     if freed.objects > 0 {
         output.step(
@@ -296,11 +302,8 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
         units::count(checked.objects, "file", "files"),
         units::size(checked.bytes)
     );
-    for path in &checked.unreadable {
-        output.warn(&format!(
-            "{} is unreadable and was left in the cache",
-            path.display()
-        ));
+    for failure in &checked.unreadable {
+        warn_failure(output, "left unreadable in the cache:", failure);
     }
     if checked.changed.is_empty() {
         if checked.unreadable.is_empty() && checked.objects == 0 {
@@ -311,14 +314,16 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
             output.done("Verified", &format!("{what}, every one is intact"));
             return Ok(());
         }
-        return Err(Error::new(
-            Kind::LocalIo,
-            format!(
-                "checked {what}. {} could not be read",
-                units::count(checked.unreadable.len() as u64, "path", "paths")
+        return Err(with_failures(
+            Error::new(
+                Kind::LocalIo,
+                format!(
+                    "checked {what}. {} could not be read",
+                    units::count(checked.unreadable.len() as u64, "path", "paths")
+                ),
             ),
-        )
-        .help("close any program using these cached files or check their permissions, then run `fetchloom cache verify` again"));
+            &checked.unreadable,
+        ));
     }
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
@@ -358,6 +363,21 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
         "check permissions on {}, then run `fetchloom cache verify` again",
         cache.root().join("changed").display()
     )))
+}
+
+fn warn_failure(output: &Output, action: &str, failure: &Failure) {
+    output.warn(&format!(
+        "{action} {}; {}",
+        failure.description(),
+        failure.advice()
+    ));
+}
+
+fn with_failures(mut error: Error, failures: &[Failure]) -> Error {
+    for failure in failures {
+        error = error.detail(format!("{}; {}", failure.description(), failure.advice()));
+    }
+    error.help("address the filesystem errors above, then run the command again")
 }
 
 /// how often the cache may remind a person of what it holds that no project needs, and how much

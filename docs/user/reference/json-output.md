@@ -43,11 +43,11 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; nine arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
-| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: paths that could not be removed or inspected for cleanup; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
+| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: failure records for paths that could not be removed or inspected for cleanup; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user` and `valid`; [auth](../commands/auth.md#json) |
 | `auth login`, `auth logout` | `account` with `user` and `saved_to`, or `removed_from` |
 | `help` | `options`: the options fetchloom itself takes, which are those every command takes and `--version`; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
-| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: paths whose contents, metadata or directory entries could not be read |
+| `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: failure records for contents, metadata or directory entries that could not be read |
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
@@ -77,7 +77,7 @@ status lists all differences in JSON. human output limits each file category to 
 
 `cache gc` keeps objects no project needs until they are a day old by modification time, unless `--now` removes that grace period. partial downloads retain their one-day grace period. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
-`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` paths; the array length is the failed-path count. human output and JSON `warnings` name those paths. a path already absent is not a failed removal.
+`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
 
@@ -101,7 +101,7 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 {"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
 
-for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes` and `leftovers` count what gc would delete and keep, and `not_removed` lists paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
+for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes` and `leftovers` count what gc would delete and keep, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 
 the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks` and `copies` stay 0.
 

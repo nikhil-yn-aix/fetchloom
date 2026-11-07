@@ -60,9 +60,9 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | an archive has no dataset folder | it contains no regular files | use `extract = false` and sync to keep the packed archive |
 | a source returns an access refusal | access is unavailable or unsupported | check the source's [credentials and limits](sources/README.md) |
 | cache registration warns after sync | the cache could not record the project root | fix cache permissions and sync again before relying on gc retention |
-| `cache gc` exits 50 after partial cleanup | some paths could not be removed or inspected | inspect `result.not_removed`, close open handles and fix permissions before retrying |
+| `cache gc` exits 50 after partial cleanup | some paths could not be removed or inspected | inspect `result.not_removed` causes; fix access or storage before retrying |
 | `cache verify` exits 30 | cached bytes changed | allow a later online sync to replace damaged objects, then sync affected projects |
-| `cache verify` exits 50 without changed bytes | objects, metadata or directory entries could not be read | inspect `result.unreadable`, fix access and verify again |
+| `cache verify` exits 50 without changed bytes | objects, metadata or directory entries could not be read | inspect `result.unreadable` causes, fix access or storage and verify again |
 | a windows file cannot be replaced or deleted | a program holds it open, or permissions block access | close the program, check permissions and retry |
 | a long path fails | the filesystem or another program may have a shorter limit | follow the shorter-project-path hint; use shorter project and dataset folders |
 | plain-word add or get refuses to guess | no interactive dataset choice is possible | choose a returned canonical id; `--yes` never selects one |

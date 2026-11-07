@@ -51,7 +51,7 @@ a missing manifest removes a registration. an unreadable registration, manifest 
 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 
-gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failed paths in `result.not_removed`, alongside the error. close programs holding those paths or fix permissions, then retry. already absent paths do not count as failed removals.
+gc warns about paths it could not remove or inspect for cleanup. JSON retains successful counts and failure records in `result.not_removed`, alongside the error. each record has `path`, `kind`, `os_code` and `message`. follow the cause-specific advice: fix access for permission errors, or check storage for I/O errors, then retry. already absent paths do not count as failed removals.
 
 ### runs that use the cache
 
@@ -114,4 +114,4 @@ verification does not check independent copies in `data/`. after repairing cache
 | a recent unused object remains | gc uses a 24-hour age rule | collect later or use `cache gc --now` |
 | `get` data is collected | one-off downloads do not register a project | use a project for inputs whose cache retention matters |
 | a damaged independent copy passes cache verification | only cache objects are checked | inspect that project's files separately |
-| gc reports errors after deleting files | cleanup can partially succeed | inspect `not_removed` and retry after fixing access |
+| gc reports errors after deleting files | cleanup can partially succeed | inspect the causes in `not_removed` and retry after fixing them |

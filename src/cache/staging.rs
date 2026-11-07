@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use super::partial::open_unfollowed;
 use super::upkeep::GRACE;
-use super::{Cache, NewObject};
+use super::{Cache, Failure, NewObject};
 use crate::place::{FolderUse, real_folder};
 use crate::stop::Stop;
 
@@ -63,7 +63,7 @@ impl Cache {
         &self,
         now: SystemTime,
         stop: &Stop,
-        not_removed: &mut Vec<PathBuf>,
+        not_removed: &mut Vec<Failure>,
     ) -> u64 {
         let mut removed = 0;
         let Ok(entries) = super::upkeep::scan_entries(&self.root.join("tmp"), not_removed, stop)
@@ -107,17 +107,22 @@ impl Cache {
         folder: &Path,
         lock: Option<File>,
         stop: &Stop,
-        not_removed: &mut Vec<PathBuf>,
+        not_removed: &mut Vec<Failure>,
     ) -> u64 {
         // someone able to rename inside tmp could swap a link in for the folder, or for tmp
         // itself, while it was used
-        if real_folder(folder, FolderUse::Cache).is_err() || self.check_inside(folder).is_err() {
-            not_removed.push(folder.to_path_buf());
+        if let Err(err) =
+            real_folder(folder, FolderUse::Cache).and_then(|()| self.check_inside(folder))
+        {
+            not_removed.push(Failure::new(folder, &err));
             return 0;
         }
-        let Ok(entries) = fs::read_dir(folder) else {
-            not_removed.push(folder.to_path_buf());
-            return 0;
+        let entries = match fs::read_dir(folder) {
+            Ok(entries) => entries,
+            Err(err) => {
+                not_removed.push(Failure::new(folder, &err));
+                return 0;
+            }
         };
         let mut removed = 0;
         let mut cleared = true;
@@ -126,10 +131,13 @@ impl Cache {
                 cleared = false;
                 break;
             }
-            let Ok(entry) = entry else {
-                not_removed.push(folder.to_path_buf());
-                cleared = false;
-                continue;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    not_removed.push(Failure::new(folder, &err));
+                    cleared = false;
+                    continue;
+                }
             };
             if entry.file_name() == "lock" || entry.file_name() == "unlocked" {
                 continue;
@@ -137,8 +145,8 @@ impl Cache {
             match self.remove_inside(&entry.path()) {
                 Ok(()) => removed += 1,
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(_) => {
-                    not_removed.push(entry.path());
+                Err(err) => {
+                    not_removed.push(Failure::new(&entry.path(), &err));
                     cleared = false;
                 }
             }

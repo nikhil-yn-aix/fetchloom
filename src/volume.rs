@@ -42,6 +42,12 @@ impl Volume {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_removal(mut self, remove: fn(&Path) -> io::Result<()>) -> Volume {
+        self.remove_file = remove;
+        self
+    }
+
     /// a volume for a dry run: it links, renames and removes nothing, and records each existing
     /// path a removal names, so the code deciding what to remove runs as it would for real.
     pub(crate) fn pretend(scratch: PathBuf) -> Volume {

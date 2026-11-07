@@ -176,7 +176,7 @@ impl Cache {
         &self,
         needed: &HashSet<Sha256>,
         stop: &crate::stop::Stop,
-        not_removed: &mut Vec<std::path::PathBuf>,
+        not_removed: &mut Vec<super::Failure>,
     ) -> Result<(), crate::error::Error> {
         let folder = self.changed_folder();
         for entry in super::upkeep::scan_entries(&folder, not_removed, stop)? {

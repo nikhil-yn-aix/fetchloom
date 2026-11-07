@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use super::Cache;
+use super::{Cache, Failure};
 use crate::digest::{self, Sha256};
-use crate::error::{Error, Kind};
+use crate::error::Error;
 use crate::stop::Stop;
 
 /// how long an object no project needs stays, so a download a project has not locked yet, or a
@@ -30,7 +30,7 @@ pub(crate) struct Object {
 #[derive(Default)]
 pub(crate) struct Scan {
     pub(crate) objects: Vec<Object>,
-    pub(crate) unreadable: Vec<PathBuf>,
+    pub(crate) unreadable: Vec<Failure>,
 }
 
 /// what the projects using a cache need from it.
@@ -48,7 +48,7 @@ pub(crate) struct Freed {
     pub(crate) bytes: u64,
     /// unfinished downloads and temporary files nobody came back for.
     pub(crate) leftovers: u64,
-    pub(crate) not_removed: Vec<PathBuf>,
+    pub(crate) not_removed: Vec<Failure>,
     /// objects no project needs that stay because they are younger than a day.
     pub(crate) kept_objects: u64,
     pub(crate) kept_bytes: u64,
@@ -63,7 +63,7 @@ pub(crate) struct Checked {
     /// changed objects whose repair marks could not be written.
     pub(crate) stuck: Vec<Sha256>,
     /// objects or folders that could not be read, left untouched without a new change mark.
-    pub(crate) unreadable: Vec<PathBuf>,
+    pub(crate) unreadable: Vec<Failure>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,12 +181,11 @@ impl Cache {
                         path: entry.path(),
                         modified,
                     }),
-                    Err(_) => scan.unreadable.push(entry.path()),
+                    Err(err) => scan.unreadable.push(Failure::new(&entry.path(), &err)),
                 }
             }
         }
-        scan.unreadable.sort();
-        scan.unreadable.dedup();
+        super::failure::sort(&mut scan.unreadable);
         Ok(scan)
     }
 
@@ -206,15 +205,8 @@ impl Cache {
             grace.is_zero() || now.duration_since(modified).is_ok_and(|age| age >= grace)
         };
         let scan = self.scan_objects(stop)?;
-        if let Some(path) = scan.unreadable.first() {
-            return Err(Error::new(
-                Kind::LocalIo,
-                format!(
-                    "cannot inspect {}, so the cache stays as it is",
-                    path.display()
-                ),
-            )
-            .help("check the cache folder's permissions, then run the command again"));
+        if let Some(failure) = scan.unreadable.first() {
+            return Err(failure.error("cannot inspect; the cache stays unchanged:"));
         }
         let mut freed = Freed::default();
         for object in scan.objects {
@@ -268,15 +260,14 @@ impl Cache {
             }
         }
         stop.check()?;
-        freed.not_removed.sort();
-        freed.not_removed.dedup();
+        super::failure::sort(&mut freed.not_removed);
         Ok(freed)
     }
 
     /// drops what the cache remembers about a link whose bytes it no longer holds, which would
     /// only grow: the next download of that link writes a new record. an archive's own bytes go
     /// once it is unpacked, and while its unpack record stays, the link's record still serves it.
-    fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<PathBuf>) -> Result<(), Error> {
+    fn forget_url_records(&self, stop: &Stop, not_removed: &mut Vec<Failure>) -> Result<(), Error> {
         for entry in scan_entries(&self.root.join("urls"), not_removed, stop)? {
             stop.check()?;
             let path = entry.path();
@@ -390,12 +381,12 @@ impl Cache {
                         }
                         match actual {
                             Ok(actual) if actual == object.digest => continue,
-                            Err(_) => {
+                            Err(err) => {
                                 checked
                                     .lock()
                                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                                     .unreadable
-                                    .push(object.path.clone());
+                                    .push(Failure::new(&object.path, &err));
                                 continue;
                             }
                             Ok(_) => {}
@@ -418,8 +409,7 @@ impl Cache {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         checked.changed.sort();
         checked.stuck.sort();
-        checked.unreadable.sort();
-        checked.unreadable.dedup();
+        super::failure::sort(&mut checked.unreadable);
         Ok(checked)
     }
 
@@ -433,7 +423,7 @@ impl Cache {
 /// a folder that cannot be read is recorded in `unreadable`.
 pub(super) fn scan_entries(
     folder: &Path,
-    unreadable: &mut Vec<PathBuf>,
+    unreadable: &mut Vec<Failure>,
     stop: &Stop,
 ) -> Result<Vec<fs::DirEntry>, Error> {
     stop.check()?;
@@ -444,7 +434,7 @@ pub(super) fn scan_entries(
                 stop.check()?;
                 match entry {
                     Ok(entry) => found.push(entry),
-                    Err(_) => unreadable.push(folder.to_path_buf()),
+                    Err(err) => unreadable.push(Failure::new(folder, &err)),
                 }
             }
         }
@@ -452,17 +442,17 @@ pub(super) fn scan_entries(
             if err.kind() == io::ErrorKind::NotFound
                 && fs::symlink_metadata(folder)
                     .is_err_and(|err| err.kind() == io::ErrorKind::NotFound) => {}
-        Err(_) => unreadable.push(folder.to_path_buf()),
+        Err(err) => unreadable.push(Failure::new(folder, &err)),
     }
     Ok(found)
 }
 
-pub(super) fn removed(path: &Path, result: io::Result<()>, not_removed: &mut Vec<PathBuf>) -> bool {
+pub(super) fn removed(path: &Path, result: io::Result<()>, not_removed: &mut Vec<Failure>) -> bool {
     match result {
         Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::NotFound => false,
-        Err(_) => {
-            not_removed.push(path.to_path_buf());
+        Err(err) => {
+            not_removed.push(Failure::new(path, &err));
             false
         }
     }
@@ -492,6 +482,8 @@ fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
 mod tests {
     use std::io::Write;
 
+    use crate::error::Kind;
+
     use super::super::tests::{cache, fat, hold, seal, store};
     use super::*;
 
@@ -516,6 +508,49 @@ mod tests {
         ) -> Checked {
             self.verify_with_stop(threads, progress, &Stop::default())
                 .unwrap()
+        }
+    }
+
+    #[test]
+    fn maintenance_failures_keep_their_io_causes() {
+        for (remove, kind, message) in [
+            (
+                (|_: &Path| Err(io::Error::other("injected storage error")))
+                    as fn(&Path) -> io::Result<()>,
+                "Other",
+                "injected storage error",
+            ),
+            (
+                (|_: &Path| {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "injected access error",
+                    ))
+                }) as fn(&Path) -> io::Result<()>,
+                "PermissionDenied",
+                "injected access error",
+            ),
+        ] {
+            let (_dir, mut cache) = cache();
+            let digest = store(&cache, b"good").digest;
+            let path = cache.object_path(&digest);
+            cache.volume = std::sync::Arc::new(
+                crate::volume::Volume::new(cache.root.join("tmp")).with_removal(remove),
+            );
+            let freed = cache
+                .sweep_with_stop(
+                    &Needed::default(),
+                    SystemTime::now(),
+                    Duration::ZERO,
+                    &Stop::default(),
+                )
+                .unwrap();
+            let report = serde_json::to_value(&freed).unwrap();
+            assert_eq!(report["not_removed"].as_array().unwrap().len(), 1);
+            assert_eq!(report["not_removed"][0]["path"], serde_json::json!(path));
+            assert_eq!(report["not_removed"][0]["kind"], kind, "{report}");
+            assert_eq!(report["not_removed"][0]["message"], message, "{report}");
+            assert_eq!(fs::read(path).unwrap(), b"good");
         }
     }
 
@@ -579,7 +614,12 @@ mod tests {
             } else {
                 folder
             };
-            assert_eq!(checked.unreadable, [unreadable]);
+            assert_eq!(checked.unreadable.len(), 1);
+            assert_eq!(checked.unreadable[0].path, unreadable);
+            assert_eq!(
+                serde_json::to_value(&checked.unreadable[0]).unwrap()["kind"],
+                "PermissionDenied"
+            );
             assert_eq!(checked.objects, 0);
             assert_eq!(checked.changed, []);
             assert!(object.exists());
@@ -661,8 +701,16 @@ mod tests {
         let report = serde_json::to_value(&freed).unwrap();
         let paths = report["not_removed"].as_array().unwrap();
         assert_eq!(paths.len(), 2);
-        assert!(paths.contains(&serde_json::json!(object)));
-        assert!(paths.contains(&serde_json::json!(leftover)));
+        assert!(
+            paths
+                .iter()
+                .any(|failure| failure["path"] == serde_json::json!(object))
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|failure| failure["path"] == serde_json::json!(leftover))
+        );
         assert!(object.exists());
         assert!(leftover.exists());
     }
@@ -965,8 +1013,8 @@ mod tests {
         assert_eq!(checked.objects, 1);
         assert_eq!(checked.bytes, 6);
         assert_eq!(
-            serde_json::to_value(&checked).unwrap()["unreadable"],
-            serde_json::json!([object])
+            serde_json::to_value(&checked).unwrap()["unreadable"][0]["path"],
+            serde_json::json!(object)
         );
     }
 
