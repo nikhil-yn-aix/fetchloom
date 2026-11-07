@@ -609,7 +609,7 @@ async fn finish(
         })
         .collect();
     let unpacked = unpack(context, cache, &mut locked, extract).await?;
-    let planned = planned(cache, &locked)?;
+    let planned = planned(cache, &locked, unpacked.trees)?;
     let placed: Vec<String> = planned
         .targets
         .iter()
@@ -617,7 +617,7 @@ async fn finish(
         .collect();
     check(&folder, Some(&placed))?;
     let outcomes = put_all(context, cache, &folder, &planned.targets, chosen.is_some())?;
-    unpacking::drop_archives(cache, &unpacked, None);
+    unpacking::drop_archives(cache, &unpacked.archives, None);
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     let origins: HashMap<&str, Origin> = locked
         .iter()
@@ -908,6 +908,14 @@ fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Resu
     Ok(())
 }
 
+type Trees = HashMap<(String, Sha256, Sha256), Vec<crate::cache::Member>>;
+
+#[derive(Default)]
+struct UnpackedFiles {
+    archives: Vec<Sha256>,
+    trees: Trees,
+}
+
 /// unpacks each archive among the fetched files that this machine has not unpacked before, and
 /// returns every archive whose files are now in the cache, so its own bytes can go.
 async fn unpack(
@@ -915,8 +923,8 @@ async fn unpack(
     cache: &Cache,
     files: &mut [LockedFile],
     extract: bool,
-) -> Result<Vec<Sha256>, Error> {
-    let mut done = Vec::new();
+) -> Result<UnpackedFiles, Error> {
+    let mut done = UnpackedFiles::default();
     let mut slots = Vec::new();
     let mut todo = Vec::new();
     for (index, file) in files.iter_mut().enumerate() {
@@ -931,9 +939,15 @@ async fn unpack(
             }
             _ => continue,
         }
-        if cache.holds_unpacked(&file.sha256, None) {
-            file.unpacks_to = cache.unpacked_tree(&file.sha256);
-            done.push(file.sha256);
+        if let Some((tree, members)) = cache.unpacked_with_tree(&file.sha256)
+            && members
+                .iter()
+                .all(|member| cache.find(&member.sha256, Some(member.size)).is_some())
+        {
+            file.unpacks_to = Some(tree);
+            done.archives.push(file.sha256);
+            done.trees
+                .insert((file.path.clone(), file.sha256, tree), members);
             continue;
         }
         slots.push(index);
@@ -948,16 +962,27 @@ async fn unpack(
     for (index, result) in slots.into_iter().zip(results) {
         if let Some(result) = result {
             files[index].unpacks_to = Some(result.tree);
-            done.push(files[index].sha256);
+            done.archives.push(files[index].sha256);
+            done.trees.insert(
+                (files[index].path.clone(), files[index].sha256, result.tree),
+                result.members,
+            );
         }
     }
     Ok(done)
 }
 
 /// where every file lands in the folder, each archive standing for the files it unpacked to.
-fn planned<'a>(cache: &Cache, files: &'a [LockedFile]) -> Result<Plan<'a>, Error> {
+fn planned<'a>(cache: &Cache, files: &'a [LockedFile], trees: Trees) -> Result<Plan<'a>, Error> {
     let mut planned = Plan::default();
-    let members = |file: &LockedFile| cache.unpacked(&file.sha256, file.unpacks_to.as_ref());
+    let trees = std::cell::RefCell::new(trees);
+    let members = |file: &LockedFile| {
+        let tree = file.unpacks_to?;
+        trees
+            .borrow_mut()
+            .remove(&(file.path.clone(), file.sha256, tree))
+            .or_else(|| cache.unpacked(&file.sha256, Some(&tree)))
+    };
     plan::expand(&mut planned, "", "", false, files, &members);
     if let Some((_, file)) = planned.unknown.first() {
         return Err(Error::new(
@@ -1276,5 +1301,47 @@ mod tests {
             pin_command(&args, "https://example.org/data.zip?token=secret"),
             None
         );
+    }
+    #[test]
+    fn get_plans_from_the_member_record_it_already_checked() {
+        use crate::output::{Level, Output, Style};
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let archive = crate::cache::tests::store(&cache, b"packed");
+        let member = crate::cache::tests::store(&cache, b"member");
+        let members = [crate::cache::Member {
+            path: "a.csv".into(),
+            size: member.size,
+            sha256: member.digest,
+        }];
+        let tree = cache.record_unpacked(&archive.digest, &members).unwrap();
+        let mut files = [LockedFile {
+            path: "files.zip".into(),
+            size: archive.size,
+            sha256: archive.digest,
+            md5: None,
+            url: "https://example.org/files.zip".into(),
+            unpacks_to: None,
+        }];
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let known =
+            crate::source::recorded::block_on(unpack(&context, &cache, &mut files, true)).unwrap();
+        assert_eq!(files[0].unpacks_to, Some(tree));
+        std::fs::remove_file(cache.root().join("unpacked").join(archive.digest.hex())).unwrap();
+        let plan = planned(&cache, &files, known.trees).unwrap();
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].path, "a.csv");
+        assert_eq!(plan.targets[0].sha256, member.digest);
     }
 }

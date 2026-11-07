@@ -69,9 +69,14 @@ impl Cache {
 
     /// the tree hash of what `archive` unpacked to on this machine, when it was recorded.
     pub(crate) fn unpacked_tree(&self, archive: &Sha256) -> Option<Sha256> {
+        self.unpacked_with_tree(archive).map(|(tree, _)| tree)
+    }
+
+    /// reads a member record and its hash together, so both describe the same bytes.
+    pub(crate) fn unpacked_with_tree(&self, archive: &Sha256) -> Option<(Sha256, Vec<Member>)> {
         let bytes = fs::read(self.unpacked_path(archive)).ok()?;
-        parse(std::str::from_utf8(&bytes).ok()?)?;
-        Some(digest::sha256(&bytes))
+        let members = parse(std::str::from_utf8(&bytes).ok()?)?;
+        Some((digest::sha256(&bytes), members))
     }
 
     /// every archive with a record.
