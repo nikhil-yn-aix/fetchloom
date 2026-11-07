@@ -178,8 +178,13 @@ enum Answer {
     Divert(Url),
 }
 
-/// where a response body starts in the file, how long the whole file is, and how the server
-/// identified it.
+/// splitting and request ownership across this file's retries.
+struct Transfer {
+    split: bool,
+    permits: Option<super::Permits>,
+}
+
+/// where a response starts, its total size and the server's version proof.
 struct Body {
     offset: u64,
     total: Option<u64>,
@@ -316,7 +321,6 @@ impl Net {
                 return Ok(fetched(record, Origin::Cache));
             }
         }
-        let _permits = self.permit(&fetch.from).await?;
         self.transfer(fetch, cache, &partial, known, on).await
     }
 
@@ -335,7 +339,10 @@ impl Net {
         let mut restarted = false;
         // a file stops being split once a server answered a range badly, or bytes from several
         // answers did not match
-        let mut split = true;
+        let mut state = Transfer {
+            split: true,
+            permits: Some(self.permit(&fetch.from).await?),
+        };
         let mut retry = Retry::new(self, &fetch.url);
         let reach = Reach::default();
         let watched = |event: Event| {
@@ -343,6 +350,7 @@ impl Net {
             on(event)
         };
         loop {
+            self.keep_permit(&fetch.from, &mut state.permits).await?;
             let answer = self
                 .attempt(
                     &from,
@@ -350,7 +358,7 @@ impl Net {
                     partial,
                     validators.as_ref(),
                     &watched,
-                    &mut split,
+                    &mut state,
                 )
                 .await;
             if reach.further() {
@@ -383,7 +391,7 @@ impl Net {
                     Err(err) if resumed && !restarted => {
                         tracing::debug!(%err, "a download in pieces did not match, starting over");
                         restarted = true;
-                        split = false;
+                        state.split = false;
                         partial.discard();
                     }
                     Err(err) => return Err(err),
@@ -487,7 +495,7 @@ impl Net {
         partial: &Partial,
         known: Option<&Validators>,
         on: Listener<'_>,
-        split: &mut bool,
+        state: &mut Transfer,
     ) -> Result<Answer, Failure> {
         let earlier = partial
             .resumable()
@@ -514,7 +522,7 @@ impl Net {
         let name = describe_response(&response, &fetch.url, on)?;
         refuse_other_length(fetch, total)?;
         let proven = fetch.expect.proves() || if_range(&validators).is_some();
-        let splits = *split && self.may_split(total, status, &head, proven);
+        let splits = state.split && self.may_split(total, status, &head, proven);
         tracing::debug!(
             splits,
             total,
@@ -556,7 +564,7 @@ impl Net {
             {
                 Run::Whole(writer) => {
                     return Ok(Answer::Stored {
-                        stored: finish(writer).await?,
+                        stored: self.after_body(&mut state.permits, finish(writer)).await?,
                         validators,
                         name,
                         resumed: offset + kept > 0,
@@ -579,12 +587,12 @@ impl Net {
             on,
             slow,
         };
-        let (writer, pieced) = match self.split(job, writer, response, split).await? {
+        let (writer, pieced) = match self.split(job, writer, response, &mut state.split).await? {
             split::Streamed::Whole { writer, pieced } => (*writer, pieced),
             split::Streamed::StartOver => return Ok(Answer::StartOver),
         };
         Ok(Answer::Stored {
-            stored: finish(writer).await?,
+            stored: self.after_body(&mut state.permits, finish(writer)).await?,
             validators,
             name,
             resumed: offset + kept > 0 || pieced,

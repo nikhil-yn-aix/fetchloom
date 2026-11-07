@@ -39,7 +39,10 @@ fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     let idle = std::time::Duration::from_millis(250);
     net.idle = idle;
     let fetch = Fetch::new(url.clone());
-    let mut split = true;
+    let mut split = Transfer {
+        split: true,
+        permits: None,
+    };
     let started = std::time::Instant::now();
     // the remaining 1024 bytes cannot split, but every rate window still wakes the stream.
     let result = block_on(async {
@@ -611,7 +614,10 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     };
     let net = net(&url);
     let fetch = Fetch::new(url.clone());
-    let mut split = false;
+    let mut split = Transfer {
+        split: false,
+        permits: None,
+    };
     let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
     assert!(matches!(result, Err(Failure::Transient { .. })));
     assert_eq!(
@@ -731,7 +737,10 @@ fn attempt_once(net: &Net, cache: &Cache, url: &Url, on: Listener<'_>) -> Result
     let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
         panic!("nothing else holds the download");
     };
-    let mut split = false;
+    let mut split = Transfer {
+        split: false,
+        permits: None,
+    };
     let fetch = Fetch::new(url.clone());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -936,4 +945,51 @@ fn early_splitting_needs_a_validator_and_respects_disabled_or_capped_runs() {
     net.split.when = Splitting::Always;
     net.rate = crate::net::rate::Rate::read(&|_| Some("1".into())).unwrap();
     assert!(!net.eager_split(&strong));
+}
+
+#[test]
+fn a_checksum_restart_reacquires_released_download_slots() {
+    for enabled in [false, true] {
+        let (url, asked) = serve(vec![
+            reply(
+                "206 Partial Content",
+                &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
+                "bbbb",
+            ),
+            reply("200 OK", &[("ETag", "\"v1\"")], "bbbbbbbb"),
+        ]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+            panic!("the fixture owns its partial")
+        };
+        let mut writer = partial
+            .writer(
+                0,
+                Some(8),
+                Validators {
+                    etag: Some("\"v1\"".to_owned()),
+                    ..Validators::default()
+                },
+                false,
+                false,
+            )
+            .unwrap();
+        writer.write_all(b"aaaa").unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        drop(partial);
+        let mut net = net(&url);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("CACHE_RELEASE_PERMITS", "1");
+        }
+        let mut fetch = Fetch::new(url.clone());
+        fetch.expect.sha256 = Some(crate::digest::sha256(b"bbbbbbbb"));
+        let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+        assert_eq!(
+            fs::read(cache.object_path(&fetched.digest)).unwrap(),
+            b"bbbbbbbb"
+        );
+        assert_eq!(asked.lock().unwrap().len(), 2);
+    }
 }

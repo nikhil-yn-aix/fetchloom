@@ -11,6 +11,7 @@ mod rate;
 mod shown;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -140,6 +141,8 @@ pub(crate) struct Split {
     /// bytes a second below which one stream, over a window, hands over to be split.
     pub(crate) slow: u64,
 }
+
+type Permits = (OwnedSemaphorePermit, OwnedSemaphorePermit);
 
 pub(crate) struct Net {
     /// made on the first request, so a run that never goes online loads no TLS roots and reads no
@@ -521,10 +524,7 @@ impl Net {
     }
 
     /// waits for a free slot for this host, then for one overall.
-    async fn permit(
-        &self,
-        url: &Url,
-    ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), Error> {
+    async fn permit(&self, url: &Url) -> Result<Permits, Error> {
         let per_host = self.slots(url);
         let closed = |_| Error::new(Kind::Interrupted, "stopped");
         let wait = async {
@@ -538,9 +538,27 @@ impl Net {
         }
     }
 
+    async fn keep_permit(&self, url: &Url, permits: &mut Option<Permits>) -> Result<(), Error> {
+        if permits.is_none() {
+            *permits = Some(self.permit(url).await?);
+        }
+        Ok(())
+    }
+
+    async fn after_body<T>(
+        &self,
+        permits: &mut Option<Permits>,
+        finish: impl Future<Output = T>,
+    ) -> T {
+        if self.exp().on("CACHE_RELEASE_PERMITS") {
+            drop(permits.take());
+        }
+        finish.await
+    }
+
     /// a slot for this host and one overall, when both are free and nothing waits for them, so
     /// an added stream never holds up another file.
-    fn try_permit(&self, url: &Url) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+    fn try_permit(&self, url: &Url) -> Option<Permits> {
         let host = self.slots(url).try_acquire_owned().ok()?;
         let all = self.jobs.clone().try_acquire_owned().ok()?;
         Some((host, all))
@@ -712,6 +730,48 @@ mod tests {
             let other = Url::parse("https://EXAMPLE.org:8443/two").unwrap();
             assert!(net.try_permit(&other).is_none());
             assert!(net.wire.get().is_none());
+        }
+    }
+    #[test]
+    fn finished_bodies_release_slots_before_the_publication_future_runs() {
+        use crate::source::recorded::block_on;
+
+        for enabled in [false, true] {
+            let exp = if enabled {
+                Experiments::default().with("CACHE_RELEASE_PERMITS", "1")
+            } else {
+                Experiments::default()
+            };
+            let net = Net::new(
+                Options {
+                    exp,
+                    offline: Offline::No,
+                    jobs: 2,
+                    credentials: Vec::new(),
+                    split: Splitting::Never,
+                },
+                Arc::default(),
+                Arc::default(),
+                Arc::new(|_| {}),
+            );
+            let url = Url::parse("https://example.org/file").unwrap();
+            block_on(async {
+                let mut permits = Some(net.permit(&url).await.unwrap());
+                assert_eq!(net.jobs.available_permits(), 1);
+                assert_eq!(net.slots(&url).available_permits(), 3);
+                let value = net
+                    .after_body(&mut permits, async {
+                        assert_eq!(net.jobs.available_permits(), if enabled { 2 } else { 1 });
+                        assert_eq!(
+                            net.slots(&url).available_permits(),
+                            if enabled { 4 } else { 3 }
+                        );
+                        "published"
+                    })
+                    .await;
+                assert_eq!(value, "published");
+                assert_eq!(permits.is_none(), enabled);
+            });
         }
     }
 }
