@@ -43,8 +43,19 @@ impl Parents {
         let root = if let Some(root) = self.root.get() {
             Arc::clone(root)
         } else {
-            let mut handles = lock_chain(root, make, !real_root)?;
-            let path = fs::canonicalize(root)?;
+            let absolute = std::path::absolute(root)?;
+            let selected =
+                if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
+                    if make {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::canonicalize(parent)?.join(name)
+                } else {
+                    absolute
+                };
+            // aliases above the selected root are allowed; its own link policy is unchanged.
+            let mut handles = lock_chain(&selected, make, !real_root)?;
+            let path = fs::canonicalize(&selected)?;
             handles.extend(lock_chain(&path, false, false)?);
             let opened = Arc::new(Root {
                 path,

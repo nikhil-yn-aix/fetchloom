@@ -1569,3 +1569,21 @@ fn readonly_windows_placement_tries_hardlinks_before_clones() {
     );
     assert!(is_read_only(&root.join("file")));
 }
+
+#[test]
+fn aliases_above_the_selected_root_keep_their_filesystem_meaning() {
+    let (folder, object) = cache(true);
+    let real = folder.path().join("real");
+    let alias = folder.path().join("alias");
+    fs::create_dir(&real).unwrap();
+    if !link_folder(&real, &alias) {
+        return;
+    }
+    let root = alias.join("data");
+    let mut placer = Placer::new(&root);
+    placer.place(&object, &root.join("file"), false).unwrap();
+    assert_eq!(
+        fs::read_to_string(real.join("data/file")).unwrap(),
+        CONTENTS
+    );
+}
