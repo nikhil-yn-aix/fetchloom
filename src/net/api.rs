@@ -109,9 +109,13 @@ impl Net {
                 .and_then(|value: &header::HeaderValue| value.to_str().ok())
                 .map(str::to_owned)
         };
-        let next = text(header::LINK)
-            .and_then(|value| next_link(&value))
-            .and_then(|link| response.url().join(&link).ok());
+        let next = response
+            .headers()
+            .get_all(header::LINK)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .filter_map(next_link)
+            .find_map(|link| response.url().join(&link).ok());
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let final_url = response.url().clone();
         let mut body = Vec::new();
@@ -211,20 +215,67 @@ fn local_test_server(variable: &str) -> Option<Url> {
 
 /// the target of the `rel="next"` link in a `Link` header.
 fn next_link(value: &str) -> Option<String> {
-    value.split(',').find_map(|link| {
-        let (target, params) = link.trim().split_once(';')?;
-        let is_next = params.split(';').any(|param| {
-            let param = param.trim().to_ascii_lowercase();
-            param == "rel=\"next\"" || param == "rel=next"
-        });
-        is_next.then(|| {
-            target
-                .trim()
-                .trim_start_matches('<')
-                .trim_end_matches('>')
-                .to_owned()
-        })
+    link_fields(value, ',').find_map(|link| {
+        let (target, params) = link.trim().strip_prefix('<')?.split_once('>')?;
+        let mut relation = None;
+        for param in link_fields(params, ';').skip(1) {
+            let Some((name, value)) = param.trim().split_once('=') else {
+                continue;
+            };
+            if name.trim().eq_ignore_ascii_case("anchor") {
+                return None;
+            }
+            // RFC 8288 ignores later rel parameters on the same link.
+            if name.trim().eq_ignore_ascii_case("rel") && relation.is_none() {
+                relation = Some(link_value(value.trim())?);
+            }
+        }
+        relation?
+            .split_ascii_whitespace()
+            .any(|value| value.eq_ignore_ascii_case("next"))
+            .then(|| target.to_owned())
     })
+}
+
+fn link_fields(value: &str, separator: char) -> impl Iterator<Item = &str> {
+    let (mut quoted, mut escaped, mut target) = (false, false, false);
+    value.split(move |character| {
+        if escaped {
+            escaped = false;
+        } else if quoted && character == '\\' {
+            escaped = true;
+        } else if character == '"' && !target {
+            quoted = !quoted;
+        } else if !quoted {
+            match character {
+                '<' => target = true,
+                '>' => target = false,
+                _ if character == separator && !target => return true,
+                _ => {}
+            }
+        }
+        false
+    })
+}
+
+fn link_value(value: &str) -> Option<Cow<'_, str>> {
+    let Some(quoted) = value.strip_prefix('"') else {
+        return Some(Cow::Borrowed(value));
+    };
+    let quoted = quoted.strip_suffix('"')?;
+    if !quoted.contains('\\') {
+        return Some(Cow::Borrowed(quoted));
+    }
+    let mut decoded = String::new();
+    let mut characters = quoted.chars();
+    while let Some(character) = characters.next() {
+        decoded.push(if character == '\\' {
+            characters.next()?
+        } else {
+            character
+        });
+    }
+    Some(Cow::Owned(decoded))
 }
 
 #[cfg(test)]
@@ -509,5 +560,32 @@ mod tests {
             next_link("<https://x/2>; rel=next").as_deref(),
             Some("https://x/2")
         );
+    }
+
+    #[test]
+    fn pagination_keeps_bracketed_targets_and_relation_lists() {
+        for (value, wanted) in [
+            (
+                r#"<https://example.org/items?cursor=a,b>; rel="next""#,
+                Some("https://example.org/items?cursor=a,b"),
+            ),
+            (r#"<page2>; rel="next last""#, Some("page2")),
+            (r#"<page2>; title="a,b;c"; rel="n\ext last""#, Some("page2")),
+            (r#"<page2>; rel=prev; rel=next"#, None),
+            (r#"<page2>; anchor="/another"; rel=next"#, None),
+        ] {
+            assert_eq!(next_link(value).as_deref(), wanted, "{value}");
+        }
+    }
+
+    #[test]
+    fn pagination_reads_each_link_header_field() {
+        let (url, _) = serve(vec![reply(
+            "200 OK",
+            "Link: <page0>; rel=prev\r\nLink: <page2>; rel=next\r\n",
+            b"[]",
+        )]);
+        let response = block_on(net(&url).get(&url)).unwrap();
+        assert_eq!(response.next, Some(url.join("page2").unwrap()));
     }
 }
