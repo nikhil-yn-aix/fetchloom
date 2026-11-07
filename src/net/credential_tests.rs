@@ -85,6 +85,11 @@ fn transport() -> reqwest::Client {
 }
 
 fn server(locations: &[String]) -> (Url, JoinHandle<Vec<Option<String>>>) {
+    server_header(locations, "authorization")
+}
+
+fn server_header(locations: &[String], header: &str) -> (Url, JoinHandle<Vec<Option<String>>>) {
+    let header = header.to_owned();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let local = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
     let locations = locations.to_vec();
@@ -100,7 +105,7 @@ fn server(locations: &[String]) -> (Url, JoinHandle<Vec<Option<String>>>) {
             }
             credentials.push(String::from_utf8_lossy(&head).lines().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("authorization")
+                name.eq_ignore_ascii_case(&header)
                     .then(|| value.trim().to_owned())
             }));
             let answer = match locations.get(index) {
@@ -323,4 +328,153 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
     }));
     assert!(answer.is_ok());
     assert_eq!(serving.join().unwrap(), [None, None, None, None]);
+}
+
+fn verification_net(credentials: Vec<Credential>) -> Net {
+    Net::new(
+        Options {
+            exp: crate::exp::Experiments::default(),
+            offline: Offline::No,
+            jobs: 1,
+            credentials,
+            split: Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    )
+}
+
+fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Vec<Option<String>> {
+    let start = Url::parse(start).unwrap();
+    let hosts = std::iter::once(start.clone())
+        .chain(hops.iter().map(|hop| Url::parse(hop).unwrap()))
+        .filter_map(|url| url.host_str().map(str::to_owned));
+    net.trust(hosts);
+    let client = transport();
+    let (local, serving) = server_header(hops, header);
+    let answer = block_on(net.send(&start, |request| {
+        let request = request.build().unwrap();
+        client.get(local.clone()).headers(request.headers().clone())
+    }));
+    assert!(answer.is_ok(), "the local redirect chain must finish");
+    serving.join().unwrap()
+}
+
+#[test]
+fn wave1_configured_dataverse_keys_do_not_return_after_an_origin_change() {
+    for (owner, other_port) in [("dv.lab", "dv.lab:8443"), ("dv.lab:8443", "dv.lab")] {
+        let configured = format!("https://{owner}");
+        let var = |name: &str| match name {
+            "DATAVERSE_API_TOKEN" => Some(OsString::from("wave1-dataverse-sentinel")),
+            "DATAVERSE_URL" => Some(OsString::from(&configured)),
+            _ => None,
+        };
+        for away in [
+            "https://elsewhere.lab:8443/away".to_owned(),
+            format!("https://{other_port}/away"),
+            format!("http://{owner}/away"),
+        ] {
+            let credentials = crate::auth::credentials(&var);
+            assert_eq!(credentials.len(), 1);
+            let net = verification_net(credentials);
+            let start = format!("https://{owner}/start");
+            let hops = [
+                format!("https://{owner}/same"),
+                away,
+                format!("https://{owner}/back"),
+            ];
+            assert_eq!(
+                redirect_headers(&net, &start, &hops, "x-dataverse-key"),
+                [
+                    Some("wave1-dataverse-sentinel".to_owned()),
+                    Some("wave1-dataverse-sentinel".to_owned()),
+                    None,
+                    None
+                ],
+                "{start}: {hops:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn wave1_netrc_logins_return_only_to_their_own_https_host_and_port() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("netrc");
+    for (owner, other_port) in [
+        ("login.lab", "login.lab:8443"),
+        ("login.lab:8443", "login.lab"),
+    ] {
+        std::fs::write(&path, format!("machine {owner} login ada password pw\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let var = |name: &str| (name == "NETRC").then(|| path.clone().into_os_string());
+        let credentials = crate::auth::credentials(&var);
+        assert_eq!(credentials.len(), 1);
+        let net = verification_net(credentials);
+        let hops = [
+            format!("https://{owner}/login"),
+            format!("https://{other_port}/other-port"),
+            format!("http://{owner}/downgrade"),
+            "https://other.lab/foreign".to_owned(),
+            "https://sub.login.lab/subdomain".to_owned(),
+            format!("https://{owner}/return"),
+        ];
+        let value = Some("Basic YWRhOnB3".to_owned());
+        assert_eq!(
+            redirect_headers(&net, "https://archive.lab/start", &hops, "authorization"),
+            [None, value.clone(), None, None, None, None, value],
+            "{owner}",
+        );
+    }
+}
+
+#[test]
+fn wave1_osf_exceptions_keep_their_own_scheme_host_and_port_boundaries() {
+    let token = "wave1-osf-sentinel";
+    for start in [
+        "https://api.osf.io/start",
+        "https://unrelated.example/start",
+    ] {
+        let var = |name: &str| (name == "OSF_TOKEN").then(|| OsString::from(token));
+        let credentials = crate::auth::credentials(&var);
+        assert_eq!(credentials.len(), 3);
+        let net = verification_net(credentials);
+        let hops: Vec<_> = [
+            "https://osf.io/download",
+            "https://files.osf.io/download",
+            "https://api.osf.io/back",
+            "http://osf.io/downgrade",
+            "https://files.osf.io:8443/other-port",
+            "https://sub.files.osf.io/subdomain",
+            "https://files.osf.io.evil.example/foreign",
+            "https://files.osf.io/back",
+        ]
+        .iter()
+        .map(|hop| (*hop).to_owned())
+        .collect();
+        let value = Some(format!("Bearer {token}"));
+        let first = start
+            .starts_with("https://api.osf.io/")
+            .then(|| format!("Bearer {token}"));
+        assert_eq!(
+            redirect_headers(&net, start, &hops, "authorization"),
+            [
+                first,
+                value.clone(),
+                value.clone(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                value
+            ],
+            "{start}",
+        );
+    }
 }
