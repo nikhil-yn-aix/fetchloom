@@ -66,6 +66,18 @@ struct Publishing {
     unflushed: bool,
 }
 
+impl Publishing {
+    fn result(&self) -> io::Result<()> {
+        match &self.failed {
+            Some(error) => Err(match error.raw_os_error() {
+                Some(code) => io::Error::from_raw_os_error(code),
+                None => io::Error::new(error.kind(), error.to_string()),
+            }),
+            None => Ok(()),
+        }
+    }
+}
+
 impl Finished {
     /// puts the download in place under its hash, then lets other processes claim its link.
     pub(super) fn publish(self, cache: &Cache) -> io::Result<Stored> {
@@ -226,22 +238,25 @@ impl Cache {
         drop(pending);
     }
 
-    /// puts a deferred download of `url` in place now, with its own flush, so another download
-    /// of the same link in this batch can claim it instead of waiting for the batch to end.
+    /// publishes a waiting download through the batch's original flush and error guard.
     /// false when no download of `url` waits.
     pub(crate) fn publish_download_of(&self, url: &str) -> io::Result<bool> {
-        let finished = {
-            let mut pending = lock(&self.deferred.pending);
-            let Some(batch) = pending.as_mut() else {
-                return Ok(false);
-            };
-            let Some(index) = batch.finished.iter().position(|item| item.url == url) else {
-                return Ok(false);
-            };
-            batch.finished.swap_remove(index)
+        let mut pending = lock(&self.deferred.pending);
+        let Some(batch) = pending.as_mut() else {
+            return Ok(false);
         };
-        File::open(&finished.bytes)?.sync_all()?;
-        finished.publish(self)?;
+        let Some(index) = batch.finished.iter().position(|item| item.url == url) else {
+            return Ok(false);
+        };
+        let group = Group {
+            #[cfg(target_os = "linux")]
+            batch: Arc::clone(&batch.batch),
+            finished: vec![batch.finished.swap_remove(index)],
+        };
+        let mut publishing = lock(&self.deferred.publishing);
+        drop(pending);
+        self.publish_group(&mut publishing, group);
+        publishing.result()?;
         Ok(true)
     }
 

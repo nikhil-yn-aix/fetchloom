@@ -63,6 +63,8 @@ partials use a separate OS lock file so windows' mandatory locks do not prevent 
 
 resume accepts only writable plain files; on unix they must belong to the current user and have one hardlink. checkpoints save the prefix digest and independently hashed ranges beyond it about once a second. they are hints: a torn or missing record loses reuse, and resumed bytes are rehashed. checkpoints, URL records and MD5 indexes skip their own flush; objects and safety-critical records retain durability.
 
+an early publication for another download of the same URL uses the original batch flush handle and the same publication lock. a failed batch flush prevents early publication too. discarding a partial waits for that publication before its path can be reused.
+
 `HashPipe` drains before its claim is released. see the [download pipeline](network.md#download-pipeline) for prefix barriers and final flush ordering.
 
 ### retention and cleanup

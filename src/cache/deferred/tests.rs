@@ -189,3 +189,27 @@ fn a_second_download_of_the_same_link_puts_the_first_in_place_instead_of_waiting
     assert!(matches!(cache.claim(url).unwrap(), Claim::Owned(_)));
     cache.publish_downloads().unwrap();
 }
+
+#[test]
+fn an_early_publication_keeps_a_failed_flush_sticky() {
+    let (_dir, cache) = cache();
+    deferring(&cache);
+    let url = "https://example.org/after-failed-flush";
+    let stored = finished(&cache, url, b"unflushed");
+    *lock(&cache.deferred.publishing) = Publishing {
+        failed: Some(io::Error::new(
+            io::ErrorKind::StorageFull,
+            "batch flush failed",
+        )),
+        unflushed: true,
+    };
+
+    let error = cache.publish_download_of(url).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+    assert!(!cache.object_path(&stored.digest).exists());
+    assert_eq!(
+        cache.publish_downloads().unwrap_err().kind(),
+        io::ErrorKind::StorageFull
+    );
+}
