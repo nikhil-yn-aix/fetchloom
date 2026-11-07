@@ -90,6 +90,8 @@ fetchloom cache gc --now --dry-run
 
 unreadable objects stay unmarked with warnings. failures to write change marks are also reported. JSON retains counts and findings in `result` beside the error. unreadable directories can hide objects from the totals; counts cover only objects whose metadata could be read.
 
+sync and get refuse unreadable change marks with `local.io` (exit 50), because a read failure cannot show that cached bytes are safe. fix the named path's storage or permissions, verify the cache and retry; do not delete the marks to bypass the error.
+
 verification does not check independent copies in `data/`. after repairing cache damage, sync each project that needs the affected files. a project whose own linked file shows changed bytes keeps it as an edit; save any needed changes and use `fetchloom sync --force` there. see [shared edits](sync.md#local-changes). cache scans check cancellation between entries; verification also checks between hash reads.
 
 ## exit codes

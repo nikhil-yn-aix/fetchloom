@@ -234,7 +234,7 @@ impl Cache {
         if !is_plain(&metadata) || size.is_some_and(|size| metadata.len() != size) {
             return None;
         }
-        if changed::doubted(&metadata, self.changed_at(digest))
+        if changed::doubted(&metadata, self.changed_at(digest).ok()?)
             && hash_object(&path).ok()? != *digest
         {
             return None;
@@ -797,7 +797,7 @@ pub(crate) mod tests {
             let other = Cache::open(cache.root().to_path_buf()).unwrap();
             for run in [&cache, &other] {
                 assert!(
-                    run.trusted(&stored.digest, Some(4), &run.doubts())
+                    run.trusted(&stored.digest, Some(4), &run.doubts().unwrap())
                         .unwrap()
                         .is_none()
                 );
@@ -840,8 +840,8 @@ pub(crate) mod tests {
                         .new
                 );
                 assert_eq!(fs::read(&object).unwrap(), b"good");
-                let marked =
-                    UNIX_EPOCH + Duration::from_nanos(cache.changed_at(&stored.digest).unwrap());
+                let marked = UNIX_EPOCH
+                    + Duration::from_nanos(cache.changed_at(&stored.digest).unwrap().unwrap());
                 assert!(marked < fs::metadata(&object).unwrap().modified().unwrap());
                 marked
             };
@@ -885,7 +885,7 @@ pub(crate) mod tests {
             let metadata = fs::metadata(&object).unwrap();
             assert!(!changed::doubted(
                 &metadata,
-                cache.changed_at(&stored.digest)
+                cache.changed_at(&stored.digest).unwrap()
             ));
         }
     }
@@ -1012,7 +1012,7 @@ pub(crate) mod tests {
         assert!(published.is_err());
         assert_eq!(cache.find(&digest, Some(4)), None);
         assert!(matches!(
-            cache.trusted(&digest, Some(4), &cache.doubts()),
+            cache.trusted(&digest, Some(4), &cache.doubts().unwrap()),
             Ok(None)
         ));
     }

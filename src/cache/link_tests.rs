@@ -190,7 +190,7 @@ fn a_changed_folder_swapped_for_a_link_never_redirects_work() {
     link_folder(&outside, &folder);
 
     assert!(cache.mark_changed(&digest).is_err());
-    assert!(cache.changed().is_empty());
+    assert!(cache.marks().is_err());
     cache.forget_changed(&std::collections::HashSet::new());
 
     assert_eq!(fs::read(kept).unwrap(), b"keep these bytes");
@@ -312,7 +312,7 @@ fn trusting_never_hashes_an_object_swapped_for_a_symlink() {
     fs::rename(&object, dir.path().join("original")).unwrap();
     std::os::unix::fs::symlink(&outside, &object).unwrap();
 
-    let found = cache.trusted(&stored.digest, Some(4), &cache.doubts());
+    let found = cache.trusted(&stored.digest, Some(4), &cache.doubts().unwrap());
 
     assert!(!matches!(found, Ok(Some(_))));
     assert_eq!(fs::read(&outside).unwrap(), b"good");

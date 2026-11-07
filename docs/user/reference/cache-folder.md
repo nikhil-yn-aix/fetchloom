@@ -88,4 +88,6 @@ project-local lock and placement records live in [the project folder](project-fo
 
 [cache sharing](../concepts.md#cache) covers per-user caches and trusted group access.
 
+an unreadable `changed/` folder or change mark stops sync and get with `local.io` (exit 50), before they place files or record a completed sync. fix storage access and read/search permissions, run `fetchloom cache verify`, then retry. keep the marks: deleting them can hide damage from another project's hardlinks.
+
 objects are not rehashed on every use. run `fetchloom cache verify` to check their bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.

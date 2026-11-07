@@ -45,6 +45,8 @@ flowchart TD
 
 lookup checks that an object is a plain file and matches the expected size. a writable object, or an object no newer than the time its change mark puts in doubt, is doubtful and must be hashed before trusted placement. a mark's file time is when the change was found; a repair writes the replacement copy's time inside it only once the replacement holds the object's name, and doubt then reaches only objects written before that; until then, and after a failed repair, the empty mark keeps the old object in doubt. intact writable objects are sealed again; damaged objects remain marked until verified replacement bytes arrive.
 
+change marks are integrity metadata. only a missing folder or mark means no recorded doubt. directory enumeration, entry metadata and mark reads propagate other errors with the failed path; sync and get stop before placement or completion. hashing the cached object alone would not replace the missing history needed to audit already placed hardlinks. optional lookups such as `find` return no hit when the mark cannot be read.
+
 object hashing, gc and `cache verify` hashing, and copy input use `read_unfollowed`, and every gc removal first checks that no folder between it and the cache root became a link: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
 
 ### publication and repair
@@ -78,7 +80,7 @@ archive staging holds an OS lock until publication or discard. the next unpack o
 ## invariants and traps
 
 - never make a hardlinked cache object writable for an edit. every hardlink names the same bytes.
-- a failed damage-mark write is an error, not permission to place doubtful bytes.
+- a failed damage-mark read or write is an error, not permission to place doubtful bytes.
 - do not remove a changed object before good replacement bytes exist on hardlink-capable volumes.
 - windows read-only removal differs on NTFS, ReFS, exFAT and FAT32. `Volume` probes hardlink support before deciding whether clearing a flag is safe; a known hardlink never has its flag cleared for removal.
 - rejected downloads or failed publication can leave unreferenced complete objects. gc owns their later cleanup.

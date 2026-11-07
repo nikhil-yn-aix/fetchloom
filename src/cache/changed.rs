@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Cache, hash_object};
 use crate::digest::Sha256;
+use crate::error::Error;
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::is_plain;
 
@@ -107,41 +108,60 @@ impl Cache {
     #[cfg(test)]
     pub(crate) fn changed(&self) -> HashMap<Sha256, u64> {
         self.marks()
+            .unwrap()
             .into_iter()
             .map(|(digest, mark)| (digest, mark.found))
             .collect()
     }
 
     /// every object found changed, with the time an object of its name must be newer than to
-    /// be out of doubt, for [`Cache::trusted`].
-    pub(crate) fn doubts(&self) -> HashMap<Sha256, u64> {
-        self.marks()
+    /// be out of doubt, for [`Cache::trusted`]. unreadable marks stop trusted placement.
+    pub(crate) fn doubts(&self) -> Result<HashMap<Sha256, u64>, Error> {
+        Ok(self
+            .marks()?
             .into_iter()
             .map(|(digest, mark)| (digest, mark.doubt_since()))
-            .collect()
+            .collect())
     }
 
     /// every object found changed, with its mark.
-    pub(crate) fn marks(&self) -> HashMap<Sha256, Mark> {
+    ///
+    /// # Errors
+    /// returns an error when the marks folder, an entry or a mark cannot be read. only a missing
+    /// folder or mark means there is no recorded doubt.
+    pub(crate) fn marks(&self) -> Result<HashMap<Sha256, Mark>, Error> {
         let folder = self.changed_folder();
-        if !fs::symlink_metadata(&folder).is_ok_and(|metadata| {
-            let kind = metadata.file_type();
-            kind.is_dir() && !kind.is_symlink()
-        }) {
-            return HashMap::new();
-        }
-        fs::read_dir(folder)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|entry| {
-                if !entry.file_type().ok()?.is_file() {
-                    return None;
+        let metadata = match fs::symlink_metadata(&folder) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(err) => return Err(unreadable_mark(&folder, &err)),
+        };
+        found_folder(&folder, &metadata, FolderUse::Cache)
+            .map_err(|err| unreadable_mark(&folder, &err))?;
+        let entries = match fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(err) => return Err(unreadable_mark(&folder, &err)),
+        };
+        let mut marks = HashMap::new();
+        for entry in entries {
+            let entry = entry.map_err(|err| unreadable_mark(&folder, &err))?;
+            let Some(digest) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+                continue;
+            };
+            let path = entry.path();
+            let mark = entry
+                .metadata()
+                .and_then(|metadata| Mark::read(&path, &metadata));
+            match mark {
+                Ok(mark) => {
+                    marks.insert(digest, mark);
                 }
-                let digest = Sha256::from_hex(&entry.file_name().to_string_lossy())?;
-                Some((digest, Mark::read(&entry.path(), &entry.metadata().ok()?)?))
-            })
-            .collect()
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(unreadable_mark(&path, &err)),
+            }
+        }
+        Ok(marks)
     }
 
     /// forgets marks only after both the object and its projects no longer need them. a retained
@@ -185,9 +205,13 @@ impl Cache {
     }
 
     /// the time the object for `digest` must be newer than to be out of doubt, when it is marked.
-    pub(super) fn changed_at(&self, digest: &Sha256) -> Option<u64> {
+    pub(super) fn changed_at(&self, digest: &Sha256) -> Result<Option<u64>, Error> {
         let path = self.changed_folder().join(digest.hex());
-        Some(Mark::read(&path, &fs::metadata(&path).ok()?)?.doubt_since())
+        match fs::symlink_metadata(&path).and_then(|metadata| Mark::read(&path, &metadata)) {
+            Ok(mark) => Ok(Some(mark.doubt_since())),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(unreadable_mark(&path, &err)),
+        }
     }
 
     fn changed_folder(&self) -> PathBuf {
@@ -206,12 +230,16 @@ pub(crate) struct Mark {
 }
 
 impl Mark {
-    fn read(path: &Path, metadata: &fs::Metadata) -> Option<Mark> {
-        let replacement = fs::read_to_string(path)
-            .ok()
-            .and_then(|text| text.trim().parse().ok());
-        Some(Mark {
-            found: nanos(metadata.modified().ok()?),
+    fn read(path: &Path, metadata: &fs::Metadata) -> io::Result<Mark> {
+        if !is_plain(metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "a change mark must be a plain file",
+            ));
+        }
+        let replacement = fs::read_to_string(path)?.trim().parse().ok();
+        Ok(Mark {
+            found: nanos(metadata.modified()?),
             replacement,
         })
     }
@@ -223,6 +251,14 @@ impl Mark {
         self.replacement
             .map_or(self.found, |written| written.saturating_sub(3 * COARSE))
     }
+}
+
+fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
+    Error::io(
+        format_args!("could not read cache change marks at {}", path.display()),
+        err,
+    )
+    .help("check the cache storage and permissions, then run `fetchloom cache verify` and retry")
 }
 
 pub(super) fn doubted(metadata: &fs::Metadata, marked: Option<u64>) -> bool {
@@ -328,5 +364,60 @@ mod tests {
         cache.drop_object(&dropped).unwrap();
         cache.forget_changed(&HashSet::from([kept]));
         assert_eq!(cache.changed().into_keys().collect::<Vec<_>>(), [kept]);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_marks_never_make_an_object_trusted() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        for mode in [Some(0o111), Some(0o000), None] {
+            let (_dir, cache) = cache();
+            let stored = store(&cache, b"good");
+            let object = cache.object_path(&stored.digest);
+            fs::set_permissions(&object, fs::Permissions::from_mode(0o600)).unwrap();
+            fs::write(&object, b"evil").unwrap();
+            super::super::tests::seal(&object);
+            assert!(!cache.verify(&stored.digest).unwrap());
+            let folder = cache.changed_folder();
+            let path = if mode.is_some() {
+                folder
+            } else {
+                folder.join(stored.digest.hex())
+            };
+            let before = fs::metadata(&path).unwrap().permissions();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode.unwrap_or(0))).unwrap();
+            let marks = cache.doubts();
+            let found = cache.find(&stored.digest, Some(4));
+            let kept = cache.contains_for_gc(&stored.digest, 4, &crate::stop::Stop::default());
+            fs::set_permissions(&path, before).unwrap();
+            let error = marks.unwrap_err();
+            assert!(
+                error.message.contains(&path.display().to_string()),
+                "{error}"
+            );
+            assert_eq!(found, None);
+            if mode != Some(0o111) {
+                assert!(kept.is_err(), "{kept:?}");
+            } else {
+                assert!(!kept.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn missing_marks_are_empty_but_non_files_are_errors() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        fs::remove_dir(cache.changed_folder()).unwrap();
+        assert!(cache.marks().unwrap().is_empty());
+        assert_eq!(cache.changed_at(&stored.digest).unwrap(), None);
+        assert!(cache.find(&stored.digest, Some(4)).is_some());
+        fs::create_dir(cache.changed_folder()).unwrap();
+        fs::create_dir(cache.changed_folder().join(stored.digest.hex())).unwrap();
+        assert!(cache.marks().is_err());
+        assert!(cache.changed_at(&stored.digest).is_err());
+        assert!(cache.find(&stored.digest, Some(4)).is_none());
     }
 }

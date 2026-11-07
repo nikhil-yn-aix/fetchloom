@@ -649,3 +649,134 @@ fn cold_syncs_share_claims_without_waiting_for_each_other() -> Result {
     assert!(servers.iter().all(|server| server.requests().len() == 1));
     Ok(())
 }
+
+#[cfg(unix)]
+fn check_unreadable_change_marks(mode: Option<u32>) -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/good.bin",
+        vec![file(b"good", "\"v1\""), file(b"good", "\"v1\"")],
+    )?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.sample]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let prepared = sandbox.run(&["sync"])?;
+    assert!(prepared.status.success(), "{}", text(&prepared.stderr)?);
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(sandbox.work().join(".fetchloom/state"))?)?;
+    let digest = state["files"]["data/sample/good.bin"]["sha256"]
+        .as_str()
+        .ok_or("a placed file has a digest")?;
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&digest[..2])
+        .join(&digest[2..]);
+    crate::support::edit(&object, b"evil")?;
+    let mut permissions = fs::metadata(&object)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&object, permissions)?;
+    let verified = sandbox.run(&["--json", "cache", "verify"])?;
+    assert_eq!(
+        verified.status.code(),
+        Some(30),
+        "{}",
+        text(&verified.stdout)?
+    );
+    let copier = sandbox.folder("copier")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), copier.join(name))?;
+    }
+    let changed = sandbox.cache().join("changed");
+    let unreadable = if mode.is_some() {
+        changed.clone()
+    } else {
+        changed.join(digest)
+    };
+    let before = fs::metadata(&unreadable)?.permissions();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(mode.unwrap_or(0)))?;
+    let output = sandbox
+        .command_in(&copier, &["--json", "sync", "--offline"])
+        .output();
+    fs::set_permissions(&unreadable, before)?;
+    let output = output?;
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(50), "{report}");
+    assert_eq!(report["errors"][0]["kind"], "local.io", "{report}");
+    assert!(
+        report
+            .to_string()
+            .contains(&unreadable.display().to_string()),
+        "{report}"
+    );
+    assert!(
+        !copier.join("data/sample/good.bin").exists(),
+        "unknown cache bytes were placed"
+    );
+    let state_path = copier.join(".fetchloom/state");
+    if state_path.exists() {
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(&state_path)?)?;
+        assert_ne!(state["synced"]["complete"], true, "{state}");
+    }
+    let recovered = sandbox.command_in(&copier, &["--json", "sync"]).output()?;
+    assert_eq!(
+        recovered.status.code(),
+        Some(0),
+        "{}",
+        text(&recovered.stdout)?
+    );
+    assert_eq!(fs::read(copier.join("data/sample/good.bin"))?, b"good");
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    assert_eq!(state["synced"]["complete"], true, "{state}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn unenumerable_change_marks_stop_sync_before_placing() -> Result {
+    check_unreadable_change_marks(Some(0o111))
+}
+
+#[cfg(unix)]
+#[test]
+fn inaccessible_change_marks_stop_sync_before_placing() -> Result {
+    check_unreadable_change_marks(Some(0o000))
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_change_mark_stops_sync_before_placing() -> Result {
+    check_unreadable_change_marks(None)
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_change_marks_stop_a_settled_sync() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/good.bin", vec![file(b"good", "\"v1\"")])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.sample]\nref = \"{}\"\n", server.url),
+    )?;
+    assert!(sandbox.run(&["sync"])?.status.success());
+    let state_path = sandbox.work().join(".fetchloom/state");
+    let state = fs::read(&state_path)?;
+    let changed = sandbox.cache().join("changed");
+    let before = fs::metadata(&changed)?.permissions();
+    fs::set_permissions(&changed, fs::Permissions::from_mode(0o111))?;
+    let output = sandbox.run(&["--json", "sync", "--offline"]);
+    fs::set_permissions(&changed, before)?;
+    let output = output?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    assert_eq!(fs::read(state_path)?, state);
+    Ok(())
+}

@@ -866,7 +866,7 @@ fn known(
 /// hashes the cached objects in doubt that this run would take for `files`, and those an archive
 /// among them unpacked to, before anything downloads, so changed bytes are marked for replacement.
 fn vet(cache: &Cache, files: &[Remote], names: &[String], extract: bool) -> Result<(), Error> {
-    let marks = cache.doubts();
+    let marks = cache.doubts()?;
     for (remote, name) in files.iter().zip(names) {
         let record = cache.url_record(remote.url.as_str());
         let Some((digest, size)) = known(cache, remote, record.as_ref()) else {

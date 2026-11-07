@@ -224,12 +224,13 @@ impl Survey {
     /// within a coarse clock's step of that time is in doubt too, as its time may be cut down. a
     /// link that is the very file a repair put in place is that copy, which the cache trusts; a
     /// shared time alone proves nothing, since two files can carry the same coarse time.
-    pub(crate) fn doubted(&self, root: &Path, cache: &Cache) -> Vec<String> {
-        let marks = cache.marks();
+    pub(crate) fn doubted(&self, root: &Path, cache: &Cache) -> Result<Vec<String>, Error> {
+        let marks = cache.marks()?;
         if marks.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        self.state
+        Ok(self
+            .state
             .files
             .iter()
             .filter(|(path, placed)| {
@@ -247,13 +248,13 @@ impl Survey {
                     && !self.edited.contains(*path)
             })
             .map(|(path, _)| path.clone())
-            .collect()
+            .collect())
     }
 
     /// hashes the files a mark puts in doubt, separating changed links from intact ones.
     /// an unreadable file stops the check.
     pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) -> Result<(), Error> {
-        let doubted = self.doubted(root, cache);
+        let doubted = self.doubted(root, cache)?;
         if doubted.is_empty() {
             return Ok(());
         }
@@ -642,7 +643,7 @@ mod tests {
         .unwrap();
         cache.mark_changed(&good.digest).unwrap();
         cache.mark_changed(&bad.digest).unwrap();
-        assert_eq!(survey.doubted(&project.root, &cache).len(), 2);
+        assert_eq!(survey.doubted(&project.root, &cache).unwrap().len(), 2);
         survey.check_doubted(&project.root, &cache).unwrap();
         assert_eq!(survey.elsewhere, HashSet::from(["data/changed".to_owned()]));
         assert_eq!(survey.vouched, HashSet::from(["data/intact".to_owned()]));
@@ -704,7 +705,7 @@ mod tests {
                 .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds))
                 .unwrap();
             assert_eq!(
-                survey.doubted(&project.root, &cache).len(),
+                survey.doubted(&project.root, &cache).unwrap().len(),
                 usize::from(doubted),
                 "{seconds}"
             );
@@ -761,7 +762,7 @@ mod tests {
         let mut survey = Survey::read(&project, "data", Threads::default());
         survey.state.files.insert("data/old".to_owned(), old);
         survey.state.files.insert("data/new".to_owned(), new);
-        assert_eq!(survey.doubted(&project.root, &cache), ["data/old"]);
+        assert_eq!(survey.doubted(&project.root, &cache).unwrap(), ["data/old"]);
 
         // a coarse clock can give the old copy the very time of the new one; only the file
         // itself says which copy a link names
@@ -792,7 +793,7 @@ mod tests {
             "data/new".to_owned(),
             crate::project::state::Placed { checked, ..new },
         );
-        assert_eq!(survey.doubted(&project.root, &cache), ["data/old"]);
+        assert_eq!(survey.doubted(&project.root, &cache).unwrap(), ["data/old"]);
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default

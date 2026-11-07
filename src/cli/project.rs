@@ -955,7 +955,7 @@ fn ready(
     let survey = Survey::read(project, &manifest.data_dir, context.threads);
     let cache = open_cache()?;
     // a file a mark puts in doubt waits for a sync, which hashes it once and records it
-    let doubted = survey.doubted(&project.root, &cache);
+    let doubted = survey.doubted(&project.root, &cache)?;
     let planned = plan::from_cache(manifest, &lock, &cache)?;
     if planned.unknown.iter().any(|(dataset, _)| *dataset == name) {
         return Ok(false);
