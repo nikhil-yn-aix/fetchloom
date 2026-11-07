@@ -11,7 +11,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use anstyle::Style as Paint;
-use indicatif::MultiProgress;
+use indicatif::{MultiProgress, ProgressDrawTarget};
 use serde::Serialize;
 
 pub(crate) use progress::{Bar, Ticker, Wait};
@@ -37,6 +37,10 @@ pub(crate) struct Output {
     level: Level,
     json: bool,
     bars: Option<MultiProgress>,
+    /// lines told while a person answers a question, written once the answer is in.
+    held: Mutex<Option<Vec<String>>>,
+    /// taken while a question waits, so two never share the terminal.
+    question: Mutex<()>,
     warnings: Mutex<Vec<String>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
     hints: bool,
@@ -128,6 +132,8 @@ impl Output {
             level,
             json,
             bars,
+            held: Mutex::new(None),
+            question: Mutex::new(()),
             warnings: Mutex::new(Vec::new()),
             hints: true,
         };
@@ -450,10 +456,7 @@ impl Output {
             let _ = terminal.write_line(selected);
             answer
         };
-        match &self.bars {
-            Some(bars) => bars.suspend(ask),
-            None => ask(),
-        }
+        self.asking(ask)
     }
 
     /// asks for a line of text, such as a username, or returns none when nobody can answer.
@@ -504,10 +507,7 @@ impl Output {
             }
             Ok(Some(String::new()))
         };
-        match &self.bars {
-            Some(bars) => bars.suspend(ask),
-            None => ask(),
-        }
+        self.asking(ask)
     }
 
     /// a line fetchloom wrote itself, such as sign-in steps holding [`Output::link`]s. text from
@@ -540,10 +540,7 @@ impl Output {
             return Ok(None);
         }
         let ask = || picker::choose(question, options, footer, self.style);
-        match &self.bars {
-            Some(bars) => bars.suspend(ask),
-            None => ask(),
-        }
+        self.asking(ask)
     }
 
     /// the counters at the end of a run, for `-v`.
@@ -622,8 +619,40 @@ impl Output {
         !self.json && self.level >= level
     }
 
+    /// runs `ask`, a question to a person, with the bars cleared and hidden but free to move.
+    /// holding their lock until a person answers, as suspending them does, would stop every
+    /// download that reports progress meanwhile. lines told meanwhile wait for the answer.
+    fn asking<R>(&self, ask: impl FnOnce() -> R) -> R {
+        let Some(bars) = &self.bars else {
+            return ask();
+        };
+        let _alone = self.question.lock().unwrap_or_else(PoisonError::into_inner);
+        *self.held.lock().unwrap_or_else(PoisonError::into_inner) = Some(Vec::new());
+        let _ = bars.clear();
+        bars.set_draw_target(ProgressDrawTarget::hidden());
+        let answer = ask();
+        bars.set_draw_target(ProgressDrawTarget::stderr());
+        let held = self
+            .held
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .unwrap_or_default();
+        bars.suspend(|| {
+            for line in &held {
+                write_line(self.style.color, line);
+            }
+        });
+        answer
+    }
+
     fn line(&self, text: &str) {
         let text = shown(text, self.style.unicode);
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(waiting) = held.as_mut() {
+            waiting.push(text.into_owned());
+            return;
+        }
         let write = || write_line(self.style.color, &text);
         match &self.bars {
             Some(bars) => bars.suspend(write),
@@ -1310,5 +1339,35 @@ mod tests {
             !shows(false, Level::Normal, false),
             "stdout or stderr is not a terminal"
         );
+    }
+
+    #[test]
+    fn bars_keep_moving_while_a_question_waits() {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: true,
+            watched: true,
+            links: false,
+        };
+        let output = Output::new(style, Level::Normal, false, false);
+        let bars = output.bars.as_ref().unwrap();
+        let bar = bars.add(indicatif::ProgressBar::new(1000));
+        let moved = output.asking(|| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let other = bar.clone();
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    other.inc(1);
+                    other.tick();
+                }
+                let _ = sender.send(());
+            });
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .is_ok()
+        });
+        assert!(moved, "a download stood still while the question waited");
+        assert_eq!(bar.position(), 100);
     }
 }
