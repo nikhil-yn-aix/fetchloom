@@ -299,14 +299,25 @@ fn components_are_counted_in_the_node_request_and_told() {
         .on(NODE, 200, serde_json::to_vec(&value).unwrap())
         .fixture(FILES, "osf/root.json");
     let (listing, logs) = logged(|| block_on(Node::parse("ezcuj").unwrap().resolve(&recorded)));
-    assert_eq!(listing.unwrap().files, [expected_file()]);
-    assert!(logs.contains("WARN"), "{logs}");
-    assert!(logs.contains("49 components"), "{logs}");
+    let listing = listing.unwrap();
+    assert_eq!(listing.files, [expected_file()]);
+    assert_eq!(
+        listing.warnings,
+        [
+            "osf:ezcuj has 49 components, and their files are not listed with it. add a component as a dataset of its own, as osf:<its id>"
+        ]
+    );
+    assert!(
+        !logs.contains("component"),
+        "told on screen, not in logs: {logs}"
+    );
     assert_eq!(recorded.asked(), [NODE, FILES]);
     let quiet = Recorded::default()
         .fixture(NODE, "osf/embedded.json")
         .fixture(FILES, "osf/root.json");
     let (listing, logs) = logged(|| block_on(Node::parse("ezcuj").unwrap().resolve(&quiet)));
-    assert_eq!(listing.unwrap().files, [expected_file()]);
+    let listing = listing.unwrap();
+    assert_eq!(listing.files, [expected_file()]);
+    assert_eq!(listing.warnings, Vec::<String>::new());
     assert!(!logs.contains("component"), "{logs}");
 }

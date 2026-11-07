@@ -199,6 +199,15 @@ impl Output {
         }
     }
 
+    /// the warnings told so far, as `--json` lists them.
+    #[cfg(test)]
+    pub(crate) fn warned(&self) -> Vec<String> {
+        self.warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// the closing line of a run that worked.
     pub(crate) fn done(&self, verb: &str, text: &str) {
         if self.tells(Level::Normal) {

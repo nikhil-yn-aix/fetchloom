@@ -167,6 +167,7 @@ impl Prefix {
             doi: None,
             files,
             unavailable: Vec::new(),
+            warnings: Vec::new(),
         })
     }
 

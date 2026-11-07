@@ -630,8 +630,16 @@ fn short_revision(reference: String) -> String {
     }
 }
 
-/// prints what a reference resolved to, before any file of it downloads.
+/// prints what a reference resolved to, before any file of it downloads, then what its source
+/// warned about.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
+    tell_facts(output, listing);
+    for warning in &listing.warnings {
+        output.warn(warning);
+    }
+}
+
+fn tell_facts(output: &Output, listing: &Listing) {
     // a plain link has nothing to tell before its bytes arrive
     if matches!(listing.resolved, Reference::Url(_)) {
         return;
@@ -1004,6 +1012,23 @@ mod tests {
             tell_upgrades(&context.output, &old, &old),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn a_source_warning_is_told_with_its_listing() {
+        let context = context();
+        let url = Url::parse("https://example.org/data.csv").unwrap();
+        let listing = Listing {
+            resolved: Reference::Url(url),
+            title: None,
+            license: None,
+            doi: None,
+            files: Vec::new(),
+            unavailable: Vec::new(),
+            warnings: vec!["osf:ezcuj has 2 components".to_owned()],
+        };
+        tell_resolved(&context.output, &listing);
+        assert_eq!(context.output.warned(), ["osf:ezcuj has 2 components"]);
     }
 
     #[test]

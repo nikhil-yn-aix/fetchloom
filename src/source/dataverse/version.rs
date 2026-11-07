@@ -129,6 +129,7 @@ impl Version {
             .map(|(_, doi)| doi.to_owned());
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Dataverse(Dataset {
                 host: dataset.host.clone(),
                 item,

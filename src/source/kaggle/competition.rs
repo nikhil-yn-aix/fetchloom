@@ -123,6 +123,7 @@ impl Competition {
         }
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::KaggleCompetition(named),
             title: Some(about.title).filter(|title| !title.is_empty()),
             license: Some(about.license_name)

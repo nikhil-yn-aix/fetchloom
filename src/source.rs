@@ -94,6 +94,9 @@ pub(crate) struct Listing {
     pub(crate) doi: Option<String>,
     pub(crate) files: Vec<Remote>,
     pub(crate) unavailable: Vec<Unavailable>,
+    /// what a person should know about the listing, told as warnings once it resolves, such as
+    /// files it leaves out.
+    pub(crate) warnings: Vec<String>,
 }
 
 impl Listing {
@@ -513,6 +516,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
 fn single(url: &Url) -> Listing {
     Listing {
         unavailable: Vec::new(),
+        warnings: Vec::new(),
         resolved: Reference::Url(url.clone()),
         title: None,
         license: None,
@@ -962,6 +966,7 @@ mod tests {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             files: paths
                 .iter()
                 .map(|path| Remote {

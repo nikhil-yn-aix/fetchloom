@@ -119,6 +119,7 @@ impl Article {
         }
         Ok(Listing {
             unavailable,
+            warnings: Vec::new(),
             resolved: Reference::Figshare(resolved),
             title: Some(answer.title),
             license: answer.license.map(|license| license.name),

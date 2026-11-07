@@ -88,13 +88,14 @@ impl Node {
                 root.query_pairs_mut().append_pair("page[size]", "100");
                 let files = walk::files(self, api, root).await?;
                 let components = metadata.components();
+                let mut listing = metadata.listing(self, files);
                 if components > 0 {
-                    tracing::warn!(
+                    listing.warnings.push(format!(
                         "{self} has {}, and their files are not listed with it. add a component as a dataset of its own, as osf:<its id>",
                         crate::units::count(components, "component", "components")
-                    );
+                    ));
                 }
-                Ok(metadata.listing(self, files))
+                Ok(listing)
             }
             Resource::File(file) => file.listing(self),
         }
@@ -183,6 +184,7 @@ impl Metadata {
     fn listing(self, node: &Node, files: Vec<Remote>) -> Listing {
         Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Osf(node.clone()),
             title: Some(self.attributes.title),
             license: self

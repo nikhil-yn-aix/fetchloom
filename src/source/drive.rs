@@ -115,6 +115,7 @@ impl Item {
         }
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Drive(item.clone()),
             title: None,
             license: None,

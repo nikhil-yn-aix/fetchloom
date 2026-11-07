@@ -64,6 +64,7 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
     }
     Ok(Listing {
         unavailable: walk.unavailable,
+        warnings: Vec::new(),
         resolved: Reference::Drive(item.clone()),
         title,
         license: None,

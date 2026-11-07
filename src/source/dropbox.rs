@@ -65,6 +65,7 @@ impl Link {
         };
         Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Dropbox(self.clone()),
             title: None,
             license: None,

@@ -197,6 +197,7 @@ impl Entry {
         let file = self.remote(node, title.clone())?;
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Osf(node.clone()),
             title: Some(title),
             license: None,

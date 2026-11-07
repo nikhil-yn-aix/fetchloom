@@ -57,6 +57,7 @@ impl Dataset {
         let files = pinned.files(api, version, newest).await?;
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Kaggle(pinned),
             title: Some(view.title).filter(|title| !title.is_empty()),
             license: Some(view.license_name)

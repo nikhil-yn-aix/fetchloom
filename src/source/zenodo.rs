@@ -98,6 +98,7 @@ impl Record {
             .collect::<Result<_, _>>()?;
         Ok(Listing {
             unavailable: Vec::new(),
+            warnings: Vec::new(),
             resolved: Reference::Zenodo(resolved),
             title: Some(answer.metadata.title),
             license: answer.metadata.license.map(|license| license.id),

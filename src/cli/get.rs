@@ -1145,6 +1145,7 @@ mod tests {
             doi: None,
             files: Vec::new(),
             unavailable: Vec::new(),
+            warnings: Vec::new(),
         };
         let paths = ["aux/a.csv".to_owned(), "aux/b.csv".to_owned()];
         assert_eq!(
