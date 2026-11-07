@@ -620,9 +620,43 @@ fn a_lean_download_cuts_what_an_earlier_run_left_past_its_end() {
 }
 
 #[test]
-fn a_lean_writer_gathers_no_more_than_its_download() {
-    assert_eq!(pending_capacity(true, Some(4096)), 4096);
-    assert_eq!(pending_capacity(true, Some(0)), 0);
-    assert_eq!(pending_capacity(true, None), BUFFER);
-    assert_eq!(pending_capacity(false, Some(4096)), BUFFER);
+fn a_sized_writer_gathers_no_more_than_its_download_has_left() {
+    assert_eq!(pending_capacity(true, Some(4096), 0), 4096);
+    assert_eq!(pending_capacity(true, Some(4096), 1000), 3096);
+    assert_eq!(pending_capacity(true, Some(0), 0), 0);
+    assert_eq!(pending_capacity(true, Some(10 * SMALL), 0), BUFFER);
+    assert_eq!(pending_capacity(true, None, 0), BUFFER);
+    assert_eq!(pending_capacity(false, Some(4096), 0), BUFFER);
+}
+
+#[test]
+fn sized_buffers_store_the_same_bytes_under_the_same_hash() {
+    let (_dir, plain) = cache();
+    let (_sized_dir, mut sized) = cache();
+    sized.switches.sized_buffers = true;
+    let large = vec![7; 3 * BUFFER / 2];
+    for bytes in [&b""[..], b"abc", &large] {
+        let stored = |cache: &Cache, url: &str| {
+            let partial = owned(cache, url);
+            let mut writer = partial
+                .writer(
+                    0,
+                    Some(bytes.len() as u64),
+                    Validators::default(),
+                    true,
+                    false,
+                )
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+            writer.save().unwrap();
+            writer.finish().unwrap()
+        };
+        let before = stored(&plain, "https://example.org/a");
+        let after = stored(&sized, "https://example.org/a");
+        assert_eq!(
+            (after.digest, after.md5, after.size),
+            (before.digest, before.md5, before.size)
+        );
+        assert_eq!(fs::read(sized.object_path(&after.digest)).unwrap(), bytes);
+    }
 }

@@ -209,7 +209,11 @@ impl Partial {
             hasher,
             _lock: self.lock.clone(),
             prefix: offset,
-            pending: Vec::with_capacity(pending_capacity(lean, length)),
+            pending: Vec::with_capacity(pending_capacity(
+                lean || self.cache.switches.sized_buffers,
+                length,
+                offset,
+            )),
             lean,
             runs: Vec::new(),
             read_back: 0,
@@ -311,7 +315,17 @@ pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
     open_plain(path, OpenOptions::new().read(true))
 }
 
+/// [`read_unfollowed`], with the size the open already looked up.
+pub(super) fn read_unfollowed_sized(path: &Path) -> io::Result<(File, u64)> {
+    let (file, metadata) = open_plain_found(path, OpenOptions::new().read(true))?;
+    Ok((file, metadata.len()))
+}
+
 fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
+    open_plain_found(path, options).map(|(file, _)| file)
+}
+
+fn open_plain_found(path: &Path, options: &mut OpenOptions) -> io::Result<(File, Metadata)> {
     #[cfg(unix)]
     {
         use rustix::fs::OFlags;
@@ -346,8 +360,9 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
         }
     });
     let file = opened?;
-    if is_plain(&file.metadata()?) {
-        Ok(file)
+    let metadata = file.metadata()?;
+    if is_plain(&metadata) {
+        Ok((file, metadata))
     } else {
         Err(refused())
     }
@@ -633,10 +648,13 @@ impl Write for PartialWriter {
     }
 }
 
-/// how much a writer gathers before it writes: all of a lean download, else up to [`BUFFER`].
-fn pending_capacity(lean: bool, length: Option<u64>) -> usize {
+/// how much a writer gathers before it writes: up to [`BUFFER`], or when `sized` no more than
+/// the download has left past `offset`.
+fn pending_capacity(sized: bool, length: Option<u64>, offset: u64) -> usize {
     match length {
-        Some(length) if lean => usize::try_from(length).map_or(BUFFER, |length| length.min(BUFFER)),
+        Some(length) if sized => {
+            usize::try_from(length.saturating_sub(offset)).map_or(BUFFER, |left| left.min(BUFFER))
+        }
         _ => BUFFER,
     }
 }

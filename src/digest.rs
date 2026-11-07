@@ -45,17 +45,30 @@ impl Sha256 {
     }
 
     /// hashes an opened reader so cache checks never reopen a checked path.
-    pub(crate) fn of_reader(mut reader: impl Read) -> io::Result<Sha256> {
+    pub(crate) fn of_reader(reader: impl Read) -> io::Result<Sha256> {
+        Self::of_reader_in(reader, &mut vec![0; READ])
+    }
+
+    /// hashes an opened reader through `buffer`, which the caller sizes or uses again.
+    pub(crate) fn of_reader_in(mut reader: impl Read, buffer: &mut [u8]) -> io::Result<Sha256> {
         let mut hasher = Hasher::default();
-        let mut buffer = vec![0; 1024 * 1024];
         loop {
-            let read = reader.read(&mut buffer)?;
+            let read = reader.read(buffer)?;
             if read == 0 {
                 return Ok(hasher.finish().0);
             }
             hasher.update(&buffer[..read]);
         }
     }
+}
+
+/// the most a hash reads at once.
+const READ: usize = 1024 * 1024;
+
+/// how large a buffer reading a file of `size` bytes needs: all of it in one read, but at least
+/// 8 KiB, in case it grew, and at most 1 MiB.
+pub(crate) fn buffer_for(size: u64) -> usize {
+    usize::try_from(size).map_or(READ, |size| size.clamp(8 * 1024, READ))
 }
 
 impl Md5 {
@@ -188,6 +201,22 @@ mod tests {
             None,
             "md5 costs nothing unless asked for"
         );
+    }
+
+    #[test]
+    fn a_buffer_sized_to_the_file_hashes_it_as_the_full_one_does() {
+        assert_eq!(buffer_for(0), 8 * 1024);
+        assert_eq!(buffer_for(4096), 8 * 1024);
+        assert_eq!(buffer_for(100_000), 100_000);
+        assert_eq!(buffer_for(u64::MAX), READ);
+        for size in [0, 1, 4096, 8 * 1024 + 1, READ + 3] {
+            let bytes: Vec<u8> = (0..size).map(|n| n.to_le_bytes()[0]).collect();
+            let full = Sha256::of_reader(&bytes[..]).unwrap();
+            let size = u64::try_from(size).unwrap();
+            let sized = Sha256::of_reader_in(&bytes[..], &mut vec![0; buffer_for(size)]).unwrap();
+            assert_eq!(sized, full);
+            assert_eq!(sized, sha256(&bytes));
+        }
     }
 
     #[test]

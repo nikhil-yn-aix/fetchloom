@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{Cache, hash_object};
+use super::Cache;
 use crate::digest::Sha256;
 use crate::place::{FolderUse, found_folder, real_folder};
 use crate::volume::is_plain;
@@ -49,9 +49,9 @@ impl Cache {
         // its name between the two is never sealed in its place
         let hashed = if writable {
             super::open_unfollowed(&path, false)
-                .and_then(|file| Ok((Sha256::of_reader(&file)?, Some(file))))
+                .and_then(|file| Ok((self.hash_opened(&file, metadata.len())?, Some(file))))
         } else {
-            hash_object(&path).map(|actual| (actual, None))
+            self.hash_object(&path).map(|actual| (actual, None))
         };
         match hashed {
             Ok((actual, file)) if actual == *digest => {

@@ -59,12 +59,15 @@ pub(crate) struct Cache {
 pub(crate) struct Switches {
     /// small fresh downloads skip their closing checkpoint, a missed open, a truncate and an fstat.
     pub(crate) lean_partial: bool,
+    /// hashing and small downloads size their buffers to the file instead of 1 MiB.
+    pub(crate) sized_buffers: bool,
 }
 
 impl Switches {
     fn read() -> Switches {
         Switches {
             lean_partial: crate::exp::on("LEAN_PARTIAL"),
+            sized_buffers: crate::exp::on("SIZED_BUFFERS"),
         }
     }
 }
@@ -222,7 +225,7 @@ impl Cache {
             return None;
         }
         if changed::doubted(&metadata, self.changed_at(digest))
-            && hash_object(&path).ok()? != *digest
+            && self.hash_object(&path).ok()? != *digest
         {
             return None;
         }
@@ -243,7 +246,7 @@ impl Cache {
     /// leaves the object and its change mark untouched.
     pub(crate) fn verify(&self, digest: &Sha256) -> io::Result<bool> {
         let path = self.object_path(digest);
-        match hash_object(&path) {
+        match self.hash_object(&path) {
             Ok(actual) if actual == *digest => Ok(true),
             Ok(_) => {
                 self.mark_changed(digest)?;
@@ -394,7 +397,7 @@ impl Cache {
         };
         if !new {
             let found = fs::symlink_metadata(path);
-            match existing(&found, size, || hash_object(path), digest) {
+            match existing(&found, size, || self.hash_object(path), digest) {
                 Existing::Keep => {}
                 Existing::Gone => return self.link_new(source, path, digest, size),
                 Existing::Changed => {
@@ -419,7 +422,8 @@ impl Cache {
                         // was being opened to clear its flag
                         Err(_)
                             if source.exists()
-                                && hash_object(path).is_ok_and(|actual| actual == *digest) => {}
+                                && self.hash_object(path).is_ok_and(|actual| actual == *digest) => {
+                        }
                         Err(err) => {
                             return Err(io::Error::new(
                                 err.kind(),
@@ -435,8 +439,24 @@ impl Cache {
     }
 }
 
-fn hash_object(path: &Path) -> io::Result<Sha256> {
-    Sha256::of_reader(read_unfollowed(path)?)
+impl Cache {
+    /// hashes the object at `path` again, never through a link.
+    fn hash_object(&self, path: &Path) -> io::Result<Sha256> {
+        if self.switches.sized_buffers {
+            let (file, size) = partial::read_unfollowed_sized(path)?;
+            return self.hash_opened(&file, size);
+        }
+        Sha256::of_reader(read_unfollowed(path)?)
+    }
+
+    /// hashes an object of `size` bytes through a handle already open.
+    fn hash_opened(&self, file: &File, size: u64) -> io::Result<Sha256> {
+        if self.switches.sized_buffers {
+            Sha256::of_reader_in(file, &mut vec![0; digest::buffer_for(size)])
+        } else {
+            Sha256::of_reader(file)
+        }
+    }
 }
 
 /// what is at an object's path when a new copy of its bytes arrives.
@@ -976,6 +996,49 @@ pub(crate) mod tests {
             cache.trusted(&digest, Some(4), &cache.doubts()),
             Ok(None)
         ));
+    }
+
+    #[test]
+    fn sized_buffers_judge_objects_as_the_full_buffer_does() {
+        for (_dir, mut cache) in [cache(), fat()] {
+            cache.switches.sized_buffers = true;
+            let large = vec![9; 3 * 1024 * 1024 / 2];
+            let stored: Vec<Stored> = [&b""[..], b"small", &large]
+                .into_iter()
+                .map(|bytes| store(&cache, bytes))
+                .collect();
+            for stored in &stored {
+                assert!(cache.verify(&stored.digest).unwrap());
+            }
+            let checked = cache.verify_all(2, &|_| {});
+            assert_eq!(checked.objects, 3);
+            assert_eq!(checked.changed, []);
+
+            let small = &stored[1];
+            let object = cache.object_path(&small.digest);
+            // writable objects are hashed when found, through the handle that seals them
+            rewrite(&object, b"small");
+            assert_eq!(cache.find(&small.digest, Some(5)), Some(object.clone()));
+            assert!(
+                cache
+                    .trusted(&small.digest, Some(5), &cache.doubts())
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(fs::metadata(&object).unwrap().permissions().readonly());
+
+            rewrite(&object, b"smalX");
+            seal(&object);
+            assert_eq!(cache.verify_all(2, &|_| {}).changed, [small.digest]);
+            assert!(!cache.verify(&small.digest).unwrap());
+            assert_eq!(cache.find(&small.digest, Some(5)), None);
+            assert!(
+                store(&cache, b"small").new,
+                "the changed object is replaced"
+            );
+            assert_eq!(fs::read(&object).unwrap(), b"small");
+            assert!(cache.verify(&small.digest).unwrap());
+        }
     }
 
     #[test]

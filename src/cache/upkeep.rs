@@ -147,8 +147,14 @@ impl Cache {
         if !crate::volume::is_plain(&metadata) || metadata.len() != size {
             return Ok(false);
         }
-        let intact = !super::changed::doubted(&metadata, self.changed_at(digest))
-            || hash(&path, stop).is_ok_and(|actual| actual == *digest);
+        let intact = !super::changed::doubted(&metadata, self.changed_at(digest)) || {
+            let size = if self.switches.sized_buffers {
+                crate::digest::buffer_for(size)
+            } else {
+                1024 * 1024
+            };
+            hash(&path, stop, &mut vec![0; size]).is_ok_and(|actual| actual == *digest)
+        };
         stop.check()?;
         Ok(intact)
     }
@@ -375,11 +381,20 @@ impl Cache {
         std::thread::scope(|scope| {
             for _ in 0..threads.max(1) {
                 scope.spawn(|| {
+                    let mut reused = Vec::new();
                     while let Some(object) = objects.get(next.fetch_add(1, Ordering::Relaxed)) {
                         if stop.is_asked() {
                             break;
                         }
-                        let actual = hash(&object.path, stop);
+                        let actual = if self.switches.sized_buffers {
+                            let size = digest::buffer_for(object.size);
+                            if reused.len() < size {
+                                reused.resize(size, 0);
+                            }
+                            hash(&object.path, stop, &mut reused)
+                        } else {
+                            hash(&object.path, stop, &mut vec![0; 1024 * 1024])
+                        };
                         if stop.is_asked() {
                             break;
                         }
@@ -471,15 +486,14 @@ fn unreadable(path: &Path, error: &io::Error) -> Error {
     Error::io(format!("cannot read {}", path.display()), error)
 }
 
-fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
+fn hash(path: &Path, stop: &Stop, buffer: &mut [u8]) -> io::Result<Sha256> {
     let mut file = super::read_unfollowed(path)?;
     let mut hasher = digest::Hasher::default();
-    let mut buffer = vec![0; 1024 * 1024];
     loop {
         if stop.is_asked() {
             return Err(io::ErrorKind::Interrupted.into());
         }
-        let read = file.read(&mut buffer)?;
+        let read = file.read(buffer)?;
         if read == 0 {
             return Ok(hasher.finish().0);
         }
