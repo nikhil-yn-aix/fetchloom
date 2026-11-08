@@ -118,10 +118,6 @@ namespace mutations use at most four workers per parent folder. other folders ca
 
 the placer checks the opened root's filesystem once. exfat and fat serialize namespace changes across folders, so they use one worker for the whole placement. linux reads `fstatfs` magic values; macos reads its filesystem name. windows uses the safe `sysinfo` disk-only API, without storage/IO refreshes, and matches the longest canonical mount path. unknown or failed probes keep the per-parent limit. an empty placement does not consume the probe before its root exists.
 
-## small-copy experiment
-
-on linux, `FETCHLOOM_EXP_PLACE_SMALL_COPY_BYTES` sets a maximum file size for buffered copies after this placer has successfully made a reflink. zero or an unset value preserves the method order. an initial unsupported reflink still falls back to hardlinks. later small files use independent bytes, not hardlinks, and keep hidden staging, read-only mode and flush-before-publication. buffered reads and writes deliberately avoid `copy_file_range`, which can clone extents on xfs; interrupted reads retry, and cancellation is checked between blocks. the comparison uses `4096`, not a new default.
-
 ## macos copy durability
 
 macos seals each copy with plain `fsync`, retains one original writer handle for the batch, then issues one `F_FULLFSYNC` before publishing any copy. a filesystem that rejects full-drive flushing keeps the per-file `fsync` guarantee, as cache batches do. a flush error publishes none of the waiting copies. nested filesystems keep per-file full flushing. apfs clones never enter this copy path and need no payload flush. [native checks](../performance/native-checks.md) cover flush calls and cross-volume copy verification; cross-compilation alone does not establish native behavior.

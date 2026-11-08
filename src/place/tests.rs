@@ -250,7 +250,6 @@ fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
         false,
         Threads::default(),
         &Stop::default(),
-        false,
     )
     .unwrap();
 
@@ -277,14 +276,7 @@ fn a_writable_copy_needs_no_permission_change() {
         .open(&destination)
         .unwrap();
 
-    let result = fill(
-        &object,
-        &output,
-        true,
-        Threads::default(),
-        &Stop::default(),
-        false,
-    );
+    let result = fill(&object, &output, true, Threads::default(), &Stop::default());
 
     assert!(
         result.is_ok(),
@@ -299,7 +291,6 @@ fn a_writable_copy_needs_no_permission_change() {
             false,
             Threads::default(),
             &Stop::default(),
-            false,
         ),
         &destination,
     );
@@ -1395,89 +1386,6 @@ fn owned_partitions_do_not_retain_old_tail_capacity() {
         runs.into_iter().flatten().collect::<Vec<_>>(),
         (0..count).collect::<Vec<_>>()
     );
-}
-
-#[test]
-fn small_copy_experiment_preserves_bytes_and_isolation() {
-    for value in ["0", "4096"] {
-        let (folder, object) = cache(true);
-        let root = folder.path().join("data");
-        let exp = Experiments::default().with("PLACE_SMALL_COPY_BYTES", value);
-        let mut placer =
-            Placer::starting_at(root.clone(), Method::Reflink, None).with_experiments(exp);
-        placer.cloned.store(true, Ordering::Relaxed);
-        let results = placer.place_all(
-            2,
-            |index| Order {
-                object: object.clone(),
-                destination: root.join(format!("{index}.csv")),
-                writable: false,
-            },
-            Metadata::len,
-        );
-        for result in results {
-            let (method, length) = result.unwrap();
-            assert_eq!(length, CONTENTS.len() as u64);
-            if value != "0" && cfg!(target_os = "linux") {
-                assert_eq!(method, Method::Copy);
-            }
-        }
-        for name in ["0.csv", "1.csv"] {
-            assert_eq!(fs::read_to_string(root.join(name)).unwrap(), CONTENTS);
-            assert!(is_read_only(&root.join(name)));
-        }
-        if value != "0" && cfg!(target_os = "linux") {
-            let destination = root.join("0.csv");
-            let file = File::open(&destination).unwrap();
-            file.set_permissions(writable_as(file.metadata().unwrap().permissions(), true))
-                .unwrap();
-            fs::write(&destination, b"edited").unwrap();
-            assert_eq!(fs::read_to_string(&object).unwrap(), CONTENTS);
-            assert_eq!(fs::read_to_string(root.join("1.csv")).unwrap(), CONTENTS);
-            assert!(is_read_only(&object));
-        }
-        assert_eq!(placed_names(&root), ["0.csv", "1.csv"]);
-    }
-}
-
-#[test]
-fn small_copy_experiment_waits_for_a_successful_clone() {
-    let (folder, object) = cache(true);
-    let root = folder.path().join("data");
-    let mut baseline = Placer::starting_at(root.clone(), Method::Reflink, None);
-    let expected = baseline
-        .place(&object, &root.join("baseline"), false)
-        .unwrap();
-    let mut placer = Placer::starting_at(root.clone(), Method::Reflink, None)
-        .with_experiments(Experiments::default().with("PLACE_SMALL_COPY_BYTES", "4096"));
-    let method = placer
-        .place(&object, &root.join("candidate"), false)
-        .unwrap();
-    assert_eq!(method, expected);
-}
-
-#[test]
-fn a_buffered_copy_retries_interrupted_reads() {
-    struct Input {
-        interrupted: bool,
-        bytes: io::Cursor<&'static [u8]>,
-    }
-    impl Read for Input {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            if !self.interrupted {
-                self.interrupted = true;
-                return Err(io::ErrorKind::Interrupted.into());
-            }
-            self.bytes.read(buffer)
-        }
-    }
-    let input = Input {
-        interrupted: false,
-        bytes: io::Cursor::new(b"complete"),
-    };
-    let mut output = Vec::new();
-    copy_buffered(input, &mut output, &Stop::default()).unwrap();
-    assert_eq!(output, b"complete");
 }
 
 #[test]
