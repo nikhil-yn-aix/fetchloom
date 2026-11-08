@@ -24,7 +24,11 @@ pub(crate) struct Object {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
     pub(crate) path: PathBuf,
-    pub(crate) modified: SystemTime,
+    /// when the object last changed, which gc ages it from: its modification time, or on unix
+    /// the later time its details changed, as by its seal, its publishing or a link. a seal dates
+    /// the modification time back to when the download began, a day before for one a later run
+    /// finished.
+    pub(crate) changed: SystemTime,
 }
 
 #[derive(Default)]
@@ -224,13 +228,15 @@ impl Cache {
                 };
                 match entry.metadata().and_then(|metadata| {
                     let modified = metadata.modified()?;
-                    Ok((metadata.len(), modified))
+                    let changed = super::object::changed(&metadata)
+                        .map_or(modified, |changed| changed.max(modified));
+                    Ok((metadata.len(), changed))
                 }) {
-                    Ok((size, modified)) => scan.objects.push(Object {
+                    Ok((size, changed)) => scan.objects.push(Object {
                         digest,
                         size,
                         path: entry.path(),
-                        modified,
+                        changed,
                     }),
                     Err(err) => scan.unreadable.push(Failure::new(&entry.path(), &err)),
                 }
@@ -274,7 +280,7 @@ impl Cache {
             if needed.objects.contains(&object.digest) {
                 continue;
             }
-            if !unused(object.modified) {
+            if !unused(object.changed) {
                 freed.kept_objects += 1;
                 freed.kept_bytes += object.size;
             } else if removed(
@@ -903,6 +909,25 @@ mod tests {
         );
         assert!(object.exists());
         assert!(leftover.exists());
+    }
+
+    /// a download a later run finished is dated back to its first run's start, so a sweep ages
+    /// an object from when it last changed, as on unix its ctime tells: its seal, its publishing
+    /// or a link to it.
+    #[cfg(unix)]
+    #[test]
+    fn an_object_dated_back_to_its_birth_still_gets_a_day() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"resumed");
+        let object = cache.object_path(&stored.digest);
+        let began = SystemTime::now() - GRACE - Duration::from_hours(24);
+        fs::File::open(&object)
+            .unwrap()
+            .set_modified(began)
+            .unwrap();
+        let freed = cache.sweep(&Needed::default(), SystemTime::now());
+        assert_eq!(freed.removed_objects, 0);
+        assert!(object.exists());
     }
 
     #[test]

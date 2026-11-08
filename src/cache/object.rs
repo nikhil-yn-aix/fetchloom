@@ -301,22 +301,27 @@ pub(super) fn date_by_birth(file: &File, begun: Option<SystemTime>) -> io::Resul
     }
 }
 
-/// when `file`, just made, last had its times or details set: its ctime on unix. on nfs 4.2 a
-/// write delegation the making began starts there. windows keeps no such time to read.
+/// when `file`, just made, last had its times or details set. on nfs 4.2 a write delegation
+/// the making began starts there.
 pub(super) fn begun(file: &File) -> Option<SystemTime> {
+    changed(&file.metadata().ok()?)
+}
+
+/// when a file's details last changed, as `metadata` tells: its ctime on unix. windows keeps no
+/// such time that std reads.
+pub(super) fn changed(metadata: &Metadata) -> Option<SystemTime> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let found = file.metadata().ok()?;
         let since = Duration::new(
-            u64::try_from(found.ctime()).ok()?,
-            u32::try_from(found.ctime_nsec()).ok()?,
+            u64::try_from(metadata.ctime()).ok()?,
+            u32::try_from(metadata.ctime_nsec()).ok()?,
         );
         UNIX_EPOCH.checked_add(since)
     }
     #[cfg(windows)]
     {
-        let _ = file;
+        let _ = metadata;
         None
     }
 }

@@ -481,7 +481,7 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
         .filter(|object| {
             !needed.objects.contains(&object.digest)
                 && now
-                    .duration_since(object.modified)
+                    .duration_since(object.changed)
                     .is_ok_and(|age| age >= crate::cache::GRACE)
                 && !crate::place::has_other_names(&object.path)
         })
