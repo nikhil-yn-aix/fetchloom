@@ -299,6 +299,31 @@ pub(crate) fn create_hidden(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
+/// makes the plain file at `path` read-only for everyone, or writable by its owner again,
+/// through a handle that never follows a link, so a link swapped in for the file cannot pass the
+/// change to another file.
+pub(crate) fn set_read_only(path: &Path, read_only: bool) -> io::Result<()> {
+    let file = open_attributes(path)?;
+    let metadata = file.metadata()?;
+    if !is_plain(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is not a plain file", path.display()),
+        ));
+    }
+    let permissions = metadata.permissions();
+    if permissions.readonly() == read_only {
+        return Ok(());
+    }
+    file.set_permissions(if read_only {
+        let mut permissions = permissions;
+        permissions.set_readonly(true);
+        permissions
+    } else {
+        writable(permissions)
+    })
+}
+
 /// opens `path` only to read and change its attributes, never following a link at its end.
 fn open_attributes(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();

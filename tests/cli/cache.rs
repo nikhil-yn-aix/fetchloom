@@ -770,3 +770,29 @@ fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
     assert_eq!(report["errors"][0]["message"], refused.as_str(), "{report}");
     Ok(())
 }
+
+/// a sync with nothing to do finds its project registered and its registration flushed already,
+/// so it leaves the cache's projects folder alone, even one it could not open to flush.
+#[cfg(unix)]
+#[test]
+fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("data.toml"), "")?;
+    let first = sandbox.run(&["sync"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let registrations = sandbox.cache().join("projects");
+    let before = fs::metadata(&registrations)?.permissions();
+    // writable and searchable, but no longer readable, so opening it to flush it fails
+    fs::set_permissions(&registrations, fs::Permissions::from_mode(0o333))?;
+    let again = sandbox.run(&["sync"]);
+    fs::set_permissions(&registrations, before)?;
+    let again = again?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("could not register"), "{stderr}");
+    Ok(())
+}

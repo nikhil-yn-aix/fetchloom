@@ -72,18 +72,36 @@ struct Registration {
 }
 
 impl Cache {
-    /// remembers that the project at `root` uses this cache, so gc keeps what it needs.
+    /// remembers that the project at `root` uses this cache, so gc keeps what it needs. a
+    /// registration turns read-only once its folder is flushed, so a run that finds it read-only
+    /// and unchanged writes and flushes nothing. a writable one may be a write whose folder flush
+    /// failed, so its folder is flushed again before it is sealed.
     pub(crate) fn register(&self, root: &Path) -> io::Result<()> {
         let path = self.registration(root);
-        if path.exists() {
-            // a previous write may have published the name but failed to flush its folder
-            return super::sync_publication(&path, &path, crate::project::sync_directory);
-        }
         let text = serde_json::to_vec(&Registration {
             root: root.to_path_buf(),
         })
         .map_err(io::Error::other)?;
-        self.write_atomically(&path, &text)
+        match fs::symlink_metadata(&path) {
+            Ok(found)
+                if crate::volume::is_plain(&found)
+                    && fs::read(&path).is_ok_and(|bytes| bytes == text) =>
+            {
+                if found.permissions().readonly() {
+                    return Ok(());
+                }
+                super::sync_publication(&path, &path, crate::project::sync_directory)?;
+            }
+            Ok(found) => {
+                // windows renames nothing over a read-only file
+                if crate::volume::is_plain(&found) {
+                    crate::volume::set_read_only(&path, false)?;
+                }
+                self.write_atomically(&path, &text)?;
+            }
+            Err(_) => self.write_atomically(&path, &text)?,
+        }
+        crate::volume::set_read_only(&path, true)
     }
 
     /// reads every registration before gc can discard anything it might protect.
@@ -752,6 +770,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(absent.not_removed, []);
+    }
+
+    #[test]
+    fn a_registration_is_sealed_once_flushed_and_written_again_when_it_changed() {
+        let (dir, cache) = cache();
+        let root = dir.path().join("thesis");
+        cache.register(&root).unwrap();
+        let path = cache.registration(&root);
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
+        crate::volume::set_read_only(&path, false).unwrap();
+        fs::write(&path, b"{}").unwrap();
+        cache.register(&root).unwrap();
+        assert_eq!(cache.projects(), vec![root]);
+        assert!(fs::metadata(&path).unwrap().permissions().readonly());
     }
 
     #[test]

@@ -90,7 +90,7 @@ project-local lock and placement records live in [the project folder](project-fo
 
 a cache folder you may not write to fails a download with `local.io` (exit 50), and the message names the folder that refused, such as `<cache>/partial`. fix its permissions, or set `FETCHLOOM_CACHE` to a folder you may write to.
 
-on unix, registrations and change marks flush their containing directory after replacement, as well as their file contents. a reported directory-flush failure means the new name exists but its persistence is uncertain; fix the storage error and retry. registrations retry this flush even when the record already exists. this directory guarantee is not extended to windows here. a lost new cache object name after a power cut causes a later fetch, so it does not substitute for a project's pinned lock.
+on unix, registrations and change marks flush their containing directory after replacement, as well as their file contents. a reported directory-flush failure means the new name exists but its persistence is uncertain; fix the storage error and retry. a registration turns read-only once its directory is flushed, so a sync that finds it read-only and unchanged writes nothing; one still writable has its directory flushed again first. this directory guarantee is not extended to windows here. a lost new cache object name after a power cut causes a later fetch, so it does not substitute for a project's pinned lock.
 
 an unreadable `changed/` folder or change mark stops sync and get with `local.io` (exit 50), before they place files or record a completed sync. fix storage access and read/search permissions, run `fetchloom cache verify`, then retry. keep the marks: deleting them can hide damage from another project's hardlinks.
 
