@@ -110,15 +110,7 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
-        if self.context.exp.on("PROJECT_LAZY_JOBS") {
-            self.download_prepared(lock, &files).await?;
-        } else {
-            let jobs = files
-                .into_iter()
-                .map(|(dataset, file)| job(lock, &dataset, file))
-                .collect::<Result<Vec<_>, _>>()?;
-            self.download(jobs).await?;
-        }
+        self.download_prepared(lock, &files).await?;
         self.unpack_locked(lock, &archives).await?;
         placing.apply(
             &self.context.output,

@@ -718,11 +718,9 @@ mod tests {
     fn prepared_descriptions_keep_initial_hosts_sizes_and_input_indexes() {
         for (interleave, expected) in [(false, vec![0, 1, 2, 3]), (true, vec![0, 2, 1, 3])] {
             let exp = if interleave {
-                crate::exp::Experiments::default()
-                    .with("PROJECT_LAZY_JOBS", "1")
-                    .with("NET_INTERLEAVE_HOSTS", "1")
+                crate::exp::Experiments::default().with("NET_INTERLEAVE_HOSTS", "1")
             } else {
-                crate::exp::Experiments::default().with("PROJECT_LAZY_JOBS", "1")
+                crate::exp::Experiments::default()
             };
             let (descriptions, urls): (Vec<_>, Vec<_>) = [
                 "slow.example",
@@ -781,7 +779,6 @@ mod tests {
             false,
         ));
         context.jobs = 2;
-        context.exp = crate::exp::Experiments::default().with("PROJECT_LAZY_JOBS", "1");
         context.offline = crate::net::Offline::Flag;
         let net = Arc::new(context.net());
         let (descriptions, urls): (Vec<_>, Vec<_>) = (0..32)
