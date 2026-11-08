@@ -52,6 +52,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 |---|---|---|
 | sync succeeds but a file is still edited | conflicts are preserved by default | inspect `status` and JSON `placement.kept`; save edits before choosing `--force` |
 | `warning: <path> was edited, and the file is shared with other projects, so they see the edit too` | the file is a hardlink to the cache, so an edit reaches every project using it | save the edit, then run `fetchloom sync --force` in each project; use `copy = true` for files you edit |
+| `warning: hf:datasets/mozilla-foundation/common_voice_17_0 holds only .gitattributes and README.md, no data files` | the owner moved the data elsewhere and left a readme saying where | read the dataset's README.md; if the data is gone, run `fetchloom remove <name>` |
 | `warning: iris was taken, so this one is iris-2` | the project already has a dataset with that name | keep it, or run `fetchloom remove iris-2` and add again with `--as <name>` |
 | status exits 0 with differences | differences are a successful result | inspect all nine status arrays |
 | an input is read-only | default placement protects shared bytes | set `copy = true` on the dataset and sync |

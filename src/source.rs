@@ -545,9 +545,29 @@ fn single(url: &Url) -> Listing {
 }
 
 /// a listing is hostile input: every path must stay inside the dataset, and no path may appear
-/// twice.
-fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
+/// twice. a dataset with nothing but its readme and git files is told, since its data has
+/// usually moved elsewhere.
+fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> {
+    let only_about = !matches!(reference, Reference::Url(_) | Reference::Dropbox(_))
+        && !listing.files.is_empty()
+        && listing.files.iter().all(|file| is_about(&file.path));
     let reference = reference.shown();
+    if only_about {
+        let mut names: Vec<&str> = listing
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        let last = names.pop().unwrap_or_default();
+        let names = if names.is_empty() {
+            last.to_owned()
+        } else {
+            format!("{} and {last}", names.join(", "))
+        };
+        listing.warnings.push(format!(
+            "{reference} holds only {names}, no data files; its README may say where the data went"
+        ));
+    }
     let count = listing.files.len() + listing.unavailable.len();
     if count > MOST_FILES {
         return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {count} entries, more than the {MOST_FILES} fetchloom handles in one dataset"))
@@ -574,6 +594,23 @@ fn check(reference: &Reference, listing: Listing) -> Result<Listing, Error> {
         }
     }
     Ok(listing)
+}
+
+/// whether a top-level file only describes a dataset: a readme, a license or citation, or git's
+/// own files.
+fn is_about(path: &str) -> bool {
+    if path.contains('/') {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    matches!(lower.as_str(), ".gitattributes" | ".gitignore" | ".gitkeep")
+        || ["readme", "license", "licence", "citation", "copying"]
+            .iter()
+            .any(|stem| {
+                lower
+                    .strip_prefix(stem)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+            })
 }
 
 /// reads a JSON answer from a source's API. a missing dataset and a refusal become errors that
@@ -1020,5 +1057,48 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_dataset_holding_only_its_readme_says_so() {
+        let url = Url::parse("https://example.org/x").unwrap();
+        let listing = |paths: &[&str]| Listing {
+            files: paths
+                .iter()
+                .map(|path| Remote {
+                    path: (*path).to_owned(),
+                    ..single(&url).files[0].clone()
+                })
+                .collect(),
+            ..single(&url)
+        };
+        let repository = parse("hf:datasets/mozilla-foundation/common_voice_17_0").reference;
+        let checked = check(&repository, listing(&[".gitattributes", "README.md"])).unwrap();
+        assert_eq!(
+            checked.warnings,
+            [
+                "hf:datasets/mozilla-foundation/common_voice_17_0 holds only .gitattributes and README.md, no data files; its README may say where the data went"
+            ]
+        );
+        for fine in [
+            &[".gitattributes", "README.md", "data/train.parquet"][..],
+            &["docs/README.md", "LICENSE"],
+        ] {
+            assert!(
+                check(&repository, listing(fine))
+                    .unwrap()
+                    .warnings
+                    .is_empty(),
+                "{fine:?}"
+            );
+        }
+        let one_file = Reference::Url(Url::parse("https://example.org/README.md").unwrap());
+        assert!(
+            check(&one_file, listing(&["README.md"]))
+                .unwrap()
+                .warnings
+                .is_empty(),
+            "a link to one readme asked for it"
+        );
     }
 }
