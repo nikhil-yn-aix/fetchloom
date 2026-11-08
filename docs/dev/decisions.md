@@ -44,6 +44,10 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 | leave checkpoint and lookup indexes as unflushed hints | losing a hint costs resumption or revalidation, while payload identity remains checked | [cache checkpoints](architecture/cache.md#partial-ownership-and-checkpoints) |
 | limit silence instead of total download time | a large transfer that keeps producing bytes can finish | [request policy](architecture/network.md#request-policy) |
 | begin adaptive downloads with one stream and split after it proves slow | extra connections slowed fast transfers and helped constrained ones | [network measurements](performance/measurements.md#network) |
+| fetch file bodies over several connections per host | one connection queued every body behind the slowest on lossy links: far s2 took 0.288 and poor s2 0.424 of the time; lan and home stayed flat | [measurements](performance/measurements.md#ab-passes-on-the-linux-lab-2026-11) |
+| keep no resume record for small downloads | a record and its lock cost more than fetching a small file again: 10,000 small files took 0.757 to 0.840 of the time | [measurements](performance/measurements.md#ab-passes-on-the-linux-lab-2026-11) |
+| spread unfinished downloads and archive staging over 16 folders | files made at once in one folder wait on its lock: s3 took 0.902, s5 0.712 and zips 0.798 to 0.830 of the time | [measurements](performance/measurements.md#ab-passes-on-the-linux-lab-2026-11) |
+| turn transparent huge pages off for the process | 2 MiB pages counted a few touched bytes as whole pages: peak memory fell to 0.33 to 0.73 on every lab case, wall time flat | [measurements](performance/measurements.md#ab-passes-on-the-linux-lab-2026-11) |
 | put all archive decoders behind one guard | entry types, paths and expansion limits must agree before members become reusable | [archives](architecture/archives.md#validate-before-publication) |
 | preserve edits and recheck before replacement | files can change while downloads run; interruption recovery must not erase unrelated work | [placing](architecture/placing.md#choose-an-action) |
 
