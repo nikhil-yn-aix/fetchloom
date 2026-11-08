@@ -663,6 +663,57 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     );
 }
 
+/// a download that goes on from what an earlier run kept says so before any server answers, so
+/// a stop while it waits for a slot or an answer still counts those bytes as kept.
+#[test]
+fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers() {
+    let body = "abcdefgh".repeat(1024);
+    let received = body.len() / 2;
+    let cut = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\nETag: \"v1\"\r\n\r\n{}",
+        body.len(),
+        &body[..received]
+    );
+    let range = format!("bytes {received}-{}/{}", body.len() - 1, body.len());
+    let (url, _) = serve(vec![
+        cut.into_bytes(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", &range), ("ETag", "\"v1\"")],
+            &body[received..],
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let net = net(&url);
+    let fetch = Fetch::new(url.clone());
+    let mut split = Transfer {
+        split: false,
+        permits: None,
+    };
+    let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
+    assert!(matches!(result, Err(Failure::Transient { .. })));
+    drop(partial);
+    let heard = Mutex::new(Vec::new());
+    let listen = |event: Event| {
+        let told = match event {
+            Event::Kept(bytes) => format!("kept {bytes}"),
+            Event::Started { resumed, .. } => format!("started at {resumed}"),
+            _ => return Ok(()),
+        };
+        heard.lock().unwrap().push(told);
+        Ok(())
+    };
+    block_on(net.download(&fetch, &cache, &listen)).unwrap();
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [format!("kept {received}"), format!("started at {received}")]
+    );
+}
+
 #[test]
 fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
     let (url, _) = serve(vec![reply("200 OK", &[], "abcd")]);

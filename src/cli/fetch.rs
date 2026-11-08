@@ -179,9 +179,11 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
-    /// how far into the file this download is, and the furthest point the overall progress
-    /// counted, so bytes fetched again after a retry or a fresh start count once.
-    position: AtomicU64,
+    /// how far into the file this download is: the bytes it holds, an earlier run's included,
+    /// which a stop keeps for the next run. the batch owns it, to say what a stop kept.
+    position: &'a AtomicU64,
+    /// the furthest point the overall progress counted, so bytes fetched again after a retry or
+    /// a fresh start count once.
     counted: AtomicU64,
 }
 
@@ -192,6 +194,7 @@ impl<'a> Watch<'a> {
         overall: &'a Overall,
         approval: &'a Approval,
         yes: bool,
+        position: &'a AtomicU64,
     ) -> Watch<'a> {
         Watch {
             job,
@@ -203,7 +206,7 @@ impl<'a> Watch<'a> {
             sized: AtomicBool::new(false),
             unbounded: AtomicBool::new(false),
             received: AtomicU64::new(0),
-            position: AtomicU64::new(0),
+            position,
             counted: AtomicU64::new(0),
         }
     }
@@ -243,14 +246,15 @@ impl<'a> Watch<'a> {
 
     fn on(&self, event: &Event) -> Result<(), Error> {
         let label = &self.job.label;
-        let bar = self.bar();
         match *event {
             Event::Waiting => {
-                bar.message(
+                self.bar().message(
                     "Waiting",
                     format!("{label} · another fetchloom is downloading it"),
                 );
             }
+            // no bar yet: the download may still wait for a free slot
+            Event::Kept(bytes) => self.position.store(bytes, Ordering::Relaxed),
             Event::Started { total, resumed, .. } => {
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {
@@ -265,6 +269,7 @@ impl<'a> Watch<'a> {
                     self.unbounded.store(total.is_none(), Ordering::Relaxed);
                     self.received.store(resumed, Ordering::Relaxed);
                 }
+                let bar = self.bar();
                 bar.message("Downloading", label.clone());
                 bar.start(total, resumed);
                 self.position.store(resumed, Ordering::Relaxed);
@@ -286,7 +291,7 @@ impl<'a> Watch<'a> {
                 }
             }
             Event::Bytes(bytes) => {
-                bar.advance(bytes);
+                self.bar().advance(bytes);
                 self.count(self.position.fetch_add(bytes, Ordering::Relaxed) + bytes);
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > super::ASK_ABOVE {
@@ -466,21 +471,26 @@ async fn run_each(
     // unknown source sizes share one answer, once headers or received bytes show a large file.
     let approval = Arc::new(Approval::new());
     let listings = again::Listings::default();
+    // what each unfinished download holds, which a stop keeps for the next run
+    let held: Arc<[AtomicU64]> = std::iter::repeat_with(AtomicU64::default)
+        .take(count)
+        .collect();
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
         {
-            let (net, cache, output, overall, approval, listings) = (
+            let (net, cache, output, overall, approval, listings, held) = (
                 net.clone(),
                 cache.clone(),
                 context.output.clone(),
                 overall.clone(),
                 approval.clone(),
                 listings.clone(),
+                held.clone(),
             );
             let yes = context.yes;
             tasks.spawn(async move {
-                let watch = Watch::new(&job, &output, &overall, &approval, yes);
+                let watch = Watch::new(&job, &output, &overall, &approval, yes, &held[index]);
                 // with no bar for them all, a lone download shows its bar while the server
                 // takes its time to answer
                 if alone {
@@ -518,20 +528,25 @@ async fn run_each(
         };
         match joined {
             Ok((index, Ok(fetched))) => {
+                held[index].store(0, Ordering::Relaxed);
                 results[index] = Some(Ok(fetched));
                 done += 1;
                 if let Some(bar) = &overall.bar {
                     bar.message("Downloading", format!("{done} of {count} files"));
                 }
             }
-            Ok((index, Err(err)))
-                if on_its_own(&err) || (apart && err.kind != Kind::Interrupted) =>
-            {
+            // a file that failed on its own leaves nothing the next run goes on from
+            Ok((index, Err(err))) if on_its_own(&err) => {
+                held[index].store(0, Ordering::Relaxed);
                 results[index] = Some(Err(err));
+            }
+            Ok((index, Err(err))) if apart && err.kind != Kind::Interrupted => {
+                results[index] = Some(Err(kept(err, held[index].load(Ordering::Relaxed))));
             }
             Ok((_, Err(err))) => {
                 tasks.abort_all();
-                return Err(err);
+                let bytes = held.iter().map(|bytes| bytes.load(Ordering::Relaxed)).sum();
+                return Err(kept(err, bytes));
             }
             Err(err) => {
                 tasks.abort_all();
@@ -543,6 +558,18 @@ async fn run_each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// tells a person who stopped, or whose network failed, that the bytes so far are not lost:
+/// `bytes`, what the unfinished downloads hold, an earlier run's included.
+fn kept(error: Error, bytes: u64) -> Error {
+    if bytes == 0 || !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
+        return error;
+    }
+    error.detail(format!(
+        "the {} downloaded so far is kept, and the next run continues from there",
+        units::size(bytes)
+    ))
 }
 
 /// how many failed files one error names. the rest are counted.
@@ -828,7 +855,8 @@ mod tests {
             resumed: 0,
         };
         let approval = Approval::new();
-        let watch = Watch::new(&job, &output, &overall, &approval, false);
+        let position = AtomicU64::new(0);
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
         watch.on(&unknown()).unwrap();
         watch.on(&Event::Bytes(super::super::ASK_ABOVE)).unwrap();
         let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
@@ -846,17 +874,17 @@ mod tests {
             Kind::Unconfirmed
         );
         let fresh = Approval::new();
-        let approved = Watch::new(&job, &output, &overall, &fresh, true);
+        let approved = Watch::new(&job, &output, &overall, &fresh, true, &position);
         approved.on(&unknown()).unwrap();
         approved
             .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
             .unwrap();
-        let another = Watch::new(&job, &output, &overall, &fresh, false);
+        let another = Watch::new(&job, &output, &overall, &fresh, false, &position);
         another.on(&unknown()).unwrap();
         another
             .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
             .unwrap();
-        let told = Watch::new(&job, &output, &overall, &fresh, false);
+        let told = Watch::new(&job, &output, &overall, &fresh, false, &position);
         let small = Event::Started {
             total: Some(10),
             resumed: 0,
@@ -893,13 +921,14 @@ mod tests {
             ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
             length: std::sync::Mutex::default(),
         };
+        let position = AtomicU64::new(0);
         for (total, resumed, needs_approval) in [
             (super::super::ASK_ABOVE, 0, false),
             (super::super::ASK_ABOVE + 1, 0, true),
             (super::super::ASK_ABOVE + 1, 1, false),
         ] {
             let approval = Approval::new();
-            let watch = Watch::new(&job, &output, &overall, &approval, false);
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
             let result = watch.on(&Event::Started {
                 total: Some(total),
                 resumed,
@@ -944,9 +973,10 @@ mod tests {
             total: Some(super::super::ASK_ABOVE + 1),
             resumed: 0,
         };
-        let first = Watch::new(&first, &output, &overall, &approval, false);
+        let position = AtomicU64::new(0);
+        let first = Watch::new(&first, &output, &overall, &approval, false, &position);
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
-        let second = Watch::new(&second, &output, &overall, &approval, false);
+        let second = Watch::new(&second, &output, &overall, &approval, false, &position);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
     }
 

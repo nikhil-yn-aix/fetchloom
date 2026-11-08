@@ -131,6 +131,9 @@ impl Fetch {
 pub(crate) enum Event {
     /// another fetchloom on this machine is downloading the same URL, and this one waits for it.
     Waiting,
+    /// an earlier run kept this many bytes of the file, which the download goes on from when
+    /// the server allows it.
+    Kept(u64),
     /// the server answered and bytes are about to flow. `total` counts the whole file.
     Started {
         total: Option<u64>,
@@ -276,7 +279,7 @@ impl Reach {
                 self.held.fetch_add(*bytes, Ordering::Relaxed);
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
-            Event::Waiting | Event::WebPage { .. } => {}
+            Event::Waiting | Event::Kept(_) | Event::WebPage { .. } => {}
         }
     }
 
@@ -359,6 +362,10 @@ impl Net {
         known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
+        // what an earlier run kept counts as kept from the start, before any server answers
+        if let Some((received, _)) = partial.resumable() {
+            on(Event::Kept(received))?;
+        }
         let validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
@@ -430,21 +437,15 @@ impl Net {
                     partial.discard();
                 }
                 Ok(Answer::Divert(next)) => from = self.divert(fetch, next, &mut diversions)?,
-                Err(Failure::Final(err)) => return Err(progress_kept(err, partial)),
+                Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason }) => {
-                    retry
-                        .limited(reason, known.is_some())
-                        .await
-                        .map_err(|err| progress_kept(err, partial))?;
+                    retry.limited(reason, known.is_some()).await?;
                 }
                 Err(Failure::Transient {
                     reason,
                     retry_after,
                 }) => {
-                    retry
-                        .wait(reason, retry_after, known.is_some())
-                        .await
-                        .map_err(|err| progress_kept(err, partial))?;
+                    retry.wait(reason, retry_after, known.is_some()).await?;
                 }
             }
         }
@@ -1205,20 +1206,6 @@ async fn finish(writer: PartialWriter) -> Result<Stored, Failure> {
         .await
         .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
         .map_err(|err| Failure::Final(local(&err)))
-}
-
-/// tells a person who stopped, or whose network failed, that the bytes so far are not lost.
-fn progress_kept(error: Error, partial: &Partial) -> Error {
-    if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
-        return error;
-    }
-    match partial.resumable() {
-        Some((received, _)) => error.detail(format!(
-            "the {} downloaded so far is kept, and the next run continues from there",
-            units::size(received)
-        )),
-        None => error,
-    }
 }
 
 #[cfg(test)]

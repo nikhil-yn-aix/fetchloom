@@ -2229,6 +2229,62 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
+/// a sync stopped while it downloads several files says what all of them keep, which is what the
+/// next sync goes on from, not what one of them keeps.
+#[cfg(unix)]
+#[test]
+fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let cows = Server::slow_file("/files/cows.csv", body.clone())?;
+    let pigs = Server::slow_file("/files/pigs.csv", body)?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.cows]\nref = \"{}\"\n\n[datasets.pigs]\nref = \"{}\"\n",
+            cows.url, pigs.url
+        ),
+    )?;
+    let running = Background::start(sandbox.command(&["sync"]))?;
+    wait_until("bytes of both files to arrive", || {
+        let started = crate::support::partial_files(&sandbox.cache())
+            .iter()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "part")
+            })
+            .filter(|path| fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0))
+            .count();
+        Ok(started == 2)
+    })?;
+    running.interrupt()?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    let kept = told_a_stop(
+        &stderr,
+        "    Stopped while talking to 127.0.0.1, so nothing changed",
+    )?;
+    let kept = kept
+        .trim_start()
+        .strip_prefix("the ")
+        .and_then(|rest| rest.split_once(" downloaded so far"))
+        .map(|(size, _)| size)
+        .ok_or_else(|| format!("no size in {kept}"))?;
+    let rerun = sandbox.run(&["sync"])?;
+    let told = text(&rerun.stderr)?;
+    assert!(rerun.status.success(), "{told}");
+    let earlier = told
+        .lines()
+        .find_map(|line| {
+            line.strip_suffix(" from an earlier run")?
+                .rsplit(" \u{b7} ")
+                .next()
+        })
+        .ok_or_else(|| format!("the second sync continued nothing: {told}"))?;
+    assert_eq!(kept, earlier, "{stderr}\n{told}");
+    Ok(())
+}
+
 /// a sync stopped while it downloads the files data.lock already pins, as after a clone, says
 /// that nothing changed: it places files only once every one is in the cache.
 #[cfg(unix)]
