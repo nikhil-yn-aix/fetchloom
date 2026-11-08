@@ -33,7 +33,7 @@ any terminal works. colors, symbols and clickable links adapt to what the termin
 | setting | effect |
 |---|---|
 | windows terminal, vs code, conemu, and any terminal on macos or linux with a utf-8 locale | unicode symbols and color |
-| windows terminal, vs code, iterm2, wezterm, ghostty, vte 0.50 or later | links you can click, outside tmux and screen |
+| windows terminal, vs code, iterm2, wezterm, ghostty, vte 0.50 or later, konsole, kitty | links you can click, outside tmux and screen |
 | the legacy windows console | colors with plain ascii symbols |
 | `NO_COLOR`, `CLICOLOR=0`, `TERM=dumb` or `--color never` | no color |
 | `CI`, or a coding agent's variable such as `AI_AGENT` | no questions, color or animation |

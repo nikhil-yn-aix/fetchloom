@@ -197,7 +197,7 @@ python3 native_audit.py "$PWD" "$native/baseline" "$native/apfs-01/www" "$native
 python3 native_audit.py "$PWD" "$native/candidate" "$native/apfs-01/www" "$native/audit-candidate"
 ```
 
-on windows use `py -3 native_audit.py $PWD.Path "$native\candidate.exe" "$native\ntfs-01\www" "$native\audit-candidate"`, and repeat for the baseline. the helper assumes the native runner's flat zip members; the additional layout fixture below also satisfies its placement rules. do not use it as an arbitrary archive extractor.
+on windows use `py -3 native_audit.py $PWD.Path "$native\candidate.exe" "$native\ntfs-01\www" "$native\audit-candidate"`, and repeat for the baseline. the helper expects no shared top folder to strip from an archive, as in the native runner and the additional layout fixture below. do not use it as an arbitrary archive extractor.
 
 ## copies and folder layouts
 
@@ -246,7 +246,7 @@ python3 -c 'import json,sys; from native_audit import verify; verify(sys.argv[1]
 
 on windows choose a fresh project on an existing second volume, copy the same two template files with `Copy-Item`, set `$env:FETCHLOOM_CACHE` to the source cache, and use the process measurement below. require `work.copies == 10000`, `work.reflinks == 0` and `work.hardlinks == 0` for a forced-copy sample. otherwise the sample did not measure copy flushing. a same-volume apfs control should use clones when supported; read-only ntfs/ReFS controls try hardlinks first.
 
-repeat one-folder and 100-folder samples at `FETCHLOOM_THREADS` 1, 2, 4 and 8. repeat on exfat rather than transferring a linux driver result to the native driver. collect both CPU and wall time. include handle counts for many folders: the parent cache can retain 128 directory handles, while low-descriptor-limit behavior has separate regression coverage.
+repeat one-folder and 100-folder samples at `FETCHLOOM_THREADS` 1, 2, 4 and 8. repeat on exfat rather than transferring a linux driver result to the native driver. collect both CPU and wall time. include handle counts for many folders: when enabled, the parent cache can retain 128 directory handles; low-descriptor-limit behavior has separate regression coverage.
 
 ## native memory and CPU
 
@@ -276,8 +276,12 @@ $out = $process.StandardOutput.ReadToEndAsync()
 $err = $process.StandardError.ReadToEndAsync()
 $peak = 0L
 while (-not $process.WaitForExit(5)) {
-    $process.Refresh()
-    $peak = [Math]::Max($peak, $process.PeakWorkingSet64)
+    try {
+        $process.Refresh()
+        $peak = [Math]::Max($peak, $process.PeakWorkingSet64)
+    } catch {
+        if (-not $process.HasExited) { throw }
+    }
 }
 $process.WaitForExit()
 $watch.Stop()

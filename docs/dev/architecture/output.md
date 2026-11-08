@@ -63,6 +63,8 @@ bars and questions need terminal stderr outside CI, outside `TERM=dumb` and outs
 
 `TERM=dumb` disables unicode choices. a windows terminal enables them only when `WT_SESSION`, `TERM_PROGRAM` or `ConEmuANSI` is present. outside a windows terminal, the first nonempty `LC_ALL`, `LC_CTYPE` or `LANG` enables unicode only when it contains `utf-8` or `utf8`, ignoring case. with none set, unicode stays enabled. fallbacks include `...` for clipping and `>` with worded key hints in the picker. this is not an ASCII-only output mode: text from filenames and sources remains intact.
 
+clickable URLs use OSC 8, a terminal escape sequence for links. they require interactive stderr and one of `WT_SESSION`, a known `TERM_PROGRAM` (`vscode`, `iTerm.app`, `WezTerm` or `ghostty`), numeric `VTE_VERSION >= 5000`, `KONSOLE_VERSION` or `TERM=xterm-kitty`. the presence of `TMUX` or `STY` disables them. link detection is independent of color; other terminals get the plain address.
+
 ### reports and counters
 
 JSON is one completed document, not a stream of progress events. it holds schema, command, status, result, warnings, errors and work. an error can carry a partial result and per-file failures. warning collection remains independent of whether human warnings are visible. encoding finishes in a byte buffer before stdout is written, so an unsupported path produces a complete error envelope instead of a successful truncated prefix. text answers retain write failures until command completion; help returns them directly. a broken pipe is successful, while other stdout failures make a successful command fail with `local.io`.

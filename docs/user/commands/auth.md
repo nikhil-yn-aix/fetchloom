@@ -24,7 +24,7 @@ an account name must be a source name or a plain host name, not a URL, query or 
 
 ## signing in
 
-`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it:
+`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
 
 ```text
     Sign in hugging face
@@ -45,7 +45,7 @@ answering no keeps the key for that command only. a key the source refuses is ne
 | nasa earthdata, physionet, any host | `.netrc` in your home folder, or the file `NETRC` names; `_netrc` on windows when it already exists | curl, wget, python's requests |
 | zenodo, figshare, osf, dataverse | the system's credential store: windows credential manager, the macos keychain or the linux secret service | nothing else; these sources have no shared file |
 
-a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable only by you: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
+a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. credential files start with mode `0600` on unix. on windows they inherit the folder's permissions, so keep any custom credential folder private. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
 
 each key is sent over https to its own host only, on port 443 unless it was saved for another port, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there. an osf key also goes to `osf.io` and `files.osf.io` on any hop, since osf's download links start on the one and send you to the other.
 

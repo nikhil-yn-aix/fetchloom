@@ -23,12 +23,14 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `NO_COLOR` | nonempty value disables automatic color |
 | `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color even into a pipe or file, unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
-| `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. `theme=ansi`, `theme=dark` or `theme=light` picks the base the other entries change. without one, a terminal that draws full color (`COLORTERM=truecolor`, windows terminal, vs code, iTerm2, WezTerm, ghostty) gets a warm dark theme, or a light one when `COLORFGBG` says the background is white, and any other terminal keeps its own sixteen colors. an entry it cannot read keeps its default and prints one warning |
+| `FETCHLOOM_COLORS` | changes colors, as `done=blue:accent=#d787ff`. tones are `done`, `work`, `warn`, `fail` and `accent`; colors are a name such as `magenta` or `bright-blue`, a 256-color number or `#rrggbb`. `theme=ansi`, `theme=dark` or `theme=light` picks the base the other entries change. without one, a terminal that draws full color (`COLORTERM=truecolor` or `24bit`, windows terminal, vs code, iTerm2, WezTerm, ghostty) gets a warm dark theme, or a light one when `COLORFGBG` says the background is white, and any other terminal keeps its own sixteen colors. an entry it cannot read keeps its default and prints one warning |
 | `FETCHLOOM_NO_HINTS` | exactly `1` drops the `hint:` and `next:` lines that suggest a next step. warnings, errors and their `help:` stay |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
 | `AI_AGENT`, `VSCODE_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `ANTIGRAVITY_AGENT` | a nonempty value other than `0` or `false` marks a coding agent's command: no questions, automatic color or animated progress, as under `CI` |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
+| `COLORTERM`, `COLORFGBG` | terminal-reported color depth and background select the base palette unless `theme=` overrides it |
+| `VTE_VERSION`, `KONSOLE_VERSION`, `TMUX`, `STY` | terminal or multiplexer indicators used for [clickable-link detection](../../dev/architecture/output.md#terminal-capabilities), alongside `WT_SESSION`, `TERM_PROGRAM` and `TERM` |
 | `LC_ALL`, `LC_CTYPE`, `LANG` | outside a windows terminal, the first nonempty value decides unicode fallbacks: it must contain `utf-8` or `utf8`, ignoring case. with none set, unicode stays enabled; `TERM=dumb` still disables it |
 
 [terminal output](../../dev/architecture/output.md#terminal-capabilities) owns color precedence, stream detection and unicode fallbacks.
@@ -57,7 +59,7 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 
 | variable | effect |
 |---|---|
-| `FETCHLOOM_KEYRING` | `0` keeps keys out of the system's credential store; `auth login` then asks before saving them in a file only you can read |
+| `FETCHLOOM_KEYRING` | `0` keeps keys out of the system's credential store; `auth login` then asks before using the [credential-file fallback](../commands/auth.md#signing-in) |
 | `NETRC` | the `.netrc` file to read and to save logins in |
 
 a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, and an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. no key appears in `data.toml`, `data.lock`, logs or `--json` output. recognized credential fields in URL queries and fragments are masked in output and refused in project references. a key holding a character no header can carry, such as a line break, is left out of every request; [`fetchloom auth`](../commands/auth.md#status) warns about it.
