@@ -41,7 +41,7 @@ flowchart LR
     flush --> publish["publish objects and record tree"]
 ```
 
-the off-by-default `FETCHLOOM_EXP_ARCH_STAGE_SHARDS` experiment spreads staging files over that many subfolders, capped at 256. the staging lock still covers the whole archive. cleanup recognizes sharded staging even when a later run disables the switch, and lockless age checks include the files inside shards.
+each archive spreads staging files over 16 lazily created subfolders to reduce contention on one folder. the staging lock covers the whole archive. cleanup visits the subfolders, and lockless age checks include their member files.
 
 members up to 1 MiB travel to writers in memory; larger ones spill to disk while the reader streams them. each archive uses up to eight writer threads, no more than the logical CPU count. queues are bounded; the retained member tree still grows with file count.
 

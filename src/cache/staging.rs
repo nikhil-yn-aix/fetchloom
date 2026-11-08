@@ -14,12 +14,14 @@ use super::{Cache, Failure, NewObject};
 use crate::place::Placer;
 use crate::stop::Stop;
 
+const SHARDS: usize = 16;
+
 pub(crate) struct Staging {
     cache: Cache,
     folder: PathBuf,
     lock: Option<File>,
     namespace: Placer,
-    shards: Box<[AtomicBool]>,
+    shards: [AtomicBool; SHARDS],
 }
 
 impl Cache {
@@ -28,11 +30,6 @@ impl Cache {
     pub(crate) fn staging(&self) -> io::Result<Arc<Staging>> {
         self.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
         let namespace = Placer::in_named_folder(&self.root);
-        let shards = self
-            .experiments()
-            .number("ARCH_STAGE_SHARDS")
-            .unwrap_or(0)
-            .min(256);
         let mut staging = loop {
             let folder = self
                 .root
@@ -45,7 +42,7 @@ impl Cache {
                         folder,
                         lock: None,
                         namespace,
-                        shards: (0..shards).map(|_| AtomicBool::new(false)).collect(),
+                        shards: std::array::from_fn(|_| AtomicBool::new(false)),
                     };
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
@@ -304,11 +301,6 @@ impl Staging {
     }
 
     pub(crate) fn new_object(self: &Arc<Self>) -> io::Result<NewObject> {
-        if self.shards.is_empty() {
-            return self
-                .cache
-                .new_object_in(&self.folder, Some(Arc::clone(self)));
-        }
         let shard = fastrand::usize(..self.shards.len());
         let folder = self.folder.join(format!("{shard:02x}"));
         if !self.shards[shard].load(Ordering::Relaxed) {
@@ -342,9 +334,20 @@ mod tests {
     use std::io::Write;
 
     use super::*;
-    use crate::exp::Experiments;
 
     use super::super::tests::cache;
+
+    #[cfg(unix)]
+    fn member_path(staging: &Staging) -> PathBuf {
+        fs::read_dir(&staging.folder)
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .flat_map(|entry| fs::read_dir(entry.path()).unwrap().map(Result::unwrap))
+            .find(|entry| entry.path().extension().is_some_and(|ext| ext == "new"))
+            .unwrap()
+            .path()
+    }
 
     #[cfg(unix)]
     #[test]
@@ -374,19 +377,16 @@ mod tests {
         let staging = cache.staging().unwrap();
         let mut object = staging.new_object().unwrap();
         object.write_all(b"partial").unwrap();
-        let name = fs::read_dir(&staging.folder)
-            .unwrap()
-            .map(Result::unwrap)
-            .find(|entry| entry.path().extension().is_some_and(|ext| ext == "new"))
-            .unwrap()
-            .file_name();
+        let member = member_path(&staging);
+        let relative = member.strip_prefix(&staging.folder).unwrap();
         let outside = dir.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join(&name), b"foreign").unwrap();
+        let victim = outside.join(relative);
+        fs::create_dir_all(victim.parent().unwrap()).unwrap();
+        fs::write(&victim, b"foreign").unwrap();
         fs::rename(&staging.folder, cache.root().join("tmp/saved.stage")).unwrap();
         std::os::unix::fs::symlink(&outside, &staging.folder).unwrap();
         drop(object);
-        assert_eq!(fs::read(outside.join(&name)).unwrap(), b"foreign");
+        assert_eq!(fs::read(&victim).unwrap(), b"foreign");
     }
 
     #[cfg(unix)]
@@ -405,9 +405,9 @@ mod tests {
     fn a_staging_sweep_dry_run_records_but_does_not_remove_files() {
         let (_dir, cache) = cache();
         let folder = cache.root().join("tmp/0123456789abcdef.stage");
-        fs::create_dir(&folder).unwrap();
+        fs::create_dir_all(folder.join("03")).unwrap();
         fs::write(folder.join("lock"), b"").unwrap();
-        let member = folder.join("member.new");
+        let member = folder.join("03/member.new");
         fs::write(&member, b"keep").unwrap();
         let pretending = cache.pretending();
         let mut failures = Vec::new();
@@ -432,71 +432,57 @@ mod tests {
         let staging = cache.staging().unwrap();
         let mut object = staging.new_object().unwrap();
         object.write_all(b"member").unwrap();
-        let name = fs::read_dir(&staging.folder)
-            .unwrap()
-            .map(Result::unwrap)
-            .find(|entry| entry.path().extension().is_some_and(|ext| ext == "new"))
-            .unwrap()
-            .file_name();
+        let member = member_path(&staging);
+        let relative = member.strip_prefix(&staging.folder).unwrap();
         let sealed = object.seal(true).unwrap();
         let outside = dir.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join(&name), b"foreign").unwrap();
+        let victim = outside.join(relative);
+        fs::create_dir_all(victim.parent().unwrap()).unwrap();
+        fs::write(&victim, b"foreign").unwrap();
         fs::rename(&staging.folder, cache.root().join("tmp/saved.stage")).unwrap();
         std::os::unix::fs::symlink(&outside, &staging.folder).unwrap();
         assert!(sealed.publish(&cache).is_err());
-        assert_eq!(fs::read(outside.join(&name)).unwrap(), b"foreign");
+        assert_eq!(fs::read(&victim).unwrap(), b"foreign");
         assert!(cache.objects().is_empty());
     }
 
     #[test]
-    fn staging_shards_are_opt_in_bounded_and_cleaned() {
-        for (value, count) in [
-            (None, 0),
-            (Some("0"), 0),
-            (Some("4"), 4),
-            (Some("18446744073709551615"), 256),
-        ] {
-            let (_dir, cache) = cache();
-            let exp = value.map_or_else(Experiments::default, |value| {
-                Experiments::default().with("ARCH_STAGE_SHARDS", value)
-            });
-            let cache = cache.with_experiments(exp);
-            let staging = cache.staging().unwrap();
-            assert_eq!(staging.shards.len(), count);
-            let mut objects = Vec::new();
-            for _ in 0..32 {
-                let mut object = staging.new_object().unwrap();
-                object.write_all(b"member").unwrap();
-                objects.push(object);
-            }
-            let entries: Vec<_> = fs::read_dir(&staging.folder)
-                .unwrap()
-                .map(Result::unwrap)
-                .collect();
-            let folders: Vec<_> = entries
-                .iter()
-                .filter(|entry| entry.file_type().unwrap().is_dir())
-                .collect();
-            if count == 0 {
-                assert!(folders.is_empty());
-                assert_eq!(entries.len(), 33);
-            } else {
-                assert!(!folders.is_empty() && folders.len() <= count);
-                let files: usize = folders
-                    .iter()
-                    .map(|folder| fs::read_dir(folder.path()).unwrap().count())
-                    .sum();
-                assert_eq!(files, 32);
-            }
-            drop(objects);
-            drop(staging);
-            assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    fn staging_members_stay_in_sixteen_shards_until_cleanup() {
+        let (_dir, cache) = cache();
+        let staging = cache.staging().unwrap();
+        let mut objects = Vec::new();
+        for _ in 0..32 {
+            let mut object = staging.new_object().unwrap();
+            object.write_all(b"member").unwrap();
+            objects.push(object);
         }
+        let entries: Vec<_> = fs::read_dir(&staging.folder)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let folders: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .collect();
+        assert_eq!(entries.len(), folders.len() + 1);
+        assert!(!folders.is_empty());
+        for folder in &folders {
+            let name = folder.file_name().to_string_lossy().into_owned();
+            assert_eq!(name.len(), 2);
+            assert!(usize::from_str_radix(&name, 16).unwrap() < 16);
+        }
+        let files: usize = folders
+            .iter()
+            .map(|folder| fs::read_dir(folder.path()).unwrap().count())
+            .sum();
+        assert_eq!(files, 32);
+        drop(objects);
+        drop(staging);
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
     }
 
     #[test]
-    fn staging_sweep_clears_abandoned_shards_with_the_switch_off() {
+    fn staging_sweep_clears_abandoned_shards() {
         let (_dir, cache) = cache();
         let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
         fs::create_dir_all(folder.join("03")).unwrap();
@@ -511,40 +497,36 @@ mod tests {
 
     #[test]
     fn staging_shards_keep_the_live_lock() {
-        for value in ["0", "4"] {
-            let (_dir, cache) = cache();
-            let cache =
-                cache.with_experiments(Experiments::default().with("ARCH_STAGE_SHARDS", value));
-            let staging = cache.staging().unwrap();
-            let object = staging.new_object().unwrap();
-            if staging.lock.is_none() {
-                continue;
-            }
-            let mut paths = vec![staging.folder.clone()];
-            let mut at = 0;
-            while at < paths.len() {
-                if paths[at].is_dir() {
-                    paths.extend(
-                        fs::read_dir(&paths[at])
-                            .unwrap()
-                            .map(|entry| entry.unwrap().path()),
-                    );
-                }
-                at += 1;
-            }
-            let latest = paths
-                .iter()
-                .map(|path| fs::metadata(path).unwrap().modified().unwrap())
-                .max()
-                .unwrap();
-            let later = latest + GRACE + std::time::Duration::from_secs(1);
-            assert_eq!(
-                cache.sweep_staging(later, &Stop::default(), &mut Vec::new()),
-                0
-            );
-            assert!(staging.folder.is_dir());
-            drop(object);
+        let (_dir, cache) = cache();
+        let staging = cache.staging().unwrap();
+        let object = staging.new_object().unwrap();
+        if staging.lock.is_none() {
+            return;
         }
+        let mut paths = vec![staging.folder.clone()];
+        let mut at = 0;
+        while at < paths.len() {
+            if paths[at].is_dir() {
+                paths.extend(
+                    fs::read_dir(&paths[at])
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path()),
+                );
+            }
+            at += 1;
+        }
+        let latest = paths
+            .iter()
+            .map(|path| fs::metadata(path).unwrap().modified().unwrap())
+            .max()
+            .unwrap();
+        let later = latest + GRACE + std::time::Duration::from_secs(1);
+        assert_eq!(
+            cache.sweep_staging(later, &Stop::default(), &mut Vec::new()),
+            0
+        );
+        assert!(staging.folder.is_dir());
+        drop(object);
     }
 
     #[cfg(unix)]
@@ -588,11 +570,12 @@ mod tests {
     fn a_swapped_staging_parent_cannot_redirect_shards_or_members() {
         for prepared in [false, true] {
             let (dir, cache) = cache();
-            let cache =
-                cache.with_experiments(Experiments::default().with("ARCH_STAGE_SHARDS", "1"));
             let staging = cache.staging().unwrap();
             if prepared {
-                drop(staging.new_object().unwrap());
+                for shard in 0..SHARDS {
+                    fs::create_dir(staging.folder.join(format!("{shard:02x}"))).unwrap();
+                    staging.shards[shard].store(true, Ordering::Relaxed);
+                }
             }
             let outside = dir.path().join("outside");
             fs::create_dir(&outside).unwrap();
@@ -601,22 +584,5 @@ mod tests {
             assert!(staging.new_object().is_err());
             assert_eq!(fs::read_dir(outside).unwrap().count(), 0);
         }
-    }
-
-    #[test]
-    fn a_sharded_dry_run_keeps_members_and_reports_their_names() {
-        let (_dir, cache) = cache();
-        let folder = cache.root().join("tmp/0123456789abcdef.stage");
-        fs::create_dir_all(folder.join("03")).unwrap();
-        fs::write(folder.join("lock"), b"").unwrap();
-        let member = folder.join("03/member.new");
-        fs::write(&member, b"keep").unwrap();
-        let pretending = cache.pretending();
-        assert_eq!(
-            pretending.sweep_staging(SystemTime::UNIX_EPOCH, &Stop::default(), &mut Vec::new()),
-            1
-        );
-        assert_eq!(fs::read(&member).unwrap(), b"keep");
-        assert!(pretending.pretended().contains(&member));
     }
 }

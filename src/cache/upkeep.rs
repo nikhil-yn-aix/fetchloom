@@ -802,9 +802,9 @@ mod tests {
     fn a_sweep_removes_unlocked_staging_without_waiting() {
         for (_dir, cache) in [cache(), fat()] {
             let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
-            fs::create_dir(&folder).unwrap();
+            fs::create_dir_all(folder.join("03")).unwrap();
             fs::write(folder.join("lock"), b"").unwrap();
-            let member = folder.join("member.new");
+            let member = folder.join("03/member.new");
             fs::write(&member, b"unfinished").unwrap();
             seal(&member);
             let freed = cache.sweep(&Needed::default(), SystemTime::now());
@@ -817,9 +817,9 @@ mod tests {
     fn staging_without_locking_keeps_the_age_rule() {
         for (_dir, cache) in [cache(), fat()] {
             let folder = cache.root().join("tmp").join("0123456789abcdef.stage");
-            fs::create_dir(&folder).unwrap();
+            fs::create_dir_all(folder.join("03")).unwrap();
             fs::write(folder.join("unlocked"), b"").unwrap();
-            let member = folder.join("member.new");
+            let member = folder.join("03/member.new");
             fs::write(&member, b"unfinished").unwrap();
             let now = SystemTime::now();
             let written = now + GRACE;

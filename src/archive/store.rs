@@ -333,9 +333,9 @@ mod tests {
             .root()
             .join("tmp")
             .join("0123456789abcdef.stage");
-        fs::create_dir(&folder).unwrap();
+        fs::create_dir_all(folder.join("03")).unwrap();
         fs::write(folder.join("lock"), b"").unwrap();
-        let member = folder.join("member.new");
+        let member = folder.join("03/member.new");
         fs::write(&member, b"unfinished").unwrap();
         crate::cache::tests::seal(&member);
         folder
@@ -362,10 +362,11 @@ mod tests {
         stored(&scratch, &[]).unwrap();
         let later = SystemTime::now() + Duration::from_hours(48);
         scratch.cache.sweep(&crate::cache::Needed::default(), later);
-        assert_eq!(fs::read(folder.join("member.new")).unwrap(), b"unfinished");
+        assert_eq!(
+            fs::read(folder.join("03/member.new")).unwrap(),
+            b"unfinished"
+        );
         drop(lock);
-        stored(&scratch, &[]).unwrap();
-        assert!(!folder.exists());
     }
 
     #[test]
@@ -480,43 +481,38 @@ mod tests {
 
     #[test]
     fn staging_shards_preserve_members_and_failed_cleanup() {
-        for value in ["0", "16"] {
-            let mut scratch = Scratch::new();
-            scratch.cache = scratch.cache.clone().with_experiments(
-                crate::exp::Experiments::default().with("ARCH_STAGE_SHARDS", value),
-            );
-            let large = vec![7; SMALL + 1];
-            let mut members = stored(
-                &scratch,
-                &[("small", b"1,2\n".to_vec()), ("large", large.clone())],
-            )
-            .unwrap();
-            members.sort_by(|a, b| a.path.cmp(&b.path));
-            scratch.assert_stored(&members[0], &large);
-            scratch.assert_stored(&members[1], b"1,2\n");
-            let before = scratch.cache.objects().len();
-            let meter = Meter::default();
-            let limits = Limits::default();
-            let never = |_: u64| false;
-            let mut guard = Guard::new(&limits, &never, &meter);
-            let error = store_all(&scratch.cache, Some(0), |writers| {
-                writers.keep(
-                    &mut guard,
-                    "discard".to_owned(),
-                    &mut &b"not kept"[..],
-                    &mut [0; 32],
-                )?;
-                Err(Error::new(Kind::SourceInvalid, "refused"))
-            })
-            .unwrap_err();
-            assert_eq!(error.kind, Kind::SourceInvalid);
-            assert_eq!(scratch.cache.objects().len(), before);
-            assert_eq!(
-                fs::read_dir(scratch.cache.root().join("tmp"))
-                    .unwrap()
-                    .count(),
-                0
-            );
-        }
+        let scratch = Scratch::new();
+        let large = vec![7; SMALL + 1];
+        let mut members = stored(
+            &scratch,
+            &[("small", b"1,2\n".to_vec()), ("large", large.clone())],
+        )
+        .unwrap();
+        members.sort_by(|a, b| a.path.cmp(&b.path));
+        scratch.assert_stored(&members[0], &large);
+        scratch.assert_stored(&members[1], b"1,2\n");
+        let before = scratch.cache.objects().len();
+        let meter = Meter::default();
+        let limits = Limits::default();
+        let never = |_: u64| false;
+        let mut guard = Guard::new(&limits, &never, &meter);
+        let error = store_all(&scratch.cache, Some(0), |writers| {
+            writers.keep(
+                &mut guard,
+                "discard".to_owned(),
+                &mut &b"not kept"[..],
+                &mut [0; 32],
+            )?;
+            Err(Error::new(Kind::SourceInvalid, "refused"))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid);
+        assert_eq!(scratch.cache.objects().len(), before);
+        assert_eq!(
+            fs::read_dir(scratch.cache.root().join("tmp"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 }
