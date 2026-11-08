@@ -1,4 +1,4 @@
-//! the network: one HTTP client, polite retries, resumable downloads, and rules about where a
+//! the network: bounded HTTP work, polite retries, resumable downloads, and rules about where a
 //! request may go and which credentials go with it.
 
 mod address;
@@ -197,7 +197,7 @@ fn key_origin(host: &str) -> Option<(String, u16)> {
 /// the HTTP clients and the proxies their requests go through.
 struct Wire {
     client: reqwest::Client,
-    /// for the added streams of a split download: HTTP/1.1, so each request has a connection of
+    /// for file bodies and added ranges: HTTP/1.1, so each request has a connection of
     /// its own instead of sharing one with every other request to the host. made when first
     /// needed.
     apart: OnceLock<Result<reqwest::Client, Error>>,
@@ -209,7 +209,7 @@ struct Wire {
 }
 
 /// which client sends a request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 enum Lane {
     Shared,
     Apart,
@@ -387,20 +387,12 @@ impl Net {
         self.link_ranges() && headers::if_range(validators).is_some()
     }
 
-    fn body_lane(&self) -> Lane {
-        if self.exp().on("NET_BODY_CONNECTIONS") {
-            Lane::Apart
-        } else {
-            Lane::Shared
-        }
-    }
-
     async fn send_body(
         &self,
         url: &Url,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
-        let response = self.send_on(self.body_lane(), url, shape).await?;
+        let response = self.send_on(Lane::Apart, url, shape).await?;
         tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
         Ok(response)
     }
@@ -701,27 +693,19 @@ mod tests {
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         net.typed(&url);
         assert!(block_on(net.send(&url, |request| request)).is_ok());
-        assert!(block_on(net.send_apart(&url, |request| request)).is_ok());
+        assert!(block_on(net.send_body(&url, |request| request)).is_ok());
         let heads = serving.join().unwrap();
         assert!(heads[1].contains("cookie: session=abc"), "{}", heads[1]);
     }
 
     #[test]
-    fn body_connection_settings_keep_the_default_and_bound_each_host() {
-        for (setting, cap, lane) in [
-            (None, 4, Lane::Shared),
-            (Some("0"), 4, Lane::Shared),
-            (Some(""), 4, Lane::Shared),
-            (Some("1"), 4, Lane::Apart),
-        ] {
-            let exp = setting.map_or_else(Experiments::default, |value| {
-                Experiments::default().with("NET_BODY_CONNECTIONS", value)
-            });
+    fn request_slots_are_shared_across_paths_and_ports_of_a_host() {
+        for jobs in [1, 8] {
             let net = Net::new(
                 Options {
-                    exp,
+                    exp: Experiments::default(),
                     offline: Offline::No,
-                    jobs: 8,
+                    jobs,
                     credentials: Vec::new(),
                     split: Splitting::Never,
                 },
@@ -729,16 +713,15 @@ mod tests {
                 Arc::default(),
                 Arc::new(|_| {}),
             );
-            assert_eq!(net.body_lane(), lane, "{setting:?}");
             let url = Url::parse("https://example.org/one").unwrap();
-            assert_eq!(net.slots(&url).available_permits(), cap);
+            assert_eq!(net.slots(&url).available_permits(), PER_HOST);
             let held: Vec<_> = std::iter::from_fn(|| net.try_permit(&url)).collect();
-            assert_eq!(held.len(), cap.min(8), "{setting:?}");
+            assert_eq!(held.len(), PER_HOST.min(jobs));
             let other = Url::parse("https://EXAMPLE.org:8443/two").unwrap();
             assert!(net.try_permit(&other).is_none());
-            assert!(net.wire.get().is_none());
         }
     }
+
     #[test]
     fn finished_bodies_release_slots_before_the_publication_future_runs() {
         use crate::source::recorded::block_on;

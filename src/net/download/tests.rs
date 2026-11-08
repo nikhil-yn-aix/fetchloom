@@ -881,38 +881,18 @@ fn malformed_tags_do_not_enable_range_splitting() {
 }
 
 #[test]
-fn a_body_transport_setting_uses_the_selected_pool() {
-    for enabled in [false, true] {
-        let (url, asked) = serve(vec![reply("200 OK", &[], "data")]);
-        let folder = tempfile::tempdir().unwrap();
-        let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let exp = if enabled {
-            crate::exp::Experiments::default().with("NET_BODY_CONNECTIONS", "1")
-        } else {
-            crate::exp::Experiments::default()
-        };
-        let net = Net::new(
-            Options {
-                exp,
-                offline: crate::net::Offline::No,
-                jobs: 8,
-                credentials: Vec::new(),
-                split: crate::net::Splitting::Never,
-            },
-            Arc::default(),
-            Arc::default(),
-            Arc::new(|_| {}),
-        );
-        net.typed(&url);
-        let fetched =
-            block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
-        assert_eq!(
-            fs::read(cache.object_path(&fetched.digest)).unwrap(),
-            b"data"
-        );
-        assert_eq!(net.wire().unwrap().apart.get().is_some(), enabled);
-        assert_eq!(asked.lock().unwrap().len(), 1);
-    }
+fn file_bodies_use_the_separate_connection_pool() {
+    let (url, asked) = serve(vec![reply("200 OK", &[], "data")]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url);
+    let fetched = block_on(net.download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"data"
+    );
+    assert!(net.wire().unwrap().apart.get().is_some());
+    assert_eq!(asked.lock().unwrap().len(), 1);
 }
 
 #[test]
