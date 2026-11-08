@@ -1548,6 +1548,10 @@ async fn sync_all(
         Read::Settled(seen) => {
             if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
             {
+                // nothing is left to do, so a stop asked from here on, as by ctrl-c while the
+                // last lines print, leaves the sync done
+                work.context.stop.check()?;
+                work.context.stop.finish();
                 register(work);
                 return Ok(Outcome {
                     lock_changed: false,
@@ -2573,6 +2577,81 @@ mod tests {
             "data.lock lists a path twice"
         );
         assert!(Lock::parse(&old.render()).is_ok());
+    }
+
+    /// a sync that finds its project settled has nothing left to do, so a stop asked once it
+    /// found so, as by ctrl-c while it prints its last lines, leaves it done, while one asked
+    /// before ends it as stopped.
+    #[test]
+    fn a_stop_once_a_settled_sync_found_nothing_to_do_leaves_it_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        std::fs::create_dir(&project.root).unwrap();
+        project.write(manifest::FILE, b"").unwrap();
+        let manifest = Manifest::parse("").unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        // a first sync writes data.lock and the state that vouch for the project
+        let first = offline_context();
+        let unlocked = Seen {
+            manifest: digest::sha256(b""),
+            lock: None,
+        };
+        let work = Loop::new(&first, &project, Arc::new(first.net()), cache.clone());
+        let synced = sync_all(
+            &work,
+            &manifest,
+            None,
+            &Upgrade::Nothing,
+            false,
+            false,
+            None,
+            Read::Planned(&unlocked),
+        );
+        assert!(super::super::block_on(&first, synced).is_ok());
+        let (lock, text) = project.lock_and_text().unwrap().unwrap();
+        let seen = Seen {
+            manifest: digest::sha256(b""),
+            lock: Some(digest::sha256(text.as_bytes())),
+        };
+        let survey = Survey::read(&project, &manifest.data_dir, first.threads);
+        assert!(
+            place::untouched(&project, &manifest, &survey, &seen, false)
+                .unwrap()
+                .is_some(),
+            "the project is not settled"
+        );
+        let mut stopped = Vec::new();
+        for late in [true, false] {
+            let context = offline_context();
+            let work = Loop::new(&context, &project, Arc::new(context.net()), cache.clone());
+            let synced = super::super::block_on(&context, async {
+                if !late {
+                    context.stop.ask();
+                }
+                let synced = sync_all(
+                    &work,
+                    &manifest,
+                    Some(lock.clone()),
+                    &Upgrade::Nothing,
+                    false,
+                    false,
+                    None,
+                    Read::Settled(&seen),
+                )
+                .await;
+                context.stop.ask();
+                synced.map(|_| ())
+            });
+            stopped.push(synced.err().map(|error| error.kind));
+        }
+        assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
     }
 
     /// a project whose data.toml and data.lock pin dataset a, as an add of dataset b holds and
