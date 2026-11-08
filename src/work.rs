@@ -13,7 +13,7 @@ pub(crate) struct Work {
     pub(crate) objects_written: AtomicU64,
     /// downloads skipped because the cache already held their bytes, as a link's record or a
     /// stated MD5 showed.
-    pub(crate) cache_hits: AtomicU64,
+    pub(crate) downloads_skipped: AtomicU64,
     pub(crate) reflinks: AtomicU64,
     pub(crate) hardlinks: AtomicU64,
     pub(crate) copies: AtomicU64,
@@ -32,7 +32,7 @@ impl Default for Work {
             retries: AtomicU64::default(),
             resumes: AtomicU64::default(),
             objects_written: AtomicU64::default(),
-            cache_hits: AtomicU64::default(),
+            downloads_skipped: AtomicU64::default(),
             reflinks: AtomicU64::default(),
             hardlinks: AtomicU64::default(),
             copies: AtomicU64::default(),
@@ -54,10 +54,7 @@ pub(crate) struct Counts {
     pub(crate) retries: u64,
     pub(crate) resumes: u64,
     pub(crate) objects_written: u64,
-    /// `--json` names it for what it counts: downloads skipped because the cache held the
-    /// bytes.
-    #[serde(rename = "downloads_skipped")]
-    pub(crate) cache_hits: u64,
+    pub(crate) downloads_skipped: u64,
     pub(crate) reflinks: u64,
     pub(crate) hardlinks: u64,
     pub(crate) copies: u64,
@@ -77,7 +74,7 @@ impl Work {
             retries: read(&self.retries),
             resumes: read(&self.resumes),
             objects_written: read(&self.objects_written),
-            cache_hits: read(&self.cache_hits),
+            downloads_skipped: read(&self.downloads_skipped),
             reflinks: read(&self.reflinks),
             hardlinks: read(&self.hardlinks),
             copies: read(&self.copies),

@@ -576,7 +576,11 @@ impl Output {
             (counts.retries, "retry", "retries"),
             (counts.resumes, "resume", "resumes"),
             (counts.objects_written, "new object", "new objects"),
-            (counts.cache_hits, "download skipped", "downloads skipped"),
+            (
+                counts.downloads_skipped,
+                "download skipped",
+                "downloads skipped",
+            ),
             (counts.reflinks, "reflink", "reflinks"),
             (counts.hardlinks, "hardlink", "hardlinks"),
             (counts.copies, "copy", "copies"),

@@ -482,7 +482,7 @@ impl Net {
             size = fetched.size,
             "in the cache, no download"
         );
-        Work::add(&self.work.cache_hits, 1);
+        Work::add(&self.work.downloads_skipped, 1);
         Some(fetched)
     }
 

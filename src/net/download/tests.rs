@@ -94,7 +94,7 @@ async fn an_uncontended_claim_rechecks_bytes_published_after_the_cache_miss() {
         assert_eq!(fetched.size, 4);
         assert_eq!(net.work.counts().requests, 0);
         assert_eq!(net.work.counts().bytes_down, 0);
-        assert_eq!(net.work.counts().cache_hits, 1);
+        assert_eq!(net.work.counts().downloads_skipped, 1);
     }
 }
 
