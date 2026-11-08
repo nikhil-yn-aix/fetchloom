@@ -107,6 +107,15 @@ impl Offline {
             Self::Both => "unset FETCHLOOM_OFFLINE, then run it again without --offline",
         }
     }
+
+    /// what to do when offline work needs bytes the cache lacks: go online, or use a cache that
+    /// holds `them`, as a CI job restores one.
+    pub(crate) fn missing_help(self, them: &str) -> String {
+        format!(
+            "{} to download {them}, or set FETCHLOOM_CACHE to a cache folder that already holds {them}",
+            self.retry()
+        )
+    }
 }
 
 pub(crate) struct Options {

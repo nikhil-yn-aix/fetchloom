@@ -92,22 +92,7 @@ fetchloom --json --offline path iris
 
 ## CI cache
 
-restore `FETCHLOOM_CACHE` using the operating system, architecture and `data.lock` hash. after checkout, with fetchloom [installed from source](getting-started.md#install), these GitHub Actions steps try offline first and allow a download on a cache miss:
-
-```yaml
-- uses: actions/cache@v4
-  with:
-    path: .fetchloom-cache
-    key: data-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('data.lock') }}
-- name: restore research inputs
-  shell: bash
-  env:
-    FETCHLOOM_CACHE: ${{ github.workspace }}/.fetchloom-cache
-  run: |
-    fetchloom sync --locked --offline || fetchloom sync --locked --yes
-```
-
-`--locked` fails with `lock.outdated`, exit 1, when the manifest and lock differ. neither attempt updates stale pins. remove `--yes` if the job must not approve a large download. this recipe checks command success; jobs that reject preserved edits must also inspect [placement results](#checking-and-syncing).
+[CI](ci.md) keeps the cache between jobs, keyed on `data.lock`, with recipes for github actions and gitlab ci.
 
 ## errors and exit codes
 

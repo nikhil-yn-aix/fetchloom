@@ -40,6 +40,7 @@
   - [project folder](user/reference/project-folder.md)
   - [compatibility](user/reference/compatibility.md)
   - [scripting](user/scripting.md)
+  - [CI](user/ci.md)
   - [AI agents](user/ai-agents.md)
   - [windows](user/windows.md)
   - [macos](user/macos.md)

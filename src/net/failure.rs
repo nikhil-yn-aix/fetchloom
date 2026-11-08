@@ -286,7 +286,7 @@ pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
         Kind::OfflineMissing,
         format!("offline, and {} is not in the cache", Shown(url)),
     )
-    .help(format!("{} to download it", mode.retry()))
+    .help(mode.missing_help("it"))
 }
 
 pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {

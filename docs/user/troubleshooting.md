@@ -29,7 +29,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `fetchloom: command not found`, or `fetchloom is not recognized` on windows | the terminal started before rust added its folder to PATH | open a new terminal; if that fails, check `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on windows) holds fetchloom |
 | `error: there is no command called "init"` | no setup command is needed | run `fetchloom add <link>` in the project folder |
 | `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
-| `error: offline, and 1 file the lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |
+| `error: offline, and 1 file the lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1`. a CI job can restore a cache that holds them, as [CI](ci.md) shows |
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
 | `error: iris/iris.csv is not the file that was locked` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here` | the download needs approval without an interactive terminal | check the size, then pass `--yes` if approved |

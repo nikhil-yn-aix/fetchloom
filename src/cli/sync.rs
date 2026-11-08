@@ -570,7 +570,7 @@ impl<'a> Loop<'a> {
             ),
         );
         error = shown_five(error, missing);
-        error.help(format!("{} to download them", self.net.offline().retry()))
+        error.help(self.net.offline().missing_help("them"))
     }
 }
 
