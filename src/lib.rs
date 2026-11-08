@@ -34,9 +34,6 @@ pub fn main() -> std::process::ExitCode {
     HOOK.call_once(|| {
         let rust = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            if threads::expected_runtime_failure(info.payload()) {
-                return;
-            }
             eprintln!(
                 "fetchloom stopped on a bug of its own, not anything you did. please report it at \
                  https://github.com/nikhil-yn-aix/fetchloom/issues with the command you ran and the \

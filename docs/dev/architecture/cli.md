@@ -28,7 +28,7 @@ command handlers order effects across modules. `Context` reads settings once and
 
 ### startup
 
-`run` parses before creating the command context. `-C` changes the working folder before command work. output style is decided once; the context then applies offline mode, job and thread limits, bandwidth settings and split policy. the runtime uses up to four workers, subject to `Threads`.
+`run` parses before creating the command context. `-C` changes the working folder before command work. output style is decided once; the context then applies offline mode, job and thread limits, bandwidth settings and split policy. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
 
 built-in environment help describes the four-request cap per initial hostname; redirects keep that initial host’s slots.
 

@@ -1,7 +1,5 @@
 //! the optional ceiling on local worker groups.
 
-use std::any::Any;
-use std::cell::Cell;
 use std::ffi::OsString;
 use std::io;
 use std::num::NonZeroUsize;
@@ -93,12 +91,7 @@ where
 {
     scoped_with(work, |job| {
         #[cfg(test)]
-        if REFUSE_AFTER.get().is_some_and(|left| {
-            REFUSE_AFTER.set(Some(left.saturating_sub(1)));
-            left == 0
-        }) {
-            return Err(io::ErrorKind::WouldBlock.into());
-        }
+        check_spawn()?;
         thread::Builder::new().spawn_scoped(scope, move || run_job(&job))
     })
 }
@@ -127,6 +120,18 @@ thread_local! {
 }
 
 #[cfg(test)]
+fn check_spawn() -> io::Result<()> {
+    if REFUSE_AFTER.get().is_some_and(|left| {
+        REFUSE_AFTER.set(Some(left.saturating_sub(1)));
+        left == 0
+    }) {
+        Err(io::ErrorKind::WouldBlock.into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 pub(crate) struct Refusing(Option<usize>);
 
 #[cfg(test)]
@@ -141,43 +146,18 @@ pub(crate) fn refuse_after(successful: usize) -> Refusing {
     Refusing(REFUSE_AFTER.replace(Some(successful)))
 }
 
-thread_local! {
-    static STARTING_RUNTIME: Cell<bool> = const { Cell::new(false) };
-}
-
-struct StartingRuntime(bool);
-
-impl Drop for StartingRuntime {
-    fn drop(&mut self) {
-        STARTING_RUNTIME.set(self.0);
-    }
-}
-
-/// tokio panics on worker-start failures rather than returning its builder's I/O result.
+/// probes thread creation before tokio can turn an immediate resource refusal into a panic.
 pub(crate) fn start_runtime<T>(start: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
-    let _starting = StartingRuntime(STARTING_RUNTIME.replace(true));
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(start)) {
-        Ok(result) => result,
-        Err(panic) => match runtime_failure(panic.as_ref()) {
-            Some(reason) => Err(io::Error::other(format!(
-                "cannot spawn a runtime worker: {reason}"
-            ))),
-            None => std::panic::resume_unwind(panic),
-        },
-    }
+    probe_thread()?
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    start()
 }
 
-/// whether the entry-point panic hook should leave this failure to `start_runtime`.
-pub(crate) fn expected_runtime_failure(panic: &(dyn Any + Send)) -> bool {
-    STARTING_RUNTIME.get() && runtime_failure(panic).is_some()
-}
-
-fn runtime_failure(panic: &(dyn Any + Send)) -> Option<&str> {
-    panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())?
-        .strip_prefix("OS can't spawn worker thread: ")
+fn probe_thread() -> io::Result<thread::JoinHandle<()>> {
+    #[cfg(test)]
+    check_spawn()?;
+    thread::Builder::new().spawn(|| {})
 }
 
 #[cfg(test)]
@@ -292,33 +272,33 @@ mod tests {
     }
 
     #[test]
-    fn runtime_thread_refusal_becomes_an_io_error() {
-        let message =
-            "OS can't spawn worker thread: Resource temporarily unavailable (os error 11)";
-        assert!(!expected_runtime_failure(&message));
-        let result: io::Result<()> = start_runtime(|| {
-            assert!(expected_runtime_failure(&message));
-            std::panic::panic_any(message);
+    fn a_refused_startup_probe_does_not_build_the_runtime() {
+        let _refusing = refuse_after(0);
+        let started = std::cell::Cell::new(false);
+        let result = start_runtime(|| {
+            started.set(true);
+            Ok(())
         });
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-        assert!(error.to_string().contains("cannot spawn a runtime worker"));
-        assert!(!expected_runtime_failure(&message));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(!started.get());
     }
 
     #[test]
-    fn runtime_errors_and_unrelated_panics_are_not_reclassified() {
-        let result: io::Result<()> = start_runtime(|| Err(io::ErrorKind::PermissionDenied.into()));
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        let result = std::panic::catch_unwind(|| {
-            let _: io::Result<()> = start_runtime(|| std::panic::panic_any("another bug"));
+    fn a_successful_probe_runs_the_builder_and_keeps_its_io_errors() {
+        let _refusing = refuse_after(1);
+        let called = std::cell::Cell::new(false);
+        let result: io::Result<()> = start_runtime(|| {
+            called.set(true);
+            assert_eq!(REFUSE_AFTER.get(), Some(0));
+            Err(io::ErrorKind::PermissionDenied.into())
         });
-        assert_eq!(
-            result.unwrap_err().downcast_ref::<&str>(),
-            Some(&"another bug")
-        );
-        assert!(!expected_runtime_failure(
-            &"OS can't spawn worker thread: refused"
-        ));
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert!(called.get());
+    }
+
+    #[test]
+    #[should_panic(expected = "another bug")]
+    fn unrelated_runtime_panics_still_propagate() {
+        let _: io::Result<()> = start_runtime(|| panic!("another bug"));
     }
 }

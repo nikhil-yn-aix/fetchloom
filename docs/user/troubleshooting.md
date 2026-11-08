@@ -101,4 +101,4 @@ an interrupted project command can leave an owner record. only delete the exact 
 
 ### the system cannot start another worker
 
-local placement, cache verification and archive work fall back to the calling thread when the OS refuses a worker. if the async runtime itself cannot start, fetchloom reports `local.io` (exit 50), including in JSON. reduce `FETCHLOOM_THREADS` or raise the process or container's thread limit, then retry. this is a resource failure, not a corrupt cache.
+local placement, cache verification and archive work fall back to the calling thread when the OS refuses a worker. before starting the async runtime, fetchloom probes whether a thread can be created. a refused probe reports `local.io` (exit 50), including in JSON. the probe does not reserve resources for later runtime workers. reduce `FETCHLOOM_THREADS` or raise the process or container's thread limit, then retry. this is a resource failure, not a corrupt cache.
