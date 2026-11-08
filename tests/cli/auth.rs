@@ -297,6 +297,32 @@ fn q_at_the_question_to_save_a_key_asks_again_and_saves_nothing() -> Result {
     Ok(())
 }
 
+/// `--yes` answers the questions signing in asks, as it answers every other question, so a key
+/// typed once is saved without another question.
+#[cfg(target_os = "linux")]
+#[test]
+fn yes_answers_the_question_to_save_a_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = sandbox.command(&["auth", "login", "hf", "--offline", "--yes"]);
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_test1234567890\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        home(&sandbox).join(".cache/huggingface/token").exists(),
+        "{screen}"
+    );
+    assert!(!screen.contains("[Y/n]"), "{screen}");
+    Ok(())
+}
+
 /// a no while signing in, to saving the key or to replacing one, and while signing out, to
 /// removing a key other tools read, changes nothing and ends as a cancel: one line says what was
 /// cancelled, and the exit code is 1, as for any no.

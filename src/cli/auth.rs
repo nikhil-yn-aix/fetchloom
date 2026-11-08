@@ -160,7 +160,7 @@ async fn sign_in(
                 "Found",
                 &format!("a {} key in {}", title(account), found.origin),
             );
-            if output.ask_yes_no("replace it?", false)? != Some(true) {
+            if agree(context, "replace it?", false)? != Some(true) {
                 after_no(rerun)?;
                 return Ok(Outcome {
                     account: account.id(),
@@ -382,6 +382,15 @@ async fn check(
 
 /// saves the key where it belongs, asking first. returns where it went, or none when it was
 /// kept for this command only.
+/// asks `question`, unless `--yes` answered it, as it answers every question a person could
+/// have been asked. nobody to ask still answers none.
+fn agree(context: &Context, question: &str, default: bool) -> Result<Option<bool>, Error> {
+    if context.yes && context.output.can_ask() {
+        return Ok(Some(true));
+    }
+    context.output.ask_yes_no(question, default)
+}
+
 fn save(
     context: &Context,
     account: &Account,
@@ -395,7 +404,7 @@ fn save(
         if told {
             return Ok(true);
         }
-        Ok(output.ask_yes_no(&question, default)? == Some(true))
+        Ok(agree(context, &question, default)? == Some(true))
     };
     let failed =
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
@@ -554,8 +563,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             if let Some(tools) = shared {
                 let question = remove_question(tools, path);
                 let removing = format!("removing the {} key, so nothing changed", title(&account));
-                match output
-                    .ask_yes_no(&question, false)
+                match agree(context, &question, false)
                     .map_err(|error| error.cancelling(&removing))?
                 {
                     Some(true) => {}
@@ -632,16 +640,18 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
             "{:>11} some datasets wait for the owner's approval",
             "2."
         ));
-        let again = output
-            .ask_yes_no("try again now?", true)
+        let again = agree(context, "try again now?", true)
             .map_err(|error| error.cancelling("trying again"))?;
         return Ok(again == Some(true));
     }
     let signing = format!("signing in to {}", title(account));
-    if !output
-        .ask_yes_no(&format!("sign in to {} now?", title(account)), true)
-        .map_err(|error| error.cancelling(&signing))?
-        .unwrap_or(false)
+    if !agree(
+        context,
+        &format!("sign in to {} now?", title(account)),
+        true,
+    )
+    .map_err(|error| error.cancelling(&signing))?
+    .unwrap_or(false)
     {
         return Ok(false);
     }

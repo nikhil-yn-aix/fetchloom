@@ -39,7 +39,7 @@ save it to /home/ada/.cache/huggingface/token? [Y/n] yes
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
-when a key is already saved, it asks before replacing it. a no to either question changes nothing: `auth login` ends with `Cancelled signing in to hugging face, so nothing changed` and exit 1. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
+when a key is already saved, it asks before replacing it; `--yes` answers both questions yes. a no to either question changes nothing: `auth login` ends with `Cancelled signing in to hugging face, so nothing changed` and exit 1. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
 
 | account | where the key goes | also read by |
 |---|---|---|
@@ -92,7 +92,7 @@ a key that holds a character no request header can carry, such as a line break, 
 
 ## signing out
 
-`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too, and a no keeps the key and exits 1; where nobody can answer, as in a script, it removes the file only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable.
+`fetchloom auth logout <account>` removes the saved key. when the source's own tools read the same file, it asks first, since they are signed out too, and a no keeps the key and exits 1. `--yes` answers that question yes, and where nobody can answer, as in a script, the file goes only with `--yes`. a key from an environment variable cannot be removed this way; unset the variable.
 
 ## JSON
 
