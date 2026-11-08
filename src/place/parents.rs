@@ -31,7 +31,25 @@ impl Identity {
 #[derive(Clone)]
 struct Parent {
     file: Arc<File>,
-    identity: Identity,
+    /// read when first needed: a copy needs it, a hardlink never does.
+    identity: OnceLock<Identity>,
+}
+
+impl Parent {
+    fn new(file: Arc<File>) -> Parent {
+        Parent {
+            file,
+            identity: OnceLock::new(),
+        }
+    }
+
+    fn identity(&self) -> io::Result<Identity> {
+        if let Some(identity) = self.identity.get() {
+            return Ok(*identity);
+        }
+        let identity = Identity::of(&self.file)?;
+        Ok(*self.identity.get_or_init(|| identity))
+    }
 }
 
 #[derive(Default)]
@@ -67,20 +85,14 @@ impl Parents {
             root.clone()
         } else {
             let file = Arc::new(open_root(root, make, real_root)?);
-            let opened = Parent {
-                identity: Identity::of(&file)?,
-                file,
-            };
+            let opened = Parent::new(file);
             let _ = self.root.set(opened.clone());
             self.root.get().cloned().unwrap_or(opened)
         };
         let file = Arc::new(open_relative(&root.file, relative, make, false)?);
-        let parent = Parent {
-            identity: Identity::of(&file)?,
-            file,
-        };
+        let parent = Parent::new(file);
         Ok(Location {
-            root_device: root.identity.device,
+            root_device: root.identity()?.device,
             root: root.file,
             relative: relative.to_path_buf(),
             parent,
@@ -216,22 +228,21 @@ impl Location {
     }
 
     pub(super) fn other_device(&self) -> bool {
-        self.parent.identity.device != self.root_device
+        // a folder that cannot be read is treated as another drive, which flushes its own copy
+        self.parent
+            .identity()
+            .map_or(true, |identity| identity.device != self.root_device)
     }
 
-    pub(super) fn metadata(&self) -> io::Result<Metadata> {
-        metadata(&self.parent.file, &self.name)
-    }
-
-    pub(super) fn hard_link(&self, object: &Path) -> io::Result<Metadata> {
+    pub(super) fn link(&self, object: &Path) -> io::Result<()> {
         native::linkat(
             native::CWD,
             object,
             &self.parent.file,
             &self.name,
             AtFlags::empty(),
-        )?;
-        self.metadata()
+        )
+        .map_err(Into::into)
     }
 
     pub(super) fn create(&self, mode: u32, retained: bool) -> io::Result<(Staged, File)> {
@@ -250,7 +261,7 @@ impl Location {
                         Staged {
                             root: Arc::clone(&self.root),
                             relative: self.relative.clone(),
-                            identity: self.parent.identity,
+                            identity: self.parent.identity()?,
                             retained: retained.then(|| self.parent.clone()),
                             hidden,
                             published: false,

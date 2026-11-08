@@ -1464,3 +1464,54 @@ fn aliases_above_the_selected_root_keep_their_filesystem_meaning() {
         CONTENTS
     );
 }
+
+/// what placing returns for each new name is what that name holds, though a hardlink takes it
+/// from the object rather than opening the name.
+#[test]
+fn placing_records_what_each_new_name_holds() {
+    for first in [Method::Hardlink, Method::Copy] {
+        let (folder, object) = cache(true);
+        let root = folder.path().join("data");
+        let destinations: Vec<PathBuf> = ["a/one.csv", "b/two.csv", "b/three.csv"]
+            .iter()
+            .map(|path| root.join(path))
+            .collect();
+        let mut placer = Placer::starting_at(root.clone(), first, None);
+        placer.check_folders(&destinations[0], true).unwrap();
+        placer.check_folders(&destinations[1], true).unwrap();
+        let results = placer.place_all(
+            destinations.len(),
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+            },
+            |metadata| (metadata.len(), metadata.modified().unwrap()),
+        );
+        for (destination, result) in destinations.iter().zip(results) {
+            let (_, (size, modified)) = result.unwrap();
+            let actual = fs::symlink_metadata(destination).unwrap();
+            assert_eq!(size, actual.len(), "{first:?}");
+            assert_eq!(modified, actual.modified().unwrap(), "{first:?}");
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hardlink_still_refuses_an_object_swapped_for_a_symlink() {
+    let (folder, object) = cache(true);
+    let outside = folder.path().join("outside");
+    fs::write(&outside, CONTENTS).unwrap();
+    fs::rename(&object, folder.path().join("original")).unwrap();
+    std::os::unix::fs::symlink(&outside, &object).unwrap();
+    let root = folder.path().join("data");
+    let destination = root.join("placed.csv");
+    let mut placer = Placer::starting_at(root, Method::Hardlink, None);
+
+    let error = placer.place(&object, &destination, false).unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(fs::symlink_metadata(&destination).is_err());
+}

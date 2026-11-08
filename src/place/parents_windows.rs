@@ -100,9 +100,8 @@ impl Location {
         fs::symlink_metadata(&self.path)
     }
 
-    pub(super) fn hard_link(&self, object: &Path) -> io::Result<Metadata> {
-        fs::hard_link(object, &self.path)?;
-        self.metadata()
+    pub(super) fn link(&self, object: &Path) -> io::Result<()> {
+        fs::hard_link(object, &self.path)
     }
 
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {

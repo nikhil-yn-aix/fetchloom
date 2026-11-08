@@ -347,8 +347,8 @@ impl Placer {
             && self.synced.is_none()
             && self.can_hardlink.load(Ordering::Relaxed);
         if early_hardlink {
-            check_object(object)?;
-            match location.hard_link(object) {
+            let checked = check_object(object)?;
+            match link_object(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
@@ -366,8 +366,8 @@ impl Placer {
             && !writable
             && self.synced.is_none()
         {
-            check_object(object)?;
-            match location.hard_link(object) {
+            let checked = check_object(object)?;
+            match link_object(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
@@ -835,9 +835,18 @@ pub(crate) fn found_folder(
     Err(io::Error::new(kind, message))
 }
 
-fn check_object(object: &Path) -> io::Result<()> {
-    if is_plain(&fs::symlink_metadata(object)?) {
-        return Ok(());
+/// links `object` at `location` and returns the object's metadata, `checked` before the link: a
+/// hardlink is the same file, so its new name needs no look of its own.
+fn link_object(location: &Location, object: &Path, checked: Metadata) -> io::Result<Metadata> {
+    location.link(object)?;
+    Ok(checked)
+}
+
+/// the object's metadata, once it is seen to be a plain file.
+fn check_object(object: &Path) -> io::Result<Metadata> {
+    let metadata = fs::symlink_metadata(object)?;
+    if is_plain(&metadata) {
+        return Ok(metadata);
     }
     Err(io::Error::new(
         io::ErrorKind::InvalidInput,
