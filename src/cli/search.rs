@@ -29,7 +29,8 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() {
         let parts = parts(output, &report.candidates);
-        let pad = widest(parts.iter().map(|(reference, _, _)| reference.as_str()));
+        let pad = widest(parts.iter().map(|(reference, _, _)| reference.as_str()))
+            .min(crate::output::REFERENCE_COLUMN);
         for (number, (reference, title, facts)) in parts.iter().enumerate() {
             output.candidate(number + 1, reference, pad, title, facts);
         }
@@ -209,7 +210,8 @@ fn parts(output: &Output, candidates: &[Candidate]) -> Vec<(String, String, Stri
         })
         .collect();
     let facts_width = widest(facts.iter().map(String::as_str));
-    let reference_width = widest(references.iter().map(String::as_str));
+    let reference_width =
+        widest(references.iter().map(String::as_str)).min(crate::output::REFERENCE_COLUMN);
     let most = output
         .width()
         .map_or(52, |width| {
@@ -267,7 +269,8 @@ fn pad(text: &str, width: usize, right: bool) -> String {
 /// the candidates as plain aligned lines, for the picker and for an error's details.
 fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
     let parts = parts(output, candidates);
-    let width = widest(parts.iter().map(|(reference, _, _)| reference.as_str()));
+    let width = widest(parts.iter().map(|(reference, _, _)| reference.as_str()))
+        .min(crate::output::REFERENCE_COLUMN);
     parts
         .into_iter()
         .map(|(reference, title, facts)| {
@@ -358,5 +361,43 @@ mod tests {
             ]
         );
         assert_eq!(rows[0].len(), rows[2].len(), "downloads end in one column");
+    }
+
+    #[test]
+    fn one_long_reference_does_not_widen_every_row() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let long = format!("hf:datasets/a/{}", "x".repeat(80));
+        let candidates = vec![
+            Candidate {
+                reference: Reference::parse("kaggle:uciml/iris").unwrap().reference,
+                title: "Iris Species".to_owned(),
+                source: "kaggle",
+                size: Some(3687),
+                downloads: None,
+                note: None,
+            },
+            Candidate {
+                reference: Reference::parse(&long).unwrap().reference,
+                title: "Long".to_owned(),
+                source: "hugging face",
+                size: Some(3687),
+                downloads: None,
+                note: None,
+            },
+        ];
+        let rows = rows(&output, &candidates);
+        assert_eq!(rows[0].find("Iris Species"), Some(50), "{}", rows[0]);
+        assert!(rows[1].starts_with(&format!("{long}  ")), "{}", rows[1]);
     }
 }

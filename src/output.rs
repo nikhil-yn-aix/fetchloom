@@ -122,6 +122,10 @@ struct WorkDone {
     elapsed_ms: u64,
 }
 
+/// the widest a list of datasets lets its reference column grow. a longer reference runs past it
+/// on its own row, so one long name does not push every other title and fact off the terminal.
+pub(crate) const REFERENCE_COLUMN: usize = 48;
+
 impl Output {
     /// `logs` says debug logs share stderr, which bars would garble.
     pub(crate) fn new(style: Style, level: Level, json: bool, logs: bool) -> Output {

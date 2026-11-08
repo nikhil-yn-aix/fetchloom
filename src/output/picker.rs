@@ -137,7 +137,8 @@ fn frame(
         .iter()
         .map(|option| reference(option).chars().count() + 2)
         .max()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .min(super::REFERENCE_COLUMN + 2);
     for (index, option) in options.iter().enumerate() {
         lines.push(row(option, index, cursor, style, width, column));
     }
@@ -184,7 +185,8 @@ fn cancelled() -> Error {
 }
 
 /// one option: the reference, then from `column` on its title and facts, dim unless the cursor
-/// is on it. the reference is never cut; the rest gives way on a narrow terminal.
+/// is on it, or right after a reference too long for the column. the reference is never cut; the
+/// rest gives way on a narrow terminal.
 fn row(
     option: &str,
     index: usize,
@@ -195,14 +197,15 @@ fn row(
 ) -> String {
     let text = plain(option);
     let reference = reference(&text);
+    let long = reference.chars().count() + 2 > column;
     let rest: String = text
         .chars()
         .skip(column.max(reference.chars().count()))
         .collect();
-    let rest = rest.trim_end();
+    let rest = if long { rest.trim() } else { rest.trim_end() };
     // the padding that lines the titles up, kept apart from the bold reference
     let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
-    let room = width.saturating_sub(column + 7);
+    let room = width.saturating_sub(column.max(reference.chars().count() + 2) + 7);
     let more = if style.unicode { "\u{2026}" } else { "..." };
     let rest = if room < 8 {
         String::new()
@@ -373,6 +376,30 @@ mod tests {
         assert!(
             tight.contains("kaggle:owner/a-very-long-dataset-name"),
             "{tight}"
+        );
+    }
+
+    /// one long name runs long on its own row, and every other row keeps its title and facts.
+    #[test]
+    fn a_long_reference_does_not_push_the_other_rows_off_the_terminal() {
+        let long = format!("hf:datasets/{}", "x".repeat(80));
+        let options = vec![
+            format!(
+                "{:48}  Palmer Penguins  18.5 KiB  12k downloads",
+                "hf:datasets/SIH/palmer-penguins"
+            ),
+            format!("{long}  Huberman  90.0 KiB  2 downloads"),
+        ];
+        let lines = frame("which one?", &options, "", 0, style(false, true), 120);
+        assert!(
+            lines[1].ends_with("Palmer Penguins  18.5 KiB  12k downloads"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].starts_with(&format!("    2 {long}  Huberman")),
+            "{}",
+            lines[2]
         );
     }
 
