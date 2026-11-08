@@ -78,16 +78,15 @@ struct VersionOnly {
 }
 
 impl Lock {
-    pub(crate) fn parse(text: &str, exp: &Experiments) -> Result<Lock, Error> {
+    pub(crate) fn parse(text: &str, _exp: &Experiments) -> Result<Lock, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        let fast = canonical::read(text, false).or_else(|| {
-            exp.on("PROJECT_LOCK_COMMENTS")
-                .then(|| canonical::read(text, true))
-                .flatten()
-        });
-        if let Some(lock) = fast {
+        if let Some(lock) = canonical::read(text, false).or_else(|| canonical::read(text, true)) {
             return Ok(lock);
         }
+        Self::parse_toml(text)
+    }
+
+    fn parse_toml(text: &str) -> Result<Lock, Error> {
         match toml::from_str::<Stored>(text) {
             Ok(stored) if stored.version == VERSION => {
                 let mut datasets = stored.dataset;

@@ -313,14 +313,8 @@ mod tests {
         ]
     }
 
-    /// the lock as the TOML reader reads it: a comment at the end is something only a person
-    /// writes, so the fast reader steps aside.
     fn full(text: &str) -> Lock {
-        Lock::parse(
-            &format!("{text}# a comment\n"),
-            &crate::exp::Experiments::default(),
-        )
-        .unwrap()
+        Lock::parse_toml(text).unwrap()
     }
 
     #[test]
@@ -340,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn anything_unusual_is_left_to_the_toml_reader() {
+    fn the_narrow_reader_defers_noncanonical_forms() {
         let text = samples()[2].render();
         let unusual = [
             text.replacen("version = 1", "version = 2", 1),
@@ -364,8 +358,8 @@ mod tests {
     }
 
     #[test]
-    fn commented_writer_output_uses_the_fast_reader_when_enabled() {
-        let enabled = crate::exp::Experiments::default().with("PROJECT_LOCK_COMMENTS", "1");
+    fn commented_writer_output_uses_the_fast_reader() {
+        let exp = crate::exp::Experiments::default();
         for mut lock in samples() {
             if let Some(dataset) = lock.datasets.first_mut() {
                 dataset.title = Some("literal # and an escaped \" quote".to_owned());
@@ -379,21 +373,20 @@ mod tests {
             commented.push_str("# trailing");
             assert_eq!(read(&commented, false), None);
             assert_eq!(read(&commented, true), Some(lock.clone()));
-            for exp in [crate::exp::Experiments::default(), enabled.clone()] {
-                assert_eq!(Lock::parse(&commented, &exp).unwrap(), lock);
-                assert_eq!(
-                    Lock::parse(&commented.replace('\n', "\r\n"), &exp).unwrap(),
-                    lock
-                );
-                for invalid in [
-                    format!("{commented}\0"),
-                    format!("{commented}\n#bad\u{7f}"),
-                    format!("{commented}\r"),
-                    format!("{commented}\n[[broken]]"),
-                ] {
-                    assert!(read(&invalid, true).is_none());
-                    assert!(Lock::parse(&invalid, &exp).is_err());
-                }
+            assert_eq!(Lock::parse_toml(&commented).unwrap(), lock);
+            assert_eq!(Lock::parse(&commented, &exp).unwrap(), lock);
+            assert_eq!(
+                Lock::parse(&commented.replace('\n', "\r\n"), &exp).unwrap(),
+                lock
+            );
+            for invalid in [
+                format!("{commented}\0"),
+                format!("{commented}\n#bad\u{7f}"),
+                format!("{commented}\r"),
+                format!("{commented}\n[[broken]]"),
+            ] {
+                assert!(read(&invalid, true).is_none());
+                assert!(Lock::parse(&invalid, &exp).is_err());
             }
         }
     }
@@ -455,22 +448,19 @@ mod tests {
             let Ok(text) = std::str::from_utf8(bytes) else {
                 return;
             };
-            if let Some(lock) = read(text, false) {
-                assert_eq!(
-                    Lock::parse(
-                        &format!("{text}# a comment\n"),
-                        &crate::exp::Experiments::default()
-                    )
-                    .ok()
-                    .as_ref(),
-                    Some(&lock),
-                    "{text:?}"
-                );
-                assert_eq!(
-                    read(&lock.render(), false).as_ref(),
-                    Some(&lock),
-                    "{text:?}"
-                );
+            for comments in [false, true] {
+                if let Some(lock) = read(text, comments) {
+                    assert_eq!(
+                        Lock::parse_toml(text).ok().as_ref(),
+                        Some(&lock),
+                        "{text:?}"
+                    );
+                    assert_eq!(
+                        read(&lock.render(), false).as_ref(),
+                        Some(&lock),
+                        "{text:?}"
+                    );
+                }
             }
             if let Ok(lock) = Lock::parse(text, &crate::exp::Experiments::default()) {
                 let written = lock.render();
