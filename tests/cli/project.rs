@@ -2493,3 +2493,27 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     assert_eq!(server.requests().len(), 0);
     Ok(())
 }
+
+/// `path -v` tells where the bytes really are, in one plain line: a placed file is a link to its
+/// file in the cache folder, or a copy of it, and `fetchloom cache` shows that folder. without
+/// `-v` the answer stays alone.
+#[test]
+fn verbose_path_says_where_the_bytes_are() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let line = "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache";
+    let plain = sandbox.run(&["path", "iris"])?;
+    assert_eq!(plain.status.code(), Some(0), "{}", text(&plain.stderr)?);
+    assert!(!text(&plain.stderr)?.contains(line));
+    for target in ["iris", "iris/iris.csv"] {
+        let verbose = sandbox.run(&["-v", "path", target])?;
+        let stderr = text(&verbose.stderr)?;
+        assert_eq!(verbose.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.lines().any(|told| told.trim() == line),
+            "{target}: {stderr}"
+        );
+    }
+    Ok(())
+}

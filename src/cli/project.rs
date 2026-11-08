@@ -1335,6 +1335,9 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         }
     };
     context.output.answer(&path.display().to_string());
+    context.output.detail(
+        "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
+    );
     Ok(path)
 }
 

@@ -23,6 +23,8 @@ there are no command-specific options. [global options](README.md#global-options
 3. if the dataset is not ready, sync the whole project.
 4. print its absolute location on stdout. JSON returns that location as a string in `result`.
 
+`-v` adds one line on stderr about where the bytes are: a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache. [placement](../concepts.md#placement) says when you get which.
+
 a ready dataset takes no `.fetchloom/lock` hold and prints no closing summary. member validation, readiness and the answer share one lock read and one plan. while waiting for another command, a changed state file triggers a fresh readiness check: a reader whose dataset is now ready answers without taking the lock; otherwise fetchloom takes it and rereads the project before deciding whether sync is still needed. a subfolder is accepted when it contains locked files. when an archive tree is unknown, sync may be needed before checking its members.
 
 stderr excerpt for a path absent from a dataset:
