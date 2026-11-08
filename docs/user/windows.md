@@ -40,7 +40,8 @@ recognized synced folders skip hardlinks. they may still use reflinks, or copy w
 stderr warning from a copied download inside onedrive:
 
 ```text
-warning: iris is inside onedrive, which breaks links, so the file was copied. a folder outside onedrive lets fetchloom try links
+warning: iris is inside onedrive, which breaks links, so the file was copied
+  help: a folder outside onedrive lets fetchloom try links
 ```
 
 use a project folder outside synced storage if you want fetchloom to try hardlinks. a copied file still has the same pinned bytes. [placement](concepts.md#placement) explains the order and writable-copy setting.

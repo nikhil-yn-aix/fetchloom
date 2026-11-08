@@ -74,11 +74,13 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
         .cautioned
         .store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(path) = auth::netrc::path(&auth::env).filter(|path| auth::netrc::too_open(path)) {
-        output.warn(&format!(
-            "other users of this machine can open {}, which holds logins; limit it to yourself with `chmod 600 {}`",
-            path.display(),
-            path.display()
-        ));
+        output.warn_with(
+            &format!(
+                "other users of this machine can open {}, which holds logins",
+                path.display()
+            ),
+            &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+        );
     }
     for account in auth::listed(&auth::env) {
         let found = account.find(&auth::env);
@@ -446,10 +448,13 @@ fn warn_if_shared(output: &crate::output::Output, path: &std::path::Path) {
         .map(std::path::PathBuf::from)
         .is_some_and(|profile| lower(path).starts_with(lower(&profile)));
     if !inside {
-        output.warn(&format!(
-            "{} is outside your user folder, so other users of this machine may be able to read it; keep the key in your profile, or limit the folder's permissions",
-            path.display()
-        ));
+        output.warn_with(
+            &format!(
+                "{} is outside your user folder, so other users of this machine may be able to read it",
+                path.display()
+            ),
+            "keep the key in your profile, or limit the folder's permissions",
+        );
     }
 }
 
@@ -545,12 +550,17 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
     );
     // another configured location may still supply a key for the same source
     if let Some(left) = account.find(var) {
-        output.warn(&format!(
-            "a {} key is still read from {}; run `fetchloom auth logout {}` again to remove it too",
-            title(&account),
-            left.origin,
-            logout.account
-        ));
+        output.warn_with(
+            &format!(
+                "a {} key is still read from {}",
+                title(&account),
+                left.origin
+            ),
+            &format!(
+                "run `fetchloom auth logout {}` again to remove it too",
+                logout.account
+            ),
+        );
     }
     Ok(Report::Logout {
         account: account.id(),
@@ -617,11 +627,14 @@ fn warn_unsendable(output: &crate::output::Output, account: &Account, found: &Fo
         Origin::Variable(name) => format!("set {name} to the key alone"),
         _ => format!("sign in again with `{}`", account.command()),
     };
-    output.warn(&format!(
-        "the {} key in {} is never sent, since it holds a character no request header can carry, such as a line break; {fix}",
-        title(account),
-        found.origin,
-    ));
+    output.warn_with(
+        &format!(
+            "the {} key in {} is never sent, since it holds a character no request header can carry, such as a line break",
+            title(account),
+            found.origin,
+        ),
+        &fix,
+    );
 }
 
 fn title(account: &Account) -> String {

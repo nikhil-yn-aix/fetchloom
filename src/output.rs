@@ -142,10 +142,13 @@ impl Output {
             hints: true,
         };
         if !unread.is_empty() {
-            output.warn(&format!(
-                "FETCHLOOM_COLORS: kept the default for {}; entries look like done=green, work=214 or accent=#d787ff",
-                unread.join(", ")
-            ));
+            output.warn_with(
+                &format!(
+                    "FETCHLOOM_COLORS: kept the default for {}",
+                    unread.join(", ")
+                ),
+                "entries look like done=green, work=214 or accent=#d787ff",
+            );
         }
         output
     }
@@ -212,6 +215,23 @@ impl Output {
             self.line(&format!(
                 "{yellow}warning:{yellow:#} {}",
                 accented(&plain(text), Paint::new(), self.style.color)
+            ));
+        }
+    }
+
+    /// a warning and what to do about it, the help on a line of its own as an error's is, so
+    /// neither runs long. `--json` and the python package get them as one sentence.
+    pub(crate) fn warn_with(&self, text: &str, help: &str) {
+        self.warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("{text}; {help}"));
+        if self.tells(Level::Quiet) {
+            let yellow = toned(self.style.color, Tone::Warn);
+            self.line(&format!(
+                "{yellow}warning:{yellow:#} {}\n{}",
+                accented(&plain(text), Paint::new(), self.style.color),
+                help_line(help, self.style.color)
             ));
         }
     }
@@ -1011,6 +1031,15 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
 fn hint_line(text: &str, color: bool) -> String {
     let dim = paint(color, Paint::new().dimmed());
     format!("  {dim}hint: {}{dim:#}", accented(&plain(text), dim, color))
+}
+
+/// what to do about a warning or an error, on a line of its own.
+fn help_line(text: &str, color: bool) -> String {
+    let cyan = paint(color, accent().bold());
+    format!(
+        "  {cyan}help:{cyan:#} {}",
+        accented(&plain(text), Paint::new(), color)
+    )
 }
 
 /// the one color for what a person types, commands and options, wherever they appear. the stream

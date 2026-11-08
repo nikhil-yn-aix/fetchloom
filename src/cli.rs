@@ -111,18 +111,23 @@ impl Context {
         if let Some(path) = crate::auth::netrc::path(&crate::auth::env)
             .filter(|path| crate::auth::netrc::too_open(path))
         {
-            self.output.warn(&format!(
-                "other users of this machine can open {}, which holds logins; limit it to yourself with `chmod 600 {}`",
-                path.display(),
-                path.display()
-            ));
+            self.output.warn_with(
+                &format!(
+                    "other users of this machine can open {}, which holds logins",
+                    path.display()
+                ),
+                &format!("limit it to yourself with `chmod 600 {}`", path.display()),
+            );
         }
         for credential in credentials {
             if reqwest::header::HeaderValue::from_str(&credential.value).is_err() {
-                self.output.warn(&format!(
-                    "a key for {} is never sent, since it holds a character no request header can carry, such as a line break; `fetchloom auth` shows where it is kept",
-                    credential.host
-                ));
+                self.output.warn_with(
+                    &format!(
+                        "a key for {} is never sent, since it holds a character no request header can carry, such as a line break",
+                        credential.host
+                    ),
+                    "`fetchloom auth` shows where it is kept",
+                );
             }
         }
     }

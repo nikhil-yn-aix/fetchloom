@@ -34,7 +34,7 @@ fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
     let output = sandbox.run(&["add", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let warning = "iris was taken, so this one is iris-2; choose a name with --as <name>";
+    let warning = "iris was taken, so this one is iris-2\n  help: choose a name with --as <name>";
     assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
     assert!(
         fs::read_to_string(sandbox.work().join("data.toml"))?.contains("[datasets.iris-2]"),

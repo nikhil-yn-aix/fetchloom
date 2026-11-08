@@ -293,7 +293,11 @@ fn tell_placed(
     };
     let why = placer.unlinked().filter(|_| copies > 0);
     if let Some(why @ Unlinked::Synced(_)) = why {
-        output.warn(&why.copied_because(folder.display(), things));
+        let because = why.copied_because(folder.display(), things);
+        match &because.help {
+            Some(help) => output.warn_with(&because.said, help),
+            None => output.warn(&because.said),
+        }
     }
     let what = match targets {
         [only] => only.path.clone(),
@@ -312,7 +316,7 @@ fn tell_placed(
         }
     }
     if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
-        output.hint(&why.copied_because(folder.display(), things));
+        output.hint(&why.copied_because(folder.display(), things).to_string());
     }
 }
 

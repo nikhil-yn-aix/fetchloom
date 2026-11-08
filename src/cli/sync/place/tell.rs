@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::put::Tally;
 use super::{Blocker, Entry, Placement, Preview, Reason};
 use crate::output::Output;
-use crate::place::{Placer, Unlinked};
+use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -66,7 +66,11 @@ pub(super) fn tell(
     if tallies.values().any(|tally| tally.unlinked > 0)
         && let Some(why) = placer.unlinked()
     {
-        output.warn(&copy_warning(why, &manifest.data_dir));
+        let because = copy_warning(why, &manifest.data_dir);
+        match &because.help {
+            Some(help) => output.warn_with(&because.said, help),
+            None => output.warn(&because.said),
+        }
     }
     warn_kept(output, placement);
     for path in &placement.restored {
@@ -75,16 +79,19 @@ pub(super) fn tell(
                 "{path} was put back as pinned: its bytes had changed though its size and time had not"
             ));
         } else {
-            output.warn(&format!(
-                "{path} was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml"
-            ));
+            output.warn_with(
+                &format!(
+                    "{path} was put back as pinned: it is linked to the cache's copy, which was changed"
+                ),
+                "to edit a dataset's files, set copy = true for it in data.toml",
+            );
         }
     }
 }
 
 /// why a sync copied files it would rather have linked. a data folder stays inside its project,
 /// so when the cache is on another drive, it is the project that moves.
-pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> String {
+pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
     match why {
         Unlinked::OtherDrive => why.copied_because("the project", "files were"),
         Unlinked::Synced(_) | Unlinked::NoLinks => why.copied_because(data_dir, "files were"),
@@ -162,29 +169,39 @@ fn warn_kept(output: &Output, placement: &Placement) {
         }
     }
     for (blocker, files) in blocking.into_values() {
-        output.warn(&in_the_way(blocker, files));
+        let (said, help) = in_the_way(blocker, files);
+        output.warn_with(&said, help);
     }
     for kept in &placement.kept {
-        let message = match kept.reason {
+        let (message, help) = match kept.reason {
             Reason::Blocked => continue,
-            Reason::Changed => format!(
-                "{} has changed, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
+            Reason::Changed => (
+                format!("{} has changed, so it stays", kept.path),
+                "`fetchloom sync --force` replaces it",
             ),
-            Reason::Shared => format!(
-                "{} was edited, and the file is shared with other projects, so they see the edit too. it stays; `fetchloom sync --force` puts the original back",
-                kept.path
+            Reason::Shared => (
+                format!(
+                    "{} was edited, and the file is shared with other projects, so they see the edit too. it stays",
+                    kept.path
+                ),
+                "`fetchloom sync --force` puts the original back",
             ),
-            Reason::Foreign => format!(
-                "{} is not a file fetchloom placed, and it differs from data.lock, so it stays. `fetchloom sync --force` replaces it",
-                kept.path
+            Reason::Foreign => (
+                format!(
+                    "{} is not a file fetchloom placed, and it differs from data.lock, so it stays",
+                    kept.path
+                ),
+                "`fetchloom sync --force` replaces it",
             ),
-            Reason::Unneeded => format!(
-                "{} is no longer needed, but it has changed, so it stays. delete it if you do not need it",
-                kept.path
+            Reason::Unneeded => (
+                format!(
+                    "{} is no longer needed, but it has changed, so it stays",
+                    kept.path
+                ),
+                "delete it if you do not need it",
             ),
         };
-        output.warn(&message);
+        output.warn_with(&message, help);
     }
 }
 
@@ -198,7 +215,7 @@ fn overwritten_what(reason: Reason) -> &'static str {
 }
 
 /// what an entry in the way of `files` files is, and what replaces it.
-fn in_the_way(blocker: &Blocker, files: u64) -> String {
+fn in_the_way(blocker: &Blocker, files: u64) -> (String, &'static str) {
     let path = &blocker.path;
     let what = entry_name(blocker.found);
     let force = if blocker.found == Entry::Link {
@@ -212,13 +229,22 @@ fn in_the_way(blocker: &Blocker, files: u64) -> String {
         } else {
             "the files data.lock pins under it are not placed"
         };
-        return format!("{path} is {what} where data.lock needs a folder, so {pinned}. {force}");
+        return (
+            format!("{path} is {what} where data.lock needs a folder, so {pinned}"),
+            force,
+        );
     }
     if blocker.clearable {
-        format!("{path} is {what} where data.lock places a file, so it stays. {force}")
+        (
+            format!("{path} is {what} where data.lock places a file, so it stays"),
+            force,
+        )
     } else {
-        format!(
-            "{path} is a folder with files in it where data.lock places a file, so it stays, even with --force. move what it holds elsewhere, then sync again"
+        (
+            format!(
+                "{path} is a folder with files in it where data.lock places a file, so it stays, even with --force"
+            ),
+            "move what it holds elsewhere, then sync again",
         )
     }
 }

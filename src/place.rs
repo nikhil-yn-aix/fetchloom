@@ -124,17 +124,43 @@ pub(crate) enum Unlinked {
 
 impl Unlinked {
     /// explains why the named files were copied and how another placement may allow links.
-    pub(crate) fn copied_because(self, place: impl std::fmt::Display, subject: &str) -> String {
+    pub(crate) fn copied_because(self, place: impl std::fmt::Display, subject: &str) -> Because {
         match self {
-            Self::Synced(client) => format!(
-                "{place} is inside {client}, which breaks links, so {subject} copied. a folder outside {client} lets fetchloom try links"
-            ),
-            Self::NoLinks => {
-                format!("the drive holding {place} cannot link files, so {subject} copied")
-            }
-            Self::OtherDrive => format!(
-                "the cache is on another drive than {place}, so {subject} copied. to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
-            ),
+            Self::Synced(client) => Because {
+                said: format!(
+                    "{place} is inside {client}, which breaks links, so {subject} copied"
+                ),
+                help: Some(format!(
+                    "a folder outside {client} lets fetchloom try links"
+                )),
+            },
+            Self::NoLinks => Because {
+                said: format!("the drive holding {place} cannot link files, so {subject} copied"),
+                help: None,
+            },
+            Self::OtherDrive => Because {
+                said: format!("the cache is on another drive than {place}, so {subject} copied"),
+                help: Some(format!(
+                    "to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+                )),
+            },
+        }
+    }
+}
+
+/// why files were copied rather than linked, and what lets fetchloom link them, when anything
+/// does: one sentence for a hint, or a warning with its help on a line of its own.
+#[derive(Debug)]
+pub(crate) struct Because {
+    pub(crate) said: String,
+    pub(crate) help: Option<String>,
+}
+
+impl std::fmt::Display for Because {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.help {
+            Some(help) => write!(f, "{}. {help}", self.said),
+            None => f.write_str(&self.said),
         }
     }
 }

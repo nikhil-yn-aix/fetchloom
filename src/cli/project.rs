@@ -1637,10 +1637,13 @@ pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
 /// here only risks a later download.
 fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
-        work.context.output.warn(&format!(
-            "could not add this project to the cache's list of projects in {}: {err}. `fetchloom cache gc` may then delete files this project needs; check the cache folder's permissions, then run the command again",
-            work.cache.root().display()
-        ));
+        work.context.output.warn_with(
+            &format!(
+                "could not add this project to the cache's list of projects in {}: {err}. `fetchloom cache gc` may then delete files this project needs",
+                work.cache.root().display()
+            ),
+            "check the cache folder's permissions, then run the command again",
+        );
     }
 }
 
@@ -1905,9 +1908,10 @@ fn choose_name(
     let Some(numbered) = numbered else {
         return Err(taken(&name));
     };
-    output.warn(&format!(
-        "{name} was taken, so this one is {numbered}; choose a name with --as <name>"
-    ));
+    output.warn_with(
+        &format!("{name} was taken, so this one is {numbered}"),
+        "choose a name with --as <name>",
+    );
     Ok(numbered)
 }
 

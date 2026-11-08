@@ -1089,12 +1089,14 @@ mod tests {
     #[test]
     fn a_copy_warning_names_the_project_when_the_cache_is_on_another_drive() {
         assert!(
-            tell::copy_warning(crate::place::Unlinked::OtherDrive, "data").starts_with(
-                "the cache is on another drive than the project, so files were copied. "
-            )
+            tell::copy_warning(crate::place::Unlinked::OtherDrive, "data")
+                .to_string()
+                .starts_with(
+                    "the cache is on another drive than the project, so files were copied. "
+                )
         );
         assert_eq!(
-            tell::copy_warning(crate::place::Unlinked::NoLinks, "data"),
+            tell::copy_warning(crate::place::Unlinked::NoLinks, "data").to_string(),
             "the drive holding data cannot link files, so files were copied"
         );
     }

@@ -56,7 +56,8 @@ save your files before using `--force`. it can overwrite edited and untracked fi
 a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made in place through any link to it, after making the read-only file writable, changes that shared copy, so it is not kept as an edit: sync marks the cached copy as changed, downloads the file again and puts the pinned file back, without `--force`, in each project whose file is still that copy, the one that made the edit included. to edit a dataset's files, set `copy = true` for it. a file saved anew, as most editors save, is the project's own and stays an edit. the warning reads, with `<path>` replaced by the affected path:
 
 ```text
-<path> was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml
+warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed
+  help: to edit a dataset's files, set copy = true for it in data.toml
 ```
 
 a changed hardlink still shared by other projects whose shared copy the cache no longer holds or records, as after the cache folder was deleted, stays with kept reason `shared` until `fetchloom sync --force`, since nothing tells which project made the change.

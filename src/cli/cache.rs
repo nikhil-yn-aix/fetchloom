@@ -413,11 +413,10 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
 }
 
 fn warn_failure(output: &Output, action: &str, failure: &Failure) {
-    output.warn(&format!(
-        "{action} {}; {}",
-        failure.description(),
-        failure.advice()
-    ));
+    output.warn_with(
+        &format!("{action} {}", failure.description()),
+        failure.advice(),
+    );
 }
 
 fn with_failures(mut error: Error, failures: &[Failure]) -> Error {

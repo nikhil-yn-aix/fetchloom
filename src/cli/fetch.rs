@@ -282,7 +282,7 @@ impl<'a> Watch<'a> {
                         )
                     })
                 {
-                    self.output.warn(&format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading; look for a download or raw link"));
+                    self.output.warn_with(&format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
             Event::Bytes(bytes) => {
@@ -494,12 +494,21 @@ async fn run_each(
                     fetched => fetched,
                 };
                 if let Ok(found) = &fetched
-                    && found.name.as_deref().and_then(crate::name::sanitize).is_none()
-                    && let Some(name) = std::path::Path::new(&job.label).file_name().and_then(|name| name.to_str())
+                    && found
+                        .name
+                        .as_deref()
+                        .and_then(crate::name::sanitize)
+                        .is_none()
+                    && let Some(name) = std::path::Path::new(&job.label)
+                        .file_name()
+                        .and_then(|name| name.to_str())
                     && !name.is_empty()
                     && name.bytes().all(|byte| byte.is_ascii_digit())
                 {
-                    output.warn(&format!("the server did not name {name}; try the article or DOI link, which names its files"));
+                    output.warn_with(
+                        &format!("the server did not name {name}"),
+                        "try the article or DOI link, which names its files",
+                    );
                 }
                 (index, fetched.map_err(|err| explain(err, &job)))
             });

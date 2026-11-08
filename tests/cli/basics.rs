@@ -146,7 +146,7 @@ fn a_palette_recolors_output_and_a_typo_only_warns() -> Result {
     assert!(!stdout.contains("\x1b[36m"), "{stdout}");
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("FETCHLOOM_COLORS: kept the default for done=teal;"),
+        stderr.contains("FETCHLOOM_COLORS: kept the default for done=teal\n"),
         "{stderr}"
     );
     Ok(())

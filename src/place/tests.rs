@@ -35,7 +35,9 @@ fn synced_copy_advice_does_not_promise_zero_disk() {
         ),
     ] {
         assert_eq!(
-            Unlinked::Synced("onedrive").copied_because(place, subject),
+            Unlinked::Synced("onedrive")
+                .copied_because(place, subject)
+                .to_string(),
             expected
         );
     }
@@ -44,11 +46,15 @@ fn synced_copy_advice_does_not_promise_zero_disk() {
 #[test]
 fn copy_advice_on_drives_without_links_names_the_place() {
     assert_eq!(
-        Unlinked::NoLinks.copied_because("data", "files were"),
+        Unlinked::NoLinks
+            .copied_because("data", "files were")
+            .to_string(),
         "the drive holding data cannot link files, so files were copied"
     );
     assert_eq!(
-        Unlinked::NoLinks.copied_because("iris", "the file was"),
+        Unlinked::NoLinks
+            .copied_because("iris", "the file was")
+            .to_string(),
         "the drive holding iris cannot link files, so the file was copied"
     );
 }
@@ -58,11 +64,15 @@ fn copy_advice_on_drives_without_links_names_the_place() {
 #[test]
 fn a_cache_on_another_drive_explains_the_copy_and_both_ways_to_links() {
     assert_eq!(
-        Unlinked::OtherDrive.copied_because("the project", "files were"),
+        Unlinked::OtherDrive
+            .copied_because("the project", "files were")
+            .to_string(),
         "the cache is on another drive than the project, so files were copied. to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
     );
     assert_eq!(
-        Unlinked::OtherDrive.copied_because("iris", "the file was"),
+        Unlinked::OtherDrive
+            .copied_because("iris", "the file was")
+            .to_string(),
         "the cache is on another drive than iris, so the file was copied. to link files instead, put both on one drive: move iris to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
     );
 }

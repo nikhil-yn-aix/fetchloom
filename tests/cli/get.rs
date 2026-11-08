@@ -700,7 +700,7 @@ fn data_file_links_warn_when_the_server_returns_html() -> Result {
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{stderr}");
         let message = format!(
-            "{} came back as a web page, not a data file. the link may open a page instead of downloading; look for a download or raw link",
+            "{} came back as a web page, not a data file. the link may open a page instead of downloading\n  help: look for a download or raw link",
             &path[1..]
         );
         assert_eq!(stderr.contains(&message), warns, "{stderr}");

@@ -88,7 +88,8 @@ fetchloom sync
 copied placement inside onedrive can report:
 
 ```text
-warning: iris is inside onedrive, which breaks links, so the file was copied. a folder outside onedrive lets fetchloom try links
+warning: iris is inside onedrive, which breaks links, so the file was copied
+  help: a folder outside onedrive lets fetchloom try links
 ```
 
 move the project outside synced storage if you want fetchloom to try hardlinks. reflinks may still work inside a synced folder. [windows](windows.md) covers drive choice and Defender scanning.
