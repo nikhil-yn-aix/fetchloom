@@ -433,6 +433,11 @@ impl PartialWriter {
     /// shares response chunks with the hash worker, avoiding a copy on the download path.
     /// bytes past the prefix are read back only once the prefix reaches them.
     pub(crate) fn write_chunk(&mut self, at: u64, bytes: &Bytes) -> io::Result<()> {
+        self.put_chunk(at, bytes)
+            .map_err(|err| self.cache.explained(folder_of(&self.bytes), err))
+    }
+
+    fn put_chunk(&mut self, at: u64, bytes: &Bytes) -> io::Result<()> {
         let end = at + bytes.len() as u64;
         let overlaps =
             at < self.prefix || self.runs.iter().any(|run| at < run.end && run.start < end);
@@ -537,6 +542,11 @@ impl PartialWriter {
     /// skips a durable flush to avoid stalling every second; a resume rechecks the saved hashes
     /// in case a power cut kept the record but lost some bytes.
     pub(crate) fn save(&mut self) -> io::Result<()> {
+        self.checkpoint()
+            .map_err(|err| self.cache.explained(folder_of(&self.record_path), err))
+    }
+
+    fn checkpoint(&mut self) -> io::Result<()> {
         self.flush_pending()?;
         if self.lean && self.runs.is_empty() && self.record.length == Some(self.prefix) {
             return Ok(());
@@ -560,7 +570,14 @@ impl PartialWriter {
 
     /// puts the finished file into the cache under its hash. a download with bytes missing
     /// before its end fails with [`io::ErrorKind::InvalidData`].
-    pub(crate) fn finish(mut self) -> io::Result<Stored> {
+    pub(crate) fn finish(self) -> io::Result<Stored> {
+        let cache = self.cache.clone();
+        let folder = folder_of(&self.bytes).to_path_buf();
+        self.seal_and_publish()
+            .map_err(|err| cache.explained(&folder, err))
+    }
+
+    fn seal_and_publish(mut self) -> io::Result<Stored> {
         self.flush_pending()?;
         if !self.runs.is_empty() {
             return Err(io::Error::new(

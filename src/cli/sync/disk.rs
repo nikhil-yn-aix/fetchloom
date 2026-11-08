@@ -469,7 +469,7 @@ const COARSE: u64 = 2_000_000_000;
 
 /// whether `a` and `b` sit on different devices, whose filesystems may keep times to different
 /// steps. folders that cannot be read count as apart.
-fn apart(a: &Path, b: &Path) -> bool {
+pub(crate) fn apart(a: &Path, b: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

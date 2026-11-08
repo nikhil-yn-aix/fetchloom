@@ -244,7 +244,8 @@ impl Cache {
     }
 
     /// `err`, from writing in `folder` of this cache, in words that say what to fix. the system
-    /// names no path, and "the cache" alone does not say which folder refused the write.
+    /// names no path, and "the cache" alone says neither which folder refused the write nor
+    /// that unfinished downloads may be what fills its disk.
     pub(crate) fn explained(&self, folder: &Path, err: io::Error) -> io::Error {
         // an error fetchloom built already says what it concerns
         if err.raw_os_error().is_none() {
@@ -255,8 +256,29 @@ impl Cache {
                 err.kind(),
                 format!("{} in {}", crate::error::said(&err), folder.display()),
             ),
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
+                match self.unfinished_held() {
+                    Some(held) => {
+                        io::Error::new(err.kind(), format!("{}; {held}", crate::error::said(&err)))
+                    }
+                    None => err,
+                }
+            }
             _ => err,
         }
+    }
+
+    /// what unfinished downloads hold of the cache's disk and how to free it, when they hold
+    /// anything.
+    pub(crate) fn unfinished_held(&self) -> Option<String> {
+        let unfinished = self.unfinished();
+        (unfinished.bytes > 0).then(|| {
+            format!(
+                "unfinished downloads in {} hold {} of it, which `fetchloom cache gc --now` frees",
+                self.root.join("partial").display(),
+                crate::units::size(unfinished.bytes)
+            )
+        })
     }
 
     /// hashes an object again. changed bytes are marked for replacement and kept until a good
@@ -652,6 +674,56 @@ pub(crate) mod tests {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
         object.seal(true).unwrap().publish(cache).unwrap()
+    }
+
+    /// a full disk under the cache says how much of it unfinished downloads hold and how to free
+    /// them, once they hold anything, and a refused write names the folder that refused it.
+    #[test]
+    fn a_write_the_cache_refuses_says_what_to_fix() {
+        let (_dir, cache) = cache();
+        let partial = cache.root.join("partial");
+        let full = || io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 });
+        let error = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, full()),
+        );
+        assert_eq!(
+            error.message,
+            "could not write to the cache: the disk is full"
+        );
+        fs::write(partial.join(format!("{}.part", "ab".repeat(32))), [0; 2048]).unwrap();
+        let error = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, full()),
+        );
+        assert_eq!(
+            error.message,
+            format!(
+                "could not write to the cache: the disk is full; unfinished downloads in {} hold 2.0 KiB of it, which `fetchloom cache gc --now` frees",
+                partial.display()
+            )
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("free some space on that disk, then run the command again")
+        );
+        let denied = io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
+        let error = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, denied),
+        );
+        assert_eq!(
+            error.message,
+            format!(
+                "could not write to the cache: permission was denied in {}",
+                partial.display()
+            )
+        );
+        let built = io::Error::new(io::ErrorKind::StorageFull, "already explained");
+        assert_eq!(
+            cache.explained(&partial, built).to_string(),
+            "already explained"
+        );
     }
 
     #[test]

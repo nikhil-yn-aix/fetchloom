@@ -22,20 +22,20 @@ fetchloom cache verify [options]
 
 `fetchloom cache` reports the cache path, the bytes it holds and the projects using it. it prints the bare path on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`.
 
-byte totals exclude indexes and partial downloads. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
+byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 
 ## gc
 
 1. read registered project locks to find needed objects and unpacked members.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
-3. clean abandoned partial and temporary files and the lock files of downloads nobody holds, and forget links whose bytes are gone, then report deleted counts and bytes.
+3. clean unfinished downloads nobody came back for in a day, or with `--now` every one no running fetchloom holds, old temporary files and the lock files of downloads nobody holds, and forget links whose bytes are gone, then report deleted counts and bytes.
 4. report unneeded objects kept because they are less than a day old.
 
 ```sh
 fetchloom cache gc --now
 ```
 
-`--now` ignores modification times for unneeded objects and unpack records, including future times that FAT timestamp rounding can produce. partial downloads and temporary files keep their one-day grace period even with `--now`. active partial-download locks are respected.
+`--now` ignores modification times for unneeded objects and unpack records, including future times that FAT timestamp rounding can produce. `--now` also removes unfinished downloads that no running fetchloom holds, however new, so the next run of those downloads starts over; a download in progress keeps its bytes, since its run holds its lock. temporary files keep their one-day grace period even with `--now`.
 
 the kept-file hint names the retained bytes:
 

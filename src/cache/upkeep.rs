@@ -42,12 +42,22 @@ pub(crate) struct Needed {
     pub(crate) unpacked: HashSet<Sha256>,
 }
 
+/// the downloads a run stopped before they finished, whose bytes the cache keeps so a later run
+/// can continue them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Unfinished {
+    pub(crate) downloads: u64,
+    pub(crate) bytes: u64,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Freed {
     pub(crate) objects: u64,
     pub(crate) bytes: u64,
     /// unfinished downloads and temporary files nobody came back for.
     pub(crate) leftovers: u64,
+    /// the bytes those leftovers held.
+    pub(crate) leftover_bytes: u64,
     pub(crate) not_removed: Vec<Failure>,
     /// objects no project needs that stay because they are younger than a day.
     pub(crate) kept_objects: u64,
@@ -105,6 +115,25 @@ impl Cache {
             Err(_) => self.write_atomically(&path, &text)?,
         }
         crate::volume::set_read_only(&path, true)
+    }
+
+    /// how many unfinished downloads the partial folder keeps, and their bytes. a folder that
+    /// cannot be read holds none.
+    pub(crate) fn unfinished(&self) -> Unfinished {
+        let mut unfinished = Unfinished::default();
+        let Ok(entries) = fs::read_dir(self.root.join("partial")) else {
+            return unfinished;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(".part")
+                && let Ok(metadata) = entry.metadata()
+                && metadata.is_file()
+            {
+                unfinished.downloads += 1;
+                unfinished.bytes += metadata.len();
+            }
+        }
+        unfinished
     }
 
     /// reads every registration before gc can discard anything it might protect.
@@ -206,9 +235,10 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes stale registrations, unneeded objects older than `grace` and abandoned downloads
-    /// older than a day, recording each refused removal. downloads keep the full day whatever
-    /// `grace` is, so a download running elsewhere keeps its partial file.
+    /// removes stale registrations, unneeded objects older than `grace` and the downloads no
+    /// run holds, recording each refused removal. an unfinished download keeps a day, so a run
+    /// tomorrow can continue it, unless `grace` is zero, as `--now` asks. a download in progress
+    /// keeps its bytes either way, since its run holds its lock.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
@@ -264,7 +294,8 @@ impl Cache {
                 removed(&path, self.remove_inside(&path), &mut freed.not_removed);
             }
         }
-        self.sweep_partials(&old, stop, &mut freed)?;
+        let abandoned = |modified: SystemTime| grace.is_zero() || old(modified);
+        self.sweep_partials(&abandoned, stop, &mut freed)?;
         freed.leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
         stop.check()?;
         self.forget_changed_reporting(&needed.objects, stop, &mut freed.not_removed)?;
@@ -274,6 +305,7 @@ impl Cache {
             let stale = entry
                 .metadata()
                 .is_ok_and(|metadata| metadata.is_file() && metadata.modified().is_ok_and(old));
+            let size = entry.metadata().map_or(0, |metadata| metadata.len());
             if stale
                 && removed(
                     &entry.path(),
@@ -282,6 +314,7 @@ impl Cache {
                 )
             {
                 freed.leftovers += 1;
+                freed.leftover_bytes += size;
             }
         }
         stop.check()?;
@@ -320,7 +353,7 @@ impl Cache {
     /// `claim` notices before it trusts the lock.
     fn sweep_partials(
         &self,
-        old: &dyn Fn(SystemTime) -> bool,
+        abandoned: &dyn Fn(SystemTime) -> bool,
         stop: &Stop,
         freed: &mut Freed,
     ) -> Result<(), Error> {
@@ -338,21 +371,23 @@ impl Cache {
                 continue;
             }
             let bytes = folder.join(format!("{key}.part"));
-            let abandoned = match fs::metadata(&bytes) {
-                Ok(metadata) => metadata.modified().is_ok_and(old),
+            let left = match fs::metadata(&bytes) {
+                Ok(metadata) => metadata.modified().is_ok_and(abandoned),
                 Err(err) => err.kind() == io::ErrorKind::NotFound,
             };
-            if !abandoned {
+            if !left {
                 continue;
             }
             for leftover in [bytes, folder.join(format!("{key}.json"))] {
                 stop.check()?;
+                let size = fs::symlink_metadata(&leftover).map_or(0, |metadata| metadata.len());
                 if removed(
                     &leftover,
                     self.remove_inside(&leftover),
                     &mut freed.not_removed,
                 ) {
                     freed.leftovers += 1;
+                    freed.leftover_bytes += size;
                 }
             }
             // an empty lock file frees nothing worth counting, and one left behind costs nothing

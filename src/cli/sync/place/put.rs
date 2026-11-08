@@ -52,7 +52,8 @@ pub(super) fn put_all<'t>(
             Err(err) => {
                 failure = failure.or_else(|| {
                     let order = order(index);
-                    Some(failed(target, &order.object, &order.destination, &err))
+                    let error = failed(target, &order.object, &order.destination, &err);
+                    Some(full_with_unfinished(error, &err, project, cache))
                 });
                 continue;
             }
@@ -100,6 +101,22 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
     )
 }
 
+/// `error`, with what unfinished downloads hold when `err` says the disk is full and the cache
+/// shares that disk with the project, since freeing them is one way to make room.
+fn full_with_unfinished(error: Error, err: &io::Error, project: &Project, cache: &Cache) -> Error {
+    if !matches!(
+        err.kind(),
+        io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+    ) || super::super::disk::apart(&project.root, cache.root())
+    {
+        return error;
+    }
+    match cache.unfinished_held() {
+        Some(held) => error.detail(held),
+        None => error,
+    }
+}
+
 fn count(work: &Work, method: Method) {
     let counter = match method {
         Method::Reflink => &work.reflinks,
@@ -120,6 +137,41 @@ mod tests {
 
     use super::*;
     use crate::project::lock::LockedFile;
+
+    #[test]
+    fn a_full_disk_the_cache_shares_names_what_unfinished_downloads_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        fs::create_dir(&project.root).unwrap();
+        let full = || io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 });
+        let error = || Error::io("could not place it", &full());
+        assert_eq!(
+            full_with_unfinished(error(), &full(), &project, &cache).details,
+            Vec::<String>::new()
+        );
+        fs::write(
+            cache
+                .root()
+                .join("partial")
+                .join(format!("{}.part", "ab".repeat(32))),
+            [0; 2048],
+        )
+        .unwrap();
+        let told = full_with_unfinished(error(), &full(), &project, &cache);
+        assert_eq!(
+            told.details,
+            [format!(
+                "unfinished downloads in {} hold 2.0 KiB of it, which `fetchloom cache gc --now` frees",
+                cache.root().join("partial").display()
+            )]
+        );
+        let denied = io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
+        let other = full_with_unfinished(Error::io("x", &denied), &denied, &project, &cache);
+        assert_eq!(other.details, Vec::<String>::new());
+    }
 
     #[test]
     fn an_edit_made_while_later_files_are_placed_is_not_recorded_as_placed() {

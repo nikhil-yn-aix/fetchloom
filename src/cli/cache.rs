@@ -26,6 +26,10 @@ pub(super) struct Info {
     /// bytes some registered project's data.lock needs.
     needed: u64,
     projects: Vec<PathBuf>,
+    /// downloads a run stopped before they finished, kept so a later run can continue them.
+    unfinished_downloads: u64,
+    /// the bytes those downloads hold.
+    unfinished_bytes: u64,
 }
 
 pub(super) fn info(context: &Context) -> Result<Info, Error> {
@@ -57,6 +61,17 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     for project in &projects {
         output.step("Used by", &project.display().to_string());
     }
+    let unfinished = cache.unfinished();
+    if unfinished.downloads > 0 {
+        output.step(
+            "Unfinished",
+            &format!(
+                "{} · {}, kept so a later run can continue",
+                units::count(unfinished.downloads, "download", "downloads"),
+                units::size(unfinished.bytes)
+            ),
+        );
+    }
     if objects.is_empty() {
         output.done("Ok", "the cache has no data files");
     } else if objects
@@ -71,6 +86,9 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         );
         output.hint("`fetchloom cache gc` frees the rest once it is a day old; `fetchloom cache gc --now` frees it now");
     }
+    if unfinished.downloads > 0 {
+        output.hint("`fetchloom cache gc --now` also frees unfinished downloads no fetchloom is running; those start over next time");
+    }
     output.answer_untold(&cache.root().display().to_string());
     Ok(Info {
         path: cache.root().to_path_buf(),
@@ -78,6 +96,8 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
         bytes,
         needed: kept,
         projects,
+        unfinished_downloads: unfinished.downloads,
+        unfinished_bytes: unfinished.bytes,
     })
 }
 
@@ -167,7 +187,11 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     if freed.leftovers > 0 {
         output.step(
             "Removed",
-            &units::count(freed.leftovers, "leftover item", "leftover items"),
+            &format!(
+                "{} · {} of unfinished downloads and temporary files",
+                units::count(freed.leftovers, "leftover item", "leftover items"),
+                units::size(freed.leftover_bytes)
+            ),
         );
     }
     if !freed.not_removed.is_empty() {
@@ -269,7 +293,11 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
     if freed.leftovers > 0 {
         output.step(
             "Would drop",
-            &units::count(freed.leftovers, "leftover item", "leftover items"),
+            &format!(
+                "{} · {} of unfinished downloads and temporary files",
+                units::count(freed.leftovers, "leftover item", "leftover items"),
+                units::size(freed.leftover_bytes)
+            ),
         );
     }
     for path in &remove {
