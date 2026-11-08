@@ -15,6 +15,13 @@ use crate::error::{Error, Kind};
 use crate::net::Credential;
 use crate::source::Var;
 
+/// one step of a sign-in guide: a page to open, or something to do.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Step {
+    Open(String),
+    Do(String),
+}
+
 /// an account at one source, or a login for one host.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Account {
@@ -201,51 +208,58 @@ impl Account {
         }
     }
 
-    /// the page where a person gets a key, and what to do there.
-    pub(crate) fn guide(&self) -> (Option<String>, Vec<String>) {
+    /// how a person gets a key, from an account they may not have yet to the terms some
+    /// datasets ask them to accept, as steps to follow in order.
+    pub(crate) fn guide(&self) -> Vec<Step> {
+        let join = |site: &str| {
+            Step::Do(format!(
+                "make a free account at {site} if you have none, and sign in"
+            ))
+        };
         match self {
-            Account::HuggingFace => (
-                Some("https://huggingface.co/settings/tokens".into()),
-                vec!["create a token of the read type, or a fine-grained one that can read the repositories you need".into()],
-            ),
-            Account::Kaggle => (
-                Some("https://www.kaggle.com/settings/api".into()),
-                vec![
-                    "under api tokens, create a token and copy it; it starts with KGAT_".into(),
-                    "a kaggle.json you downloaded before works too: paste its path".into(),
-                ],
-            ),
-            Account::Zenodo => (
-                Some("https://zenodo.org/account/settings/applications/tokens/new/".into()),
-                vec!["name it fetchloom and create it; downloads need no scopes".into()],
-            ),
-            Account::Figshare => (
-                Some("https://figshare.com/account/applications".into()),
-                vec!["under personal tokens, create one and copy it; figshare shows it only once".into()],
-            ),
-            Account::Osf => (
-                Some("https://osf.io/settings/tokens/".into()),
-                vec!["create a token with the osf.full_read scope".into()],
-            ),
-            Account::Dataverse(host) => (
-                Some(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
-                vec![format!("sign in to {host}, then create or copy the api token there; it works on that server only")],
-            ),
-            Account::Login(host) if host == EARTHDATA => (
-                Some("https://urs.earthdata.nasa.gov/users/new".into()),
-                vec![
-                    "use your earthdata login username and password; create an account there if you have none".into(),
-                    "some archives also need their application approved under applications in your earthdata profile".into(),
-                ],
-            ),
-            Account::Login(host) if host == PHYSIONET => (
-                Some("https://physionet.org/settings/credentialing/".into()),
-                vec![
-                    "use your physionet username and password".into(),
-                    "credentialed datasets also need the training and a signed data use agreement on their own page".into(),
-                ],
-            ),
-            Account::Login(host) => (None, vec![format!("use the username and password {host} gave you")]),
+            Account::HuggingFace => vec![
+                join("huggingface.co"),
+                Step::Open("https://huggingface.co/settings/tokens".into()),
+                Step::Do("create a token of the read type, or a fine-grained one that can read the repositories you need".into()),
+                Step::Do("a gated dataset also needs its terms accepted on its own page, with the same account".into()),
+            ],
+            Account::Kaggle => vec![
+                join("kaggle.com"),
+                Step::Open("https://www.kaggle.com/settings/api".into()),
+                Step::Do("under api tokens, create a token and copy it; it starts with KGAT_".into()),
+                Step::Do("a kaggle.json you downloaded before works too: paste its path".into()),
+                Step::Do("a competition also needs its rules accepted on its page, under data, with the same account".into()),
+            ],
+            Account::Zenodo => vec![
+                join("zenodo.org"),
+                Step::Open("https://zenodo.org/account/settings/applications/tokens/new/".into()),
+                Step::Do("name it fetchloom and create it; downloads need no scopes".into()),
+            ],
+            Account::Figshare => vec![
+                join("figshare.com"),
+                Step::Open("https://figshare.com/account/applications".into()),
+                Step::Do("under personal tokens, create one and copy it; figshare shows it only once".into()),
+            ],
+            Account::Osf => vec![
+                join("osf.io"),
+                Step::Open("https://osf.io/settings/tokens/".into()),
+                Step::Do("create a token with the osf.full_read scope".into()),
+            ],
+            Account::Dataverse(host) => vec![
+                Step::Open(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
+                Step::Do(format!("sign in to {host}, then create or copy the api token there; it works on that server only")),
+            ],
+            Account::Login(host) if host == EARTHDATA => vec![
+                Step::Open("https://urs.earthdata.nasa.gov/users/new".into()),
+                Step::Do("use your earthdata login username and password; create an account there if you have none".into()),
+                Step::Do("some archives also need their application approved under applications in your earthdata profile".into()),
+            ],
+            Account::Login(host) if host == PHYSIONET => vec![
+                Step::Open("https://physionet.org/settings/credentialing/".into()),
+                Step::Do("use your physionet username and password".into()),
+                Step::Do("credentialed datasets also need the training and a signed data use agreement on their own page".into()),
+            ],
+            Account::Login(host) => vec![Step::Do(format!("use the username and password {host} gave you"))],
         }
     }
 

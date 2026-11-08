@@ -24,12 +24,14 @@ an account name must be a source name or a plain host name, not a URL, query or 
 
 ## signing in
 
-`fetchloom auth login hf` shows the page where you make a key, as a link you can click in most terminals, and what to pick there. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
+`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, as a link you can click in most terminals, and what to pick there. hugging face and kaggle add the step a gated dataset or a competition needs: accept its terms or rules on its own page, with the same account. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
 
 ```text
     Sign in hugging face
-         1. open https://huggingface.co/settings/tokens
-         2. create a token of the read type, or a fine-grained one that can read the repositories you need
+         1. make a free account at huggingface.co if you have none, and sign in
+         2. open https://huggingface.co/settings/tokens
+         3. create a token of the read type, or a fine-grained one that can read the repositories you need
+         4. a gated dataset also needs its terms accepted on its own page, with the same account
         key hf_A...x9Qz · 37 characters
     Checked the key works for ada
 save it to /home/ada/.cache/huggingface/token, where the hf command and the hugging face python libraries read it? [Y/n] yes

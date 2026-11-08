@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::Context;
 use super::args::{Auth, AuthAction, Login, Logout};
-use crate::auth::{self, Account, Found, Home, Need, Origin, Secret, store};
+use crate::auth::{self, Account, Found, Home, Need, Origin, Secret, Step, store};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 
@@ -220,23 +220,16 @@ async fn sign_in(
     })
 }
 
-/// the steps to get a key, with the page as a link a person can click.
+/// the steps to get a key, with each page as a link a person can click.
 fn guide(context: &Context, account: &Account) {
     let output = &context.output;
-    let (page, steps) = account.guide();
     output.say(&format!("{:>11} {}", "Sign in", title(account)));
-    let mut number = 1;
-    if let Some(page) = page {
-        output.say(&format!(
-            "{:>11} open {}",
-            format!("{number}."),
-            output.link(&page)
-        ));
-        number += 1;
-    }
-    for step in steps {
-        output.say(&format!("{:>11} {step}", format!("{number}.")));
-        number += 1;
+    for (number, step) in account.guide().into_iter().enumerate() {
+        let text = match step {
+            Step::Open(page) => format!("open {}", output.link(&page)),
+            Step::Do(text) => text,
+        };
+        output.say(&format!("{:>11} {text}", format!("{}.", number + 1)));
     }
 }
 

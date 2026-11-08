@@ -480,3 +480,30 @@ fn stored_account_hosts_cannot_become_displayed_secret_urls() {
     );
     assert!(listed.contains(&Account::Login("example.org:8443".to_owned())));
 }
+
+#[test]
+fn a_guide_starts_with_the_account_and_ends_with_the_terms_a_dataset_needs() {
+    for account in [
+        Account::HuggingFace,
+        Account::Kaggle,
+        Account::Zenodo,
+        Account::Figshare,
+        Account::Osf,
+    ] {
+        let guide = account.guide();
+        let Some(Step::Do(first)) = guide.first() else {
+            panic!("{account:?}: {guide:?}");
+        };
+        assert!(
+            first.starts_with("make a free account at "),
+            "{account:?}: {first}"
+        );
+        assert!(matches!(guide.get(1), Some(Step::Open(page)) if page.starts_with("https://")));
+    }
+    let last = |account: Account| match account.guide().pop() {
+        Some(Step::Do(text)) => text,
+        other => panic!("{other:?}"),
+    };
+    assert!(last(Account::HuggingFace).contains("gated dataset also needs its terms accepted"));
+    assert!(last(Account::Kaggle).contains("competition also needs its rules accepted"));
+}
