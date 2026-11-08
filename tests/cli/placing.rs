@@ -947,6 +947,53 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> 
     Ok(())
 }
 
+/// an edit in place through one project's hardlink that keeps the size, saved as vim's `:w!`
+/// saves a read-only file and then sealed again, leaves the cached object looking whole. its time
+/// moved, so a new project's sync checks it, downloads the file again and places the locked bytes.
+#[test]
+fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_them_in_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let before = fs::metadata(&placed)?;
+    if before.created().is_err() {
+        return Ok(());
+    }
+    let mut changed = V1.to_vec();
+    changed[0] = b'X';
+    edit(&placed, &changed)?;
+    fs::File::options()
+        .write(true)
+        .open(&placed)?
+        .set_modified(before.modified()? + std::time::Duration::from_secs(3600))?;
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&placed, permissions)?;
+    let other = sandbox.folder("other")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), other.join(name))?;
+    }
+
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        text(&fs::read(other.join("data").join("iris").join("iris.csv"))?)?,
+        text(V1)?
+    );
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}
+
 #[test]
 fn sync_force_puts_back_a_link_another_project_edited() -> Result {
     let sandbox = Sandbox::new()?;

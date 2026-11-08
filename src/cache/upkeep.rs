@@ -198,7 +198,7 @@ impl Cache {
         if !crate::volume::is_plain(&metadata) || metadata.len() != size {
             return Ok(false);
         }
-        let intact = !super::changed::doubted(&metadata, self.changed_at(digest)?)
+        let intact = !super::changed::doubted(&path, &metadata, self.changed_at(digest)?)
             || hash(&path, stop).is_ok_and(|actual| actual == *digest);
         stop.check()?;
         Ok(intact)

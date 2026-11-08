@@ -322,6 +322,23 @@ pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
     open_plain(path, OpenOptions::new().read(true))
 }
 
+/// opens an object to hash it and then date it again: to read, and on windows also to set its
+/// times, which a read-only file allows. unix lets the owner set times through any handle.
+pub(crate) fn open_to_redate(path: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const GENERIC_READ: u32 = 0x8000_0000;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+        open_plain(
+            path,
+            OpenOptions::new().access_mode(GENERIC_READ | FILE_WRITE_ATTRIBUTES),
+        )
+    }
+    #[cfg(not(windows))]
+    read_unfollowed(path)
+}
+
 fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     #[cfg(unix)]
     {
@@ -615,6 +632,10 @@ impl PartialWriter {
         let metadata = file.metadata()?;
         if metadata.len() != prefix {
             file.set_len(prefix)?;
+        }
+        // dated while the handle may still set times, before the flag and the flush
+        if let Err(err) = super::object::date_by_birth(&file) {
+            tracing::debug!(%err, "could not date a download by its birth");
         }
         // sealed through the handle that wrote it: by name, a link swapped in since would be
         // sealed in its place

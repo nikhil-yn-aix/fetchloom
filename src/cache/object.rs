@@ -1,11 +1,14 @@
 //! new objects written in one go, such as the members of an archive. each is created read-only in
-//! `tmp/`, written and hashed in one pass, flushed and closed, then published through the cache's
-//! hardlink-or-rename policy.
+//! `tmp/`, written and hashed in one pass, dated by its birth, flushed and closed, then published
+//! through the cache's hardlink-or-rename policy.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{File, FileTimes, Metadata, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
+use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime};
 
 use super::{Cache, Staging, Stored};
 use crate::digest::{Hasher, Sha256};
@@ -208,6 +211,10 @@ impl NewObject {
             hasher,
             written,
         } = self;
+        // dated before the flush, so the time reaches the disk with the bytes
+        if let Err(err) = date_by_birth(&file) {
+            tracing::debug!(%err, "could not date an object by its birth");
+        }
         if flush {
             file.sync_all()?;
         }
@@ -258,12 +265,123 @@ impl Write for NewObject {
     }
 }
 
+/// how far apart a sealed object's modification and birth times may lie: FAT and exFAT round a
+/// modification time up to two seconds.
+const SEALED_WITHIN: Duration = Duration::from_secs(2);
+
+/// dates a sealed object by its birth: its modification time becomes the time the file was made,
+/// which no later write moves. a write through any link to the object moves the modification
+/// time alone, so [`rewritten`] puts the object in doubt, as pnpm finds a changed store file by
+/// its time. a filesystem that keeps no birth time leaves the object undated.
+pub(super) fn date_by_birth(file: &File) -> io::Result<()> {
+    let found = file.metadata()?;
+    let born = found.created().ok();
+    #[cfg(target_os = "linux")]
+    let born = born.or_else(|| statx_birth(file, "", rustix::fs::AtFlags::EMPTY_PATH));
+    match born {
+        Some(born) => file.set_times(FileTimes::new().set_modified(born)),
+        None => Ok(()),
+    }
+}
+
+/// whether bytes may have been written into the object at `path` since it was sealed: its
+/// modification time moved past its birth time, as any write moves it. a time moved back, as a
+/// copy that keeps times gives, is no write. a filesystem that keeps no birth time cannot tell,
+/// and the answer is no.
+pub(crate) fn rewritten(path: &Path, metadata: &Metadata) -> bool {
+    let (Some(born), Ok(modified)) = (birth(path, metadata), metadata.modified()) else {
+        return false;
+    };
+    modified
+        .duration_since(born)
+        .is_ok_and(|later| later > SEALED_WITHIN)
+}
+
+/// dates `file`, an object a hash just vouched for, by its birth again, so the next use need not
+/// hash it. a write since `seen` was read of it is no longer vouched for and keeps its time. so
+/// does an object a project placed as a hardlink: its time is that project's file's, and moving
+/// it would look like an edit there.
+pub(super) fn redate(file: &File, seen: &Metadata) {
+    let unchanged = file
+        .metadata()
+        .is_ok_and(|now| now.len() == seen.len() && now.modified().ok() == seen.modified().ok());
+    if unchanged
+        && alone(file)
+        && let Err(err) = date_by_birth(file)
+    {
+        tracing::debug!(%err, "could not date an object by its birth");
+    }
+}
+
+/// whether `file` has no name but its own.
+fn alone(file: &File) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        file.metadata().is_ok_and(|found| found.nlink() == 1)
+    }
+    #[cfg(windows)]
+    {
+        winapi_util::file::information(file).is_ok_and(|found| found.number_of_links() == 1)
+    }
+}
+
+/// when the file at `path`, which `metadata` describes, was made. std reads it everywhere but on
+/// linux with musl, where statx does. none where the filesystem keeps no birth time.
+pub(crate) fn birth(path: &Path, metadata: &Metadata) -> Option<SystemTime> {
+    let born = metadata.created().ok();
+    #[cfg(target_os = "linux")]
+    let born =
+        born.or_else(|| statx_birth(rustix::fs::CWD, path, rustix::fs::AtFlags::SYMLINK_NOFOLLOW));
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
+    born
+}
+
+/// the birth time statx reads for `path` under `folder`, when the filesystem keeps one.
+#[cfg(target_os = "linux")]
+fn statx_birth<P: rustix::path::Arg>(
+    folder: impl rustix::fd::AsFd,
+    path: P,
+    flags: rustix::fs::AtFlags,
+) -> Option<SystemTime> {
+    use rustix::fs::{StatxFlags, statx};
+    let found = statx(folder, path, flags, StatxFlags::BTIME).ok()?;
+    if found.stx_mask & StatxFlags::BTIME.bits() == 0 {
+        return None;
+    }
+    let since = Duration::new(
+        u64::try_from(found.stx_btime.tv_sec).ok()?,
+        found.stx_btime.tv_nsec,
+    );
+    UNIX_EPOCH.checked_add(since)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use super::super::tests::fat;
+    use super::super::tests::{cache, fat};
     use super::*;
+
+    /// an object whose bytes took long to arrive, as a large download's do, is dated by its birth
+    /// once sealed, so only a later write moves its time away from it.
+    #[test]
+    fn sealing_dates_an_object_by_its_birth() {
+        let (_dir, cache) = cache();
+        let mut object = cache.new_object().unwrap();
+        object.write_all(b"slow bytes").unwrap();
+        let Some(born) = birth(&object.temp.path, &object.file.metadata().unwrap()) else {
+            return;
+        };
+        object
+            .file
+            .set_modified(born + std::time::Duration::from_secs(3600))
+            .unwrap();
+        let stored = object.seal(true).unwrap().publish(&cache).unwrap();
+        let path = cache.object_path(&stored.digest);
+        assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
+    }
 
     #[test]
     fn objects_never_published_leave_nothing_on_fat() {

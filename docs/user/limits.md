@@ -27,7 +27,7 @@ see the [developer roadmap](../dev/roadmap.md) for future work. current commands
 
 file hashes and sizes pin bytes. they do not guarantee that a source will host those bytes forever. locked 404 or 410 downloads can try a replacement URL from the source, but the bytes must still match.
 
-cached objects are not rehashed on every use. status uses saved metadata and selective hashing, and cache verification does not check independent copies in `data/`.
+cached objects are not rehashed on every use. an edit through a placed hardlink moves the cached copy's time and is caught before the copy is used again, but a change that puts the time back, as `touch -r` does, is caught only by `--verify` or `fetchloom cache verify`. status uses saved metadata and selective hashing, and cache verification does not check independent copies in `data/`.
 
 sync preserves local conflicts by default and can exit 0 while keeping them. `path` returns a location even when an edited file remains there. scripts that require untouched inputs must inspect [status and placement results](scripting.md#checking-and-syncing).
 

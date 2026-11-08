@@ -251,16 +251,16 @@ impl Cache {
         self.root.join("objects").join(&hex[..2]).join(&hex[2..])
     }
 
-    /// the object's path, when the cache holds it. a known size must match, and writable or
-    /// marked objects must still hash to their names.
+    /// the object's path, when the cache holds it. a known size must match, and writable,
+    /// marked or retimed objects must still hash to their names.
     pub(crate) fn find(&self, digest: &Sha256, size: Option<u64>) -> Option<PathBuf> {
         let path = self.object_path(digest);
         let metadata = fs::symlink_metadata(&path).ok()?;
         if !is_plain(&metadata) || size.is_some_and(|size| metadata.len() != size) {
             return None;
         }
-        if changed::doubted(&metadata, self.changed_at(digest).ok()?)
-            && hash_object(&path).ok()? != *digest
+        if changed::doubted(&path, &metadata, self.changed_at(digest).ok()?)
+            && !changed::vouch(&path, &metadata, digest).ok()?
         {
             return None;
         }
@@ -1342,6 +1342,7 @@ pub(crate) mod tests {
             );
             let metadata = fs::metadata(&object).unwrap();
             assert!(!changed::doubted(
+                &object,
                 &metadata,
                 cache.changed_at(&stored.digest).unwrap()
             ));

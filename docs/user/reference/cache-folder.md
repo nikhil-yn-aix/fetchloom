@@ -39,7 +39,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
 
 `CACHEDIR.TAG` starts with `Signature: 8a477f597d28d172789f06886806bc55` to let backup tools skip the cache. `gc.lock` is empty; commands that use the cache hold it with a shared OS lock and `cache gc` holds it alone, so gc waits for them ([runs that use the cache](../commands/cache.md#runs-that-use-the-cache)). `reminded` is empty; its modification time is when fetchloom last [checked for bytes no project needs](../commands/cache.md#reminder). opening, verifying and collecting the cache ignore unknown top-level files. on macos, first initialization also creates `.metadata_never_index` for spotlight and sets the time machine backup-exclusion attribute when the filesystem supports it. these markers belong to the cache root, not to each object.
 
-objects hold read-only payloads. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup.
+objects hold read-only payloads. sealing sets an object's modification time to its birth time, so a later modification time means it was written since, and it is hashed before use. each archive stages its read-only `.new` members in a unique `.stage` folder under `tmp/`. its writer holds the empty `lock` file open with an exclusive OS lock through publication and cleanup.
 
 the next unpack or gc removes a staging folder as soon as it can take that lock.
 
@@ -94,4 +94,4 @@ on unix, registrations and change marks flush their containing directory after r
 
 an unreadable `changed/` folder or change mark stops sync and get with `local.io` (exit 50), before they place files or record a completed sync. fix storage access and read/search permissions, run `fetchloom cache verify`, then retry. keep the marks: deleting them can hide damage from another project's hardlinks.
 
-objects are not rehashed on every use. run `fetchloom cache verify` to check their bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.
+objects are not rehashed on every use, only once their time moved since sealing. run `fetchloom cache verify` to check every object's bytes. [cache commands](../commands/cache.md) covers the 24-hour collection rule, registrations and partial failures.

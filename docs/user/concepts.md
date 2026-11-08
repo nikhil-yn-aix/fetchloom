@@ -20,7 +20,7 @@ fetchloom sync
 
 `data.lock` records selected source files by SHA-256 and size, plus stated MD5 when available. source metadata and resolved versions make the origin inspectable. archive extraction adds a hash of the unpacked file tree.
 
-downloads must match their locked size and hashes. cached objects are not rehashed on every use. file metadata and saved state avoid unnecessary reads; [cache verify](commands/cache.md#verify) checks cached bytes explicitly.
+downloads must match their locked size and hashes. cached objects are not rehashed on every use: sealing dates each object by its birth, and one whose time has moved since, as an edit through a placed hardlink moves it, is hashed before it is used. file metadata and saved state avoid unnecessary reads; [cache verify](commands/cache.md#verify) checks cached bytes explicitly.
 
 source checksum support covers MD5 and SHA-256. a known SHA-256 and size can allow a file to be locked without downloading it. hashes pin bytes after resolution; a source reference is not always immutable. see [lock rules](reference/data-lock.md#the-spec-hash).
 

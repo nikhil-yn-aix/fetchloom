@@ -1,6 +1,7 @@
 //! objects found changed, remembered after replacement so projects can check their old hardlinks.
 //! marked objects stay at their names until a verified copy replaces them. lookup hashes objects
-//! no newer than their marks, or newer by less than a coarse clock's two second step.
+//! written since they were sealed, and objects no newer than their marks, or newer by less than a
+//! coarse clock's two second step.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -9,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{Cache, hash_object};
+use super::Cache;
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::{FolderUse, found_folder, real_folder};
@@ -27,8 +28,9 @@ pub(crate) struct Doubt {
 impl Cache {
     /// the object for `digest` when the cache holds it, with `size` when one is known, and its
     /// bytes can be trusted. a mark in `marks`, from [`Cache::doubts`], at least as new as the
-    /// object puts it in doubt, as does a writable flag. intact writable objects are sealed
-    /// again; changed ones are marked and left at their names until a fetched copy replaces them.
+    /// object puts it in doubt, as do a writable flag and a time moved since sealing. intact
+    /// objects are sealed and dated again; changed ones are marked and left at their names until
+    /// a fetched copy replaces them.
     pub(crate) fn trusted(
         &self,
         digest: &Sha256,
@@ -44,26 +46,29 @@ impl Cache {
         }
         let mut permissions = metadata.permissions();
         let writable = !permissions.readonly();
-        if !doubted(&metadata, marks.get(digest).copied()) {
+        if !doubted(&path, &metadata, marks.get(digest).copied()) {
             return Ok(Some(path));
         }
-        // a writable object is hashed and sealed through one handle, so a link swapped in for
-        // its name between the two is never sealed in its place
-        let hashed = if writable {
+        // the object is hashed, sealed and dated through one handle, so a link swapped in for its
+        // name meanwhile is never sealed or dated in its place
+        let opened = if writable {
             super::open_unfollowed(&path, false)
-                .and_then(|file| Ok((Sha256::of_reader(&file)?, Some(file))))
         } else {
-            hash_object(&path).map(|actual| (actual, None))
+            super::partial::open_to_redate(&path)
         };
+        let hashed = opened.and_then(|file| Ok((Sha256::of_reader(&file)?, file)));
         match hashed {
             Ok((actual, file)) if actual == *digest => {
-                if let Some(file) = file {
+                if writable {
                     permissions.set_readonly(true);
                     file.set_permissions(permissions).map_err(|error| Doubt {
                         object: path.clone(),
                         changed: false,
                         error,
                     })?;
+                }
+                if super::object::rewritten(&path, &metadata) {
+                    super::object::redate(&file, &metadata);
                 }
                 Ok(Some(path))
             }
@@ -376,8 +381,23 @@ fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
     .help("check the cache storage and permissions, then run `fetchloom cache verify` and retry")
 }
 
-pub(super) fn doubted(metadata: &fs::Metadata, marked: Option<u64>) -> bool {
+/// whether the object at `path`, which `seen` describes, holds `digest`'s bytes, by hashing it.
+/// an intact object whose time moved since sealing is dated again through the same handle, so
+/// the next use need not hash it.
+pub(super) fn vouch(path: &Path, seen: &fs::Metadata, digest: &Sha256) -> io::Result<bool> {
+    let file = super::partial::open_to_redate(path)?;
+    let intact = Sha256::of_reader(&file)? == *digest;
+    if intact && super::object::rewritten(path, seen) {
+        super::object::redate(&file, seen);
+    }
+    Ok(intact)
+}
+
+/// whether the object at `object`, which `metadata` describes, may not hold the bytes its name
+/// says: it is writable, its time moved since sealing, or a mark `marked` is no older than it.
+pub(super) fn doubted(object: &Path, metadata: &fs::Metadata, marked: Option<u64>) -> bool {
     !metadata.permissions().readonly()
+        || super::object::rewritten(object, metadata)
         || marked.is_some_and(|marked| {
             marked.saturating_add(COARSE) >= metadata.modified().map_or(0, nanos)
         })
@@ -403,7 +423,7 @@ fn nanos(time: SystemTime) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{cache, store};
+    use super::super::tests::{cache, rewrite, seal, store};
     use super::*;
 
     #[test]
@@ -460,6 +480,108 @@ mod tests {
                 assert!(cache.changed().is_empty());
             }
         }
+    }
+
+    /// an editor that saves in place through a placed hardlink, then puts the read-only flag back,
+    /// as vim's `:w!` does, changes the cache's own copy and leaves it looking sealed. its time
+    /// moved, so the cache hashes it before trusting it, finds the change and marks it.
+    #[test]
+    fn an_object_written_through_a_link_and_sealed_again_is_not_trusted() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        if fs::metadata(&object)
+            .ok()
+            .and_then(|found| super::super::object::birth(&object, &found))
+            .is_none()
+        {
+            return;
+        }
+        let sealed = fs::metadata(&object).unwrap().modified().unwrap();
+        rewrite(&object, b"evil");
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(sealed + std::time::Duration::from_secs(3600))
+            .unwrap();
+        seal(&object);
+
+        let found = cache
+            .trusted(&stored.digest, Some(4), &HashMap::new())
+            .unwrap();
+
+        assert_eq!(found, None);
+        assert!(cache.changed().contains_key(&stored.digest));
+    }
+
+    /// an object whose time moved but whose bytes did not, as after a `touch` through a link, is
+    /// trusted once hashed, and dated again so the next use need not hash it.
+    #[test]
+    fn an_intact_object_whose_time_moved_is_dated_again() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let Some(born) = fs::metadata(&object)
+            .ok()
+            .and_then(|found| super::super::object::birth(&object, &found))
+        else {
+            return;
+        };
+        rewrite(&object, b"good");
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(born + std::time::Duration::from_secs(3600))
+            .unwrap();
+        seal(&object);
+
+        let found = cache
+            .trusted(&stored.digest, Some(4), &HashMap::new())
+            .unwrap();
+
+        assert_eq!(found.as_deref(), Some(object.as_path()));
+        assert!(!super::super::object::rewritten(
+            &object,
+            &fs::metadata(&object).unwrap()
+        ));
+        assert!(cache.changed().is_empty());
+    }
+
+    /// an object a project placed as a hardlink shares its time with that project's file, so a
+    /// hash vouches for it but leaves its time, which dating it again would make look edited.
+    #[test]
+    fn an_intact_object_a_project_links_keeps_its_moved_time() {
+        let (dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let Some(born) = fs::metadata(&object)
+            .ok()
+            .and_then(|found| super::super::object::birth(&object, &found))
+        else {
+            return;
+        };
+        let placed = dir.path().join("placed");
+        if fs::hard_link(&object, &placed).is_err() {
+            return;
+        }
+        rewrite(&object, b"good");
+        let moved = born + std::time::Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(moved)
+            .unwrap();
+        seal(&object);
+
+        let found = cache
+            .trusted(&stored.digest, Some(4), &HashMap::new())
+            .unwrap();
+
+        assert_eq!(found.as_deref(), Some(object.as_path()));
+        assert_eq!(fs::metadata(&placed).unwrap().modified().unwrap(), moved);
     }
 
     #[test]
