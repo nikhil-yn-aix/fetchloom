@@ -19,7 +19,7 @@ command handlers order effects across modules. `Context` reads settings once and
 | [picker.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/picker.rs) | terminal candidate selection and cancellation | `choose`, `selection_key`, `row` |
 | [list.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/list.rs) | manifest and lock listing without placement, and its tables | `Report`, `Listed`, `run`, `listed`, `table`, `columns` |
 | [status.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/status.rs) | local comparison and summaries | `Status`, `run`, `brief` |
-| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | cache command reports and retained-project discovery | `Info`, `info`, `gc`, `verify`, `needed` |
+| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | cache command reports and retained-project discovery | `Info`, `Collected`, `info`, `gc`, `verify`, `needed_with` |
 | [fetch.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch.rs), [fetch/again.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/again.rs) | bounded transfer scheduling and expired-link recovery | `Job`, `all`, `apart`, `listed_job`, `Again`, `Listings`, `recover` |
 | [help.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/help.rs), [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) | help and argument errors | `show`, `answer` |
 | [logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs) | debug events and trace-file lifetime | `Logs`, `start` |
@@ -28,7 +28,7 @@ command handlers order effects across modules. `Context` reads settings once and
 
 ### startup
 
-`run` parses before creating the command context. `-C` changes the working folder before command work. output style is decided once; the context then applies offline mode, job and thread limits, bandwidth settings and split policy. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
+`run` parses before creating the command context. output style and logging start before `-C`; an explicit trace path is created or truncated there, even for a dry run. version, help and completions return before `-C` and resource-setting validation. other commands change the working folder and read `Threads`; named commands also read job and rate limits. bare welcome and project status bypass the job and rate checks. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
 
 built-in environment help describes the four-request cap per initial hostname; redirects keep that initial host’s slots.
 

@@ -61,7 +61,7 @@ stdout and stderr detect color separately. explicit `--color always` or `--color
 
 bars and questions need terminal stderr outside CI, outside `TERM=dumb` and outside a coding agent. `by_agent` in [output/style.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output/style.rs) checks `AGENT_VARIABLES`, such as `AI_AGENT`, `VSCODE_AGENT` and `CLAUDECODE`; any value other than empty, `0` or `false` marks an agent, which also turns off automatic color. add a variable there only if agents set it and people's own terminals do not. questions also require terminal stdin. JSON, quiet mode and stderr debug logs suppress bars; quiet does not waive a question. the dataset picker follows [selection rules](../../user/commands/search.md#choosing-a-dataset), including refusal to let `--yes` choose.
 
-`TERM=dumb` disables unicode choices. a windows terminal enables them only when `WT_SESSION`, `TERM_PROGRAM` or `ConEmuANSI` is present. other destinations keep unicode by default. fallbacks include `...` for clipping and `>` with worded key hints in the picker. this is not an ASCII-only output mode: text from filenames and sources remains intact.
+`TERM=dumb` disables unicode choices. a windows terminal enables them only when `WT_SESSION`, `TERM_PROGRAM` or `ConEmuANSI` is present. outside a windows terminal, the first nonempty `LC_ALL`, `LC_CTYPE` or `LANG` enables unicode only when it contains `utf-8` or `utf8`, ignoring case. with none set, unicode stays enabled. fallbacks include `...` for clipping and `>` with worded key hints in the picker. this is not an ASCII-only output mode: text from filenames and sources remains intact.
 
 ### reports and counters
 
@@ -80,7 +80,7 @@ flag help initializes the same palette as the `help` command. both apply `FETCHL
 - snapshot filters remove paths, ports, times and rates. inspect unfiltered output when changing a value those filters can hide.
 - literal error kinds are stable script interfaces. prose can improve without renaming them.
 - masked display URLs do not sanitize raw URL values stored elsewhere. semantic argument errors, such as an unknown auth account, need the same masking as clap errors.
-- a panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`.
+- an unhandled panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`. the known runtime-worker startup panic is caught and reported as `local.io`; [worker budgets](primitives.md#worker-budgets) explains that exception.
 
 ## tests
 

@@ -11,7 +11,7 @@ research code can outlive the dataset version it used. keep input identities bes
 | what | why | implementation |
 |---|---|---|
 | keep one rust crate | modules provide boundaries without separate package versions; split only when an independent consumer needs one | [architecture](architecture/README.md) |
-| ship one executable named `fetchloom` | powershell uses `fl` for `Format-List`, and a managed machine's ransomware rule blocked an unsigned `fl.exe`; users can choose their own shell alias | [CLI](architecture/cli.md) |
+| ship one executable named `fetchloom` | powershell uses `fl` for `Format-List`; the full executable name avoids that collision, and users can choose their own shell alias | [CLI](architecture/cli.md) |
 | keep adapters in the crate | version, checksum and paging rules stay beside their tests; there is no current plugin-protocol consumer | [sources](architecture/sources.md) |
 | route DOIs through the registered handle URL | DOI prefixes and landing-page redirects do not reliably identify the repository | [source routing](architecture/sources.md#parse-before-resolving) |
 | support shared-link sources alongside repositories | research inputs also arrive through hugging face, kaggle, drive and dropbox | [source behavior](../user/sources/README.md) |
@@ -36,13 +36,13 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 
 | what | why | invariant |
 |---|---|---|
-| try reflink, hardlink, then copy | reflinks isolate later writes; hardlinks share bytes; copies work when links fail. symlinks can dangle after cache cleanup and need extra windows privileges | [placing](architecture/placing.md#choose-a-filesystem-method) |
-| separate object publication from partial ownership | hardlink publication avoids a global cache lock; unfinished bytes need an ownership lock | [cache publication](architecture/cache.md#publication-and-repair) |
+| try reflink, hardlink, then copy; read-only windows placement tries hardlinks first | reflinks isolate later writes; hardlinks share bytes and can reuse a windows scan; copies work when links fail. symlinks can dangle after cache cleanup and need extra windows privileges | [placing](architecture/placing.md#choose-a-filesystem-method) |
+| separate object publication from partial ownership | hardlink publication avoids serializing publishers on one exclusive cache lock; unfinished bytes need an ownership lock, and the shared gc lock protects active runs | [cache publication](architecture/cache.md#publication-and-repair) |
 | open cache hashing and copy inputs without following final links | a replaced object name must not redirect these readers to another file | [cache access](architecture/cache.md#safe-object-access) |
 | flush copied payloads before sync writes state | state must not vouch for bytes still pending write-back; linux batching avoids one flush per small copy | [copy durability](architecture/placing.md#copy-durability) |
 | leave checkpoint and lookup indexes as unflushed hints | losing a hint costs resumption or revalidation, while payload identity remains checked | [cache checkpoints](architecture/cache.md#partial-ownership-and-checkpoints) |
 | limit silence instead of total download time | a large transfer that keeps producing bytes can finish | [request policy](architecture/network.md#request-policy) |
-| begin with one stream and split only after it proves slow | extra connections slowed fast transfers and helped constrained ones | [network measurements](performance/measurements.md#network) |
+| begin adaptive downloads with one stream and split after it proves slow | extra connections slowed fast transfers and helped constrained ones | [network measurements](performance/measurements.md#network) |
 | put all archive decoders behind one guard | entry types, paths and expansion limits must agree before members become reusable | [archives](architecture/archives.md#validate-before-publication) |
 | preserve edits and recheck before replacement | files can change while downloads run; interruption recovery must not erase unrelated work | [placing](architecture/placing.md#choose-an-action) |
 

@@ -40,7 +40,7 @@ flowchart TD
     safe -->|yes| replace["replace"]
     safe -->|no| equal{"holds wanted bytes?"}
     tracked -->|no| equal
-    equal -->|yes| adopt["adopt; tracked mode mismatch replaces"]
+    equal -->|yes| adopt["adopt; writable-mode mismatch replaces"]
     equal -->|no| force{"force requested?"}
     force -->|yes| replace
     force -->|no| leave["leave edited or foreign file"]
@@ -52,7 +52,7 @@ flowchart TD
 | vouch | a doubtful hardlink was hashed and found intact; keep it and record the scan's start |
 | adopt | existing bytes match the target; record them as managed without rewriting them |
 | place | no file occupies the target |
-| replace | old managed data is superseded, an unchanged alias is proven damaged, a tracked mode must change, or force permits replacement |
+| replace | old managed data is superseded, an unchanged alias is proven damaged, a matching file needs writable placement, or force permits replacement |
 | leave | preserve an edited or foreign file and report why it stayed |
 
 equal files are adopted only when their writable mode fits the dataset. a read-only file whose bytes match is replaced when `copy = true`, whether tracked or untracked; differing untracked bytes still require force. a tracked changed file holding the target bytes can recover an interruption between placement and state writing. adoption detects when the existing file is the cache object under another name and records it as a hardlink.

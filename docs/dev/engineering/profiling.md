@@ -47,7 +47,7 @@ $env:FETCHLOOM_TRACE = 'run.json'
 Remove-Item Env:\FETCHLOOM_TRACE
 ```
 
-create the trace file's parent directory first and choose a writable destination. if opening the file fails, fetchloom warns and continues without a timeline; JSON retains the warning. a trace path is not created recursively.
+create the trace file's parent directory first and choose a separate writable destination. the file is created or truncated before command dispatch, even with `--dry-run`; never point it at project metadata or a file you need to keep. if opening the file fails, fetchloom warns and continues without a timeline; JSON retains the warning. a trace path is not created recursively.
 
 open [perfetto](https://ui.perfetto.dev), choose "open trace file", and select `run.json` after fetchloom exits and flushes it. select a span to inspect its duration and arguments, and zoom into a slow interval to compare concurrent tracks. it contains local paths and source references, so review it before sharing. [cli/logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs) holds the flush guard until the command ends.
 
