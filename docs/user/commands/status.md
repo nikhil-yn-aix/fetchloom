@@ -69,7 +69,7 @@ an entry in a file's way is listed once as blocked, rather than each file behind
     Blocked data/iris · a file is where a folder belongs
 ```
 
-a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work.
+a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as extra, and the files behind it as missing.
 
 human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files placed from it can also appear as extra.
 

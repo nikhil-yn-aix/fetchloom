@@ -171,6 +171,10 @@ enum Action {
     /// `--force` removes the entry in the way, without following it, and places the file.
     Unblock(Blocker),
     Blocked(Blocker),
+    /// the entry in the way is a file fetchloom placed that no dataset needs now, or a folder of
+    /// only such files, so removing those first clears the way and the file is placed. one that
+    /// changed since the scan stays, and keeps the file out as blocked.
+    Freed(Blocker),
     Replace,
     Adopt(Look),
     /// a hardlink a mark put in doubt that still holds the locked bytes: kept, with the time
@@ -222,11 +226,28 @@ impl<'a> Placing<'a> {
         project.planned_data_dir(manifest)?;
         survey.retarget(&project.root, &plan.targets);
         let _span = tracing::debug_span!("decide").entered();
-        let actions = plan
+        let mut actions = plan
             .targets
             .iter()
             .map(|target| decide(target, &survey, force, &project.root.join(&target.path)))
             .collect::<Result<Vec<_>, _>>()?;
+        if actions
+            .iter()
+            .any(|action| matches!(action, Action::Blocked(_) | Action::Unblock(_)))
+        {
+            let going = going(&survey, &plan.targets, &plan.unknown);
+            actions = actions
+                .into_iter()
+                .map(|action| match action {
+                    Action::Blocked(blocker) | Action::Unblock(blocker)
+                        if survey.frees(&blocker, &going) =>
+                    {
+                        Action::Freed(blocker)
+                    }
+                    action => action,
+                })
+                .collect();
+        }
         Ok(Placing {
             project,
             manifest,
@@ -295,7 +316,10 @@ impl<'a> Placing<'a> {
             .iter()
             .zip(&self.actions)
             .filter(|(_, action)| {
-                matches!(action, Action::Place | Action::Replace | Action::Unblock(_))
+                matches!(
+                    action,
+                    Action::Place | Action::Replace | Action::Unblock(_) | Action::Freed(_)
+                )
             })
             .map(|(target, _)| target)
             .collect();
@@ -352,7 +376,7 @@ impl<'a> Placing<'a> {
                         .replace
                         .push(target.path.clone());
                 }
-                Action::Place => {
+                Action::Place | Action::Freed(_) => {
                     placement.placed += 1;
                     preview.changes.place.push(target.path.clone());
                     preview
@@ -592,7 +616,7 @@ fn added_here(dataset: &str, targets: &[Target], actions: &[Action]) -> Vec<(Str
         .zip(actions)
         .filter(|(target, _)| target.dataset == dataset)
         .filter_map(|(target, action)| match action {
-            Action::Place => Some((target.path.clone(), true)),
+            Action::Place | Action::Freed(_) => Some((target.path.clone(), true)),
             Action::Adopt(_) => Some((target.path.clone(), false)),
             _ => None,
         })
@@ -681,7 +705,13 @@ fn settle<'t, 'a>(
                     });
                 }
             }
-            Action::Blocked(blocker) => placement.kept.push(Kept {
+            // removing what no dataset needs came first, and cleared the way unless it found
+            // what stood there changed
+            Action::Freed(blocker) if now(&project.root.join(&blocker.path)).is_none() => {
+                placement.placed += 1;
+                todo.push(target);
+            }
+            Action::Blocked(blocker) | Action::Freed(blocker) => placement.kept.push(Kept {
                 blocker: Some(blocker),
                 ..Kept::new(target.path.clone(), Reason::Blocked)
             }),
@@ -918,6 +948,20 @@ fn sweep(project: &Project, placer: &mut Placer, survey: &Survey, wanted: &HashS
             tracing::debug!(%path, %err, "could not delete a leftover of a placement");
         }
     }
+}
+
+/// the files fetchloom placed that no dataset among `targets` needs now and nobody changed, which
+/// sync removes before it places anything, so they stand in no file's way.
+pub(crate) fn going(
+    survey: &Survey,
+    targets: &[Target],
+    unknown: &[(&str, &LockedFile)],
+) -> HashSet<String> {
+    let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
+    unwanted(survey, &wanted, unknown)
+        .into_iter()
+        .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
+        .collect()
 }
 
 /// what becomes of each file fetchloom placed that no dataset needs now. the files of a dataset

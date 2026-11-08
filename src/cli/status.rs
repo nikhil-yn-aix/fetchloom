@@ -134,12 +134,21 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     if verify {
         survey.verify(&project.root)?;
     }
+    let mut going = None;
     for target in &targets {
         let seen = survey.disk.get(&target.path);
         let file = project.root.join(&target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
             (None, _) => match survey.blocker(&target.path) {
-                Some(blocker) => {
+                // what sync removes before it places anything stands in no file's way
+                Some(blocker)
+                    if !survey.frees(
+                        &blocker,
+                        going.get_or_insert_with(|| {
+                            place::going(&survey, &targets, &planned.unknown)
+                        }),
+                    ) =>
+                {
                     if !status
                         .blocked
                         .iter()
@@ -149,7 +158,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
                     }
                     continue;
                 }
-                None => &mut status.missing,
+                _ => &mut status.missing,
             },
             (Some(_), Some(_)) if survey.elsewhere.contains(&target.path) => {
                 &mut status.edited_elsewhere

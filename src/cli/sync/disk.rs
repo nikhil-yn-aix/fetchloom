@@ -287,6 +287,35 @@ impl Survey {
         })
     }
 
+    /// whether removing the files in `going`, with the folders that leaves empty, takes
+    /// `blocker` out of the way: a file in the way that is one of them, or a folder that holds
+    /// nothing else, since a folder goes with the last file removed from it.
+    pub(crate) fn frees(&self, blocker: &Blocker, going: &HashSet<String>) -> bool {
+        match blocker.found {
+            Entry::File => going.contains(&blocker.path),
+            Entry::Folder => {
+                let prefix = format!("{}/", blocker.path);
+                let mut files = self
+                    .disk
+                    .keys()
+                    .filter(|path| path.starts_with(&prefix))
+                    .peekable();
+                files.peek().is_some()
+                    && files.all(|path| going.contains(path))
+                    && self
+                        .entries
+                        .iter()
+                        .filter(|(path, _)| path.starts_with(&prefix))
+                        .all(|(path, entry)| {
+                            let below = format!("{path}/");
+                            *entry == Entry::Folder
+                                && going.iter().any(|file| file.starts_with(&below))
+                        })
+            }
+            Entry::Link | Entry::Special => false,
+        }
+    }
+
     /// whether the folder at `path` was empty when the survey listed it.
     fn holds_nothing_under(&self, path: &str) -> bool {
         let prefix = format!("{path}/");

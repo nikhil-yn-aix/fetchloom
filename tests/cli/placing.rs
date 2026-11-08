@@ -1788,6 +1788,94 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     Ok(())
 }
 
+/// a project that placed iris.csv, its data.lock, and that lock as it is and with iris.csv made a
+/// folder holding the same file.
+fn reshaped(sandbox: &Sandbox, server: &Server) -> Result<(std::path::PathBuf, String, String)> {
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = sandbox.work().join("data.lock");
+    let as_file = fs::read_to_string(&lock)?;
+    let as_folder = as_file.replace("path = \"iris.csv\"", "path = \"iris.csv/iris.csv\"");
+    assert_ne!(as_folder, as_file);
+    Ok((lock, as_file, as_folder))
+}
+
+/// a pinned file that becomes a folder of pinned files, and back, is placed by the sync that
+/// removes what was placed in its way, rather than reported blocked until a second sync.
+#[test]
+fn a_file_that_becomes_a_folder_and_back_is_placed_in_one_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let (lock, as_file, as_folder) = reshaped(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    for (pins, file) in [(&as_folder, placed.join("iris.csv")), (&as_file, placed)] {
+        fs::write(&lock, pins)?;
+        let output = sandbox.run(&["--json", "sync"])?;
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(output.status.code(), Some(0), "{document}");
+        let placement = &document["result"]["placement"];
+        assert_eq!(placement["kept"], serde_json::json!([]), "{document}");
+        assert_eq!(
+            (&placement["placed"], &placement["removed"]),
+            (&serde_json::json!(1), &serde_json::json!(1)),
+            "{document}"
+        );
+        assert_eq!(fs::read(&file)?, V1, "{document}");
+        let status = sandbox.run(&["status"])?;
+        assert_eq!(
+            text(&status.stderr)?,
+            "         Ok everything matches data.lock by size and time\n"
+        );
+    }
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// status agrees with sync: a file fetchloom placed that sync removes before it places anything,
+/// or a folder of only such files, is extra rather than in the way, and the file behind it is
+/// missing rather than blocked.
+#[test]
+fn status_lists_what_sync_removes_as_extra_rather_than_blocking() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let (lock, as_file, as_folder) = reshaped(&sandbox, &server)?;
+    for (pins, missing, extra) in [
+        (
+            &as_folder,
+            "data/iris/iris.csv/iris.csv",
+            "data/iris/iris.csv",
+        ),
+        (
+            &as_file,
+            "data/iris/iris.csv",
+            "data/iris/iris.csv/iris.csv",
+        ),
+    ] {
+        fs::write(&lock, pins)?;
+        let status = sandbox.run(&["--json", "status"])?;
+        let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+        assert_eq!(
+            report["result"]["blocked"],
+            serde_json::json!([]),
+            "{report}"
+        );
+        assert_eq!(
+            report["result"]["missing"],
+            serde_json::json!([missing]),
+            "{report}"
+        );
+        assert_eq!(
+            report["result"]["extra"],
+            serde_json::json!([extra]),
+            "{report}"
+        );
+        // --force places it either way, so the next round starts from it in place
+        let forced = sandbox.run(&["sync", "--force"])?;
+        assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    }
+    Ok(())
+}
+
 /// an add whose placing fails is rolled back, and the files it placed for the dataset go with
 /// data.toml and data.lock, so a failed add leaves nothing of the dataset in the data folder.
 #[cfg(unix)]
