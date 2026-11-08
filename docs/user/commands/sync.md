@@ -18,7 +18,7 @@ fetchloom sync [options]
 
 | option | effect |
 |---|---|
-| `--force` | replace files in the data folder that differ from `data.lock`, even ones fetchloom did not place, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder |
+| `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. it finds changes by size and time; add `--verify` for changes that kept both |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
 | `--verify` | check the SHA-256 of every placed file, and put back those that changed though their size and time did not |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
@@ -51,7 +51,7 @@ follow the upgrade hint only when you intend to change the input. [recovery](../
 
 without `--force`, edited files and conflicting untracked files stay in place. JSON lists them in `result.placement.kept`. unrelated extras are not included there; use [status](status.md) to find them.
 
-save your files before using `--force`. it can overwrite edited and untracked files at locked paths. it does not delete unrelated extras or edited files no longer needed.
+save your files before using `--force`. it can overwrite edited and untracked files at locked paths, and names each one as it does, as in `Replaced data/iris/iris.csv · your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete unrelated extras or edited files no longer needed.
 
 a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made in place through any link to it, after making the read-only file writable, changes that shared copy, so it is not kept as an edit: sync marks the cached copy as changed, downloads the file again and puts the pinned file back, without `--force`, in each project whose file is still that copy, the one that made the edit included. to edit a dataset's files, set `copy = true` for it. a file saved anew, as most editors save, is the project's own and stays an edit. the warning reads, with `<path>` replaced by the affected path:
 

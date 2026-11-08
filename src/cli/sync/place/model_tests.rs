@@ -65,7 +65,7 @@ fn choice(action: &Action) -> Choice {
         Action::Vouch(_) => Choice::Vouch,
         Action::Adopt(_) => Choice::Adopt,
         Action::Place => Choice::Place,
-        Action::Replace => Choice::Replace,
+        Action::Replace | Action::Overwrite(_) => Choice::Replace,
         Action::Leave(Reason::Changed) => Choice::Changed,
         Action::Leave(Reason::Shared) => Choice::Shared,
         Action::Leave(Reason::Foreign) => Choice::Foreign,

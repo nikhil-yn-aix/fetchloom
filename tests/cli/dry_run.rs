@@ -192,7 +192,7 @@ fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would renew data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+        "Would renew data/iris · 1 file\nwarning: data/iris/iris.csv is your edit, and --force would replace it\n         Ok dry run, nothing was changed\n"
     );
     let document = json(&sandbox.run(&["--json", "sync", "--force", "-n"])?)?;
     let result = &document["result"];
@@ -200,12 +200,23 @@ fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
     assert_eq!(result["lock_changed"], false);
     assert_eq!(result["placement"]["replaced"], 1);
     assert_eq!(
+        result["placement"]["overwritten"],
+        serde_json::json!([{"path": "data/iris/iris.csv", "reason": "changed"}])
+    );
+    assert_eq!(
         result["changes"]["replace"],
         serde_json::json!(["data/iris/iris.csv"])
     );
     assert_eq!(result["changes"]["download"], serde_json::json!([]));
     assert_eq!(tree(&sandbox.work())?, project, "the edit is still there");
     assert_eq!(tree(&sandbox.cache())?, cache);
+    let forced = sandbox.run(&["sync", "--force"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.starts_with("   Replaced data/iris/iris.csv · your edit\n"),
+        "{stderr}"
+    );
     Ok(())
 }
 

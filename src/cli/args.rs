@@ -680,8 +680,8 @@ pub(crate) struct Remove {
 /// put the files data.lock lists into the data folder
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Sync {
-    /// replace files in the data folder that differ from data.lock, even ones fetchloom did not
-    /// place
+    /// replace edited files, and files fetchloom did not place, at the paths data.lock lists,
+    /// naming each. it finds changes by size and time; add --verify for changes that kept both
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 
@@ -808,7 +808,7 @@ mod tests {
             .render_help()
             .to_string();
         assert!(
-            help.contains("replace files in the data folder that differ from data.lock, even"),
+            help.contains("replace edited files, and files fetchloom did not place"),
             "{help}"
         );
         Ok(())

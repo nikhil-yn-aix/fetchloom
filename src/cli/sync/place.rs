@@ -43,6 +43,8 @@ pub(crate) struct Placement {
     /// which an edit through a link changed, here or in another project, and files `--verify`
     /// found changed under an unchanged size and time.
     pub(crate) restored: Vec<String>,
+    /// files `--force` replaced that sync would otherwise keep, with the reason it would have.
+    pub(crate) overwritten: Vec<Kept>,
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
     #[serde(skip)]
     pub(crate) repaired: HashSet<String>,
@@ -173,6 +175,8 @@ enum Action {
     /// changed since the scan stays, and keeps the file out as blocked.
     Freed(Blocker),
     Replace,
+    /// `--force` replaces a file sync would otherwise keep for this reason, and names it.
+    Overwrite(Reason),
     Adopt(Look),
     /// a hardlink a mark put in doubt that still holds the locked bytes: kept, with the time
     /// the scan began and how it looks by name now.
@@ -302,7 +306,11 @@ impl<'a> Placing<'a> {
             .filter(|(_, action)| {
                 matches!(
                     action,
-                    Action::Place | Action::Replace | Action::Unblock(_) | Action::Freed(_)
+                    Action::Place
+                        | Action::Replace
+                        | Action::Overwrite(_)
+                        | Action::Unblock(_)
+                        | Action::Freed(_)
                 )
             })
             .map(|(target, _)| target)
@@ -348,7 +356,12 @@ impl<'a> Placing<'a> {
                     blocker: Some(blocker.clone()),
                     ..Kept::new(target.path.clone(), Reason::Blocked)
                 }),
-                Action::Replace | Action::Unblock(_) => {
+                Action::Replace | Action::Overwrite(_) | Action::Unblock(_) => {
+                    if let Action::Overwrite(reason) = action {
+                        placement
+                            .overwritten
+                            .push(Kept::new(target.path.clone(), *reason));
+                    }
                     restore(&self.survey, &target.path, placement);
                     placement.replaced += 1;
                     preview.changes.replace.push(target.path.clone());
@@ -720,7 +733,7 @@ fn settle<'t, 'a>(
                 adopted = true;
             }
             Action::Leave(reason) => placement.kept.push(Kept::new(target.path.clone(), reason)),
-            Action::Replace => {
+            Action::Replace | Action::Overwrite(_) => {
                 let destination = project.root.join(&target.path);
                 match now(&destination) {
                     Some(look) if survey.disk.get(&target.path) != Some(&look) => {
@@ -739,6 +752,11 @@ fn settle<'t, 'a>(
                             .map_err(|err| local(&destination, &err))?;
                     }
                     None => {}
+                }
+                if let Action::Overwrite(reason) = action {
+                    placement
+                        .overwritten
+                        .push(Kept::new(target.path.clone(), reason));
                 }
                 restore(survey, &target.path, placement);
                 placement.replaced += 1;
@@ -856,21 +874,29 @@ fn decide(
                 Action::Replace
             })
         }
-        Some(placed) => Ok(if force {
-            Action::Replace
-        } else if placed.method == Method::Hardlink && place::has_other_names(destination) {
-            Action::Leave(Reason::Shared)
-        } else {
-            Action::Leave(Reason::Changed)
-        }),
+        Some(placed) => {
+            let reason = if placed.method == Method::Hardlink && place::has_other_names(destination)
+            {
+                Reason::Shared
+            } else {
+                Reason::Changed
+            };
+            Ok(if force {
+                Action::Overwrite(reason)
+            } else {
+                Action::Leave(reason)
+            })
+        }
         None => {
             let same = look.size == target.size
                 && Sha256::of_file(destination).map_err(|err| local(destination, &err))?
                     == target.sha256;
             Ok(if same && (!target.copy || now_writable(destination)) {
                 Action::Adopt(*look)
-            } else if same || force {
+            } else if same {
                 Action::Replace
+            } else if force {
+                Action::Overwrite(Reason::Foreign)
             } else {
                 Action::Leave(Reason::Foreign)
             })

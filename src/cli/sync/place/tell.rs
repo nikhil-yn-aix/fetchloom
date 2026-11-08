@@ -25,6 +25,16 @@ pub(super) fn tell(
             &format!("{path} · {} that was in the way", entry_name(*found)),
         );
     }
+    for overwritten in &placement.overwritten {
+        output.step(
+            "Replaced",
+            &format!(
+                "{} · {}",
+                overwritten.path,
+                overwritten_what(overwritten.reason)
+            ),
+        );
+    }
     for (dataset, tally) in tallies
         .iter()
         .filter(|(dataset, _)| told != Some(**dataset))
@@ -108,6 +118,13 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     for (dataset, planned) in &preview.by_dataset {
         tell_files("Would renew", dataset, &planned.replace);
     }
+    for overwritten in &preview.placement.overwritten {
+        output.warn(&format!(
+            "{} is {}, and --force would replace it",
+            overwritten.path,
+            overwritten_what(overwritten.reason)
+        ));
+    }
     let placement = &preview.placement;
     if placement.removed > 0 {
         output.step(
@@ -168,6 +185,15 @@ fn warn_kept(output: &Output, placement: &Placement) {
             ),
         };
         output.warn(&message);
+    }
+}
+
+/// what `--force` replaced in a file sync would otherwise keep for `reason`.
+fn overwritten_what(reason: Reason) -> &'static str {
+    match reason {
+        Reason::Shared => "an edit through a link other projects share",
+        Reason::Foreign => "a file fetchloom did not place",
+        Reason::Changed | Reason::Unneeded | Reason::Blocked => "your edit",
     }
 }
 
