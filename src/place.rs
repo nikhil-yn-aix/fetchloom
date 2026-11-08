@@ -302,7 +302,7 @@ impl Placer {
         };
         let serial = !ready.is_empty()
             && *this.serial.get_or_init(|| {
-                this.location(&this.root.join(".filesystem"), false, true)
+                this.location(&this.root.join(".filesystem"), false)
                     .is_ok_and(|location| location.serializes())
             });
         let grouped = folders.finish(serial);
@@ -363,7 +363,7 @@ impl Placer {
         batch: bool,
     ) -> io::Result<Put<Metadata>> {
         check_stop(&self.stop)?;
-        let location = Arc::new(self.location(destination, false, true)?);
+        let location = Arc::new(self.location(destination, false)?);
         let early_hardlink = cfg!(windows)
             && !writable
             && self.synced.is_none()
@@ -461,7 +461,7 @@ impl Placer {
                 let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
                 crate::cache::syncfs_reports_errors(&release)
                     .then(|| {
-                        self.location(&self.root.join(".batch"), false, true)
+                        self.location(&self.root.join(".batch"), false)
                             .and_then(|location| location.flush_handle())
                             .ok()
                     })
@@ -534,7 +534,7 @@ impl Placer {
         check_stop(&self.stop)?;
         let (_, parent) = self.within(path)?;
         if !self.folders.contains(&parent) {
-            if let Err(error) = self.location(path, make, true) {
+            if let Err(error) = self.location(path, make) {
                 if let Ok(metadata) = fs::symlink_metadata(&parent) {
                     found_folder(&parent, &metadata, FolderUse::Place { make: false })?;
                 }
@@ -558,7 +558,7 @@ impl Placer {
     ) -> io::Result<()> {
         check_stop(&self.stop)?;
         let (path, parent) = self.within(path)?;
-        let location = self.location(&path, false, false)?;
+        let location = self.location(&path, false)?;
         #[cfg(unix)]
         {
             let _ = placed;
@@ -580,16 +580,12 @@ impl Placer {
             }
             check_stop(&self.stop)?;
             let removed = self
-                .location(current, false, false)
+                .location(current, false)
                 .and_then(|location| location.remove_dir());
             if removed.is_err() {
                 break;
             }
             self.folders.remove(current);
-            #[cfg(unix)]
-            if let Ok(relative) = current.strip_prefix(&self.root) {
-                self.parents.forget(relative);
-            }
             folder = current.parent();
         }
         Ok(())
@@ -597,32 +593,32 @@ impl Placer {
 
     /// checks a parent without caching the result or creating anything.
     pub(crate) fn check_parent(&self, path: &Path) -> io::Result<()> {
-        self.location(path, false, false).map(drop)
+        self.location(path, false).map(drop)
     }
 
     /// creates one new folder below the pinned root; existing names are refused.
     pub(crate) fn create_folder(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
-        self.location(path, false, false)?.create_folder()
+        self.location(path, false)?.create_folder()
     }
 
     /// creates a new file through its parent, with a writable handle even when its mode is read-only.
     pub(crate) fn create_file(&self, path: &Path, readonly: bool) -> io::Result<File> {
         check_stop(&self.stop)?;
-        self.location(path, false, false)?.create_file(readonly)
+        self.location(path, false)?.create_file(readonly)
     }
 
     /// renames between two checked parents below the pinned root.
     pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
-        self.location(from, false, false)?
-            .rename_to(&self.location(to, false, false)?)
+        self.location(from, false)?
+            .rename_to(&self.location(to, false)?)
     }
 
     /// deletes a temporary file through its parent; it is not a recorded placement.
     pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
-        let location = self.location(path, false, false)?;
+        let location = self.location(path, false)?;
         #[cfg(unix)]
         {
             location.remove_file()
@@ -636,25 +632,20 @@ impl Placer {
     /// removes an empty folder without following a replacement link.
     pub(crate) fn delete_folder(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
-        self.location(path, false, false)?.remove_dir()
+        self.location(path, false)?.remove_dir()
     }
 
-    fn location(&self, destination: &Path, make: bool, reuse: bool) -> io::Result<Location> {
+    fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
         let (destination, _) = self.within(destination)?;
-        self.parents.locate(
-            &self.root,
-            &destination,
-            self.checks_root,
-            make,
-            reuse && cfg!(unix) && self.experiments().on("PLACE_PARENT_FD"),
-        )
+        self.parents
+            .locate(&self.root, &destination, self.checks_root, make)
     }
 
     fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
         }
-        let location = self.location(&self.root.join(".probe"), false, true).ok()?;
+        let location = self.location(&self.root.join(".probe"), false).ok()?;
         let links = location.can_hardlink()?;
         Some(*self.links.get_or_init(|| links))
     }

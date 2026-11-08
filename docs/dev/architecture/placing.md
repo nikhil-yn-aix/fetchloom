@@ -63,7 +63,7 @@ unwanted tracked files are removed only if unchanged. an edited unwanted file le
 
 new placements try reflink, hardlink, then copy, except read-only placements on windows try hardlinks first to reuse an already scanned file. a reflink shares disk blocks until either file is written; a hardlink is another name for the same file. writable placement skips hardlinks. default placements are read-only; synced folders detected as onedrive, dropbox or icloud also skip hardlinks but may use reflinks. on macos a reflink is an apfs clone made with `fclonefileat`; hfs+ and other disks without clones fall back to hardlinks or copies.
 
-`Placer` remembers refused methods. its capability probes use the opened root. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`. owned worker partitions allocate for their own items rather than retaining unused capacity from the remaining batch.
+`Placer` remembers refused methods. its capability probes use the opened root. each mutation resolves its parent through that root rather than canonicalizing its full path; parent handles are not cached between mutations. the first file runs alone to learn capabilities; later work spreads across folders on bounded worker groups. `place_all` rebuilds `Order` paths per file instead of retaining full paths for the entire batch. results retain only the metadata selected by the caller, normally `Look`. owned worker partitions allocate for their own items rather than retaining unused capacity from the remaining batch.
 
 the non-linux pipelined copy uses the same fallible thread helper: a refused reader copies on the caller instead of waiting on a queue with no consumer. small reads are bounded too, even if a cached file grows after its size check. both borrowed and owned placement jobs keep their input when a worker cannot start. the shared [thread helper](primitives.md#worker-budgets) runs refused work on the caller, preserving result order.
 
@@ -121,12 +121,6 @@ the placer checks the opened root's filesystem once. exfat and fat serialize nam
 ## small-copy experiment
 
 on linux, `FETCHLOOM_EXP_PLACE_SMALL_COPY_BYTES` sets a maximum file size for buffered copies after this placer has successfully made a reflink. zero or an unset value preserves the method order. an initial unsupported reflink still falls back to hardlinks. later small files use independent bytes, not hardlinks, and keep hidden staging, read-only mode and flush-before-publication. buffered reads and writes deliberately avoid `copy_file_range`, which can clone extents on xfs; interrupted reads retry, and cancellation is checked between blocks. the comparison uses `4096`, not a new default.
-
-## parent-handle experiment
-
-`FETCHLOOM_EXP_PLACE_PARENT_FD=1` retains up to 128 verified parent handles on unix. both settings use the same anchored resolver; enabling reuse skips repeated parent opens and identity reads during placement. removal and pruning still reopen parents without following links, and eviction bounds the open-handle budget. queued copies retain the root and parent identity, not a handle per copy. windows already holds directory handles to prevent replacement and does not use this unix cache.
-
-the per-file `canonicalize` call is absent in both settings: containment removed its repeated `readlink` walk. cached handles continue to refer to the original directory if another process renames it; they never follow the replacement link.
 
 ## macos copy durability
 

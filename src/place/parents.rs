@@ -1,19 +1,16 @@
 //! directory handles keep later path swaps out of placement operations.
 
-use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, Metadata};
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 
 #[cfg(target_os = "linux")]
 use rustix::fs::ResolveFlags;
 use rustix::fs::{self as native, AtFlags, Mode, OFlags};
 use rustix::io::Errno;
-
-const RETAINED: usize = 128;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Identity {
@@ -40,7 +37,6 @@ struct Parent {
 #[derive(Default)]
 pub(super) struct Parents {
     root: OnceLock<Parent>,
-    retained: Mutex<HashMap<PathBuf, Parent>>,
 }
 
 pub(super) struct Location {
@@ -58,7 +54,6 @@ impl Parents {
         destination: &Path,
         real_root: bool,
         make: bool,
-        retain: bool,
     ) -> io::Result<Location> {
         let relative = destination
             .parent()
@@ -79,33 +74,10 @@ impl Parents {
             let _ = self.root.set(opened.clone());
             self.root.get().cloned().unwrap_or(opened)
         };
-        let cached = if retain {
-            self.retained
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(relative)
-                .cloned()
-        } else {
-            None
-        };
-        let parent = if let Some(parent) = cached {
-            parent
-        } else {
-            let file = Arc::new(open_relative(&root.file, relative, make, false)?);
-            let parent = Parent {
-                identity: Identity::of(&file)?,
-                file,
-            };
-            if retain {
-                let mut retained = self.retained.lock().unwrap_or_else(PoisonError::into_inner);
-                if retained.len() >= RETAINED
-                    && let Some(old) = retained.keys().next().cloned()
-                {
-                    retained.remove(&old);
-                }
-                retained.insert(relative.to_path_buf(), parent.clone());
-            }
-            parent
+        let file = Arc::new(open_relative(&root.file, relative, make, false)?);
+        let parent = Parent {
+            identity: Identity::of(&file)?,
+            file,
         };
         Ok(Location {
             root_device: root.identity.device,
@@ -114,20 +86,6 @@ impl Parents {
             parent,
             name: name.to_owned(),
         })
-    }
-    #[cfg(test)]
-    pub(super) fn cached(&self) -> usize {
-        self.retained
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
-    }
-
-    pub(super) fn forget(&self, relative: &Path) {
-        self.retained
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(relative);
     }
 }
 
@@ -138,7 +96,7 @@ impl Location {
         let root = destination
             .parent()
             .ok_or_else(|| invalid("a placement has no parent"))?;
-        Parents::default().locate(root, &destination, true, false, false)
+        Parents::default().locate(root, &destination, true, false)
     }
 
     #[cfg(target_os = "macos")]
@@ -539,7 +497,7 @@ mod tests {
             fs::create_dir(&outside).unwrap();
             let parents = Parents::default();
             let location = parents
-                .locate(&root, &root.join("set/file"), true, false, false)
+                .locate(&root, &root.join("set/file"), true, false)
                 .unwrap();
             let (staged, mut output) = location.create(0o600, retain).unwrap();
             output.write_all(b"pinned").unwrap();
@@ -564,7 +522,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let parents = Parents::default();
         let location = parents
-            .locate(dir.path(), &dir.path().join("file"), true, false, false)
+            .locate(dir.path(), &dir.path().join("file"), true, false)
             .unwrap();
         let (mut staged, mut file) = location.create(0o600, true).unwrap();
         file.write_all(b"placed").unwrap();
@@ -587,10 +545,10 @@ mod tests {
         fs::write(outside.join("file"), b"foreign").unwrap();
         let parents = Parents::default();
         let location = parents
-            .locate(&root, &root.join("set/file"), true, false, false)
+            .locate(&root, &root.join("set/file"), true, false)
             .unwrap();
         let folder = parents
-            .locate(&root, &root.join("set"), true, false, false)
+            .locate(&root, &root.join("set"), true, false)
             .unwrap();
         fs::rename(root.join("set"), root.join("saved")).unwrap();
         symlink(&outside, root.join("set")).unwrap();
@@ -622,26 +580,25 @@ mod tests {
     }
 
     #[test]
-    fn queued_copies_do_not_keep_an_evicted_parent_open() {
+    fn queued_copies_keep_only_the_root_descriptor() {
         let dir = tempfile::tempdir().unwrap();
         let parents = Parents::default();
         let mut queued = Vec::new();
-        for index in 0..RETAINED * 2 {
+        for index in 0..256 {
             let path = dir.path().join(format!("{index}/file"));
-            let location = parents.locate(dir.path(), &path, true, true, true).unwrap();
+            let location = parents.locate(dir.path(), &path, true, true).unwrap();
             let weak = Arc::downgrade(&location.parent.file);
             let (staged, output) = location.create(0o600, false).unwrap();
             drop(output);
             drop(location);
             queued.push((staged, weak));
         }
-        assert_eq!(parents.retained.lock().unwrap().len(), RETAINED);
         assert_eq!(
             queued
                 .iter()
                 .filter(|(_, parent)| parent.upgrade().is_some())
                 .count(),
-            RETAINED
+            0
         );
         drop(queued);
         assert!(fs::read_dir(dir.path()).unwrap().all(|entry| {

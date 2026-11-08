@@ -30,7 +30,6 @@ impl Parents {
         destination: &Path,
         real_root: bool,
         make: bool,
-        _retain: bool,
     ) -> io::Result<Location> {
         let relative = destination
             .parent()
@@ -86,7 +85,7 @@ impl Location {
         let root = destination
             .parent()
             .ok_or_else(|| invalid("a placement has no parent"))?;
-        Parents::default().locate(root, &destination, true, false, false)
+        Parents::default().locate(root, &destination, true, false)
     }
 
     pub(super) fn root_path(&self) -> &Path {
