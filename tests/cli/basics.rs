@@ -583,7 +583,14 @@ fn cli_output_non_unicode_paths_return_error_documents() -> Result {
     let project = sandbox
         .work()
         .join(OsString::from_vec(b"project-\xff".to_vec()));
-    std::fs::create_dir(&project)?;
+    // apfs and other filesystems refuse a name that is not UTF-8, so no such path reaches
+    // fetchloom there
+    match std::fs::create_dir(&project) {
+        Err(err) if err.raw_os_error() == Some(rustix::io::Errno::ILSEQ.raw_os_error()) => {
+            return Ok(());
+        }
+        made => made?,
+    }
     std::fs::write(project.join("data.toml"), "[datasets]\n")?;
     let cache = sandbox
         .work()
