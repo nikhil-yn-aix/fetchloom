@@ -1042,7 +1042,6 @@ fn stopped_text(error: &Error, color: bool) -> String {
 
 fn error_text(error: &Error, level: Level, color: bool) -> String {
     let red = toned(color, Tone::Fail);
-    let cyan = paint(color, accent().bold());
     let dim = paint(color, Paint::new().dimmed());
     let mut text = format!(
         "{red}error:{red:#} {}",
@@ -1056,11 +1055,8 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         );
     }
     if let Some(help) = &error.help {
-        let _ = write!(
-            text,
-            "\n  {cyan}help:{cyan:#} {}",
-            accented(&plain(help), Paint::new(), color)
-        );
+        text.push('\n');
+        text.push_str(&help_line(help, color));
     }
     if level >= Level::Verbose {
         let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
