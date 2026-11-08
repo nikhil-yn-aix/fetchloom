@@ -243,6 +243,22 @@ impl Cache {
         }
     }
 
+    /// `err`, from writing in `folder` of this cache, in words that say what to fix. the system
+    /// names no path, and "the cache" alone does not say which folder refused the write.
+    pub(crate) fn explained(&self, folder: &Path, err: io::Error) -> io::Error {
+        // an error fetchloom built already says what it concerns
+        if err.raw_os_error().is_none() {
+            return err;
+        }
+        match err.kind() {
+            io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => io::Error::new(
+                err.kind(),
+                format!("{} in {}", crate::error::said(&err), folder.display()),
+            ),
+            _ => err,
+        }
+    }
+
     /// hashes an object again. changed bytes are marked for replacement and kept until a good
     /// copy arrives. the mark also tells projects to check their placed hardlinks. a read error
     /// leaves the object and its change mark untouched.
@@ -338,14 +354,14 @@ impl Cache {
             {
                 Ok(file) => break (temporary, file),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err),
+                Err(err) => return Err(self.explained(&self.root.join("tmp"), err)),
             }
         };
         let written = fill_and_rename(file, bytes, &temporary, path, durable);
         if written.is_err() {
             let _ = fs::remove_file(&temporary);
         }
-        written
+        written.map_err(|err| self.explained(path.parent().unwrap_or(&self.root), err))
     }
 
     /// moves a sealed file into the cache under its hash. the link never replaces an intact

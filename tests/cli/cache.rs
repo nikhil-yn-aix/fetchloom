@@ -723,3 +723,50 @@ fn small_downloads_keep_their_bytes_and_sealing() -> Result {
     assert!(fs::metadata(object)?.permissions().readonly());
     Ok(())
 }
+
+/// a cache this user may not write to is named in the error a download ends with, for a person
+/// and in `--json`, since "the cache" alone does not say which folder to fix.
+#[cfg(unix)]
+#[test]
+fn a_cache_that_cannot_be_written_is_named_in_the_error() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    assert!(sandbox.run(&["cache"])?.status.success());
+    let mut folders = vec![sandbox.cache()];
+    for entry in fs::read_dir(sandbox.cache())? {
+        let path = entry?.path();
+        if path.is_dir() {
+            folders.push(path);
+        }
+    }
+    let before: Vec<_> = folders
+        .iter()
+        .map(|folder| fs::metadata(folder).map(|metadata| metadata.permissions()))
+        .collect::<std::io::Result<_>>()?;
+    for folder in &folders {
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555))?;
+    }
+    let people = sandbox.run(&["get", &server.url]);
+    let scripts = sandbox.run(&["--json", "get", &server.url]);
+    for (folder, permissions) in folders.iter().zip(before) {
+        fs::set_permissions(folder, permissions)?;
+    }
+    let (people, scripts) = (people?, scripts?);
+    let refused = format!(
+        "could not write to the cache: permission was denied in {}",
+        sandbox.cache().join("partial").display()
+    );
+    let stderr = text(&people.stderr)?;
+    assert_eq!(people.status.code(), Some(50), "{stderr}");
+    assert!(stderr.contains(&refused), "{stderr}");
+    assert!(stderr.contains("help: check its permissions"), "{stderr}");
+    let report: serde_json::Value = serde_json::from_slice(&scripts.stdout)?;
+    assert_eq!(scripts.status.code(), Some(50), "{report}");
+    assert_eq!(report["errors"][0]["kind"], "local.io", "{report}");
+    assert_eq!(report["errors"][0]["message"], refused.as_str(), "{report}");
+    Ok(())
+}

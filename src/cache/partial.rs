@@ -79,11 +79,12 @@ impl Cache {
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
         let key = digest::sha256(url.as_bytes()).hex();
         let partial = self.root.join("partial");
-        real_folder(&partial, FolderUse::Cache)?;
+        real_folder(&partial, FolderUse::Cache).map_err(|err| self.explained(&self.root, err))?;
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
         let path = partial.join(format!("{key}.lock"));
-        let (folder, stem, lock) = match take_lock(&path, open_unfollowed(&path, true)?) {
+        let opened = open_unfollowed(&path, true).map_err(|err| self.explained(&partial, err))?;
+        let (folder, stem, lock) = match take_lock(&path, opened) {
             Ok(lock) => (partial, key, Some(Arc::new(lock))),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
             // without locks, a private file keeps processes apart, at the cost of resuming
@@ -167,7 +168,10 @@ impl Partial {
         keep: bool,
     ) -> io::Result<PartialWriter> {
         let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
-        let file = Arc::new(self.open(offset, keep, lean)?);
+        let file = Arc::new(
+            self.open(offset, keep, lean)
+                .map_err(|err| self.cache.explained(folder_of(&self.bytes), err))?,
+        );
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -613,10 +617,18 @@ impl PartialWriter {
             Err(finished) => {
                 file.sync_all()?;
                 drop(file);
-                (*finished).publish(&cache)
+                let objects = cache.object_path(&finished.digest);
+                (*finished)
+                    .publish(&cache)
+                    .map_err(|err| cache.explained(folder_of(&objects), err))
             }
         }
     }
+}
+
+/// the folder `path` is in.
+fn folder_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(path)
 }
 
 impl Write for PartialWriter {
