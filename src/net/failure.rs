@@ -273,7 +273,7 @@ pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
         return Error::new(
             Kind::OfflineMissing,
             format!(
-                "offline, and a new link must be downloaded once to learn its fingerprint: {}",
+                "offline, and a new link must be downloaded once to learn its SHA-256: {}",
                 Shown(url)
             ),
         )

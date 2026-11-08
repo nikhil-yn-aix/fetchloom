@@ -71,11 +71,11 @@ impl Repo {
                 Error::new(
                     Kind::SourceInvalid,
                     format!(
-                        "huggingface.co gave {} in {self} a file fingerprint that is not a SHA-256",
+                        "huggingface.co gave {} in {self} a SHA-256 that is not valid",
                         entry.path
                     ),
                 )
-                .help("ask the dataset's owner to check that file's fingerprint on huggingface.co")
+                .help("ask the dataset's owner to check that file's SHA-256 on huggingface.co")
             })?),
         };
         let mut segments = self.page_segments();
@@ -144,7 +144,7 @@ mod tests {
             assert_eq!(error.kind, Kind::SourceInvalid);
             assert!(error.message.contains("weights.bin"));
             assert!(error.message.contains("SHA-256"));
-            assert!(error.help.unwrap().contains("fingerprint"));
+            assert!(error.help.unwrap().contains("that file's SHA-256"));
         }
     }
 

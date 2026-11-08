@@ -86,7 +86,7 @@ fn bytes_found_elsewhere_must_match_the_lock() -> Result {
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(30), "{stderr}");
     assert!(
-        stderr.contains("is not the file that was locked"),
+        stderr.contains("is not the file data.lock records"),
         "{stderr}"
     );
     assert!(!clone.join("data").join("iris").join("iris.csv").exists());

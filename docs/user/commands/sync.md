@@ -40,7 +40,7 @@ placement tries a reflink, then a hardlink, then a copy; read-only placement on 
 if a locked 32-byte file is replaced upstream by a 15-byte file, stderr reports:
 
 ```text
-error: iris/iris.csv is not the file that was locked
+error: iris/iris.csv is not the file data.lock records
   expected 32 bytes, got 15
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```

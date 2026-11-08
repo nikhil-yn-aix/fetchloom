@@ -99,7 +99,7 @@ fn an_offline_add_of_a_new_link_says_it_must_be_fetched_once() -> Result {
     assert_eq!(output.status.code(), Some(20));
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("a new link must be downloaded once to learn its fingerprint"),
+        stderr.contains("a new link must be downloaded once to learn its SHA-256"),
         "{stderr}"
     );
     assert_eq!(server.requests().len(), 0, "offline sends nothing");
@@ -456,7 +456,7 @@ fn changed_bytes_from_a_source_that_states_md5_get_the_same_fix() -> Result {
     assert_eq!(output.status.code(), Some(30));
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("is not the file that was locked"),
+        stderr.contains("is not the file data.lock records"),
         "{stderr}"
     );
     assert!(stderr.contains("fetchloom lock --upgrade iris"), "{stderr}");

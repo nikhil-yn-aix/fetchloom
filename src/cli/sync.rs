@@ -598,7 +598,7 @@ impl<'a> Loop<'a> {
         if unknown {
             let mut error = Error::new(
                 Kind::OfflineMissing,
-                "offline, and a new link must be downloaded once to learn its fingerprint",
+                "offline, and a new link must be downloaded once to learn its SHA-256",
             );
             error = shown_five(error, &missing);
             return Err(error.help(format!(
@@ -613,7 +613,7 @@ impl<'a> Loop<'a> {
         let mut error = Error::new(
             Kind::OfflineMissing,
             format!(
-                "offline, and {} the lock names {} not in the cache",
+                "offline, and {} data.lock names {} not in the cache",
                 units::count(missing.len() as u64, "file", "files"),
                 if missing.len() == 1 { "is" } else { "are" }
             ),

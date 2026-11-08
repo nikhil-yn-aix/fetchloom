@@ -1344,7 +1344,10 @@ mod tests {
             super::fix("run `fetchloom add <link>` to start, or `fetchloom search iris`"),
             Some("fetchloom search iris")
         );
-        assert_eq!(super::fix("add --yes to approve this download"), None);
+        assert_eq!(
+            super::fix("add --yes to download it without being asked"),
+            None
+        );
         assert_eq!(super::fix("quote it, as in `\"fashion mnist\"`"), None);
         assert_eq!(
             super::fix("use a link or an id, as in `fetchloom add zenodo:3608990`"),

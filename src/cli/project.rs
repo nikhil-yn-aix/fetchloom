@@ -1638,7 +1638,7 @@ pub(super) fn dry_run_done(output: &Output, nothing_to_do: Option<&str>) {
 fn register(work: &Loop<'_>) {
     if let Err(err) = work.cache.register(&work.project.root) {
         work.context.output.warn(&format!(
-            "could not register this project with {}: {err}. gc may not keep this project's files; check the cache folder's permissions and run the command again",
+            "could not add this project to the cache's list of projects in {}: {err}. `fetchloom cache gc` may then delete files this project needs; check the cache folder's permissions, then run the command again",
             work.cache.root().display()
         ));
     }

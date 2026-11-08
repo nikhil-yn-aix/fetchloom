@@ -1,7 +1,6 @@
 ---
 source: tests/cli/get.rs
-assertion_line: 270
 expression: stderr
 ---
-error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here
-  help: add --yes to approve this download
+error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here
+  help: add --yes to download it without being asked

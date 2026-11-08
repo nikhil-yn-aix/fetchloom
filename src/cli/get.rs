@@ -214,8 +214,11 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<String>, Error> {
         links.push(line.to_owned());
     }
     if links.len() == before {
-        return Err(Error::new(Kind::Usage, format!("{name} lists no links"))
-            .help("put one link a line in it. blank lines and lines starting with # are skipped"));
+        return Err(
+            Error::new(Kind::Usage, format!("{name} lists no links")).help(
+                "put one link per line in it. blank lines and lines starting with # are skipped",
+            ),
+        );
     }
     Ok(links)
 }

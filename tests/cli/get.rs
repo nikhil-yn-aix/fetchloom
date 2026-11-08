@@ -1036,7 +1036,12 @@ fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result 
     fs::write(sandbox.work().join("empty.txt"), "# nothing yet\n\n")?;
     let empty = sandbox.run(&["get", "-i", "empty.txt"])?;
     assert_eq!(empty.status.code(), Some(2));
-    assert!(text(&empty.stderr)?.contains("empty.txt lists no links"));
+    let stderr = text(&empty.stderr)?;
+    assert!(stderr.contains("empty.txt lists no links"), "{stderr}");
+    assert!(
+        stderr.contains("help: put one link per line in it."),
+        "{stderr}"
+    );
     Ok(())
 }
 #[test]

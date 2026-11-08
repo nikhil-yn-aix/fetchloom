@@ -326,7 +326,17 @@ fn sync_warns_when_gc_registration_fails() -> Result {
         } else {
             text(&output.stderr)?
         };
-        assert!(warnings.contains("gc may not keep"), "{warnings}");
+        assert!(
+            warnings.contains(&format!(
+                "could not add this project to the cache's list of projects in {}",
+                sandbox.cache().display()
+            )),
+            "{warnings}"
+        );
+        assert!(
+            warnings.contains("`fetchloom cache gc` may then delete files this project needs"),
+            "{warnings}"
+        );
         assert!(warnings.contains("permissions"), "{warnings}");
         assert!(warnings.contains("again"), "{warnings}");
     }
@@ -805,7 +815,10 @@ fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
     let again = again?;
     let stderr = text(&again.stderr)?;
     assert_eq!(again.status.code(), Some(0), "{stderr}");
-    assert!(!stderr.contains("could not register"), "{stderr}");
+    assert!(
+        !stderr.contains("could not add this project to the cache's list of projects"),
+        "{stderr}"
+    );
     Ok(())
 }
 

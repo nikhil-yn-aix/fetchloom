@@ -29,17 +29,17 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `fetchloom: command not found`, or `fetchloom is not recognized` on windows | the terminal started before rust added its folder to PATH | open a new terminal; if that fails, check `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on windows) holds fetchloom |
 | `error: there is no command called "init"` | no setup command is needed | run `fetchloom add <link>` in the project folder |
 | `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
-| `error: offline, and 1 file the lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1`. a CI job can restore a cache that holds them, as [CI](ci.md) shows |
+| `error: offline, and 1 file data.lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1`. a CI job can restore a cache that holds them, as [CI](ci.md) shows |
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
-| `error: iris/iris.csv is not the file that was locked` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
-| `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask for confirmation here` | the download needs approval without an interactive terminal | check the size, then pass `--yes` if approved |
+| `error: iris/iris.csv is not the file data.lock records` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
+| `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here` | a large download needs a yes, and no one is at a terminal to answer | check the size, then pass `--yes` if you want it |
 | `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `-o` |
 | `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
 
 for a size mismatch, the full stderr answer can be:
 
 ```text
-error: iris/iris.csv is not the file that was locked
+error: iris/iris.csv is not the file data.lock records
   expected 32 bytes, got 15
   help: if the new version is intended, run `fetchloom lock --upgrade iris`
 ```
@@ -63,7 +63,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | an archive remains packed | the extension or bytes are unsupported, or extraction is disabled | check [archive rules](concepts.md#archives) |
 | an archive has no dataset folder | it contains no regular files | use `extract = false` and sync to keep the packed archive |
 | a source returns an access refusal | access is unavailable or unsupported | check the source's [credentials and limits](sources/README.md) |
-| cache registration warns after sync | the cache could not record the project root | fix cache permissions and sync again before relying on gc retention |
+| sync warns it could not add the project to the cache's list of projects | the cache folder could not be written | fix the cache folder's permissions and sync again before relying on `cache gc` to keep the project's files |
 | `cache gc` exits 50 after partial cleanup | some paths could not be removed or inspected | inspect `result.not_removed` causes; fix access or storage before retrying |
 | `cache verify` exits 30 | cached bytes changed | allow a later online sync to replace damaged objects, then sync affected projects |
 | `cache verify` exits 50 without changed bytes | objects, metadata or directory entries could not be read | inspect `result.unreadable` causes, fix access or storage and verify again |

@@ -645,13 +645,13 @@ fn explain(error: Error, job: &Job) -> Error {
     });
     let Some(dataset) = dataset else {
         return if error.kind == Kind::IntegrityMismatch {
-            error.or_help("run the same command again later. if it keeps happening, ask the dataset's owner to check the file and its published size or fingerprint")
+            error.or_help("run the same command again later. if it keeps happening, ask the dataset's owner to check the file and its published size or SHA-256")
         } else {
             error
         };
     };
     Error {
-        message: format!("{} is not the file that was locked", job.label),
+        message: format!("{} is not the file data.lock records", job.label),
         help: Some(format!(
             "if the new version is intended, run `fetchloom lock --upgrade {dataset}`"
         )),
@@ -825,11 +825,11 @@ mod tests {
         assert_eq!(stopped.kind, Kind::Unconfirmed);
         assert_eq!(
             stopped.message,
-            "downloading big.bin needs more than 1.0 GiB, and fetchloom cannot ask for confirmation here"
+            "downloading big.bin needs more than 1.0 GiB, and fetchloom cannot ask you here"
         );
         assert_eq!(
             stopped.help.as_deref(),
-            Some("add --yes to approve this download")
+            Some("add --yes to download it without being asked")
         );
         assert_eq!(
             watch.on(&Event::Bytes(1)).unwrap_err().kind,
@@ -959,12 +959,7 @@ mod tests {
             &job,
         );
         assert_eq!(error.message, "the file differs");
-        assert!(
-            error
-                .help
-                .unwrap()
-                .contains("published size or fingerprint")
-        );
+        assert!(error.help.unwrap().contains("published size or SHA-256"));
     }
 
     #[test]

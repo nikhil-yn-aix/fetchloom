@@ -162,7 +162,7 @@ fn reference(text: &str) -> Result<Reference, Error> {
         .map_err(|error| {
             Error::new(
                 Kind::SourceInvalid,
-                format!("a catalog returned an invalid dataset id: {error}"),
+                format!("a search site returned an invalid dataset id: {error}"),
             )
         })
 }

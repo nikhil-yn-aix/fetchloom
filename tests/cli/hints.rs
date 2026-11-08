@@ -172,7 +172,7 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
         (
             &["get", server.url.as_str()],
             sandbox.work(),
-            "a new link must be downloaded once to learn its fingerprint",
+            "a new link must be downloaded once to learn its SHA-256",
             None,
         ),
         (
@@ -184,7 +184,7 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
         (
             &["sync"],
             locked,
-            "the lock names is not in the cache",
+            "data.lock names is not in the cache",
             None,
         ),
     ];

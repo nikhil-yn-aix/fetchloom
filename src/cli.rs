@@ -701,11 +701,9 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
         }
         None => Err(Error::new(
             Kind::Unconfirmed,
-            format!(
-                "downloading {what} needs {size}, and fetchloom cannot ask for confirmation here"
-            ),
+            format!("downloading {what} needs {size}, and fetchloom cannot ask you here"),
         )
-        .help("add --yes to approve this download")),
+        .help("add --yes to download it without being asked")),
     }
 }
 
