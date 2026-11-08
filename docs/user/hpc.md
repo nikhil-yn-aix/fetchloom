@@ -52,6 +52,18 @@ python train.py --data "$(fetchloom --offline path iris)"
 
 the cache uses file locks, so `cache gc` never deletes a file another fetchloom is about to use. on NFS, the locks work between machines. on lustre, they work between machines only when the disk is mounted with the `flock` option; with `localflock` each machine sees only its own locks, so run `fetchloom cache gc` only when no job is using the cache. if your cluster mounts it with `noflock`, fetchloom cannot lock the cache and says so; ask your admins, or keep the cache on a disk that allows locks.
 
+## one cache for a whole lab
+
+each person's cache is theirs alone: a cache folder fetchloom makes is readable by its owner only. a cache several accounts write is safe only among people who trust each other, since anyone who can write it can change what every project reads. to share one, make its folder first, owned by the lab's group, with the group allowed to write and new files keeping the group:
+
+```sh
+mkdir -p /scratch/lab/fetchloom-cache
+chgrp mylab /scratch/lab/fetchloom-cache
+chmod 2770 /scratch/lab/fetchloom-cache
+```
+
+then each member runs `umask 002`, so the files and folders they add stay writable for the group, and sets `FETCHLOOM_CACHE=/scratch/lab/fetchloom-cache`. fetchloom keeps a folder's permissions once it exists. linux usually refuses a hardlink to a file someone else owns, so fetchloom places files another member downloaded as reflinks or copies. [concepts](concepts.md#cache) has the rules for sharing a cache.
+
 ## no internet on compute nodes
 
 a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. [CI](ci.md) shows the same idea for build machines.
