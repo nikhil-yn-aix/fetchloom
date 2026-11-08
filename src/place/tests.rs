@@ -646,6 +646,14 @@ fn staged_copies(folder: &Path, object: &Path) -> (Vec<PathBuf>, Vec<(usize, Sta
     (destinations, staged)
 }
 
+fn publication_work(destinations: &[PathBuf]) -> schedule::Work {
+    let mut folders = schedule::Folders::new(destinations.len());
+    for (index, destination) in destinations.iter().enumerate() {
+        folders.record(index, destination);
+    }
+    folders.finish(false)
+}
+
 #[test]
 fn batched_copies_are_named_only_after_the_flush() {
     let (folder, object) = cache(true);
@@ -661,7 +669,7 @@ fn batched_copies_are_named_only_after_the_flush() {
         Threads::default(),
         &|metadata: &Metadata| metadata.len(),
         &Stop::default(),
-        None,
+        &publication_work(&destinations),
     );
 
     assert_eq!(
@@ -689,7 +697,7 @@ fn a_failed_flush_names_no_batched_copy() {
         Threads::default(),
         &|_: &Metadata| (),
         &Stop::default(),
-        None,
+        &publication_work(&destinations),
     );
 
     assert_eq!(results.len(), 3);
@@ -1235,7 +1243,7 @@ fn a_stopped_copy_batch_publishes_nothing_and_drops_staging() {
         Threads::default(),
         &|_: &Metadata| (),
         &stop,
-        None,
+        &publication_work(&destinations),
     );
     assert!(results.iter().all(|(_, result)| result.is_err()));
     assert!(destinations.iter().all(|path| !path.exists()));
@@ -1253,7 +1261,7 @@ fn a_stop_during_copy_publication_keeps_only_completed_files() {
         Threads::default(),
         &|_: &Metadata| stop.ask(),
         &stop,
-        None,
+        &publication_work(&destinations),
     );
     assert_eq!(
         results.iter().filter(|(_, result)| result.is_ok()).count(),
@@ -1340,34 +1348,40 @@ fn undo_on_error<T>(result: io::Result<T>, destination: &Path) -> io::Result<T> 
 }
 
 #[test]
-fn folder_thread_experiment_keeps_results_and_probes_only_when_enabled() {
-    for value in ["0", "1"] {
-        let (folder, object) = cache(true);
-        let root = folder.path().join("data");
-        let mut placer = Placer::starting_at(root.clone(), Method::Copy, None)
-            .with_experiments(Experiments::default().with("PLACE_DIR_THREADS", value));
-        for batch in 0..2 {
-            let results = placer.place_all(
-                256,
-                |index| Order {
-                    object: object.clone(),
-                    destination: root.join(format!("{}/{batch}-{index}", index % 3)),
-                    writable: true,
-                },
-                Metadata::len,
+fn folder_aware_placement_preserves_results_and_probes_its_filesystem() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
+    assert!(placer.serial.get().is_none());
+    for batch in 0..2 {
+        let results = placer.place_all(
+            256,
+            |index| Order {
+                object: object.clone(),
+                destination: root.join(format!("{}/{batch}-{index}", index % 3)),
+                writable: true,
+            },
+            Metadata::len,
+        );
+        assert_eq!(results.len(), 256);
+        for (index, result) in results.into_iter().enumerate() {
+            assert_eq!(result.unwrap(), (Method::Copy, CONTENTS.len() as u64));
+            assert_eq!(
+                fs::read_to_string(root.join(format!("{}/{batch}-{index}", index % 3))).unwrap(),
+                CONTENTS
             );
-            assert_eq!(results.len(), 256);
-            for (index, result) in results.into_iter().enumerate() {
-                assert_eq!(result.unwrap(), (Method::Copy, CONTENTS.len() as u64));
-                assert_eq!(
-                    fs::read_to_string(root.join(format!("{}/{batch}-{index}", index % 3)))
-                        .unwrap(),
-                    CONTENTS
-                );
-            }
         }
-        assert_eq!(placer.serial.get().is_some(), value == "1");
+        assert!(placer.serial.get().is_some());
     }
+}
+
+#[test]
+fn an_empty_placement_does_not_latch_a_failed_filesystem_probe() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut placer = Placer::new(&folder.path().join("missing"));
+    let results = placer.place_all(0, |_| panic!("no order"), |_| ());
+    assert_eq!(results.len(), 0);
+    assert!(placer.serial.get().is_none());
 }
 
 #[test]

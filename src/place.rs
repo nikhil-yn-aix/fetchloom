@@ -274,10 +274,7 @@ impl Placer {
         seen: impl Fn(&Metadata) -> T + Sync,
     ) -> Vec<io::Result<(Method, T)>> {
         let mut results = Vec::with_capacity(count);
-        let mut folders = self
-            .experiments()
-            .on("PLACE_DIR_THREADS")
-            .then(|| schedule::Folders::new(count));
+        let mut folders = schedule::Folders::new(count);
         let ready = spread((0..count).filter_map(|index| {
             if let Err(err) = check_stop(&self.stop) {
                 results.push((index, Err(err)));
@@ -286,9 +283,7 @@ impl Placer {
             let order = order(index);
             match self.check_folders(&order.destination, true) {
                 Ok(()) => {
-                    if let Some(folders) = &mut folders {
-                        folders.record(index, &order.destination);
-                    }
+                    folders.record(index, &order.destination);
                     Some((index, order))
                 }
                 Err(err) => {
@@ -305,21 +300,17 @@ impl Placer {
             }
             seen(metadata)
         };
-        let grouped = folders.map(|folders| {
-            let serial = !ready.is_empty()
-                && *this.serial.get_or_init(|| {
-                    this.location(&this.root.join(".filesystem"), false, true)
-                        .is_ok_and(|location| location.serializes())
-                });
-            folders.finish(serial)
-        });
-        let threads = grouped
-            .as_ref()
-            .map_or(this.threads, |work| work.threads(this.threads));
+        let serial = !ready.is_empty()
+            && *this.serial.get_or_init(|| {
+                this.location(&this.root.join(".filesystem"), false, true)
+                    .is_ok_and(|location| location.serializes())
+            });
+        let grouped = folders.finish(serial);
+        let threads = grouped.threads(this.threads);
         let batch = this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
-            let _permit = grouped.as_ref().and_then(|work| work.enter(*index));
+            let _permit = grouped.enter(*index);
             let order = order(*index);
             let placed = this
                 .put(&order.object, &order.destination, order.writable, batch)
@@ -356,7 +347,7 @@ impl Placer {
             threads,
             &observe,
             &this.stop,
-            grouped.as_ref(),
+            &grouped,
         ));
         results.sort_unstable_by_key(|(index, _)| *index);
         results.into_iter().map(|(_, result)| result).collect()
@@ -1012,7 +1003,7 @@ fn publish_flushed<T: Send>(
     threads: Threads,
     seen: &(impl Fn(&Metadata) -> T + Sync),
     stop: &Stop,
-    grouped: Option<&schedule::Work>,
+    grouped: &schedule::Work,
 ) -> Vec<(usize, io::Result<(Method, T)>)> {
     if waiting.is_empty() {
         return Vec::new();
@@ -1027,7 +1018,7 @@ fn publish_flushed<T: Send>(
             .collect();
     }
     let publish = &|(index, staged): (usize, Staged)| {
-        let _permit = grouped.and_then(|work| work.enter(index));
+        let _permit = grouped.enter(index);
         let named = check_stop(stop)
             .and_then(|()| staged.publish())
             .map(|metadata| (Method::Copy, seen(&metadata)));

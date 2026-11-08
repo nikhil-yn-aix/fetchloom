@@ -112,13 +112,11 @@ placement-order tests pause at the first metadata observation before later names
 
 [sync loop](sync-loop.md), [cache](cache.md), [archives](archives.md), [filesystem CI](../engineering/ci.md), [copy measurements](../performance/measurements.md#storage-and-memory).
 
-## folder-aware worker experiment
+## folder-aware workers
 
-`FETCHLOOM_EXP_PLACE_DIR_THREADS=1` limits namespace mutations to four workers per parent folder. other folders can use the remaining command budget. both staging and publication take the same parent permit; an explicit `FETCHLOOM_THREADS` limit still wins. unset or zero keeps the original eight-worker scheduling and makes no filesystem probe.
+namespace mutations use at most four workers per parent folder. other folders can use the remaining command budget. both staging and publication take the same parent permit; an explicit `FETCHLOOM_THREADS` limit still wins. readonly metadata scans use the shared worker ceiling without taking mutation permits.
 
-the enabled policy checks the opened root's filesystem once per placer. exfat and fat serialize namespace changes across folders, so they use one worker for the whole placement. linux reads `fstatfs` magic values; macos reads its filesystem name. windows uses the safe `sysinfo` disk-only API, without storage/IO refreshes, and matches the longest canonical mount path. unknown or failed probes keep the per-parent policy. the native drivers must be measured independently; a linux loop image does not establish a windows or macos speedup.
-
-the saved 10,000-file single-folder grid uses 1.005 cpu s at four ext4 workers versus 1.890 at eight, with similar wall time; multiple folders still use eight workers. the private linux exfat follow-up uses 1,000 distinct 4 KiB files to keep each run short: eight workers take 6.667 cpu s and 1.071 wall s; the enabled serial policy takes 1.022 cpu s and 1.067 wall s. this is a CPU reduction, not evidence of a wall-time win. raw captures and setup are in the group c exfat proof bundle.
+the placer checks the opened root's filesystem once. exfat and fat serialize namespace changes across folders, so they use one worker for the whole placement. linux reads `fstatfs` magic values; macos reads its filesystem name. windows uses the safe `sysinfo` disk-only API, without storage/IO refreshes, and matches the longest canonical mount path. unknown or failed probes keep the per-parent limit. an empty placement does not consume the probe before its root exists.
 
 ## small-copy experiment
 
