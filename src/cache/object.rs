@@ -6,7 +6,7 @@ use std::fs::{File, FileTimes, Metadata, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-#[cfg(target_os = "linux")]
+#[cfg(any(unix, test))]
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
@@ -20,6 +20,7 @@ pub(crate) struct NewObject {
     temp: Temporary,
     hasher: Hasher,
     written: u64,
+    begun: Option<SystemTime>,
 }
 
 /// an object written in full and flushed to disk, waiting in `tmp/` to be put in place. dropped
@@ -94,6 +95,7 @@ impl Cache {
             );
             match created {
                 Ok(file) => {
+                    let begun = begun(&file);
                     return Ok(NewObject {
                         file,
                         temp: Temporary {
@@ -104,6 +106,7 @@ impl Cache {
                         },
                         hasher: Hasher::default(),
                         written: 0,
+                        begun,
                     });
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
@@ -210,9 +213,10 @@ impl NewObject {
             temp,
             hasher,
             written,
+            begun,
         } = self;
         // dated before the flush, so the time reaches the disk with the bytes
-        if let Err(err) = date_by_birth(&file) {
+        if let Err(err) = date_by_birth(&file, begun) {
             tracing::debug!(%err, "could not date an object by its birth");
         }
         if flush {
@@ -269,18 +273,51 @@ impl Write for NewObject {
 /// modification time up to two seconds.
 const SEALED_WITHIN: Duration = Duration::from_secs(2);
 
-/// dates a sealed object by its birth: its modification time becomes the time the file was made,
-/// which no later write moves. a write through any link to the object moves the modification
-/// time alone, so [`rewritten`] puts the object in doubt, as pnpm finds a changed store file by
-/// its time. a filesystem that keeps no birth time leaves the object undated.
-pub(super) fn date_by_birth(file: &File) -> io::Result<()> {
+/// how far past its start a seal dates an object, the least step a time takes.
+const PAST_BIRTH: Duration = Duration::from_nanos(1);
+
+/// dates a sealed object by its birth: its modification time becomes just past the time the
+/// file was made, which no later write moves. a write through any link to the object moves the
+/// modification time alone, so [`rewritten`] puts the object in doubt, as pnpm finds a changed
+/// store file by its time. a filesystem that keeps no birth time leaves the object undated.
+///
+/// `begun` is the [`begun`] time of a file this process made. an nfs 4.2 server that lets its
+/// client hold a file's times through a write delegation keeps the times the client hands back
+/// only if they are newer than the ones the file had when the delegation began (RFC 9754), and
+/// otherwise dates a written file to when the delegation ends, seconds or minutes later. making
+/// a file there sets its times once more, a few milliseconds past its birth, so the seal dates
+/// the object past that too.
+pub(super) fn date_by_birth(file: &File, begun: Option<SystemTime>) -> io::Result<()> {
     let found = file.metadata()?;
     let born = found.created().ok();
     #[cfg(target_os = "linux")]
     let born = born.or_else(|| statx_birth(file, "", rustix::fs::AtFlags::EMPTY_PATH));
     match born {
-        Some(born) => file.set_times(FileTimes::new().set_modified(born)),
+        Some(born) => {
+            let start = begun.map_or(born, |begun| begun.max(born));
+            file.set_times(FileTimes::new().set_modified(start + PAST_BIRTH))
+        }
         None => Ok(()),
+    }
+}
+
+/// when `file`, just made, last had its times or details set: its ctime on unix. on nfs 4.2 a
+/// write delegation the making began starts there. windows keeps no such time to read.
+pub(super) fn begun(file: &File) -> Option<SystemTime> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let found = file.metadata().ok()?;
+        let since = Duration::new(
+            u64::try_from(found.ctime()).ok()?,
+            u32::try_from(found.ctime_nsec()).ok()?,
+        );
+        UNIX_EPOCH.checked_add(since)
+    }
+    #[cfg(windows)]
+    {
+        let _ = file;
+        None
     }
 }
 
@@ -307,7 +344,7 @@ pub(super) fn redate(file: &File, seen: &Metadata) {
         .is_ok_and(|now| now.len() == seen.len() && now.modified().ok() == seen.modified().ok());
     if unchanged
         && alone(file)
-        && let Err(err) = date_by_birth(file)
+        && let Err(err) = date_by_birth(file, None)
     {
         tracing::debug!(%err, "could not date an object by its birth");
     }
@@ -380,6 +417,28 @@ mod tests {
             .unwrap();
         let stored = object.seal(true).unwrap().publish(&cache).unwrap();
         let path = cache.object_path(&stored.digest);
+        assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
+    }
+
+    /// an nfs 4.2 server that lets its client hold a new file's times keeps the time the client
+    /// hands back only if it is newer than the birth the file began with, so a seal dates an
+    /// object just past its birth.
+    #[test]
+    fn sealing_dates_an_object_just_past_its_birth() {
+        let (_dir, cache) = cache();
+        let mut object = cache.new_object().unwrap();
+        object.write_all(b"bytes").unwrap();
+        let Some(born) = birth(&object.temp.path, &object.file.metadata().unwrap()) else {
+            return;
+        };
+        let stored = object.seal(true).unwrap().publish(&cache).unwrap();
+        let path = cache.object_path(&stored.digest);
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        // ntfs keeps a time to 100 nanoseconds and fat to far coarser, and both drop the nanosecond
+        let fine = born.duration_since(UNIX_EPOCH).unwrap().subsec_nanos() % 100 != 0;
+        if fine {
+            assert!(modified > born, "{modified:?} is not past {born:?}");
+        }
         assert!(!rewritten(&path, &fs::metadata(&path).unwrap()));
     }
 

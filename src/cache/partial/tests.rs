@@ -280,6 +280,32 @@ fn a_resume_keeps_the_ranges_other_streams_finished() {
     );
 }
 
+/// on nfs 4.2 a kept download goes on in a file made now, where its seal sticks as a fresh
+/// download's does.
+#[test]
+fn a_renewed_download_keeps_its_bytes_in_a_file_made_now() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/renewed");
+    two_parts(&partial);
+    let before = fs::read(&partial.bytes).unwrap();
+    let kept = open_unfollowed(&partial.bytes, false).unwrap();
+    #[cfg(unix)]
+    let old = std::os::unix::fs::MetadataExt::ino(&kept.metadata().unwrap());
+    let (renewed, begun) = partial.renew(kept, 9).unwrap();
+    assert_eq!(fs::read(&partial.bytes).unwrap(), before[..9]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let now = renewed.metadata().unwrap().ino();
+        assert_ne!(now, old);
+        assert_eq!(fs::metadata(&partial.bytes).unwrap().ino(), now);
+        assert!(begun.is_some());
+    }
+    #[cfg(windows)]
+    let _ = (renewed, begun);
+    assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+}
+
 #[test]
 fn a_kept_range_whose_bytes_changed_is_fetched_again() {
     let (_dir, cache) = cache();

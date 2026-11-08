@@ -129,6 +129,8 @@ rmdir "$scratch/xfs" "$scratch"
 
 unmount even if tests fail. do not delete an image while it is mounted. [CI](ci.md) reruns the tests that touch the disk on xfs and btrfs, on ReFS, exFAT and FAT32 on windows, and on hfs+ on macos; the full suite runs once on each default filesystem.
 
+on nfs 4.2 from a linux server that hands out delegated timestamps (RFC 9754), as 7.0 does, the tests that fake an edit a coarse clock hides, by writing a file and putting its old time back, fail by design: the server keeps a time the client sets under a write delegation only if it is newer than the file's times when the delegation began, and stamps the file when the delegation ends. run those on a local filesystem.
+
 ## adding coverage
 
 keep parsers and pure planning tests close to the module. inject `Api` responses, environment readers or archive limits where the code already exposes those seams. retry timing still uses a real clock and randomness; it is not a fully simulated scheduler. use a CLI scenario for interrupted replacement, locked-source recovery or anything whose contract includes on-disk leftovers.

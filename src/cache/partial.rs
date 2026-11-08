@@ -3,10 +3,10 @@
 //! among them, so none of them is ever opened through one.
 
 use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -174,10 +174,10 @@ impl Partial {
         keep: bool,
     ) -> io::Result<PartialWriter> {
         let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
-        let file = Arc::new(
-            self.open(offset, keep, lean)
-                .map_err(|err| self.cache.explained(folder_of(&self.bytes), err))?,
-        );
+        let (file, begun) = self
+            .open(offset, keep, lean)
+            .map_err(|err| self.cache.explained(folder_of(&self.bytes), err))?;
+        let file = Arc::new(file);
         let mut hasher = if md5 {
             Hasher::with_md5()
         } else {
@@ -219,6 +219,7 @@ impl Partial {
             prefix: offset,
             pending: Vec::with_capacity(BUFFER),
             lean,
+            begun,
             runs: Vec::new(),
             read_back: 0,
             saved: Instant::now(),
@@ -248,11 +249,12 @@ impl Partial {
     }
 
     /// the file for the bytes, cut to their first `offset` unless `keep` keeps what lies past
-    /// them. bytes an earlier run kept are used only when this process may continue them.
+    /// them, and when this run made it, its [`super::object::begun`] time. bytes an earlier run
+    /// kept are used only when this process may continue them.
     /// otherwise a download from the first byte removes their name and makes a new file there: a
     /// read-only one was sealed by a run that did not finish publishing, and may already be a
     /// second name of the object, which must never become writable.
-    fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<File> {
+    fn open(&self, offset: u64, keep: bool, lean: bool) -> io::Result<(File, Option<SystemTime>)> {
         if lean
             && let Ok(file) = OpenOptions::new()
                 .read(true)
@@ -260,15 +262,19 @@ impl Partial {
                 .create_new(true)
                 .open(&self.bytes)
         {
-            return Ok(file);
+            let begun = super::object::begun(&file);
+            return Ok((file, begun));
         }
         // windows reports no link count in metadata, so a second name is asked for apart
         let kept = open_unfollowed(&self.bytes, false).ok().filter(|file| {
             file.metadata().is_ok_and(|metadata| continuable(&metadata))
                 && !crate::place::has_other_names(&self.bytes)
         });
-        let file = match kept {
-            Some(file) => file,
+        let (file, begun) = match kept {
+            Some(file) if on_nfs(&file) => {
+                self.renew(file, if keep { u64::MAX } else { offset })?
+            }
+            Some(file) => (file, None),
             None if offset > 0 => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -281,17 +287,52 @@ impl Partial {
                 {
                     return Err(err);
                 }
-                OpenOptions::new()
+                let file = OpenOptions::new()
                     .read(true)
                     .write(true)
                     .create_new(true)
-                    .open(&self.bytes)?
+                    .open(&self.bytes)?;
+                let begun = super::object::begun(&file);
+                (file, begun)
             }
         };
         if !keep {
             file.set_len(offset)?;
         }
-        Ok(file)
+        Ok((file, begun))
+    }
+
+    /// copies the first `length` bytes of `kept`, the file an earlier run left, into a file made
+    /// now that takes its name, with that file's [`super::object::begun`] time. on nfs 4.2 a
+    /// seal sticks only on a file the run that writes it made (see
+    /// [`super::object::date_by_birth`]), and there the server copies the bytes itself. when the
+    /// copy fails, the kept file stays.
+    fn renew(&self, kept: File, length: u64) -> io::Result<(File, Option<SystemTime>)> {
+        let temp = self
+            .cache
+            .root
+            .join("tmp")
+            .join(format!("{:016x}.new", fastrand::u64(..)));
+        let copied = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .and_then(|mut fresh| {
+                let begun = super::object::begun(&fresh);
+                io::copy(&mut (&kept).take(length), &mut fresh)?;
+                Ok((fresh, begun))
+            });
+        let Ok((fresh, begun)) = copied else {
+            let _ = fs::remove_file(&temp);
+            return Ok((kept, None));
+        };
+        drop(kept);
+        if let Err(err) = fs::rename(&temp, &self.bytes) {
+            let _ = fs::remove_file(&temp);
+            return Err(err);
+        }
+        Ok((fresh, begun))
     }
 
     fn recorded(&self) -> Option<Record> {
@@ -302,6 +343,20 @@ impl Partial {
         }
         record.url.clone_from(&self.url);
         Some(record)
+    }
+}
+
+/// whether `file` lies on nfs.
+fn on_nfs(file: &File) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        const NFS_SUPER_MAGIC: i128 = 0x6969;
+        rustix::fs::fstatfs(file).is_ok_and(|found| i128::from(found.f_type) == NFS_SUPER_MAGIC)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+        false
     }
 }
 
@@ -406,6 +461,8 @@ pub(crate) struct PartialWriter {
     /// the end of the prefix, not yet in the file.
     pending: Vec<u8>,
     lean: bool,
+    /// when the file this run made began, which its seal dates the download past.
+    begun: Option<SystemTime>,
     /// what other streams wrote past the prefix, by start.
     runs: Vec<Run>,
     /// bytes read back from the file to hash them, since another stream wrote them.
@@ -623,6 +680,7 @@ impl PartialWriter {
             record_path,
             record,
             lean,
+            begun,
             _lock: lock,
             ..
         } = self;
@@ -634,7 +692,7 @@ impl PartialWriter {
             file.set_len(prefix)?;
         }
         // dated while the handle may still set times, before the flag and the flush
-        if let Err(err) = super::object::date_by_birth(&file) {
+        if let Err(err) = super::object::date_by_birth(&file, begun) {
             tracing::debug!(%err, "could not date a download by its birth");
         }
         // sealed through the handle that wrote it: by name, a link swapped in since would be
