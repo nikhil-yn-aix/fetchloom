@@ -1335,29 +1335,49 @@ async fn learn_name(
 }
 
 /// refuses a name that is not a valid dataset name or that data.toml already has, as `--as`
-/// gives it.
+/// gives it, saying why and suggesting one the next run accepts.
 fn usable(asked: &str, manifest: &Manifest) -> Result<(), Error> {
+    if let Some(problem) = name::dataset_name_problem(asked) {
+        // a name long enough to be refused for its length would fill the screen
+        let shown: String = if asked.chars().count() > 40 {
+            asked.chars().take(40).chain(['\u{2026}']).collect()
+        } else {
+            asked.to_owned()
+        };
+        let error = Error::new(
+            Kind::Usage,
+            format!("\"{shown}\" is not a valid dataset name"),
+        )
+        .detail(problem);
+        let rule = format!(
+            "use lowercase letters a to z, digits, - and _, starting with a letter or a digit, at most {} characters",
+            name::DATASET_NAME_MOST
+        );
+        return Err(match name::dataset_name(asked) {
+            Some(suggested) => {
+                error.help(format!("{rule}, such as --as {}", unreserved(suggested)))
+            }
+            None => error.help(rule),
+        });
+    }
     // a dataset's name is its folder, and data.toml travels to windows machines too
-    if name::is_dataset_name(asked) && name::is_reserved_on_windows(asked) {
+    if name::is_reserved_on_windows(asked) {
         return Err(Error::new(
             Kind::Usage,
             format!("\"{asked}\" is a name windows keeps for devices, so it cannot be a folder"),
         )
         .help(format!("pick another name, such as --as {asked}-data")));
     }
-    if !name::is_dataset_name(asked) {
-        let error = Error::new(
-            Kind::Usage,
-            format!("\"{asked}\" is not a valid dataset name"),
-        );
-        return Err(match name::dataset_name(asked) {
-            Some(suggested) => error.help(format!(
-                "use lowercase letters, digits, - and _, such as --as {suggested}"
-            )),
-            None => error.help("pass --as a name of lowercase letters, digits, - and _"),
-        });
-    }
     unused(asked, manifest)
+}
+
+/// `name`, or `name-data` where windows keeps `name` for a device, such as con.
+fn unreserved(name: String) -> String {
+    if name::is_reserved_on_windows(&name) {
+        format!("{name}-data")
+    } else {
+        name
+    }
 }
 
 /// the name a new dataset gets without `--as`: one made from its file or its title.
@@ -1384,11 +1404,7 @@ fn choose_name(
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
     // data.toml travels to windows machines, where a folder named con or aux cannot exist
-    let name = if name::is_reserved_on_windows(&name) {
-        format!("{name}-data")
-    } else {
-        name
-    };
+    let name = unreserved(name);
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number
     if !manifest.datasets.contains_key(&name) {
         return Ok(name);

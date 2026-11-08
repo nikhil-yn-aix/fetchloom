@@ -1725,3 +1725,54 @@ fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
     assert_eq!(fs::read_dir(&elsewhere)?.count(), 0);
     Ok(())
 }
+
+/// a name given with `--as` is refused for its real reason, with the limit it breaks, and the
+/// suggested name keeps the letters it can and is one the next run accepts.
+#[test]
+fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
+    let sandbox = Sandbox::new()?;
+    let long = "x".repeat(300);
+    let short = "x".repeat(40);
+    for (asked, reason, suggested) in [
+        (
+            long.as_str(),
+            "it has 300 characters, and the most is 64",
+            short.as_str(),
+        ),
+        ("ïris-数据", "it holds ï, 数 and 据", "iris"),
+        ("CON", "it holds capital letters", "con-data"),
+        ("my iris", "it holds a space", "my-iris"),
+    ] {
+        let output = sandbox.run(&[
+            "--json",
+            "add",
+            "https://example.org/iris.csv",
+            "--as",
+            asked,
+        ])?;
+        assert_eq!(output.status.code(), Some(2), "{asked}");
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        let message = error["message"].as_str().unwrap_or_default();
+        let help = error["help"].as_str().unwrap_or_default();
+        assert_eq!(error["details"], serde_json::json!([reason]), "{asked}");
+        assert!(
+            help.ends_with(&format!("--as {suggested}")),
+            "{asked}: {help}"
+        );
+        assert!(message.len() < 120, "{asked}: {message}");
+        let retried = sandbox.run(&[
+            "--json",
+            "add",
+            "--dry-run",
+            "--offline",
+            "https://example.org/iris.csv",
+            "--as",
+            suggested,
+        ])?;
+        let kind = json(&retried)?["errors"][0]["kind"].clone();
+        assert_ne!(kind, "usage", "{suggested} is refused too");
+    }
+    assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}

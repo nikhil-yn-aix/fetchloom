@@ -48,7 +48,7 @@ if the generated name is taken, fetchloom tries `-2` through `-99`, then fails i
 warning: iris was taken, so this one is iris-2; choose a name with --as <name>
 ```
 
-an explicitly supplied `--as` name that is taken is refused.
+an explicitly supplied `--as` name that is taken is refused. a name that breaks the rules above is refused with the rule it breaks, such as its length or the characters it holds, and a suggestion made from it: lowercase, with accents dropped from letters (`ïris` gives `iris`), other characters turned into `-`, at most 40 characters, and `-data` after a name windows keeps for a device, such as `con`. generated names drop accents the same way.
 
 ## destination paths
 

@@ -2,12 +2,16 @@
 
 use std::path::Path;
 
-use icu_normalizer::ComposingNormalizerBorrowed;
+use icu_normalizer::properties::CanonicalCombiningClassMapBorrowed;
+use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 use percent_encoding::percent_decode_str;
 use url::Url;
 
 /// the longest name kept, in bytes. most filesystems stop at 255.
 const LONGEST: usize = 200;
+
+/// the most characters a dataset name has.
+pub(crate) const DATASET_NAME_MOST: usize = 64;
 
 /// a name a server or a link suggested, made safe to create anywhere: only its last path part,
 /// with the characters windows refuses replaced and the names windows reserves avoided.
@@ -48,10 +52,11 @@ pub(crate) fn from_url(url: &Url) -> Option<String> {
 }
 
 /// a dataset name made from free text, such as a title or a file name: lowercase letters,
-/// digits, `-` and `_`, at most 40 characters, ending at a word break when one is near.
+/// digits, `-` and `_`, at most 40 characters, ending at a word break when one is near. a letter
+/// with an accent keeps its letter, as `ï` becomes `i`.
 pub(crate) fn dataset_name(text: &str) -> Option<String> {
     let mut name = String::with_capacity(text.len());
-    for c in text.chars().flat_map(char::to_lowercase) {
+    for c in plain_letters(text).chars() {
         if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
             name.push(c);
         } else if !name.ends_with('-') {
@@ -82,7 +87,7 @@ const DANGLING: [&str; 13] = [
 /// a dangling "and" or "of" at the end. a first word too long for that is cut as
 /// [`dataset_name`] cuts any text, at 40 characters.
 pub(crate) fn title_name(title: &str) -> Option<String> {
-    let lower = title.to_lowercase();
+    let lower = plain_letters(title);
     let words = lower
         .split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
         .map(|word| word.trim_start_matches('_'))
@@ -123,12 +128,93 @@ pub(crate) fn reference_name(reference: &str) -> Option<String> {
 }
 
 pub(crate) fn is_dataset_name(text: &str) -> bool {
-    !text.is_empty()
-        && text.len() <= 64
-        && text
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        && !text.starts_with(['-', '_'])
+    dataset_name_problem(text).is_none()
+}
+
+/// why `text` cannot be a dataset name, in plain words, or none when it can be one. a name is
+/// also a folder on every machine that syncs the project, so it keeps to characters every
+/// filesystem stores alike.
+pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
+    let count = text.chars().count();
+    if count == 0 {
+        return Some("it is empty".to_owned());
+    }
+    if count > DATASET_NAME_MOST {
+        return Some(format!(
+            "it has {count} characters, and the most is {DATASET_NAME_MOST}"
+        ));
+    }
+    let mut capitals = false;
+    let mut spaces = 0;
+    let mut others: Vec<char> = Vec::new();
+    for c in text.chars() {
+        match c {
+            'a'..='z' | '0'..='9' | '-' | '_' => {}
+            'A'..='Z' => capitals = true,
+            ' ' => spaces += 1,
+            other if !others.contains(&other) => others.push(other),
+            _ => {}
+        }
+    }
+    let mut held: Vec<String> = Vec::new();
+    if capitals {
+        held.push("capital letters".to_owned());
+    }
+    match spaces {
+        0 => {}
+        1 => held.push("a space".to_owned()),
+        _ => held.push("spaces".to_owned()),
+    }
+    let shown = others.len().min(5);
+    for &other in &others[..shown] {
+        held.push(if is_control(other) {
+            other.escape_unicode().to_string()
+        } else {
+            other.to_string()
+        });
+    }
+    if others.len() > shown {
+        held.push(format!("{} more", others.len() - shown));
+    }
+    if let [first @ .., last] = held.as_slice() {
+        return Some(if first.is_empty() {
+            format!("it holds {last}")
+        } else {
+            format!("it holds {} and {last}", first.join(", "))
+        });
+    }
+    text.starts_with(['-', '_'])
+        .then(|| "it does not start with a letter or a digit".to_owned())
+}
+
+/// `text` in lowercase with each letter's accents dropped, as `Ï` becomes `i`, and the letters
+/// unicode does not split into a letter and an accent spelled out, as `ß` becomes `ss`. other
+/// characters stay as they are.
+fn plain_letters(text: &str) -> String {
+    let lower = text.to_lowercase();
+    if lower.is_ascii() {
+        return lower;
+    }
+    let marks = CanonicalCombiningClassMapBorrowed::new();
+    let mut plain = String::with_capacity(lower.len());
+    for c in DecomposingNormalizerBorrowed::new_nfd()
+        .normalize(&lower)
+        .chars()
+        .filter(|&c| marks.get_u8(c) == 0)
+    {
+        match c {
+            'ß' => plain.push_str("ss"),
+            'æ' => plain.push_str("ae"),
+            'œ' => plain.push_str("oe"),
+            'þ' => plain.push_str("th"),
+            'ø' => plain.push('o'),
+            'đ' | 'ð' => plain.push('d'),
+            'ł' => plain.push('l'),
+            'ı' => plain.push('i'),
+            other => plain.push(other),
+        }
+    }
+    plain
 }
 
 /// the candidate closest to `word`, when it is close enough to be a likely typo.
@@ -605,6 +691,43 @@ mod tests {
         for bad in ["", "EEG", "a b", "-lead", "x.y"] {
             assert!(!is_dataset_name(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn accented_letters_keep_their_letter_in_names() {
+        assert_eq!(dataset_name("ïris-数据").as_deref(), Some("iris"));
+        assert_eq!(
+            dataset_name("Straße Øresund").as_deref(),
+            Some("strasse-oresund")
+        );
+        assert_eq!(
+            title_name("Données météo de Paris").as_deref(),
+            Some("donnees-meteo-de-paris")
+        );
+        assert_eq!(dataset_name("数据"), None);
+    }
+
+    #[test]
+    fn a_refused_dataset_name_says_why() {
+        assert_eq!(dataset_name_problem("eeg-2024_v2"), None);
+        for (name, problem) in [
+            ("", "it is empty"),
+            ("-lead", "it does not start with a letter or a digit"),
+            ("My Data Set", "it holds capital letters and spaces"),
+            ("a.b/c\u{202e}", "it holds ., / and \\u{202e}"),
+            ("äöüõåé", "it holds ä, ö, ü, õ, å and 1 more"),
+        ] {
+            assert_eq!(
+                dataset_name_problem(name).as_deref(),
+                Some(problem),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            dataset_name_problem(&"a".repeat(65)).as_deref(),
+            Some("it has 65 characters, and the most is 64")
+        );
+        assert_eq!(dataset_name_problem(&"a".repeat(64)), None);
     }
 
     #[test]
