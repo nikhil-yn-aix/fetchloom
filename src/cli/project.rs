@@ -132,7 +132,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         open_cache()?
     };
     let mut addition = resolve_add(context, &net, &args, &parsed).await?;
-    let (old, lock_text) = project.lock_and_text(&context.exp)?.unzip();
+    let (old, lock_text) = project.lock_and_text()?.unzip();
     let lock_seen = lock_text
         .as_deref()
         .map(|text| digest::sha256(text.as_bytes()));
@@ -553,7 +553,7 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
 }
 
 fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {
-    let lock = work.project.lock(&work.context.exp)?.unwrap_or_default();
+    let lock = work.project.lock()?.unwrap_or_default();
     Ok(plan::from_cache(manifest, &lock, &work.cache)?
         .targets
         .iter()
@@ -572,19 +572,14 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     known(&manifest, &args.name, "remove")?;
     let updated = manifest::without_dataset(&text, &args.name)?;
     let new_manifest = Manifest::parse(&updated)?;
-    let mut lock = project.lock(&context.exp)?.unwrap_or_default();
+    let mut lock = project.lock()?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
     let cache = if dry_run {
         peek_cache()?
     } else {
         open_cache()?
     };
-    let survey = Survey::read(
-        &project,
-        &new_manifest.data_dir,
-        context.threads,
-        &context.exp,
-    );
+    let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
     let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
     if dry_run {
         let preview = placing.preview_removal();
@@ -598,7 +593,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     }
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
-    let placement = placing.remove_only(&context.output, &cache).map_err(|error| {
+    let placement = placing.remove_only(&context.output).map_err(|error| {
         error.detail("data.toml and data.lock were updated; after fixing the error, `fetchloom sync` finishes the removal")
     })?;
     context.output.done("Removed", &args.name);
@@ -624,7 +619,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Some(hold(context, &project, "sync").await?)
     };
     let (text, manifest) = project.manifest()?;
-    let read = project.lock_and_text(&context.exp)?;
+    let read = project.lock_and_text()?;
     if args.locked {
         let Some((lock, _)) = &read else {
             return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
@@ -749,7 +744,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         Some(hold(context, &project, "lock").await?)
     };
     let (_, manifest) = project.manifest()?;
-    let old = project.lock(&context.exp)?;
+    let old = project.lock()?;
     if args.check {
         return check(&project, &manifest, old.as_ref());
     }
@@ -837,7 +832,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
-    let lock = project.lock(&context.exp)?;
+    let lock = project.lock()?;
     let mut cache = None;
     let path = if let Some(path) = ready_path(
         context,
@@ -857,7 +852,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
                 known(&manifest, name, "path")?;
-                let read = project.lock_and_text(&context.exp)?;
+                let read = project.lock_and_text()?;
                 if let Some(path) = ready_path(
                     context,
                     &project,
@@ -892,7 +887,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                     )
                     .await?;
                     drop(held);
-                    let lock = project.lock(&context.exp)?.unwrap_or_default();
+                    let lock = project.lock()?.unwrap_or_default();
                     let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
                     planned_path(&project, &manifest, &planned, name, file)?
                 }
@@ -1007,7 +1002,7 @@ fn ready_path(
     }
     // reject a known impossible member before a missing file can trigger downloads.
     let answer = planned_path(project, manifest, &planned, name, file)?;
-    let survey = Survey::read(project, &manifest.data_dir, context.threads, &context.exp);
+    let survey = Survey::read(project, &manifest.data_dir, context.threads);
     let doubted = survey.doubted(&project.root, cache)?;
     let ready = planned
         .targets
@@ -1046,12 +1041,7 @@ async fn sync_all(
     given: Option<(String, Listing)>,
     read: Read<'_>,
 ) -> Result<(bool, Placement), Error> {
-    let mut survey = Survey::read(
-        work.project,
-        &manifest.data_dir,
-        work.context.threads,
-        &work.context.exp,
-    );
+    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
@@ -1104,12 +1094,7 @@ async fn preview_all(
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
 ) -> Result<(bool, Preview), Error> {
-    let mut survey = Survey::read(
-        work.project,
-        &manifest.data_dir,
-        work.context.threads,
-        &work.context.exp,
-    );
+    let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
@@ -1226,7 +1211,7 @@ async fn hold_path(
         before = current;
         let (_, manifest) = project.manifest()?;
         known(&manifest, name, "path")?;
-        let lock = project.lock(&context.exp)?;
+        let lock = project.lock()?;
         ready_path(
             context,
             project,
@@ -1630,7 +1615,7 @@ mod tests {
         })
         .await;
         let state_path = project.own_folder().join("state");
-        project.write_state(&state, &context.exp).unwrap();
+        project.write_state(&state).unwrap();
         std::fs::File::options()
             .write(true)
             .open(&state_path)
@@ -1655,7 +1640,7 @@ mod tests {
             .unwrap()
             .set_modified(stamp)
             .unwrap();
-        project.write_state(&state, &context.exp).unwrap();
+        project.write_state(&state).unwrap();
         std::fs::File::options()
             .write(true)
             .open(&state_path)
@@ -1847,6 +1832,6 @@ mod tests {
             old.render(),
             "data.lock lists a path twice"
         );
-        assert!(Lock::parse(&old.render(), &crate::exp::Experiments::default()).is_ok());
+        assert!(Lock::parse(&old.render()).is_ok());
     }
 }

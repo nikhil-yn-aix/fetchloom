@@ -47,7 +47,7 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     if let Some(name) = name {
         super::project::known(&manifest, name, "list")?;
     }
-    let lock = project.lock(&context.exp)?.unwrap_or_default();
+    let lock = project.lock()?.unwrap_or_default();
     let mut report = listed(&manifest, &lock);
     let output = &context.output;
     if let Some(name) = name {

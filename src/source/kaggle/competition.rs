@@ -629,7 +629,6 @@ mod tests {
         }
         let work = Arc::new(Work::default());
         let options = Options {
-            exp: crate::exp::Experiments::default(),
             offline: crate::net::Offline::No,
             jobs: 4,
             credentials: crate::source::kaggle_credentials(&crate::auth::env),

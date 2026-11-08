@@ -578,7 +578,6 @@ mod tests {
         let url = Url::parse("https://example.org/list").unwrap();
         let net = Net::new(
             Options {
-                exp: crate::exp::Experiments::default(),
                 offline: Offline::No,
                 jobs: 1,
                 credentials: Vec::new(),
@@ -610,7 +609,6 @@ mod tests {
         let url = Url::parse("https://example.org/file").unwrap();
         let net = Net::new(
             Options {
-                exp: crate::exp::Experiments::default(),
                 offline: Offline::No,
                 jobs: 1,
                 credentials: Vec::new(),

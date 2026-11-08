@@ -28,7 +28,6 @@ fn net() -> Net {
     };
     Net::new(
         Options {
-            exp: crate::exp::Experiments::default(),
             offline: crate::net::Offline::No,
             jobs: 1,
             credentials: crate::auth::credentials(&var),
@@ -165,7 +164,6 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
 fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
     let net = Net::new(
         Options {
-            exp: crate::exp::Experiments::default(),
             offline: crate::net::Offline::No,
             jobs: 1,
             credentials: vec![
@@ -232,7 +230,6 @@ fn keyed(hosts: &[&str]) -> Net {
         .collect();
     Net::new(
         Options {
-            exp: crate::exp::Experiments::default(),
             offline: crate::net::Offline::No,
             jobs: 1,
             credentials,
@@ -333,7 +330,6 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
 fn verification_net(credentials: Vec<Credential>) -> Net {
     Net::new(
         Options {
-            exp: crate::exp::Experiments::default(),
             offline: Offline::No,
             jobs: 1,
             credentials,

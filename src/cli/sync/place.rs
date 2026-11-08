@@ -351,7 +351,6 @@ impl<'a> Placing<'a> {
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir)
-            .with_experiments(cache.experiments().clone())
             .with_threads(survey.threads)
             .with_stop(std::sync::Arc::clone(stop));
         // removing first means a file that moved never collides with its own old copy
@@ -392,7 +391,7 @@ impl<'a> Placing<'a> {
         let resynced = state.synced != synced;
         state.synced = synced;
         if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
-            project.write_state(state, cache.experiments())?;
+            project.write_state(state)?;
         }
         stop.check()?;
         if let Some(error) = failure {
@@ -403,7 +402,7 @@ impl<'a> Placing<'a> {
     }
 
     /// removes only what no dataset needs, and places nothing, so `remove` never downloads.
-    pub(crate) fn remove_only(self, output: &Output, cache: &Cache) -> Result<Placement, Error> {
+    pub(crate) fn remove_only(self, output: &Output) -> Result<Placement, Error> {
         let _span = tracing::debug_span!("remove").entered();
         let Placing {
             project,
@@ -416,9 +415,7 @@ impl<'a> Placing<'a> {
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-        let mut placer = Placer::new(&data_dir)
-            .with_experiments(cache.experiments().clone())
-            .with_threads(survey.threads);
+        let mut placer = Placer::new(&data_dir).with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
             &mut placer,
@@ -430,7 +427,7 @@ impl<'a> Placing<'a> {
         survey.smudge_edited();
         let forgot = survey.state.synced.take().is_some();
         if removed || forgot || survey.needs_writing {
-            project.write_state(&survey.state, cache.experiments())?;
+            project.write_state(&survey.state)?;
         }
         tell(
             output,
@@ -794,12 +791,7 @@ mod tests {
     use crate::project::state::State;
 
     fn surveyed(project: &Project) -> Survey {
-        Survey::read(
-            project,
-            "data",
-            crate::threads::Threads::default(),
-            &crate::exp::Experiments::default(),
-        )
+        Survey::read(project, "data", crate::threads::Threads::default())
     }
 
     #[test]
@@ -854,9 +846,7 @@ mod tests {
                 );
             }
         }
-        project
-            .write_state(&state, &crate::exp::Experiments::default())
-            .unwrap();
+        project.write_state(&state).unwrap();
         let mut survey = surveyed(&project);
         let started = 42;
         survey.started = started;

@@ -8,7 +8,6 @@ mod cache;
 mod cli;
 mod digest;
 mod error;
-mod exp;
 mod glob;
 mod name;
 mod net;

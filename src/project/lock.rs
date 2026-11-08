@@ -15,7 +15,6 @@ use serde::{Deserialize, Deserializer};
 use super::manifest::Entry;
 use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::exp::Experiments;
 use crate::glob::Glob;
 use crate::name;
 
@@ -78,7 +77,7 @@ struct VersionOnly {
 }
 
 impl Lock {
-    pub(crate) fn parse(text: &str, _exp: &Experiments) -> Result<Lock, Error> {
+    pub(crate) fn parse(text: &str) -> Result<Lock, Error> {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         if let Some(lock) = canonical::read(text, false).or_else(|| canonical::read(text, true)) {
             return Ok(lock);
@@ -357,7 +356,7 @@ mod tests {
         let canonical = lock.render();
         let edited = format!("# edited lock\n{canonical}");
         for text in [canonical, edited] {
-            let error = Lock::parse(&text, &crate::exp::Experiments::default()).unwrap_err();
+            let error = Lock::parse(&text).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert_eq!(error.message, "data.lock lists the dataset iris twice");
             assert_eq!(error.help.as_deref(), Some(BROKEN));
@@ -372,7 +371,7 @@ mod tests {
         let canonical = lock.render();
         let edited = format!("# edited lock\n{canonical}");
         for text in [canonical, edited] {
-            let error = Lock::parse(&text, &crate::exp::Experiments::default()).unwrap_err();
+            let error = Lock::parse(&text).unwrap_err();
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert!(error.message.contains("twice"), "{}", error.message);
             assert_eq!(error.help.as_deref(), Some(BROKEN));
@@ -395,7 +394,7 @@ mod tests {
             "files are sorted"
         );
         assert!(text.contains(", md5 = \"900150983cd24fb0d6963f7d28e17f72\", url = \"https://example.org/b/iris.zip\", unpacks_to = \"sha256:"), "{text}");
-        let read = Lock::parse(&text, &crate::exp::Experiments::default()).unwrap();
+        let read = Lock::parse(&text).unwrap();
         let mut sorted = sample();
         sorted.datasets.sort_by(|a, b| a.name.cmp(&b.name));
         for dataset in &mut sorted.datasets {
@@ -411,28 +410,21 @@ mod tests {
 
     #[test]
     fn another_format_or_a_broken_file_is_refused_with_the_fix() {
-        let newer = Lock::parse(
-            "version = 2\n[[dataset]]\nwhatever = 1\n",
-            &crate::exp::Experiments::default(),
-        )
-        .unwrap_err();
+        let newer = Lock::parse("version = 2\n[[dataset]]\nwhatever = 1\n").unwrap_err();
         assert!(newer.message.contains("format 2"), "{}", newer.message);
         assert_eq!(
             newer.help.as_deref(),
             Some("install a newer fetchloom, then run the same command again")
         );
         for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
-            let broken = Lock::parse(text, &crate::exp::Experiments::default()).unwrap_err();
+            let broken = Lock::parse(text).unwrap_err();
             assert_eq!(broken.kind, Kind::ProjectInvalid);
             assert_eq!(broken.help.as_deref(), Some(BROKEN), "{text}");
         }
         assert!(
             BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
         );
-        assert_eq!(
-            Lock::parse("version = 1\n", &crate::exp::Experiments::default()).unwrap(),
-            Lock::default()
-        );
+        assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
     }
 
     #[test]
@@ -469,7 +461,7 @@ mod tests {
                 "version = 1\n[[dataset]]\nname = \"x\"\nref = \"https://example.org/x\"\nspec = \"sha256:00\"\nresolved = \"https://example.org/x\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles = [\n  {{ path = \"{path}\", size = 1, sha256 = \"{}\", url = \"https://example.org/x\" }},\n]\n",
                 digest::sha256(b"x")
             );
-            let err = Lock::parse(&text, &crate::exp::Experiments::default()).unwrap_err();
+            let err = Lock::parse(&text).unwrap_err();
             assert_eq!(err.kind, Kind::ProjectInvalid, "{path}");
             assert!(err.message.contains("data.lock"), "{}", err.message);
             assert_eq!(err.help.as_deref(), Some(BROKEN), "{path}");

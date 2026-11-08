@@ -10,7 +10,6 @@ use super::place::local;
 use crate::cache::{self, Cache};
 use crate::digest::Sha256;
 use crate::error::Error;
-use crate::exp::Experiments;
 use crate::name;
 use crate::place::{self, Method};
 use crate::plan::Target;
@@ -47,15 +46,10 @@ pub(crate) struct Survey {
 impl Survey {
     /// reads the state, lists the data folder, and hashes the files the state is too new to
     /// vouch for.
-    pub(crate) fn read(
-        project: &Project,
-        data_dir: &str,
-        threads: Threads,
-        exp: &Experiments,
-    ) -> Survey {
+    pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
         let started = nanos(SystemTime::now());
         let (state, written) = project.state();
-        let (disk, temporaries) = scan(&project.root, data_dir, threads, exp);
+        let (disk, temporaries) = scan(&project.root, data_dir, threads);
         let mut survey = Survey {
             threads,
             started,
@@ -403,12 +397,7 @@ fn apart(a: &Path, b: &Path) -> bool {
 /// every file under the data folder and how it looks, by its path in the project, and the paths
 /// of those under the hidden names placement stages files in. links are neither followed nor
 /// touched.
-fn scan(
-    root: &Path,
-    data_dir: &str,
-    threads: Threads,
-    _exp: &Experiments,
-) -> (HashMap<String, Look>, Vec<String>) {
+fn scan(root: &Path, data_dir: &str, threads: Threads) -> (HashMap<String, Look>, Vec<String>) {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut found = HashMap::new();
     let mut temporaries = Vec::new();
@@ -549,12 +538,7 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        let (found, _) = scan(
-            dir.path(),
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let (found, _) = scan(dir.path(), "data", Threads::default());
         assert_eq!(found.len(), 512);
     }
 
@@ -581,17 +565,14 @@ mod tests {
                 .unwrap();
         }
         let serial = Threads::read(&|_| Some("1".into())).unwrap();
-        let expected = scan(root, "data", serial, &Experiments::default());
+        let expected = scan(root, "data", serial);
         assert_eq!(expected.0.len(), 513);
         assert_eq!(expected.1, ["data/.fetchloom-0123456789abcdef.copy"]);
         for count in ["1", "8"] {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
-            let actual = scan(root, "data", threads, &Experiments::default());
+            let actual = scan(root, "data", threads);
             assert_eq!(actual, expected);
-            assert_eq!(
-                scan(root, "absent", threads, &Experiments::default()),
-                (HashMap::new(), Vec::new())
-            );
+            assert_eq!(scan(root, "absent", threads), (HashMap::new(), Vec::new()));
         }
     }
 
@@ -647,12 +628,7 @@ mod tests {
         for path in ["data/changed", "data/intact"] {
             fs::write(project.root.join(path), b"original").unwrap();
         }
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         for path in ["data/changed", "data/intact"] {
             survey.state.files.insert(
                 path.to_owned(),
@@ -702,12 +678,7 @@ mod tests {
         // 10 s, while a state on a finer clock was written at 10.5 s
         let placed = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_010);
         stamp(b"original", placed);
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         survey.state.files.insert(
             "data/table.csv".to_owned(),
             record(&project.root, "data/table.csv", b"original", Method::Copy),
@@ -775,12 +746,7 @@ mod tests {
                 .unwrap();
             fs::hard_link(object, project.root.join("data").join(name)).unwrap();
         }
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         survey.state.files.insert(
             "data/intact".to_owned(),
             record(&project.root, "data/intact", b"intact", Method::Hardlink),
@@ -815,12 +781,7 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/file"), b"bytes").unwrap();
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         placed.look.modified = 0;
         survey.disk.insert("data/file".to_owned(), placed.look);
@@ -843,12 +804,7 @@ mod tests {
         fs::create_dir(project.root.join("data")).unwrap();
         fs::write(project.root.join("data/file"), b"bytes").unwrap();
         let cache = Cache::open(project.root.join("cache")).unwrap();
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let mut placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
         placed.look.modified = 0;
         placed.checked = 1_700_000_000_500_000_000;
@@ -922,12 +878,7 @@ mod tests {
         fs::hard_link(&object, project.root.join("data/new")).unwrap();
         let mut new = record(&project.root, "data/new", b"good", Method::Hardlink);
         new.checked = checked;
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         survey.state.files.insert("data/old".to_owned(), old);
         survey.state.files.insert("data/new".to_owned(), new);
         assert_eq!(survey.doubted(&project.root, &cache).unwrap(), ["data/old"]);
@@ -953,12 +904,7 @@ mod tests {
         fs::set_permissions(&old_path, permissions).unwrap();
         let mut old = record(&project.root, "data/old", b"good", Method::Hardlink);
         old.checked = checked;
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let new = record(&project.root, "data/new", b"good", Method::Hardlink);
         assert_eq!(old.look.modified, new.look.modified);
         survey.state.files.insert("data/old".to_owned(), old);
@@ -983,12 +929,7 @@ mod tests {
         if !project.root.join("data/a.txt").is_file() {
             return;
         }
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let placed = record(&project.root, "data/a.txt", b"a", Method::Copy);
         survey
             .state
@@ -1065,12 +1006,7 @@ mod tests {
         if !project.root.join("data/caf\u{e9}.txt").is_file() {
             return;
         }
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let listed = survey.disk.keys().next().unwrap().clone();
         let locked = locked("caf\u{e9}.txt", b"a");
         survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
@@ -1095,12 +1031,7 @@ mod tests {
         if !project.root.join("data/a.txt").is_file() {
             return;
         }
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let locked = locked("a.txt", b"a");
         survey.retarget(&project.root, &[target(&locked, "data/a.txt")]);
         assert_eq!(survey.disk.keys().collect::<Vec<_>>(), ["data/A.txt"]);
@@ -1127,25 +1058,10 @@ mod tests {
             dir.path().join("data/file-link"),
         )
         .unwrap();
-        let (files, leftovers) = scan(
-            dir.path(),
-            "data",
-            Threads::default(),
-            &Experiments::default(),
-        );
+        let (files, leftovers) = scan(dir.path(), "data", Threads::default());
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
         assert_eq!(leftovers, Vec::<String>::new());
-        assert_eq!(
-            scan(
-                dir.path(),
-                "missing",
-                Threads::default(),
-                &Experiments::default()
-            )
-            .0
-            .len(),
-            0
-        );
+        assert_eq!(scan(dir.path(), "missing", Threads::default()).0.len(), 0);
     }
 }

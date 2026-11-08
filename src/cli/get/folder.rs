@@ -95,7 +95,6 @@ pub(super) fn put_all(
     } else {
         Placer::new(folder)
     }
-    .with_experiments(cache.experiments().clone())
     .with_threads(context.threads)
     .with_stop(std::sync::Arc::clone(&context.stop));
     // an empty archive still leaves the output folder, bound before later path changes.

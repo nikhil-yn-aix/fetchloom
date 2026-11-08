@@ -343,7 +343,6 @@ mod tests {
     fn net(url: &Url) -> Net {
         let net = Net::new(
             Options {
-                exp: crate::exp::Experiments::default(),
                 offline: Offline::No,
                 jobs: 1,
                 credentials: Vec::new(),

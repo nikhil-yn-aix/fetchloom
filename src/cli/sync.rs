@@ -1213,20 +1213,14 @@ mod tests {
             std::fs::metadata(&path).unwrap().modified().unwrap(),
             before
         );
-        assert_eq!(
-            project.lock(&crate::exp::Experiments::default()).unwrap(),
-            Some(lock.clone())
-        );
+        assert_eq!(project.lock().unwrap(), Some(lock.clone()));
         assert!(
             runner
                 .write_lock(&Before::whole(Some(lock.clone())), &Lock::default())
                 .unwrap()
                 .is_some()
         );
-        assert_eq!(
-            project.lock(&crate::exp::Experiments::default()).unwrap(),
-            Some(Lock::default())
-        );
+        assert_eq!(project.lock().unwrap(), Some(Lock::default()));
     }
 
     #[test]

@@ -359,7 +359,6 @@ mod tests {
 
     #[test]
     fn commented_writer_output_uses_the_fast_reader() {
-        let exp = crate::exp::Experiments::default();
         for mut lock in samples() {
             if let Some(dataset) = lock.datasets.first_mut() {
                 dataset.title = Some("literal # and an escaped \" quote".to_owned());
@@ -374,11 +373,8 @@ mod tests {
             assert_eq!(read(&commented, false), None);
             assert_eq!(read(&commented, true), Some(lock.clone()));
             assert_eq!(Lock::parse_toml(&commented).unwrap(), lock);
-            assert_eq!(Lock::parse(&commented, &exp).unwrap(), lock);
-            assert_eq!(
-                Lock::parse(&commented.replace('\n', "\r\n"), &exp).unwrap(),
-                lock
-            );
+            assert_eq!(Lock::parse(&commented).unwrap(), lock);
+            assert_eq!(Lock::parse(&commented.replace('\n', "\r\n")).unwrap(), lock);
             for invalid in [
                 format!("{commented}\0"),
                 format!("{commented}\n#bad\u{7f}"),
@@ -386,7 +382,7 @@ mod tests {
                 format!("{commented}\n[[broken]]"),
             ] {
                 assert!(read(&invalid, true).is_none());
-                assert!(Lock::parse(&invalid, &exp).is_err());
+                assert!(Lock::parse(&invalid).is_err());
             }
         }
     }
@@ -462,13 +458,9 @@ mod tests {
                     );
                 }
             }
-            if let Ok(lock) = Lock::parse(text, &crate::exp::Experiments::default()) {
+            if let Ok(lock) = Lock::parse(text) {
                 let written = lock.render();
-                assert_eq!(
-                    Lock::parse(&written, &crate::exp::Experiments::default()).ok(),
-                    Some(lock),
-                    "{written:?}"
-                );
+                assert_eq!(Lock::parse(&written).ok(), Some(lock), "{written:?}");
             }
         });
     }

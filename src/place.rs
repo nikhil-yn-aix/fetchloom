@@ -21,7 +21,6 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::read_unfollowed;
-use crate::exp::Experiments;
 use crate::stop::Stop;
 use crate::threads::Threads;
 #[cfg(windows)]
@@ -52,7 +51,6 @@ pub(crate) enum Method {
 
 /// puts objects into one folder tree, and remembers which methods its filesystem refuses.
 pub(crate) struct Placer {
-    exp: Experiments,
     threads: Threads,
     stop: Arc<Stop>,
     root: PathBuf,
@@ -174,7 +172,6 @@ impl Placer {
             #[cfg(test)]
             observed: None,
             threads: Threads::default(),
-            exp: Experiments::default(),
             stop: Arc::default(),
             root,
             checks_root: true,
@@ -190,21 +187,6 @@ impl Placer {
             #[cfg(target_os = "macos")]
             copy_flush: std::sync::Mutex::new(None),
         }
-    }
-
-    /// uses the cache's experiment settings for this placement.
-    pub(crate) fn with_experiments(mut self, exp: Experiments) -> Placer {
-        self.exp = exp;
-        self
-    }
-
-    /// the experiment settings supplied for this placement.
-    #[allow(
-        dead_code,
-        reason = "shared plumbing stays until all adoption changes are merged"
-    )]
-    pub(crate) fn experiments(&self) -> &Experiments {
-        &self.exp
     }
 
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {

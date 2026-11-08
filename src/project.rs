@@ -16,7 +16,6 @@ use self::lock::Lock;
 use self::manifest::Manifest;
 use self::state::{Look, State};
 use crate::error::{Error, Kind};
-use crate::exp::Experiments;
 
 const FOLDER: &str = ".fetchloom";
 
@@ -212,17 +211,17 @@ impl Project {
     }
 
     /// data.lock, or nothing when the project has none yet.
-    pub(crate) fn lock(&self, exp: &Experiments) -> Result<Option<Lock>, Error> {
-        Ok(self.lock_and_text(exp)?.map(|(lock, _)| lock))
+    pub(crate) fn lock(&self) -> Result<Option<Lock>, Error> {
+        Ok(self.lock_and_text()?.map(|(lock, _)| lock))
     }
 
     /// data.lock with the text it was read from, or nothing when the project has none yet.
-    pub(crate) fn lock_and_text(&self, exp: &Experiments) -> Result<Option<(Lock, String)>, Error> {
+    pub(crate) fn lock_and_text(&self) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                Ok(Some((Lock::parse(&text, exp)?, text)))
+                Ok(Some((Lock::parse(&text)?, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
@@ -305,7 +304,7 @@ impl Project {
         Ok(path)
     }
 
-    pub(crate) fn write_state(&self, state: &State, _exp: &Experiments) -> Result<(), Error> {
+    pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
         write_atomically(&folder.join("state"), &state.render())
@@ -875,9 +874,7 @@ mod tests {
     #[test]
     fn a_linked_state_reads_as_none() {
         let (_dir, project) = project(&[]);
-        project
-            .write_state(&State::default(), &Experiments::default())
-            .unwrap();
+        project.write_state(&State::default()).unwrap();
         let path = project.own_folder().join("state");
         assert_ne!(project.state().1, 0, "a plain state is read");
         let target = project.own_folder().join("elsewhere");
@@ -957,7 +954,7 @@ mod tests {
         );
 
         let held = project.hold("sync");
-        let written = project.write_state(&State::default(), &Experiments::default());
+        let written = project.write_state(&State::default());
         assert!(held.is_err(), "linked .fetchloom accepted a project lock");
         assert!(written.is_err(), "linked .fetchloom accepted project state");
         for error in [held.err().unwrap(), written.unwrap_err()] {
@@ -1069,9 +1066,7 @@ mod tests {
         };
         project.write("data.lock", b"first").unwrap();
         project.write("data.lock", b"second").unwrap();
-        project
-            .write_state(&State::default(), &Experiments::default())
-            .unwrap();
+        project.write_state(&State::default()).unwrap();
         assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"second");
         assert!(project.root.join(FOLDER).join("state").is_file());
     }
@@ -1086,7 +1081,7 @@ mod tests {
         assert_eq!(manifest.kind, Kind::ProjectInvalid);
         assert!(manifest.message.contains("UTF-8"));
         assert!(manifest.help.unwrap().contains("UTF-8"));
-        let lock = project.lock_and_text(&Experiments::default()).unwrap_err();
+        let lock = project.lock_and_text().unwrap_err();
         assert_eq!(lock.kind, Kind::ProjectInvalid);
         assert!(lock.message.contains("UTF-8"));
         assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
@@ -1096,14 +1091,11 @@ mod tests {
     fn missing_and_unreadable_metadata_are_not_treated_as_parse_errors() {
         let (_dir, project) = project(&[]);
         assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
-        assert_eq!(project.lock(&Experiments::default()).unwrap(), None);
+        assert_eq!(project.lock().unwrap(), None);
         fs::create_dir(project.root.join(manifest::FILE)).unwrap();
         fs::create_dir(project.root.join(lock::FILE)).unwrap();
         assert_eq!(project.manifest().unwrap_err().kind, Kind::LocalIo);
-        assert_eq!(
-            project.lock(&Experiments::default()).unwrap_err().kind,
-            Kind::LocalIo
-        );
+        assert_eq!(project.lock().unwrap_err().kind, Kind::LocalIo);
     }
 
     #[test]
@@ -1135,9 +1127,7 @@ mod tests {
             lock: crate::digest::sha256(b"lock"),
             complete: true,
         });
-        project
-            .write_state(&state, &Experiments::default())
-            .unwrap();
+        project.write_state(&state).unwrap();
         let (read, written) = project.state();
         assert_eq!(read.files, state.files);
         assert_eq!(read.synced, state.synced);
@@ -1155,9 +1145,7 @@ mod tests {
             (".fetchloom", "keep metadata blocker"),
             ("data", "keep data blocker"),
         ]);
-        let error = project
-            .write_state(&State::default(), &Experiments::default())
-            .unwrap_err();
+        let error = project.write_state(&State::default()).unwrap_err();
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert!(error.help.unwrap().contains("real folder"));
         let error = project.data_dir(&Manifest::parse("").unwrap()).unwrap_err();
@@ -1248,10 +1236,7 @@ mod tests {
             Kind::ProjectInvalid
         );
         assert_eq!(
-            project
-                .write_state(&State::default(), &Experiments::default())
-                .unwrap_err()
-                .kind,
+            project.write_state(&State::default()).unwrap_err().kind,
             Kind::ProjectInvalid
         );
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);

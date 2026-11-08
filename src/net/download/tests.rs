@@ -212,7 +212,6 @@ fn reply(status: &str, headers: &[(&str, &str)], body: &str) -> Vec<u8> {
 
 fn net(url: &Url) -> Net {
     let options = Options {
-        exp: crate::exp::Experiments::default(),
         offline: crate::net::Offline::No,
         jobs: 1,
         credentials: Vec::new(),

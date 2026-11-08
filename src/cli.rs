@@ -25,7 +25,6 @@ use serde::Serialize;
 
 use crate::cache::{Access, Cache};
 use crate::error::{Error, Kind};
-use crate::exp::Experiments;
 use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
 use crate::stop::Stop;
@@ -50,7 +49,6 @@ struct Context {
     threads: Threads,
     /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
     split: net::Splitting,
-    exp: Experiments,
     work: Arc<Work>,
     stop: Arc<Stop>,
     /// the account a failed command needed, kept so a person at the terminal can sign in and
@@ -73,7 +71,6 @@ impl Context {
             rate: None,
             threads: Threads::default(),
             split: net::Splitting::WhenSlow,
-            exp: Experiments::default(),
             work: Arc::default(),
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
@@ -146,7 +143,6 @@ impl Context {
             jobs: self.jobs,
             credentials,
             split: self.split,
-            exp: self.exp.clone(),
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify).with_rate(self.rate.clone())
     }
@@ -232,9 +228,6 @@ fn open_cache() -> Result<Cache, Error> {
 /// signal, once they exist. `open_cache` is called where neither is at hand.
 static WAITS: std::sync::OnceLock<(Arc<Output>, Arc<Stop>)> = std::sync::OnceLock::new();
 
-/// cache-opening helpers have no context, so they share the value set once by `execute`.
-static EXPERIMENTS: std::sync::OnceLock<Experiments> = std::sync::OnceLock::new();
-
 /// holds `cache` for `access`, calling `waiting` once if another run makes this one wait.
 fn hold_cache(
     cache: Cache,
@@ -271,30 +264,26 @@ fn open_unheld() -> Result<Cache, Error> {
         )
         .help("set FETCHLOOM_CACHE to a folder fetchloom may write to"));
     }
-    Cache::open(root.clone())
-        .map(|cache| cache.with_experiments(EXPERIMENTS.get().cloned().unwrap_or_default()))
-        .map_err(|err| {
-            Error::io(
-                format_args!("could not open the cache at {}", root.display()),
-                &err,
-            )
-            .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
-        })
+    Cache::open(root.clone()).map_err(|err| {
+        Error::io(
+            format_args!("could not open the cache at {}", root.display()),
+            &err,
+        )
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    })
 }
 
 /// the cache this machine uses, for a dry run: read as it is, with no folder or file created, so
 /// a missing cache or cache folder stands for an empty one.
 fn peek_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
-    Cache::unopened(root.clone())
-        .map(|cache| cache.with_experiments(EXPERIMENTS.get().cloned().unwrap_or_default()))
-        .map_err(|err| {
-            Error::io(
-                format_args!("could not open the cache at {}", root.display()),
-                &err,
-            )
-            .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
-        })
+    Cache::unopened(root.clone()).map_err(|err| {
+        Error::io(
+            format_args!("could not open the cache at {}", root.display()),
+            &err,
+        )
+        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    })
 }
 
 fn cache_root() -> Result<std::path::PathBuf, Error> {
@@ -353,10 +342,6 @@ pub(crate) fn run() -> ExitCode {
     let output = Output::new(style, level, global.json, logs.on_stderr())
         .without_hints(var("FETCHLOOM_NO_HINTS").is_some_and(|value| value == "1"));
     let mut context = Context::new(output);
-    context.exp = Experiments::from_vars(std::env::vars_os());
-    if !context.exp.is_empty() {
-        tracing::debug!(experiments = ?context.exp, "experiment settings");
-    }
     if let Some(refused) = &logs.refused {
         context.output.warn(refused);
     }
@@ -424,7 +409,6 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     };
     let entered = runtime.enter();
     let _ = WAITS.set((Arc::clone(&context.output), Arc::clone(&context.stop)));
-    let _ = EXPERIMENTS.set(context.exp.clone());
     let mut outcome = match command.clone() {
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),
@@ -859,28 +843,6 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn experiments_default_to_empty_and_reach_the_network() {
-        let mut context = Context::new(Output::new(
-            Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-            },
-            Level::Quiet,
-            false,
-            false,
-        ));
-        assert!(context.exp.is_empty());
-        assert!(context.net_with(Vec::new()).exp().is_empty());
-        context.exp = Experiments::default().with("DEMO", " 7 ");
-        let net = context.net_with(Vec::new());
-        assert!(net.exp().on("DEMO"));
-        assert_eq!(net.exp().number("DEMO"), Some(7));
-    }
 
     #[test]
     fn a_key_no_header_can_carry_is_told_once_per_run() {

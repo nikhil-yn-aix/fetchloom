@@ -164,12 +164,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
             fs::hard_link(&destination, &alias).unwrap();
         }
     }
-    let mut survey = Survey::read(
-        project,
-        "data",
-        Threads::default(),
-        &crate::exp::Experiments::default(),
-    );
+    let mut survey = Survey::read(project, "data", Threads::default());
     if !matches!(ownership, Ownership::Untracked) {
         let mut look = survey.disk[PATH];
         if matches!(scenario, 5 | 6) {
@@ -253,12 +248,7 @@ fn unwanted_observations() {
     for flags in 0_u8..32 {
         let [wanted, unknown, missing, edited, different] =
             std::array::from_fn(|bit| flags & (1 << bit) != 0);
-        let mut survey = Survey::read(
-            &project,
-            "data",
-            Threads::default(),
-            &crate::exp::Experiments::default(),
-        );
+        let mut survey = Survey::read(&project, "data", Threads::default());
         let look = Look {
             size: 16,
             modified: 123,

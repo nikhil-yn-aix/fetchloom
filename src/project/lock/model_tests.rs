@@ -100,23 +100,15 @@ fn compare(lock: &Lock) {
     );
     let generic = Lock::parse_toml(&rendered).unwrap();
     assert_eq!(&generic, lock, "{rendered}");
-    assert_eq!(
-        Lock::parse(&rendered, &crate::exp::Experiments::default())
-            .as_ref()
-            .unwrap(),
-        lock
-    );
+    assert_eq!(Lock::parse(&rendered).as_ref().unwrap(), lock);
     assert_eq!(
         canonical::read(&rendered.replace('\n', "\r\n"), false).as_ref(),
         Some(lock)
     );
     assert_eq!(
-        Lock::parse(
-            &format!("\u{feff}{rendered}"),
-            &crate::exp::Experiments::default()
-        )
-        .as_ref()
-        .unwrap(),
+        Lock::parse(&format!("\u{feff}{rendered}"))
+            .as_ref()
+            .unwrap(),
         lock
     );
     assert_eq!(generic.render(), rendered);
@@ -154,7 +146,7 @@ fn lock_reader_mutations_agree() {
         ];
         for changed in variants {
             let generic = Lock::parse_toml(&changed);
-            let normal = Lock::parse(&changed, &crate::exp::Experiments::default());
+            let normal = Lock::parse(&changed);
             assert_eq!(normal.as_ref().ok(), generic.as_ref().ok(), "{changed}");
             for comments in [false, true] {
                 if let Some(fast) = canonical::read(&changed, comments) {
