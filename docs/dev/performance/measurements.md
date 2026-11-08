@@ -30,6 +30,34 @@ placement was 2 to 3 times slower than in the earlier quiet window. the no-readb
 
 network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
 
+## final pass on the linux lab, 2026-11-08
+
+the [lab](benchmark-design.md) on an azure Standard_NC24ads_A100_v4 (EPYC 7V13, 24 vCPU, nvme, loop-mounted ext4 and xfs), median wall seconds of five measured rounds per arm. "final" is the static musl build of this release; "main" is the static musl build of d168842. the best other tool comes from the earlier baseline campaign on the same machine and lab, except s2 and s3, where curl, aria2c and wget were measured again in the same session because main's own times had drifted by more than 5%. far and poor are indicative: their wall time varies by about 45% between runs.
+
+| case | main s | final s | final/main | best other tool | its s | final/best |
+|---|---:|---:|---:|---|---:|---:|
+| ext4 lan s1, 1 GiB | 2.507 | 2.627 | 1.048 | curl | 2.704 | 0.972 |
+| ext4 lan s2, 1,000 files | 0.464 | 0.428 | 0.922 | curl | 0.502 | 0.852 |
+| ext4 lan s3, 10,000 files | 2.734 | 1.913 | 0.700 | curl | 1.755 | 1.090 |
+| ext4 lan s4, zip of 10,000 | 0.953 | 0.781 | 0.820 | curl and unzip | 0.789 | 0.990 |
+| ext4 lan s5, second project | 0.080 | 0.085 | 1.064 | pooch | 0.286 | 0.296 |
+| ext4 lan s6, no-op | 0.030 | 0.032 | 1.073 | wget | 0.109 | 0.296 |
+| xfs lan s1 | 2.535 | 2.593 | 1.023 | curl | 2.556 | 1.015 |
+| xfs lan s2 | 0.553 | 0.482 | 0.872 | curl | 0.487 | 0.989 |
+| xfs lan s3 | 3.122 | 2.406 | 0.771 | curl | 1.835 | 1.312 |
+| xfs lan s4 | 1.769 | 1.484 | 0.839 | curl and unzip | 0.862 | 1.723 |
+| xfs lan s5 | 0.096 | 0.107 | 1.111 | pooch | 0.308 | 0.348 |
+| xfs lan s6 | 0.026 | 0.028 | 1.087 | wget | 0.110 | 0.252 |
+| ext4 home s1 | 23.007 | 22.936 | 0.997 | wget | 22.910 | 1.001 |
+| ext4 home s2 | 8.966 | 8.954 | 0.999 | aria2c | 8.865 | 1.010 |
+| ext4 home s7, resume | 13.253 | 13.348 | 1.007 | curl | 13.376 | 0.998 |
+| ext4 far s1 | 15.512 | 19.651 | 1.267 | wget | 14.133 | 1.390 |
+| ext4 far s2 | 31.484 | 5.772 | 0.183 | aria2c | 6.130 | 0.942 |
+| ext4 poor s1 | 20.486 | 8.855 | 0.432 | pooch | 4.832 | 1.832 |
+| ext4 poor s2 | 26.831 | 9.308 | 0.347 | aria2c | 7.848 | 1.186 |
+
+fetchloom verifies every downloaded byte, fills a reusable content-addressed cache and places from it; curl writes straight to its target and checks with `sha256sum` afterwards. the remaining gaps are xfs s3 and s4, where the lock on each folder's namespace and xfs's reflink bookkeeping dominate placement (see the architecture notes on [placing](../architecture/placing.md)).
+
 ## observations and rejected experiments
 
 parenthesized bounds are observed minima and maxima. when only a time, rate or peak was recorded, the median and range columns say so rather than supplying a new statistic.
