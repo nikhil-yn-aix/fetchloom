@@ -39,7 +39,7 @@ flowchart TD
     root --> gclock["gc.lock: shared by runs, exclusive for gc"]
 ```
 
-first initialization writes `CACHEDIR.TAG` on every platform. on macos it also creates `.metadata_never_index` and sets `com.apple.metadata:com_apple_backup_excludeItem` to `com.apple.backupd` when extended attributes are supported. these root markers are not rewritten on subsequent opens.
+first initialization writes `CACHEDIR.TAG` on every platform. on macos it also creates `.metadata_never_index` and sets `com.apple.metadata:com_apple_backup_excludeItem` to `com.apple.backupd` when extended attributes are supported. these root markers are not rewritten on subsequent opens. runs that initialize one cache at once each write the tag. FAT and exFAT on windows refuse a rename over a file another process has open, and each run opens the tag to look for it, so a run whose tag write fails while a tag is in place keeps that tag and opens the cache.
 
 `Cache::locate` uses `FETCHLOOM_CACHE`, otherwise the platform cache location. there is no layout-marker file. the [cache-folder reference](../../user/reference/cache-folder.md) owns record paths and user-facing recovery rules.
 

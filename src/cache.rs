@@ -156,13 +156,25 @@ impl Cache {
             deferred: Arc::default(),
             held: None,
         };
-        let tag = cache.root.join("CACHEDIR.TAG");
-        if !tag.exists() {
-            #[cfg(target_os = "macos")]
-            exclude_native_backup_and_indexing(&cache.root)?;
-            cache.write_atomically(&tag, TAG.as_bytes())?;
-        }
+        cache.tag(|tag, bytes| cache.write_atomically(tag, bytes))?;
         Ok(cache)
+    }
+
+    /// marks the cache for backup tools, writing its tag with `write` unless a tag is there. runs
+    /// opening a new cache at once each write one, and FAT and exFAT on windows refuse to rename
+    /// over a file another run has open, as each run opens the tag to look for it, so a write
+    /// that fails with a tag in place leaves the cache tagged.
+    fn tag(&self, write: impl FnOnce(&Path, &[u8]) -> io::Result<()>) -> io::Result<()> {
+        let tag = self.root.join("CACHEDIR.TAG");
+        if tag.exists() {
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        exclude_native_backup_and_indexing(&self.root)?;
+        match write(&tag, TAG.as_bytes()) {
+            Err(_) if tag.exists() => Ok(()),
+            written => written,
+        }
     }
 
     /// the cache at `root` as it is, with nothing created, for a dry run that only reads it. a
@@ -1062,6 +1074,31 @@ pub(crate) mod tests {
         let (_dir, cache) = cache();
         let tag = fs::read_to_string(cache.root.join("CACHEDIR.TAG")).unwrap();
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
+    }
+
+    /// runs opening a new cache at once each write its tag, and FAT and exFAT refuse one run's
+    /// rename over the tag while another run has it open.
+    #[test]
+    fn a_cache_another_run_tagged_since_the_check_still_opens() {
+        let (_dir, cache) = cache();
+        let tag = cache.root.join("CACHEDIR.TAG");
+        let denied = || io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
+        cache
+            .tag(|_, _| panic!("a tag that is there is not written again"))
+            .unwrap();
+        fs::remove_file(&tag).unwrap();
+        cache
+            .tag(|path, bytes| {
+                // the other run's tag lands first, and the rename over it is refused
+                fs::write(path, bytes)?;
+                Err(denied())
+            })
+            .unwrap();
+        assert_eq!(fs::read_to_string(&tag).unwrap(), TAG);
+        fs::remove_file(&tag).unwrap();
+        let refused = cache.tag(|_, _| Err(denied())).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!tag.exists());
     }
 
     #[test]
