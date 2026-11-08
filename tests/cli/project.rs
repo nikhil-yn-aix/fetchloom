@@ -2538,6 +2538,107 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     Ok(())
 }
 
+/// no or ctrl-c at the question about a large download an add needs is a cancel, and the add has
+/// changed nothing by then: it writes data.toml and data.lock only once every file is in.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let before = (
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    );
+    let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
+    let large = Server::start("/huge.bin", (0..4).map(|_| huge()).collect())?;
+    let command = sandbox.command(&["add", &large.url]);
+    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+        // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
+        let Some((exit, screen)) = crate::support::typed(
+            &work,
+            &command,
+            "-isig",
+            "download huge.bin (2.0 GiB)?",
+            keys,
+        )?
+        else {
+            return Ok(());
+        };
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert!(
+            screen.contains("  Cancelled the download of huge.bin (2.0 GiB), so nothing changed\n"),
+            "{keys:?}: {screen}"
+        );
+        assert!(!screen.contains("error:"), "{keys:?}: {screen}");
+        assert_eq!(
+            (
+                fs::read(work.join("data.toml"))?,
+                fs::read(work.join("data.lock"))?
+            ),
+            before,
+            "{screen}"
+        );
+    }
+    Ok(())
+}
+
+/// a sync asks before it downloads what placing needs, once data.lock is as data.toml asks. no
+/// to that question says nothing changed when data.lock was already so, and does not say it
+/// when the same sync just wrote data.lock.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let large = Server::start("/files/huge.bin", vec![file(b"eleven byte", "\"h\"")])?;
+    let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    for (server, name) in [(&large, "huge"), (&cows, "cows")] {
+        let output = sandbox.run(&["add", &server.url, "--as", name])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    // data.lock now pins 2 GiB for the file, which the cache does not hold, so placing it again
+    // asks first
+    let pinned = fs::read_to_string(work.join("data.lock"))?;
+    let grown = pinned.replace("size = 11,", "size = 2147483648,");
+    assert_ne!(grown, pinned);
+    fs::write(work.join("data.lock"), &grown)?;
+    delete(&work.join("data/huge/huge.bin"))?;
+    let sync = sandbox.command(&["sync"]);
+    let question = "download 1 file (2.0 GiB)?";
+    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n")? else {
+        return Ok(());
+    };
+    assert_eq!(exit, Some(1), "{screen}");
+    assert!(
+        screen.contains("  Cancelled the download of 1 file (2.0 GiB), so nothing changed\n"),
+        "{screen}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, grown);
+    // with cows gone from data.toml, the sync writes data.lock before it asks
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    let kept: Vec<&str> = manifest
+        .split("\n\n")
+        .filter(|table| !table.starts_with("[datasets.cows]"))
+        .collect();
+    fs::write(work.join("data.toml"), kept.join("\n\n"))?;
+    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n")? else {
+        return Ok(());
+    };
+    assert_eq!(exit, Some(1), "{screen}");
+    assert!(
+        screen.contains("  Cancelled the download of 1 file (2.0 GiB)\n"),
+        "{screen}"
+    );
+    assert!(!screen.contains("nothing changed"), "{screen}");
+    assert!(
+        !fs::read_to_string(work.join("data.lock"))?.contains("cows"),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// `path -v` tells where the bytes really are, in one plain line: a placed file is a link to its
 /// file in the cache folder, or a copy of it, and `fetchloom cache` shows that folder. without
 /// `-v` the answer stays alone.

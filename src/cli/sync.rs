@@ -7,6 +7,7 @@ pub(super) mod place;
 pub(super) mod unpack;
 
 use std::collections::{BTreeSet, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
@@ -61,6 +62,9 @@ pub(super) struct Loop<'a> {
     unpacked: Mutex<Vec<Sha256>>,
     /// the dataset the command's last line tells about, so its lock and placement lines stay out.
     told: Option<String>,
+    /// whether this run wrote data.lock, so a download cancelled later no longer left everything
+    /// as it was.
+    wrote_lock: AtomicBool,
 }
 
 impl<'a> Loop<'a> {
@@ -77,6 +81,7 @@ impl<'a> Loop<'a> {
             cache,
             unpacked: Mutex::default(),
             told: None,
+            wrote_lock: AtomicBool::new(false),
         }
     }
 
@@ -393,6 +398,7 @@ impl<'a> Loop<'a> {
     ) -> Result<String, Error> {
         let _span = tracing::debug_span!("write_lock").entered();
         self.project.write(lock::FILE, text.as_bytes())?;
+        self.wrote_lock.store(true, Ordering::Relaxed);
         tell_lock(
             &self.context.output,
             before,
@@ -486,11 +492,24 @@ impl<'a> Loop<'a> {
             self.context.yes,
             &units::count(jobs.len() as u64, "file", "files"),
             size,
-        )?;
+        )
+        .map_err(|error| self.as_left(error))?;
         let started = Instant::now();
-        let fetched = fetch::all(self.context, &self.net, &self.cache, jobs).await?;
+        let fetched = fetch::all(self.context, &self.net, &self.cache, jobs)
+            .await
+            .map_err(|error| self.as_left(error))?;
         self.tell_downloaded(&fetched, started);
         Ok(fetched)
+    }
+
+    /// `error`, saying that a cancel left everything as it was, unless this run wrote data.lock
+    /// before it: a run downloads before it places, and places only once every file is in.
+    fn as_left(&self, error: Error) -> Error {
+        if self.wrote_lock.load(Ordering::Relaxed) {
+            error
+        } else {
+            error.unchanged()
+        }
     }
 
     async fn download_prepared(
@@ -532,7 +551,8 @@ impl<'a> Loop<'a> {
             self.context.yes,
             &units::count(files.len() as u64, "file", "files"),
             size,
-        )?;
+        )
+        .map_err(|error| self.as_left(error))?;
         let started = Instant::now();
         let fetched = fetch::prepared(
             self.context,
@@ -545,7 +565,8 @@ impl<'a> Loop<'a> {
                 make_job(lock, dataset, file, &url)
             },
         )
-        .await?;
+        .await
+        .map_err(|error| self.as_left(error))?;
         self.tell_downloaded(&fetched, started);
         Ok(fetched)
     }

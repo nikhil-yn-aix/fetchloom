@@ -171,6 +171,15 @@ impl Error {
         }
     }
 
+    /// says that a cancel left everything as it was, once the caller knows that nothing changed
+    /// before it. any other error stays as it is.
+    pub(crate) fn unchanged(mut self) -> Error {
+        if let Some(what) = self.cancelled.take() {
+            self.cancelled = Some(format!("{what}, so nothing changed").into_boxed_str());
+        }
+        self
+    }
+
     /// the help, unless the error has one already.
     pub(crate) fn or_help(self, help: impl Into<String>) -> Error {
         if self.help.is_some() {
@@ -395,6 +404,22 @@ mod tests {
         assert_eq!(cancel.cancelled.as_deref(), Some("the download of x"));
         assert_eq!(cancel.message, "stopped");
         assert_eq!(cancel.kind.exit_code(), 130);
+    }
+
+    /// a cancel says that nothing changed once its caller knows so, and keeps the message scripts
+    /// read. an error that is no cancel stays as it is.
+    #[test]
+    fn a_cancel_says_nothing_changed_once_its_caller_knows_so() {
+        let cancel = Error::new(Kind::Unconfirmed, "did not download x")
+            .cancelled("the download of x (2.0 GiB)")
+            .unchanged();
+        assert_eq!(
+            cancel.cancelled.as_deref(),
+            Some("the download of x (2.0 GiB), so nothing changed")
+        );
+        assert_eq!(cancel.message, "did not download x");
+        let failed = Error::new(Kind::LocalIo, "x").unchanged();
+        assert_eq!((failed.cancelled, failed.message.as_str()), (None, "x"));
     }
 
     #[test]

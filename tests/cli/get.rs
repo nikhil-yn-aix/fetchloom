@@ -532,7 +532,8 @@ fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
 }
 
 /// at a terminal, no or ctrl-c at the question about a large download is a cancel, not an
-/// error: one line says what was cancelled, and the exit codes stay 1 and 130.
+/// error: one line says what was cancelled and that nothing changed, and the exit codes stay 1
+/// and 130.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
@@ -555,7 +556,7 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
         assert!(screen.contains("download huge.bin (2.0 GiB)?"), "{screen}");
         assert_eq!(exit, Some(code), "{keys:?}: {screen}");
         assert!(
-            screen.contains("  Cancelled the download of huge.bin (2.0 GiB)\n"),
+            screen.contains("  Cancelled the download of huge.bin (2.0 GiB), so nothing changed\n"),
             "{keys:?}: {screen}"
         );
         assert!(!screen.contains("error:"), "{keys:?}: {screen}");

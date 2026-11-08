@@ -273,7 +273,11 @@ async fn one(
     approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
-    let fetched = fetch::all(context, net, &cache, jobs).await?;
+    // nothing is placed before every file is in, so a download cancelled at its question
+    // changed nothing
+    let fetched = fetch::all(context, net, &cache, jobs)
+        .await
+        .map_err(Error::unchanged)?;
     let done = finish(
         context,
         &cache,
@@ -325,10 +329,10 @@ async fn many(
     let started = Instant::now();
     let mut fetched: Vec<Vec<Result<Fetched, Error>>> = links.iter().map(|_| Vec::new()).collect();
     if !jobs.is_empty() {
-        for (owner, result) in owners
-            .into_iter()
-            .zip(fetch::apart(context, net, &cache, jobs).await?)
-        {
+        let fetched_all = fetch::apart(context, net, &cache, jobs)
+            .await
+            .map_err(Error::unchanged)?;
+        for (owner, result) in owners.into_iter().zip(fetched_all) {
             fetched[owner].push(result);
         }
     }
@@ -809,6 +813,8 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
     }))
 }
 
+/// asks before the run's downloads when they are large. nothing is placed yet, so a cancel there
+/// changed nothing.
 fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
     if context.offline.enabled() {
         return Ok(());
@@ -827,6 +833,7 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         &units::count(missing.len() as u64, "file", "files"),
         size,
     )
+    .map_err(Error::unchanged)
 }
 
 /// the names the files will have, and the paths they will take in the folder when the cache

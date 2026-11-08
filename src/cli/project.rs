@@ -1809,7 +1809,10 @@ async fn learn_name(
 
     let job = fetch::listed_job(remote, &remote.path, extract);
     let started = std::time::Instant::now();
-    let fetched = fetch::all(context, net, cache, vec![job]).await?;
+    // the add changes nothing before its downloads are done
+    let fetched = fetch::all(context, net, cache, vec![job])
+        .await
+        .map_err(Error::unchanged)?;
     if let Some(fetched) = fetched.first() {
         if let Some(given) = fetched.name.as_deref().and_then(name::sanitize) {
             remote.path = given;
