@@ -13,6 +13,12 @@ use crate::units;
 
 /// the rate needs a few seconds of samples before the time left means anything.
 const SETTLE: Duration = Duration::from_secs(3);
+/// a time left reaching further than this many times the time watched so far is a guess, until
+/// [`STEADY`] has passed.
+const REACH: u32 = 60;
+const STEADY: Duration = Duration::from_secs(30);
+/// how long a download receives nothing before its bar says so instead of showing a fading rate.
+const STALL: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(100);
 /// how long a batch runs before its first plain line, so a quick one adds no line at all.
 const MOMENT: Duration = Duration::from_secs(2);
@@ -24,6 +30,35 @@ pub(crate) struct Bar {
     drawn: Option<ProgressBar>,
     color: bool,
     unicode: bool,
+    moved: Arc<Moved>,
+}
+
+/// when a bar last moved, so a download that stopped receiving can say so.
+struct Moved {
+    born: Instant,
+    /// milliseconds from `born` to the last bytes or answer.
+    at: AtomicU64,
+}
+
+impl Moved {
+    fn new() -> Moved {
+        Moved {
+            born: Instant::now(),
+            at: AtomicU64::new(0),
+        }
+    }
+
+    fn now(&self) {
+        let millis = u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.at.store(millis, Ordering::Relaxed);
+    }
+
+    /// how long since the bar last moved.
+    fn quiet(&self) -> Duration {
+        self.born
+            .elapsed()
+            .saturating_sub(Duration::from_millis(self.at.load(Ordering::Relaxed)))
+    }
 }
 
 impl Bar {
@@ -32,6 +67,7 @@ impl Bar {
             drawn: None,
             color: false,
             unicode: false,
+            moved: Arc::new(Moved::new()),
         }
     }
 
@@ -42,19 +78,27 @@ impl Bar {
         color: bool,
         unicode: bool,
     ) -> Bar {
+        let moved = Arc::new(Moved::new());
         let bar = bars.add(ProgressBar::no_length().with_message(message));
-        bar.set_style(style(verb, color, unicode, &bar.message()));
+        bar.set_style(style(verb, color, unicode, &bar.message(), moved.clone()));
         bar.enable_steady_tick(TICK);
         Bar {
             drawn: Some(bar),
             color,
             unicode,
+            moved,
         }
     }
 
     pub(crate) fn message(&self, verb: &'static str, text: String) {
         if let Some(bar) = &self.drawn {
-            bar.set_style(style(verb, self.color, self.unicode, &text));
+            bar.set_style(style(
+                verb,
+                self.color,
+                self.unicode,
+                &text,
+                self.moved.clone(),
+            ));
             bar.set_message(text);
         }
     }
@@ -66,12 +110,14 @@ impl Bar {
             }
             bar.set_position(resumed);
             bar.reset_eta();
+            self.moved.now();
         }
     }
 
     pub(crate) fn advance(&self, bytes: u64) {
         if let Some(bar) = &self.drawn {
             bar.inc(bytes);
+            self.moved.now();
         }
     }
 
@@ -91,7 +137,13 @@ impl Drop for Bar {
     }
 }
 
-fn style(verb: &'static str, color: bool, unicode: bool, message: &str) -> ProgressStyle {
+fn style(
+    verb: &'static str,
+    color: bool,
+    unicode: bool,
+    message: &str,
+    moved: Arc<Moved>,
+) -> ProgressStyle {
     let name = super::plain(message).into_owned();
     let tone = super::toned(color, super::Tone::Work);
     let heading = format!("{tone}{verb:>11}{tone:#}");
@@ -108,12 +160,19 @@ fn style(verb: &'static str, color: bool, unicode: bool, message: &str) -> Progr
                 } else {
                     String::new()
                 };
+                // unpacking and checking read local files, whose pauses mean nothing
+                let quiet = if verb == "Downloading" {
+                    moved.quiet()
+                } else {
+                    Duration::ZERO
+                };
                 let amount = measure(
                     state.pos(),
                     state.len(),
                     state.per_sec(),
                     state.elapsed(),
                     state.eta(),
+                    quiet,
                 );
                 let width = usize::from(console::Term::stderr().size().1);
                 let line = render(&name, &heading, &bar, &amount, width, color);
@@ -201,19 +260,34 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
-/// elapsed time stays visible until a settled rate can estimate the time left.
-fn measure(done: u64, total: Option<u64>, rate: f64, elapsed: Duration, left: Duration) -> String {
+/// elapsed time stays visible until a settled rate can estimate the time left, and a download
+/// that has received nothing for [`STALL`] says so instead of showing a fading rate.
+fn measure(
+    done: u64,
+    total: Option<u64>,
+    rate: f64,
+    elapsed: Duration,
+    left: Duration,
+    quiet: Duration,
+) -> String {
     let mut parts = Vec::new();
     if done > 0 {
         parts.push(total.map_or_else(|| units::size(done), |total| fraction(done, total)));
-        if rate > 0.0 && elapsed >= SETTLE {
-            parts.push(units::speed(rate));
-            if total.is_some() {
-                parts.push(format!("{} left", units::seconds(left)));
-            }
+    }
+    if quiet >= STALL {
+        parts.push(format!("no data for {}", units::seconds(quiet)));
+        return parts.join(" · ");
+    }
+    let settled = done > 0 && rate > 0.0 && elapsed >= SETTLE;
+    let foreseen =
+        settled && total.is_some() && (elapsed >= STEADY || left <= elapsed.saturating_mul(REACH));
+    if settled {
+        parts.push(units::speed(rate));
+        if foreseen {
+            parts.push(format!("{} left", units::seconds(left)));
         }
     }
-    if elapsed >= MOMENT && !(done > 0 && rate > 0.0 && elapsed >= SETTLE && total.is_some()) {
+    if elapsed >= MOMENT && !foreseen {
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
@@ -608,22 +682,90 @@ mod tests {
     #[test]
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
-        assert_eq!(measure(0, None, 0.0, second, Duration::ZERO), "");
+        let busy = Duration::ZERO;
+        assert_eq!(measure(0, None, 0.0, second, Duration::ZERO, busy), "");
         assert_eq!(
-            measure(1024, None, 512.0, 12 * second, Duration::ZERO),
+            measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy),
             "1.0 KiB · 512 B/s · 12 s"
         );
         assert_eq!(
-            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO),
+            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy),
             "12 s"
         );
         assert_eq!(
-            measure(1024, Some(4096), 0.0, second, Duration::ZERO),
+            measure(1024, Some(4096), 0.0, second, Duration::ZERO, busy),
             "1.0/4.0 KiB"
         );
         assert_eq!(
-            measure(1024, Some(4096), 512.0, 12 * second, 6 * second),
+            measure(1024, Some(4096), 512.0, 12 * second, 6 * second, busy),
             "1.0/4.0 KiB · 512 B/s · 6 s left"
+        );
+    }
+
+    #[test]
+    fn a_download_that_stopped_receiving_says_so_instead_of_a_fading_rate() {
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            measure(
+                1024,
+                Some(4096),
+                300.0,
+                40 * second,
+                10 * second,
+                12 * second
+            ),
+            "1.0/4.0 KiB · no data for 12 s"
+        );
+        assert_eq!(
+            measure(0, Some(4096), 0.0, 9 * second, Duration::ZERO, 9 * second),
+            "no data for 9 s"
+        );
+        assert_eq!(
+            measure(1024, Some(4096), 512.0, 12 * second, 6 * second, 4 * second),
+            "1.0/4.0 KiB · 512 B/s · 6 s left",
+            "a gap of a few seconds is ordinary"
+        );
+    }
+
+    #[test]
+    fn the_time_left_waits_until_the_rate_can_carry_it() {
+        let second = Duration::from_secs(1);
+        let busy = Duration::ZERO;
+        let mib = 1024 * 1024;
+        assert_eq!(
+            measure(
+                9 * 1024,
+                Some(136 * mib),
+                2970.0,
+                3 * second,
+                801 * 60 * second,
+                busy
+            ),
+            "9.0 KiB/136.0 MiB · 2.9 KiB/s · 3 s",
+            "three seconds at the start of a slow link cannot tell thirteen hours"
+        );
+        assert_eq!(
+            measure(
+                9 * mib,
+                Some(136 * mib),
+                2.0 * 1_048_576.0,
+                10 * second,
+                64 * second,
+                busy
+            ),
+            "9.0/136.0 MiB · 2.0 MiB/s · 1 min 04 s left"
+        );
+        assert_eq!(
+            measure(
+                1024,
+                Some(136 * mib),
+                2970.0,
+                30 * second,
+                801 * 60 * second,
+                busy
+            ),
+            "1.0 KiB/136.0 MiB · 2.9 KiB/s · 801 min 00 s left",
+            "half a minute of a steady slow rate is worth telling"
         );
     }
 
