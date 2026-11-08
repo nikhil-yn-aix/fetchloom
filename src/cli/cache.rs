@@ -141,6 +141,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     for failure in &freed.not_removed {
         warn_failure(output, "could not read or remove", failure);
     }
+    tell_forgotten(output, &freed.forgotten);
     let kept = kept(&freed);
     if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
         match &kept {
@@ -150,6 +151,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             }
             None => output.done("Ok", "nothing to free"),
         }
+        hint_forgotten(output, &freed);
         return Ok(collected(freed));
     }
     if freed.objects > 0 {
@@ -197,6 +199,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     if let Some(kept) = &kept {
         output.hint(kept);
     }
+    hint_forgotten(output, &freed);
     Ok(collected(freed))
 }
 
@@ -205,6 +208,25 @@ fn collected(freed: Freed) -> Collected {
         freed,
         dry_run: false,
         changes: None,
+    }
+}
+
+/// a line for each project gc forgets, since the files only it needed go with it.
+fn tell_forgotten(output: &Output, forgotten: &[PathBuf]) {
+    for root in forgotten {
+        output.mark(
+            "Forgot",
+            &format!("{} · it has no data.toml anymore", root.display()),
+        );
+    }
+}
+
+/// how a project gc forgot because it moved gets its files kept again.
+fn hint_forgotten(output: &Output, freed: &Freed) {
+    if !freed.forgotten.is_empty() {
+        output.hint(
+            "if a project moved, run `fetchloom sync` in its new folder, so gc keeps its files",
+        );
     }
 }
 
@@ -227,6 +249,12 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
             "could not read; gc would leave this in the cache:",
             failure,
         );
+    }
+    for root in &freed.forgotten {
+        output.detail(&format!(
+            "would forget {}, which has no data.toml anymore",
+            root.display()
+        ));
     }
     if freed.objects > 0 {
         output.step(

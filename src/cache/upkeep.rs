@@ -52,6 +52,9 @@ pub(crate) struct Freed {
     /// objects no project needs that stay because they are younger than a day.
     pub(crate) kept_objects: u64,
     pub(crate) kept_bytes: u64,
+    /// projects whose registration went because their data.toml is gone, as from a folder that
+    /// moved, so what only they needed was freed too.
+    pub(crate) forgotten: Vec<PathBuf>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -227,7 +230,9 @@ impl Cache {
         for root in stale_projects {
             stop.check()?;
             let path = self.registration(root);
-            removed(&path, self.remove_inside(&path), &mut freed.not_removed);
+            if removed(&path, self.remove_inside(&path), &mut freed.not_removed) {
+                freed.forgotten.push(root.clone());
+            }
         }
         for object in scan.objects {
             stop.check()?;
@@ -759,6 +764,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(freed.not_removed, []);
+        assert_eq!(freed.forgotten, std::slice::from_ref(&root));
         assert_eq!(cache.projects(), Vec::<PathBuf>::new());
         let absent = cache
             .sweep_with_stop(
@@ -770,6 +776,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(absent.not_removed, []);
+        assert_eq!(absent.forgotten, Vec::<PathBuf>::new());
     }
 
     #[test]

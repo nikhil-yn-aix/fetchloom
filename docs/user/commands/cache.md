@@ -47,7 +47,7 @@ a gc dry run shows the same hint. `cache gc` JSON reports these young unneeded o
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
-`cache gc` removes a registration when its manifest is missing. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection skips that project but keeps its registration, in case its drive is disconnected. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
+`cache gc` removes a registration when its manifest is missing, as when a project folder moved, and then frees what only that project needed. it names each project it forgets this way, in a `Forgot` line and in `result.forgotten`; a dry run names them with `-v` and in `result.forgotten`. run `fetchloom sync` in a project's new folder to register it again. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection skips that project but keeps its registration, in case its drive is disconnected. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 

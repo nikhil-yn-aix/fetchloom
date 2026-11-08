@@ -796,3 +796,52 @@ fn a_sync_with_nothing_to_do_leaves_its_registration_alone() -> Result {
     assert!(!stderr.contains("could not register"), "{stderr}");
     Ok(())
 }
+
+/// a project folder that moved leaves its registration behind with no data.toml, and gc forgets
+/// that project and frees what only it needed. gc says which project it forgot, to a person and
+/// in `--json`, and a dry run says which it would forget, with `-v` and in `--json`.
+#[test]
+fn gc_names_each_project_it_forgets() -> Result {
+    for json in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+        let project = sandbox.folder("thesis")?;
+        let added = sandbox
+            .command_in(&project, &["add", &server.url])
+            .output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        fs::rename(&project, project.with_file_name("thesis-moved"))?;
+        let shown = project.display().to_string();
+        let gc = |dry: bool| {
+            let mut args = vec!["cache", "gc", "--now"];
+            if dry {
+                args.extend(["--dry-run", "-v"]);
+            }
+            if json {
+                args.insert(0, "--json");
+            }
+            sandbox.run(&args)
+        };
+        for dry in [true, false] {
+            let output = gc(dry)?;
+            assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+            if json {
+                let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+                assert_eq!(
+                    report["result"]["forgotten"],
+                    serde_json::json!([shown]),
+                    "{report}"
+                );
+            } else {
+                let stderr = text(&output.stderr)?;
+                let told = if dry {
+                    format!("would forget {shown}, which has no data.toml anymore")
+                } else {
+                    format!("Forgot {shown} · it has no data.toml anymore")
+                };
+                assert!(stderr.contains(&told), "{stderr}");
+            }
+        }
+    }
+    Ok(())
+}
