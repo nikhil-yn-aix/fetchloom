@@ -194,6 +194,11 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let found = Project::find(&here);
     let starting = found.is_none();
     let project = found.unwrap_or_else(|| Project { root: here.clone() });
+    if project.root != here {
+        context
+            .output
+            .aside(&format!("using the project in {}", project.root.display()));
+    }
     before_holding(context, &mut args, &project.root, starting && !dry_run)
         .await
         .map_err(|error| stopped(context, error, true))?;
@@ -216,7 +221,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         lock_text: None,
     };
     let added = match adding.read() {
-        Ok(()) => add_held(context, &mut adding, args, starting).await,
+        Ok(()) => add_held(context, &mut adding, args, &here, starting).await,
         Err(error) => Err(error),
     };
     added.map_err(|error| {
@@ -312,6 +317,7 @@ async fn add_held(
     context: &Context,
     adding: &mut AddProject,
     mut args: Add,
+    here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
@@ -339,7 +345,7 @@ async fn add_held(
             entry: &addition.entry,
             listing: &addition.listing,
         };
-        return again(&work, adding, old, &present, dry_run).await;
+        return again(&work, adding, old, &present, dry_run, here).await;
     }
     // a dry run downloads nothing, so it names the dataset from the link alone. patterns were
     // written against the link's own name, which the server's name would replace before they apply
@@ -362,7 +368,7 @@ async fn add_held(
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
     let work = Loop::new(context, project, net, cache).telling(&name);
     if dry_run {
-        return preview_add(&work, &new_manifest, old, name, addition.listing).await;
+        return preview_add(&work, &new_manifest, old, name, addition.listing, here).await;
     }
     let outcome = sync_add(
         &work,
@@ -373,7 +379,7 @@ async fn add_held(
         (&name, Some(addition.listing)),
     )
     .await?;
-    render_add(&work, &new_manifest, &name, starting)?;
+    render_add(&work, &new_manifest, &name, here, starting)?;
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -455,13 +461,15 @@ fn added(
     Ok((updated, manifest))
 }
 
-/// `add --dry-run`: what adding the dataset would change, with data.toml as it would be.
+/// `add --dry-run`: what adding the dataset would change, with data.toml as it would be, told
+/// from `here`.
 async fn preview_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<Lock>,
     name: String,
     listing: Listing,
+    here: &Path,
 ) -> Result<Report, Error> {
     let given = Some((name.clone(), listing));
     let outcome = preview_all(work, manifest, old, false, given, None).await?;
@@ -471,7 +479,7 @@ async fn preview_add(
         "Would add",
         &format!(
             "{name} to data.toml, its files in {}",
-            plan::folder(manifest, &name)
+            from_here(work.project, here, &plan::folder(manifest, &name))
         ),
     );
     dry_run_done(output, None);
@@ -556,6 +564,7 @@ fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     name: &str,
+    here: &Path,
     starting: bool,
 ) -> Result<(), Error> {
     if starting {
@@ -565,7 +574,7 @@ fn render_add(
         );
     }
     ignore_data(work, manifest)?;
-    tell_added(work, manifest, name)
+    tell_added(work, manifest, name, here)
 }
 
 fn preview_ignore(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
@@ -675,13 +684,14 @@ fn present(
 
 /// `add` of a dataset data.toml already has, as `present`. with the same settings nothing
 /// changes, so running the same `add` twice is safe; other settings need a choice only the person
-/// can make.
+/// can make. paths are told from `here`.
 async fn again(
     work: &Loop<'_>,
     adding: &AddProject,
     old: Option<Lock>,
     present: &Present<'_>,
     dry_run: bool,
+    here: &Path,
 ) -> Result<Report, Error> {
     let Present {
         name,
@@ -722,7 +732,10 @@ async fn again(
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest)?;
     let contents = if has_files(work, manifest, name)? {
-        format!("its files are in {}", plan::folder(manifest, name))
+        format!(
+            "its files are in {}",
+            from_here(work.project, here, &plan::folder(manifest, name))
+        )
     } else {
         "its archives contain no regular files".to_owned()
     };
@@ -738,9 +751,9 @@ async fn again(
     })
 }
 
-fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str, here: &Path) -> Result<(), Error> {
     if has_files(work, manifest, name)? {
-        let folder = plan::folder(manifest, name);
+        let folder = from_here(work.project, here, &plan::folder(manifest, name));
         work.context
             .output
             .done("Added", &format!("{name}, its files are in {folder}"));
@@ -757,6 +770,14 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Er
         .output
         .next("commit data.toml and data.lock; anyone who clones runs `fetchloom sync`");
     Ok(())
+}
+
+/// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.
+fn from_here(project: &Project, here: &Path, path: &str) -> String {
+    let depth = here
+        .strip_prefix(&project.root)
+        .map_or(0, |inside| inside.components().count());
+    format!("{}{path}", "../".repeat(depth))
 }
 
 fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {

@@ -2263,6 +2263,43 @@ fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> 
     Ok(())
 }
 
+/// an add run in a folder below its project names the project once, for a person at a terminal,
+/// and shows where the files are from where the person stands.
+#[test]
+fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let below = sandbox.work().join("notebooks").join("week1");
+    fs::create_dir_all(&below)?;
+    let again = sandbox.command_in(&below, &["add", &server.url]).output()?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok iris is already in data.toml, its files are in ../../data/iris"),
+        "{stderr}"
+    );
+    let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    let added_cows = sandbox.command_in(&below, &["add", &cows.url]).output()?;
+    let stderr = text(&added_cows.stderr)?;
+    assert_eq!(added_cows.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Added cows, its files are in ../../data/cows"),
+        "{stderr}"
+    );
+    #[cfg(target_os = "linux")]
+    if let Some(screen) = sandbox.on_a_terminal(&["-C", "notebooks/week1", "add", &server.url])? {
+        assert!(
+            screen.contains(&format!(
+                "using the project in {}",
+                sandbox.work().display()
+            )),
+            "{screen}"
+        );
+    }
+    Ok(())
+}
+
 /// what a person at a terminal sees from `command` after typing `keys`, through a pseudo
 /// terminal `script` opens, with its exit code. none when `script` is not installed.
 #[cfg(target_os = "linux")]
