@@ -81,7 +81,7 @@ put parsing and conflicts in `args.rs`, then pass the value through `Context` or
 - a successful argument parse does not permit overwriting a hand edit. placement makes that decision later.
 - do not initialize TLS or source credentials on help, version or local-only paths.
 - a second ctrl-c clears the bars through `Output::abandon` and exits immediately; the first prints `Stopping` through `Output::stopping` and asks running work to stop and clean up. `interrupts` in cli.rs holds that order. prompts read keys raw, so at a question ctrl-c is a key that cancels it rather than a signal.
-- no or ctrl-c at a download question is a cancel, and `Error::unchanged` makes its line say that nothing changed once the caller knows so: `get` places and `add` writes nothing before every file is in, and `Loop::as_left` says it until the run writes data.lock, which `sync` does before it downloads what placing needs.
+- no or ctrl-c at a download question is a cancel, and `Error::unchanged` makes its line say that nothing changed once the caller knows so: `get` places and `add` writes nothing before every file is in, and `Loop::as_left` says it until the run writes data.lock, which `sync` does before it downloads what placing needs. a stop before `sync` places a file says the same through `Loop::before_placing`, or that the data folder is as it was once data.lock is written.
 - a single failing source can stop dataset resolution. catalog search instead retains successful catalogs unless all fail. failed batches can carry partial results in their error report.
 
 ## tests

@@ -98,6 +98,8 @@ each file it would download is listed with its size, or `size unknown` when only
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
 
-## stopping placement
+## stopping a sync
 
-the first ctrl-c stops starting new placements and removals. an operation already in the filesystem may finish. completed files stay recorded; unfinished copies never take their final names. run sync again to finish.
+ctrl-c while a sync resolves or downloads stops it before it places any file. it ends with `Stopped while talking to zenodo.org, so nothing changed`, and a dim line under it says how much of the unfinished downloads is kept, so the next sync continues from there. a sync that already wrote `data.lock`, which it does before it downloads what placing needs, keeps the new `data.lock` and says `so the data folder is as it was` instead.
+
+during placement, the first ctrl-c stops starting new placements and removals. an operation already in the filesystem may finish. completed files stay recorded; unfinished copies never take their final names. run sync again to finish.

@@ -103,7 +103,10 @@ impl<'a> Loop<'a> {
         survey: Survey,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
-        let placing = self.prepare(manifest, lock, plan, force, survey).await?;
+        let placing = self
+            .prepare(manifest, lock, plan, force, survey)
+            .await
+            .map_err(|error| self.before_placing(error))?;
         self.apply(placing, synced)
     }
 
@@ -500,6 +503,21 @@ impl<'a> Loop<'a> {
             .map_err(|error| self.as_left(error))?;
         self.tell_downloaded(&fetched, started);
         Ok(fetched)
+    }
+
+    /// `error`, saying what a stop before any file was placed left: nothing changed, or, once this
+    /// run wrote data.lock, the data folder as it was. a cancel says so through
+    /// [`Loop::as_left`], and any other error stays as it is.
+    pub(super) fn before_placing(&self, mut error: Error) -> Error {
+        if error.kind == Kind::Interrupted && error.cancelled.is_none() {
+            let left = if self.wrote_lock.load(Ordering::Relaxed) {
+                "the data folder is as it was"
+            } else {
+                "nothing changed"
+            };
+            error.message = format!("{}, so {left}", error.message);
+        }
+        error
     }
 
     /// `error`, saying that a cancel left everything as it was, unless this run wrote data.lock

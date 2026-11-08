@@ -2199,7 +2199,9 @@ fn told_a_stop<'s>(stderr: &'s str, stopped: &str) -> Result<&'s str> {
 }
 
 /// ctrl-c during a sync's download is a stop, not an error: one `Stopped` line says where it
-/// stopped, and a dim line under it what the download kept. the exit code stays 130.
+/// stopped and that nothing changed, since the sync wrote neither data.lock nor the data folder
+/// before every file was in, and a dim line under it what the download kept. the exit code stays
+/// 130.
 #[cfg(unix)]
 #[test]
 fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
@@ -2218,8 +2220,47 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     running.interrupt()?;
     let (code, stderr) = running.finish()?;
     assert_eq!(code, Some(130), "{stderr}");
-    let kept = told_a_stop(&stderr, "    Stopped while talking to 127.0.0.1")?;
+    let kept = told_a_stop(
+        &stderr,
+        "    Stopped while talking to 127.0.0.1, so nothing changed",
+    )?;
     assert!(kept.starts_with("            the "), "{stderr}");
+    assert!(!sandbox.work().join("data.lock").exists(), "{stderr}");
+    Ok(())
+}
+
+/// a sync stopped while it downloads the files data.lock already pins, as after a clone, says
+/// that nothing changed: it places files only once every one is in the cache.
+#[cfg(unix)]
+#[test]
+fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let site = crate::support::Ranged::start("/files/cows.csv", body, 0)?;
+    let work = sandbox.work();
+    fs::write(
+        work.join("data.toml"),
+        format!("[datasets.cows]\nref = \"{}\"\n", site.url),
+    )?;
+    let locked = sandbox.run(&["lock"])?;
+    assert!(locked.status.success(), "{}", text(&locked.stderr)?);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    site.pace(64 * 1024);
+    // a cache without the file, as on another machine
+    let cache = sandbox.folder("another cache")?;
+    let mut sync = sandbox.command(&["sync"]);
+    sync.env("FETCHLOOM_CACHE", &cache);
+    let running = Background::start(sync)?;
+    wait_until("bytes to arrive", || Ok(partial_bytes(&cache) > 0))?;
+    running.interrupt()?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    told_a_stop(
+        &stderr,
+        "    Stopped while talking to 127.0.0.1, so nothing changed",
+    )?;
+    assert_eq!(fs::read_to_string(work.join("data.lock"))?, lock);
+    assert!(!work.join("data/cows").exists(), "{stderr}");
     Ok(())
 }
 

@@ -1550,7 +1550,10 @@ async fn sync_all(
             {
                 // nothing is left to do, so a stop asked from here on, as by ctrl-c while the
                 // last lines print, leaves the sync done
-                work.context.stop.check()?;
+                work.context
+                    .stop
+                    .check()
+                    .map_err(|error| work.before_placing(error))?;
                 work.context.stop.finish();
                 register(work);
                 return Ok(Outcome {
@@ -1566,7 +1569,8 @@ async fn sync_all(
     let (lock, before) = work
         .relock(manifest, old, upgrade, given)
         .instrument(tracing::debug_span!("relock"))
-        .await?;
+        .await
+        .map_err(|error| work.before_placing(error))?;
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;
