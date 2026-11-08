@@ -14,12 +14,12 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 |---|---|
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
-| `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted. requests to any one host are capped at 4 at once, the streams of a split download included. that cap is fixed and `FETCHLOOM_JOBS` does not raise it, so a project whose files all come from one host downloads at most 4 at a time |
+| `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted. requests sharing an initial hostname are capped at 4 at once, the streams of a split download included. redirects keep that initial host's slots, so several initial hosts can send more than 4 requests to one destination host. `FETCHLOOM_JOBS` does not raise the initial-host cap |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
 | `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](../../dev/architecture/network.md#the-1-mbs-handover). a `FETCHLOOM_RATE` cap turns off the adaptive trigger; `1` and a resumed download whose later ranges are kept still split |
 | `FETCHLOOM_LOG` | tracing target filter, such as `fetchloom=debug`; overrides the `-vv` default filter; events include uptime timestamps |
-| `FETCHLOOM_TRACE` | nonempty path for a chrome trace, including one `download` span per file; relative to the starting directory, before `-C`; open it in [perfetto](../../dev/engineering/profiling.md#timeline) |
+| `FETCHLOOM_TRACE` | nonempty path for a chrome trace, including one `download` span per file; relative to the starting directory, before `-C`; the file is created or truncated even with `--dry-run`, so choose a separate output path; open it in [perfetto](../../dev/engineering/profiling.md#timeline) |
 | `NO_COLOR` | nonempty value disables automatic color |
 | `CLICOLOR_FORCE` | nonempty value other than `0` enables automatic color even into a pipe or file, unless `NO_COLOR` wins |
 | `CLICOLOR` | `0` disables automatic color |
@@ -27,8 +27,9 @@ there is no config file. [CLI options](../commands/README.md#global-options) set
 | `FETCHLOOM_NO_HINTS` | exactly `1` drops the `hint:` and `next:` lines that suggest a next step. warnings, errors and their `help:` stay |
 | `TERM` | `dumb` disables automatic color, unicode symbols and interactivity |
 | `CI` | nonempty value disables automatic color and interactivity |
-| `AI_AGENT`, `VSCODE_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `ANTIGRAVITY_AGENT` | a value other than `0` or `false` marks a coding agent's command: no questions, automatic color or animated progress, as under `CI` |
+| `AI_AGENT`, `VSCODE_AGENT`, `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `GEMINI_CLI`, `CURSOR_AGENT`, `OPENCODE`, `AUGMENT_AGENT`, `ANTIGRAVITY_AGENT` | a nonempty value other than `0` or `false` marks a coding agent's command: no questions, automatic color or animated progress, as under `CI` |
 | `WT_SESSION`, `TERM_PROGRAM`, `ConEmuANSI` | presence enables unicode in a windows terminal |
+| `LC_ALL`, `LC_CTYPE`, `LANG` | outside a windows terminal, the first nonempty value decides unicode fallbacks: it must contain `utf-8` or `utf8`, ignoring case. with none set, unicode stays enabled; `TERM=dumb` still disables it |
 
 [terminal output](../../dev/architecture/output.md#terminal-capabilities) owns color precedence, stream detection and unicode fallbacks.
 
@@ -38,7 +39,7 @@ the shared rate limit permits a burst of one second's bytes or 1 MiB, whichever 
 
 rate values accept surrounding whitespace and a decimal fraction with digits on both sides of the point. suffixes multiply by powers of 1024; fractions of any precision round down to whole bytes per second after that multiplication. the resulting rate must be from 1 to 18,446,744,073,709,551,615. signs, exponent notation, lowercase suffixes and suffixes such as `MB` are refused.
 
-invalid jobs and rate values fail a named command with kind `usage` and exit 2, even when it does not download. welcome, bare-project status, help and version bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help and version bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
+invalid jobs and rate values fail a named command with kind `usage` and exit 2, even when it does not download. welcome, bare-project status, help, version and completions bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help, version and completions bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, the icloud drive folder on windows, and on macos `~/Library/Mobile Documents` and the onedrive and dropbox folders in `~/Library/CloudStorage`. the home folder is `HOME`, else `USERPROFILE`. system proxy settings and proxy environment variables are read by the HTTP stack.
 

@@ -15,7 +15,7 @@ fetchloom remove [options] <name>
 
 | option | effect |
 |---|---|
-| `-n`, `--dry-run` | show what removing would change, and change nothing on disk |
+| `-n`, `--dry-run` | plan removal without applying project or cache changes |
 
 [global options](README.md#global-options) also apply. the argument is a dataset name from `data.toml`, not a source reference.
 
@@ -26,7 +26,7 @@ fetchloom remove [options] <name>
 3. delete unchanged managed files belonging to it.
 4. leave edited and unrelated extra files in place, warning about edits.
 
-nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged.
+nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.
 
 removing a table also removes its attached comments and strips leading blank lines. other manifest entries remain. commit the manifest and lock after removal.
 
@@ -34,7 +34,7 @@ if deleting files fails after metadata was written, fix the reported error and r
 
 ## dry run
 
-`remove --dry-run`, or `-n`, makes the same plan and stops before writing: `data.toml`, `data.lock`, `data/` and the cache stay as they are, and nothing is asked of the network. `-v` names each file it would delete. stderr for a dataset `a` with one placed file, matching a test snapshot:
+`remove --dry-run`, or `-n`, makes the same plan and stops before writing: `data.toml`, `data.lock`, `data/` and the cache stay as they are, and nothing is asked of the network. explicit `FETCHLOOM_TRACE` output is still created or truncated. `-v` names each file it would delete. stderr for a dataset `a` with one placed file, matching a test snapshot:
 
 ```text
  Would drop a from data.toml and data.lock

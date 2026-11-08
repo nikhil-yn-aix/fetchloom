@@ -34,7 +34,7 @@ path = "measurements"
 
 names are 1 to 64 ASCII characters: `a-z`, `0-9`, `-`, `_`. the first character must be a letter or digit.
 
-without `--as`, fetchloom chooses a name in this order:
+without `--as`, `add` chooses a name from the listing before applying command-line filters, in this order:
 
 | available information | generated name |
 |---|---|

@@ -39,12 +39,14 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `unlocked` | a manifest entry is missing from the lock or has a changed spec |
 | `removed` | a locked dataset is no longer in the manifest |
 | `missing` | a target path is absent |
-| `edited` | a managed file's size or modification time changed |
+| `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |
 | `outdated` | an unchanged managed file needs a new pin or writable placement |
 | `edited_elsewhere` | a shared hardlink was marked changed and its bytes differ |
 | `extra` | a scanned path is outside known targets |
 | `not_unpacked` | an archive's member record is unavailable here |
+
+files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
 
 a visibly changed hardlink appears as edited, with the path followed by `· changed through a hardlink other projects may share`. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
 

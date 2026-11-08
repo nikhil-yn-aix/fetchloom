@@ -26,7 +26,7 @@ put that line in `~/.zshrc` to keep it in later sessions. changing the variable 
 
 ## clones and links
 
-apfs, the disk format of every mac since macos 10.13, clones files. a clone shares its blocks with the cached file until either is written, so placing a large dataset takes almost no time or space, and `copy = true` gets writable clones. hfs+, found on older external drives, cannot clone, so fetchloom places hardlinks there. exFAT and FAT32 drives make neither, so every file is copied. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
+apfs supports copy-on-write clones: a clone shares its blocks with the cached file until either file is written. `copy = true` requests writable clones. hfs+ cannot clone, so fetchloom tries hardlinks there. exFAT and FAT32 drives make neither, so every file is copied. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
 
 stderr excerpt when the project and cache share an apfs disk:
 

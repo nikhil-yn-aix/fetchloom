@@ -19,7 +19,7 @@ fetchloom sync [options]
 |---|---|
 | `--force` | replace conflicting files at locked paths, including untracked files |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
-| `-n`, `--dry-run` | show what sync would lock, download, place and remove, and change nothing on disk |
+| `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
 [global options](README.md#global-options) also apply.
 
@@ -63,7 +63,7 @@ if cache registration fails, sync still succeeds with a warning that gc may not 
 
 ## dry run
 
-`sync --dry-run`, or `-n`, prints what sync would change and changes nothing on disk: no file downloads, no `data.lock` or state writes, nothing placed or deleted in `data/`, and no cache writes. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file, 4 MiB at most, which is not kept. stderr after a dataset `cows` was added to `data.toml`, matching a test:
+`sync --dry-run`, or `-n`, prints what sync would change without downloading files for placement, writing `data.lock` or state, changing `data/` or writing the cache. explicit `FETCHLOOM_TRACE` output is still created or truncated. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr after a dataset `cows` was added to `data.toml`, matching a test:
 
 ```text
  Would lock cows · 1 file in data.lock

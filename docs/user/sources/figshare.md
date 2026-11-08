@@ -13,7 +13,7 @@ fetchloom get figshare:34744689@1
 |---|---|
 | `figshare:34744689@1` | request article version 1 |
 | a figshare article link | resolve the article and pin its version |
-| an institutional figshare article link | use the article resolver for that host |
+| an institutional figshare article link | extract the article id and use figshare's API |
 
 article links keep the title, article id and optional version in their own path positions. a numeric title does not become an id, and an explicit version stays attached to that article. modern type/title/id links and older title/id links are accepted. other portal pages are refused, including on institutional hosts. file-download endpoints, including `/ndownloader/` links, remain ordinary file URLs.
 

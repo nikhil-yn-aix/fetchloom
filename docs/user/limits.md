@@ -11,7 +11,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | private and requester-pays buckets | use the provider's own tools; fetchloom reads [public buckets](sources/buckets.md) only |
 | search beyond hugging face, kaggle and zenodo | choose a reference from the source's own catalog |
 | plugins | source adapters live in the fetchloom crate |
-| accounts, hosting and telemetry | fetchloom is a local command |
+| fetchloom accounts, hosting and telemetry | fetchloom is a local command |
 | controlled-data access approval | request access from the institution or owner |
 | 7z and rar extraction | keep the packed file and use another decoder |
 | recursive archive extraction | nested archives remain files |

@@ -31,6 +31,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
 - [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior
+- [compatibility](docs/user/reference/compatibility.md): configured platform targets, terminals and build requirements
 - [cache folder](docs/user/reference/cache-folder.md): shared cache layout, durable records, URL fingerprints and unreadable change-mark errors
 - [project folder](docs/user/reference/project-folder.md): owner records, placement state and metadata publication
 - [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
@@ -52,7 +53,3 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [style](docs/dev/style.md): prose, code and commit conventions
 - [decisions](docs/dev/decisions.md): design choices
 - [roadmap](docs/dev/roadmap.md): future work
-
-placement cancellation: the first ctrl-c stops new placements and removals and checks between copy blocks. completed files stay; unpublished copies are discarded. sync records completed placements as incomplete so the next run can finish.
-
-get preflights every target in an output folder before removing earlier versions. a later conflict or missing cached object preserves earlier files.

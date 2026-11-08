@@ -26,6 +26,8 @@ fetchloom get [options] <link>...
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed |
 
+`-o -` is refused: get writes files to a folder, not their contents to stdout.
+
 [global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote them. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
 ## what happens
@@ -37,7 +39,7 @@ fetchloom get [options] <link>...
 
 a single file defaults to a folder named after its filename stem. several files use a name derived from their title or reference. a direct download's `Content-Disposition` filename, including one received after redirects, replaces the name guessed from the URL. unsafe characters are replaced and names shortened for filesystem limits.
 
-stderr excerpt for a single-file download on a filesystem that supports links:
+stderr excerpt from a snapshot for a single-file download on a filesystem that supports links. `[time]` replaces the measured duration:
 
 ```text
  Downloaded iris.csv · 81 B in [time]
@@ -54,7 +56,7 @@ with several links, each must be a link, a DOI or an id; a bare word among them 
 
 batch destination checks use those final folders, after downloads have supplied filenames. rerunning the same ordered batch reuses its suffixed folders. a refused destination can leave downloaded bytes in the cache.
 
-a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a run where the first link was fetched before and the second answers 404:
+a link that fails is reported on a `Failed` line while the others finish. the run then ends with one error naming each failed link, and exits with the code of the first failed link in the order given. links already placed stay in place. stderr from a snapshot where the first link is cached and the second answers 404. `[port]` replaces the fixture server's port:
 
 ```text
     Checked iris.csv · unchanged on 127.0.0.1
@@ -79,7 +81,7 @@ a list always runs as several links, even when it holds one, so `-o` names the f
 
 ## checking a hash
 
-`--sha256 <hex>` takes the 64 hex digits a publisher states for a file. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed. the details show the first 12 digits of the expected and received hashes.
+`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed. the details show the first 12 digits of the expected and received hashes.
 
 ## existing folders
 

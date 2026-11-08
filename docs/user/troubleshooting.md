@@ -20,7 +20,7 @@ fetchloom --version -v >> fetchloom-debug.txt
 
 on windows, run these lines in cmd or powershell 7; windows powershell 5.1 rewrites redirected stderr. attach `fetchloom-debug.txt`, the exit code, and the `data.toml` and `data.lock` entries for the dataset. debug lines say whether each file came from the cache or a download, why a placed file was hashed again, which placement method was used and why a better one was given up, which host a stored credential was sent to, and each retry and redirect.
 
-logs never include a token or password: a credential is named by its host and header only, and a login or secret query value in a link shows as `***`. local paths and dataset references do appear, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
+credentials are logged by host and header, not by value. URL logins and recognized secret fields show as `***`; arbitrary secret fields cannot be identified reliably. local paths and dataset references appear too, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
 
 ## errors
 
@@ -93,7 +93,7 @@ move the project outside synced storage if you want fetchloom to try hardlinks. 
 
 restore a broken or older lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a newer lock version requires a newer fetchloom.
 
-a failed `add` attempts to restore both `data.toml` and `data.lock`. if either restoration fails, follow the named file's recovery details and decode its backup JSON string. cached downloads and files already placed can remain.
+a failed `add` attempts to restore both `data.toml` and `data.lock`. if either restoration fails, restore the metadata from the named recovery file under `.fetchloom/`. it holds the original bytes, not a JSON string; do not paste its contents into logs, since they may contain credentials. cached downloads and files already placed can remain.
 
 if `remove` changed metadata but could not delete files, fix the reported local error and run sync to finish removal.
 

@@ -65,9 +65,9 @@ random names use 16 hexadecimal digits. unclaimed loose `.new` files use the age
 
 partial JSON records have `url`, `received`, `sha256`, `length` and the same `validators` object. `url` uses the same fingerprint, so signed-link credentials stay out of records. `received` is the checkpoint byte count; `sha256` hashes that prefix; `length` is the total file size stated by the response, or null.
 
-lookup requires the matching fingerprint and restores the request URL only in memory. plaintext URL records are not accepted. cache bodies and other metadata are not sanitized output.
+lookup requires the matching fingerprint and restores the request URL only in memory. cache bodies and other metadata are not sanitized output.
 
-`ranges` lists pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; it is an empty array when there are none. every declared URL, validator and partial-record field is required. optional values are explicit nulls, not missing fields. incomplete records are discarded as hints; there is no record migration.
+`ranges` lists pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; it is an empty array when there are none. every declared URL, validator and partial-record field is required. optional values are explicit nulls, not missing fields. incomplete records are discarded as hints.
 
 progress is saved about once a second while writing. a complete known-size download of at most 1 MiB, started at offset 0 without retained ranges, needs no closing checkpoint; an interrupted prefix still gets one. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 

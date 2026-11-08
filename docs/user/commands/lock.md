@@ -31,7 +31,7 @@ fetchloom lock [options]
 
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
-`lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents.
+`lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.
 
 ## upgrading
 

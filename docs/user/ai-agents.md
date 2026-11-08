@@ -21,9 +21,9 @@ agents that read skills from another folder take the same `SKILL.md`.
 - `errors[0].kind` and the [exit code](reference/exit-codes.md) say what failed; `errors[0].fix` is the command to run next, when there is one.
 - `fetchloom help --json` describes every command, option and example in one call.
 - without a terminal fetchloom never asks: it refuses to guess between search results, needs `--yes` for downloads over 1 GiB, and names `fetchloom auth login` instead of asking for a key.
-- an agent that runs commands in a real terminal is treated the same way when it says so: `VSCODE_AGENT`, `CLAUDECODE`, `AI_AGENT`, `CODEX_SANDBOX`, `GEMINI_CLI`, `CURSOR_AGENT` and a few others turn off questions, colors and animated progress. a harness that sets none of them can set `AI_AGENT=1`.
-- keys stay out of the agent's hands. fetchloom reads the keys the source's own tools saved, and signing in happens in your terminal, not the agent's.
+- an agent that runs commands in a real terminal is treated the same way when it says so: `VSCODE_AGENT`, `CLAUDECODE`, `AI_AGENT`, `CODEX_SANDBOX`, `GEMINI_CLI`, `CURSOR_AGENT` and a few others turn off questions, automatic colors and animated progress. a harness that sets none of them can set `AI_AGENT=1`.
+- keep keys out of the agent's conversation. fetchloom reads keys saved by the source's tools; sign in in your own terminal rather than pasting a key into chat.
 
 ## why there is no MCP server
 
-an agent with a shell does better calling a CLI it can read about than a separate server whose tool list fills its context, and fetchloom's commands already return typed results. an MCP server would only help chat apps with no shell, and fetchloom does not ship one for now.
+fetchloom's CLI already returns structured JSON to an agent with a shell. fetchloom ships no MCP server, so a chat application without shell access needs another way to run the executable.

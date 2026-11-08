@@ -21,7 +21,7 @@ fetchloom add [options] <link>
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false` |
-| `-n`, `--dry-run` | show what adding would change, and change nothing on disk |
+| `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
 [global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote several words, as in `fetchloom add "fashion mnist"`. the manifest stores the chosen canonical id, not the search words.
 
@@ -35,7 +35,7 @@ fetchloom add [options] <link>
 
 there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
 
-stderr for a single-file addition, matching a test snapshot:
+stderr for a single-file addition, matching a test snapshot. `[time]` replaces the measured duration:
 
 ```text
  Downloaded iris.csv · 32 B in [time]
@@ -51,7 +51,7 @@ if a new addition fails to sync, fetchloom attempts to restore both `data.toml` 
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do and writes nothing: no `data.toml`, `data.lock`, `.gitignore` or `data/`, no downloads and no new cache. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file, 4 MiB at most, which is not kept. stderr from a git repository with no manifest yet, matching a test snapshot:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. explicit `FETCHLOOM_TRACE` output is still created or truncated. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr from a git repository with no manifest yet, matching a test snapshot:
 
 ```text
  Would lock iris · 1 file in data.lock

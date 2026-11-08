@@ -93,4 +93,6 @@ a key that holds a character no request header can carry, such as a line break, 
 
 ## JSON
 
-`auth` returns `result.accounts`, each with `account`, `signed_in`, `from`, `user` and `valid`. `auth login` returns `account`, `user` and `saved_to`. `auth logout` returns `account` and `removed_from`. secrets never appear.
+`auth` returns `result.accounts`. `account` is a string id; `signed_in` is true when a key was found, even if it is refused. `from` and `user` are strings or null. `valid` is true or false after a source check, or null when no check was made, including offline or for an unsendable key.
+
+`auth login` returns `account`, nullable `user` and nullable `saved_to`. `auth logout` returns `account` and nullable `removed_from`. a null destination means no key was saved or removed. secrets never appear.

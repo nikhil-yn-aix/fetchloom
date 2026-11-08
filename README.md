@@ -27,7 +27,7 @@ fetchloom --version
 
 [getting started](docs/user/getting-started.md) walks through installing rust on windows, macos and linux, a first project and how to undo it.
 
-after the first release, these will install a prebuilt `fetchloom` for x86_64 or arm64 and check it against the release's `SHA256SUMS`:
+after the first release, these shell installers will install a prebuilt `fetchloom` for x86_64 or arm64 and check it against the release's `SHA256SUMS`:
 
 ```sh
 # linux and macos
@@ -38,6 +38,8 @@ curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/i
 # windows powershell
 powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
 ```
+
+the python package will install the executable and [python helper](docs/user/scripting.md#python-helper):
 
 ```sh
 # python 3.9 or later
@@ -66,7 +68,7 @@ a name searches hugging face, kaggle and zenodo. a link works as well:
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 ```
 
-that is what `fetchloom` prints with no arguments outside a project; inside one it shows the project's status.
+that is the introductory part of the welcome outside a project. it follows a version line and, at a wide terminal, a wordmark. inside a project, bare `fetchloom` shows its status.
 
 files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the python helper.
 

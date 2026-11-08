@@ -113,7 +113,7 @@ copy `data.toml` and `data.lock` to another machine, or commit them to git. leav
 fetchloom sync
 ```
 
-`sync` downloads what is missing and checks every file against `data.lock`, so you get the same bytes.
+`sync` downloads what is missing and checks every download against `data.lock`, so you get the same bytes. files it already verified are reused without hashing them again; `fetchloom cache verify` rehashes the cache when you want to be sure.
 
 with git, `add` already put `data/` in `.gitignore` when the folder was a git repository. if you start git later, run `git init` and then `fetchloom add https://huggingface.co/datasets/scikit-learn/iris` again; it reuses the dataset and writes `.gitignore`. then:
 
@@ -143,7 +143,7 @@ to remove the whole project, delete its folder.
 ## uninstall
 
 1. sign out of anything you signed in to with fetchloom, if you want those keys gone too: `fetchloom auth` lists them, and `fetchloom auth logout <account>` removes one. keys you saved with a source's own tools, such as `~/.kaggle` or the hugging face token, are shared with those tools.
-2. delete the cache folder: `%LOCALAPPDATA%\fetchloom` on windows, `~/Library/Caches/fetchloom` on macos, `~/.cache/fetchloom` on linux, or wherever `FETCHLOOM_CACHE` points.
+2. run `fetchloom -q cache` to find the cache folder, then delete it if you no longer need its bytes. this respects `FETCHLOOM_CACHE` and, on linux, an absolute `XDG_CACHE_HOME`; the [cache locations](reference/cache-folder.md#location) list the defaults.
 3. remove the program, the way you installed it:
 
 | installed with | remove with |

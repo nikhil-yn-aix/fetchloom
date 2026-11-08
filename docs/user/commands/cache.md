@@ -43,11 +43,11 @@ the kept-file hint names the retained bytes:
   hint: 4.1 KiB no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now
 ```
 
-a dry run shows the same hint. plain `fetchloom cache` ends with a similar hint when some cached bytes are unneeded. JSON reports them as `result.kept_objects` and `result.kept_bytes`. these counts exclude objects a registered project needs.
+a gc dry run shows the same hint. `cache gc` JSON reports these young unneeded objects as `result.kept_objects` and `result.kept_bytes`, excluding objects a registered project needs. plain `fetchloom cache` ends with a similar hint, but its JSON reports `bytes` and `needed`: their difference is the unneeded payload, regardless of age.
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
-gc queues a registration for removal when its manifest is missing. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection alone does not remove registrations. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
+`cache gc` removes a registration when its manifest is missing. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection skips that project but keeps its registration, in case its drive is disconnected. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 
@@ -59,7 +59,7 @@ every command that opens the cache to work with it, such as `add`, `sync`, `get`
 
 ### reminder
 
-fetchloom deletes nothing from the cache on its own, apart from a packed archive no project needs once its files are unpacked. freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when files gc would free total 1 GiB or more, says so once:
+fetchloom does not automatically collect unneeded payload objects, apart from a packed archive no project needs once its files are unpacked. abandoned staging files are cleaned during unpacking or gc. freeing bytes is `cache gc`'s, which you run on purpose. so the cache cannot grow unnoticed, after an `add`, `sync`, `remove` or `get` at a terminal, at most once a week, fetchloom checks what no project needs and, when files gc would free total 1 GiB or more, says so once:
 
 ```text
   hint: the cache holds 3.2 GiB no project needs; `fetchloom cache gc` frees it
@@ -73,7 +73,7 @@ scripts, CI and coding agents never see it, since it only runs when a person can
 fetchloom cache gc --now --dry-run
 ```
 
-`--dry-run` runs the same sweep with every deletion recorded instead of made, so it applies the same age rules and keeps the same files. the cache, partial downloads and project registrations stay as they are, and a cache that does not exist yet is not created. stderr when one unneeded 32-byte object is in the cache, matching a test:
+`--dry-run` runs the same sweep with every deletion recorded instead of made, so it applies the same age rules and keeps the same files. the cache, partial downloads and project registrations stay as they are, and a cache that does not exist yet is not created. explicit `FETCHLOOM_TRACE` output is still created or truncated. stderr when one unneeded 32-byte object is in the cache, matching a test:
 
 ```text
  Would free 1 file · 32 B from the cache

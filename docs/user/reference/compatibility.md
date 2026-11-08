@@ -1,10 +1,12 @@
 # compatibility
 
-what fetchloom runs on, what it talks to and how long each holds. [versioning](../../dev/engineering/versioning.md) covers what a new release may change.
+fetchloom supports the systems, terminals and source APIs listed below. [versioning](../../dev/engineering/versioning.md) covers what a new release may change.
 
 ## systems
 
-tier 1 means every change is built and its tests run there before it merges. tier 2 means release binaries are built there, but tests do not run.
+the system table describes configured release targets. source builds depend on their selected rust target and its runtime libraries.
+
+tier 1 means CI builds the program and runs its tests there. tier 2 means the release workflow builds binaries there, but CI does not run tests there.
 
 | system | cpu | tier | needs |
 |---|---|---|---|

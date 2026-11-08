@@ -36,7 +36,7 @@ project commands reject login details in plain URLs and recognized secret query 
 
 `get` accepts secret query values for one-off downloads. its JSON file URLs and errors mask logins and recognized keys, including malformed-link errors. recognized names include `token`, `signature` and `sig`; arbitrary secrets cannot be identified reliably.
 
-local URL records keep raw links. do not share those records or commit them. there is no general browser login or access-approval workflow.
+[local URL and partial records](../reference/cache-folder.md#url-and-partial-records) store a fingerprint of the URL, not its raw text. cache payloads and other metadata can still contain private data. there is no general browser login or access-approval workflow.
 
 ## limits
 

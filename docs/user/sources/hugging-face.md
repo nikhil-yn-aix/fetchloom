@@ -8,7 +8,7 @@ fetchloom add hf:datasets/openai/openai_humaneval@7dce6050a7d6d172f3cc5c32aa97f5
 
 ## references and pins
 
-use `hf:datasets/` followed by the repository's organization and name, with `@revision` to choose a branch, tag or commit. a branch or tag is resolved before file listing. a link to an individual commit (`/commit/<commit>`) uses that commit. a commit-history page (`/commits/<revision>`) names the repository without pinning that view.
+use `hf:datasets/` followed by the repository's organization and name, with `@revision` to choose a branch, tag or commit. `hf:org/name` is shorthand for a dataset. `hf:models/org/name` and `hf:spaces/org/name` use the same pinning rules for models and spaces; catalog search finds datasets only. a branch or tag is resolved before file listing. a link to an individual commit (`/commit/<commit>`) uses that commit. a commit-history page (`/commits/<revision>`) names the repository without pinning that view.
 
 a pasted link to a file, such as `https://huggingface.co/datasets/org/name/blob/main/data.csv`, selects that file. a link to a folder, such as `https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/sample/10BT`, selects everything below it, as `--select "sample/10BT/**"` would. `add` writes that pattern to `data.toml`, and an explicit `--select` replaces it. a file or folder link written by hand as a `ref` in `data.toml`, without `select`, narrows the dataset the same way.
 

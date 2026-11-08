@@ -57,7 +57,7 @@ placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `k
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
-`get.items` has one record for each link, in the order given on the command line and then in the `--input-file` list. each has `reference`, the link as given with a login and secret query values masked; `status`, `ok` or `error`; `folder`, the link's absolute folder or null; `files`, file records as above, empty on failure; and `error`, null on success or an object with `kind`, `message`, `details`, `help` and, for failed downloads, `failures`, in the form of `errors[]`. one link without `-i` keeps `folder` and `files` at the top as well, and fails as before, with a null `result`. several links, or any `-i` list, give a null top-level `folder` and empty `files`. when some of them fail, the run returns `error` with `result` still set: `errors[0].kind` and the exit code come from the first failed link in that order, and `errors[0].failures` names each failed link in `file`. an interruption, a refused question about the total size and a cache that cannot open return immediately with a null `result`.
+`get.items` has one record for each link, in the order given on the command line and then in the `--input-file` list. each has `reference`, the link as given with a login and secret query values masked; `status`, `ok` or `error`; `folder`, the link's absolute folder or null; `files`, file records as above, empty on failure; and `error`, null on success or an object with `kind`, `message`, `details`, `help` and, for failed downloads, `failures`, in the form of `errors[]`. one link without `-i` keeps `folder` and `files` at the top as well, and returns a null `result` on failure. several links, or any `-i` list, give a null top-level `folder` and empty `files`. when some of them fail, the run returns `error` with `result` still set: `errors[0].kind` and the exit code come from the first failed link in that order, and `errors[0].failures` names each failed link in `file`. an interruption, a refused question about the total size and a cache that cannot open return immediately with a null `result`.
 
 status arrays:
 
@@ -66,7 +66,7 @@ status arrays:
 | `unlocked` | dataset names missing from the lock or with a changed spec |
 | `removed` | dataset names in data.lock but no longer in data.toml |
 | `missing` | absent target paths |
-| `edited` | managed paths whose size or modification time changed |
+| `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
 | `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after fetchloom last knew them, and whose bytes hashing found changed; `sync` puts them back |
@@ -79,7 +79,7 @@ status lists all differences in JSON. human output limits each file category to 
 
 `cache gc` keeps objects no project needs until they are a day old by modification time, unless `--now` removes that grace period. partial downloads retain their one-day grace period. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
-`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal.
+`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this kind also covers partial cleanup failures. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
 
@@ -114,7 +114,7 @@ the work counters still count metadata requests a dry run makes to resolve chang
 | field | value |
 |---|---|
 | `reference` | canonical reference string to pass to add or get |
-| `title` | catalog title |
+| `title` | catalog title, or the repository id for hugging face |
 | `source` | `hugging face`, `kaggle` or `zenodo` |
 | `size` | byte count, or null when unknown |
 | `downloads` | catalog download count, or null |

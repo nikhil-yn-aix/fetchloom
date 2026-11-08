@@ -1,6 +1,6 @@
 ---
 name: fetchloom
-description: Find, download and pin research datasets with the fetchloom CLI. Use when a task needs a dataset from Hugging Face, Kaggle, Zenodo, figshare, OSF, Dataverse, Google Drive, Dropbox, a public S3 or GCS bucket, a DOI or a URL; when a project has data.toml or data.lock; or when code must find where a dataset lives on disk.
+description: find, download and pin research datasets with the fetchloom CLI. Use when a task needs a dataset from Hugging Face, Kaggle, Zenodo, figshare, OSF, Dataverse, Google Drive, Dropbox, a public S3 or GCS bucket, a DOI or a URL; when a project has data.toml or data.lock; or when code must find where a dataset lives on disk.
 license: Apache-2.0
 compatibility: needs fetchloom on PATH (`fetchloom --version`)
 ---
@@ -34,19 +34,21 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 - never put a token in data.toml, code or a command you show. fetchloom reads keys the source's own tools saved; if none exists, ask the user to run `fetchloom auth login <source>` in their terminal.
 - `get` checks every target in an output folder before removing earlier versions; a later conflict leaves earlier files in place.
 - `sync` keeps files a person edited and says so. `sync --force` replaces them; use it only with the user's agreement.
-- to show the user what `add`, `remove`, `sync` or `cache gc` would change before it does, add `--dry-run`. it writes nothing and downloads no dataset files, though checking a kaggle competition's rules reads its smallest file, 4 MiB at most, and keeps none of it; `result.changes` lists the paths.
+- to preview `add`, `remove`, `sync` or `cache gc`, add `--dry-run`. it does not apply project or cache changes; `result.changes` lists the paths. explicit `FETCHLOOM_TRACE` output is still written. a kaggle rules check can read its smallest file when its listed size is at most 4 MiB; wrappers can be larger, under the 64 MiB API-response limit, and none of those bytes is kept.
 
 ## reading a failure
 
-`errors[0].kind` names what went wrong, and `errors[0].fix`, when present, is the command to run next.
+`errors[0].kind` names what went wrong. `errors[0].fix`, when present, is a runnable suggestion; check that it fits the user's intended inputs before running it.
+
+`status` differences and sync conflicts still exit 0. inspect all nine status arrays and `result.placement.kept` before using inputs; a successful `path` is not proof that its bytes match the lock.
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; for `lock.outdated`, data.toml changed, so run `fetchloom lock` |
+| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; for `lock.outdated`, the lock is missing or differs from the manifest, so review the inputs before running `fetchloom lock` |
 | 2 | `usage` | fix the command line as `fix` or `help` says |
 | 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose a candidate from `result.candidates` |
-| 20 | `network.*`, `offline.missing` | retry later, or drop `--offline` |
-| 30 | `integrity.mismatch` | from `add`, `sync` or `get`: the source changed its bytes; tell the user, do not force. from `cache verify`: a file in the cache was edited, often through a project's `data/`; `fetchloom sync --force` puts the pinned bytes back, so ask the user first |
+| 20 | `network.*`, `offline.missing` | retry later; to go online, remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |
+| 30 | `integrity.mismatch` | the bytes, size, archive tree or stated hash differ from the expected pin. check any supplied `--sha256` and the source; this does not prove upstream data changed. `cache verify` means cached bytes differ, possibly through a shared hardlink. preserve edits and ask before `sync --force` restores the pins |
 | 40 | `auth.required` | ask the user to sign in in their own terminal with the command in `help`, or to accept terms at the page in `help` |
 | 50 | `local.*`, `project.invalid` | a local I/O or resource failure, file conflict, or broken data.toml; report the cause |
 | 130 | `interrupted` | the run was stopped; completed placements stay, unfinished copies are discarded; run it again |
