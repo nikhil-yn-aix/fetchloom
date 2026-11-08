@@ -2609,13 +2609,8 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let asked = sandbox.command(&["add", &server.url]);
     for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
-        let Some((exit, screen)) = crate::support::typed(
-            &home,
-            &asked,
-            "-isig",
-            "start the project there anyway?",
-            keys,
-        )?
+        let Some((exit, screen)) =
+            crate::support::typed(&home, &asked, "-isig", "start one anyway?", keys)?
         else {
             return Ok(());
         };

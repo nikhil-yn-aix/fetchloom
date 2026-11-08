@@ -306,7 +306,7 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
     );
     match context
         .output
-        .ask_yes_no(&format!("{why}. start the project there anyway?"), false)
+        .ask_yes_no(&start_question(root, what), false)
         .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
@@ -323,6 +323,15 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
             "{elsewhere}, or add --yes to start the project there anyway"
         ))),
     }
+}
+
+/// the question before a project starts in `root`, which is `what`: the home folder or the
+/// root of a disk.
+fn start_question(root: &Path, what: &str) -> String {
+    format!(
+        "{} is {what}.\na project there takes in every folder below it. start one anyway?",
+        root.display()
+    )
 }
 
 /// `error`, once it says what state the project is in when a stop ended the add, which the stop's
@@ -2226,6 +2235,23 @@ mod tests {
         context.yes = true;
         assert!(start_here(&context, root, None).is_ok());
         assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
+    }
+
+    #[test]
+    fn the_question_before_a_project_in_home_fits_an_80_column_terminal() {
+        for (root, what) in [
+            ("/home/ada", "your home folder"),
+            ("/", "the root of a disk"),
+        ] {
+            let question = start_question(std::path::Path::new(root), what);
+            for line in format!("{question} [y/N] ").lines() {
+                assert!(
+                    line.chars().count() < 80,
+                    "{} columns: {line}",
+                    line.chars().count()
+                );
+            }
+        }
     }
 
     #[test]
