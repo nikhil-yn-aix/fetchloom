@@ -40,6 +40,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |
 | [CI](ci.md) | keep data between CI jobs so it downloads once per lock change |
+| [clusters](hpc.md) | use a cluster's home and scratch disks, many jobs and offline nodes |
 | [AI agents](ai-agents.md) | let a coding agent find and fetch data safely |
 | [windows](windows.md) | choose drives, avoid synced-folder surprises and handle paths |
 | [macos](macos.md) | find the cache, use apfs clones and icloud drive, and handle unicode names |
