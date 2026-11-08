@@ -360,30 +360,40 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
     set_time(&placed, second)?;
 
     let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let links = sandbox.links()?;
+    if links.hardlink && !links.reflink {
+        // a hardlink is the cache's own copy, so the edit changed what every project reads, and
+        // the sync path runs downloads the file again to put it back
+        assert!(status.contains("Damaged data/iris/iris.csv"), "{status}");
+        let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
+        assert!(
+            path.contains("data/iris/iris.csv was put back as pinned"),
+            "path trusted the file without syncing: {path}"
+        );
+        assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
+        assert_eq!(server.requests().len(), 2);
+        return Ok(());
+    }
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
     let path = text(&sandbox.run(&["path", "iris"])?.stderr)?;
-    // a project's own copy "has changed", a shared hardlink "was edited"
     assert!(
-        path.contains("data/iris/iris.csv has changed")
-            || path.contains("data/iris/iris.csv was edited"),
+        path.contains("data/iris/iris.csv has changed"),
         "path trusted the file without syncing: {path}"
     );
-    // the sync path ran found the object behind a hardlink changed and marked it, which must
-    // not turn this project's own edit into one made elsewhere
     let synced = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(
-        synced.contains("data/iris/iris.csv has changed")
-            || synced.contains("data/iris/iris.csv was edited"),
+        synced.contains("data/iris/iris.csv has changed"),
         "{synced}"
     );
     assert_eq!(fs::read(&placed)?, edited, "the edit stays without --force");
     let forced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
     assert_eq!(fs::read(&placed)?, V1, "the locked bytes are back");
-    // only an edit through a hardlink reaches the cached object, which is then downloaded again
-    let links = sandbox.links()?;
-    let hardlinked = links.hardlink && !links.reflink;
-    assert_eq!(server.requests().len(), if hardlinked { 2 } else { 1 });
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "a project's own copy shares nothing"
+    );
     Ok(())
 }
 
@@ -583,7 +593,10 @@ fn a_sync_with_nothing_to_do_writes_nothing() -> Result {
 #[test]
 fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     // the state the first sync writes must be newer than the file, even on a coarse clock
@@ -615,11 +628,14 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"sepal_length,species\n5.1,setosa\nedited\n")?;
     let (said, third) = sync("third.json")?;
-    assert!(
-        said.contains("data/iris/iris.csv has changed")
-            || said.contains("data/iris/iris.csv was edited"),
-        "{said}"
-    );
+    // a hardlink is the cache's own copy, which the edit changed, so it is put back
+    let links = sandbox.links()?;
+    let told = if links.hardlink && !links.reflink {
+        "data/iris/iris.csv was put back as pinned"
+    } else {
+        "data/iris/iris.csv has changed"
+    };
+    assert!(said.contains(told), "{said}");
     assert!(plans(&third), "{third}");
     Ok(())
 }
@@ -731,6 +747,21 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
 /// file, with iris then edited through the first project's link. nothing, on a filesystem
 /// without hardlinks.
 fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBuf>> {
+    let Some(other) = shared(sandbox, server)? else {
+        return Ok(None);
+    };
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    edit(
+        &sandbox.work().join("data").join("iris").join("iris.csv"),
+        &edited,
+    )?;
+    Ok(Some(other))
+}
+
+/// a project in `work` and a second one in `other`, both holding iris as a link to one cached
+/// file. nothing, on a filesystem without hardlinks.
+fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBuf>> {
     if !sandbox.links()?.hardlink {
         return Ok(None);
     }
@@ -763,13 +794,66 @@ fn shared_and_edited(sandbox: &Sandbox, server: &Server) -> Result<Option<std::p
             fs::write(&state, fs::read(&state)?)?;
         }
     }
-    let mut edited = V1.to_vec();
-    edited[0] = b'S';
-    edit(
-        &sandbox.work().join("data").join("iris").join("iris.csv"),
-        &edited,
-    )?;
     Ok(Some(other))
+}
+
+/// the case a person met: two projects hold one cached file through links, and someone makes it
+/// writable and appends to it through the first project's link, which changes the cache's own
+/// copy. the other project's status calls that damage to the cached copy, not its own edit, and
+/// its plain sync downloads the file again and puts it back. the first project's plain sync then
+/// puts its link back too, since it is still the very copy the cache found changed.
+#[test]
+fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared(&sandbox, &server)? else {
+        return Ok(());
+    };
+    let mine = sandbox.work().join("data").join("iris").join("iris.csv");
+    let theirs = other.join("data").join("iris").join("iris.csv");
+    let mut grown = V1.to_vec();
+    grown.extend_from_slice(b"local tweak\n");
+    edit(&mine, &grown)?;
+
+    let status = sandbox.command_in(&other, &["--json", "status"]).output()?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        report["result"]["edited_elsewhere"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    assert_eq!(
+        report["result"]["edited"],
+        serde_json::json!([]),
+        "{report}"
+    );
+    let synced = sandbox.command_in(&other, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&theirs)?, V1, "{stderr}");
+    assert!(!stderr.contains("left unchanged"), "{stderr}");
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed file is fetched again"
+    );
+
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&mine)?, V1, "{stderr}");
+    assert_eq!(server.requests().len(), 2, "{stderr}");
+    for project in [sandbox.work(), other] {
+        let status = sandbox.command_in(&project, &["status"]).output()?;
+        assert_eq!(
+            text(&status.stderr)?,
+            "         Ok everything matches data.lock\n"
+        );
+    }
+    Ok(())
 }
 
 /// gives the fixture real hardlinks even when the filesystem chose reflinks or copies.
@@ -903,13 +987,17 @@ fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
     );
     let status = sandbox.command_in(&other, &["status"]).output()?;
     let stderr = text(&status.stderr)?;
-    assert!(stderr.contains("Edited data/iris/iris.csv"), "{stderr}");
+    assert!(
+        stderr
+            .contains("Damaged data/iris/iris.csv · linked to the cache's copy, which was changed"),
+        "{stderr}"
+    );
     Ok(())
 }
 
 /// on windows a folder's listing keeps the old size and time of a hardlink edited through another
 /// name, so fetchloom opens each hardlink to see it as it is. the other project then finds the
-/// edit at once, as on linux, and keeps it as an edit that `--force` puts back.
+/// edit at once, as on linux, and its plain sync puts the pinned file back.
 #[cfg(windows)]
 #[test]
 fn another_projects_edit_through_a_link_is_seen_at_once_on_windows() -> Result {
@@ -925,17 +1013,13 @@ fn another_projects_edit_through_a_link_is_seen_at_once_on_windows() -> Result {
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("data/iris/iris.csv was edited, and the file is shared"),
+        stderr.contains("data/iris/iris.csv was put back as pinned"),
         "{stderr}"
     );
-    let forced = sandbox.command_in(&other, &["sync", "--force"]).output()?;
-    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
     assert_eq!(
         fs::read(other.join("data").join("iris").join("iris.csv"))?,
         V1
     );
-    let edited = fs::read(sandbox.work().join("data").join("iris").join("iris.csv"))?;
-    assert_eq!(edited[0], b'S', "the project that made the edit keeps it");
     Ok(())
 }
 
@@ -992,7 +1076,7 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
         "{stderr}"
     );
     assert!(
-        stderr.contains("data/iris/iris.csv is a linked file whose contents changed"),
+        stderr.contains("data/iris/iris.csv was put back as pinned"),
         "{stderr}"
     );
     let after = sandbox.command_in(&other, &["status"]).output()?;
@@ -1010,10 +1094,11 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
 }
 
 /// a coarse clock can give a project's state the same time as the link it records, and then an
-/// edit that keeps the size and time is racy: hashing finds it, but neither that nor a later
-/// change mark says which project made it. the edit stays with a warning until --force.
+/// edit that keeps the size and time is racy: hashing finds it. the link is still the cache's
+/// copy, so the edit changed what every project sharing it reads, and a plain sync puts the
+/// pinned file back.
 #[test]
-fn a_racy_edit_of_a_marked_link_stays_until_forced() -> Result {
+fn a_racy_edit_through_a_shared_link_is_put_back() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(
         "/files/iris.csv",
@@ -1042,15 +1127,11 @@ fn a_racy_edit_of_a_marked_link_stays_until_forced() -> Result {
 
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
-    assert_eq!(fs::read(&placed)?[0], b'S', "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
     assert!(
-        stderr
-            .contains("data/iris/iris.csv was edited, and the file is shared with other projects"),
+        stderr.contains("data/iris/iris.csv was put back as pinned"),
         "{stderr}"
     );
-    let forced = sandbox.run(&["sync", "--force"])?;
-    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
-    assert_eq!(fs::read(&placed)?, V1);
     Ok(())
 }
 

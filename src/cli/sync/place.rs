@@ -38,7 +38,8 @@ pub(crate) struct Placement {
     pub(crate) unchanged: u64,
     /// files left alone: changed by hand, or never placed by fetchloom.
     pub(crate) kept: Vec<Kept>,
-    /// files replaced because another project changed the bytes they shared through a link.
+    /// files replaced because they were linked to the cache's copy, which an edit through a
+    /// link changed, here or in another project.
     pub(crate) restored: Vec<String>,
 }
 
@@ -108,8 +109,9 @@ enum Unwanted {
 pub(crate) enum Reason {
     /// fetchloom placed it, and it changed since.
     Changed,
-    /// fetchloom placed it as a hardlink to the cache, and it changed since. the change is in
-    /// every project sharing that link, and fetchloom cannot tell which one made it.
+    /// fetchloom placed it as a hardlink to the cache, and it changed since, while other names
+    /// still share it. the cache neither holds nor records that copy, so nothing tells which
+    /// project made the change.
     Shared,
     /// fetchloom did not place it, and it holds other bytes than the lock pins.
     Foreign,

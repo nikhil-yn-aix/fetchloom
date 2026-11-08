@@ -217,41 +217,62 @@ impl Survey {
             .filter(|path| !self.state.files.contains_key(*path))
     }
 
-    /// files placed as hardlinks whose object the cache marked as changed after fetchloom last
-    /// knew them to hold their bytes, while they still show the size and time they were placed
-    /// with, so the mark is the only sign of an edit made through another project. the link may also name
-    /// an older copy of the object than the one that changed, so only hashing settles it. a mark
-    /// within a coarse clock's step of that time is in doubt too, as its time may be cut down. a
-    /// link that is the very file a repair put in place is that copy, which the cache trusts; a
-    /// shared time alone proves nothing, since two files can carry the same coarse time.
+    /// files placed as hardlinks that only hashing can tell intact from changed, with the cache's
+    /// copy of their bytes in doubt.
+    ///
+    /// one kind still shows the size and time it was placed with, while its object was marked as
+    /// changed after fetchloom last knew the link to hold its bytes, so the mark is the only sign
+    /// of an edit made through another project. the link may also name an older copy of the
+    /// object than the one that changed. a mark within a coarse clock's step of that time is in
+    /// doubt too, as its time may be cut down. a link that is the very file a repair put in place
+    /// is that copy, which the cache trusts; a shared time alone proves nothing, since two files
+    /// can carry the same coarse time.
+    ///
+    /// the other kind changed, and is still the cache's own copy, or the very copy a mark records
+    /// the cache found changed. an edit through any link to that copy, in this project or
+    /// another, changed what every project sharing it reads, so it is damage to the cached copy
+    /// rather than this project's own file. a link replaced by a file of the project's own is
+    /// another file, and stays an edit.
     pub(crate) fn doubted(&self, root: &Path, cache: &Cache) -> Result<Vec<String>, Error> {
         let marks = cache.marks()?;
-        if marks.is_empty() {
-            return Ok(Vec::new());
-        }
         Ok(self
             .state
             .files
             .iter()
             .filter(|(path, placed)| {
-                placed.method == Method::Hardlink
-                    && marks.get(&placed.sha256).is_some_and(|mark| {
+                if placed.method != Method::Hardlink {
+                    return false;
+                }
+                let Some(seen) = self.disk.get(*path) else {
+                    return false;
+                };
+                let mark = marks.get(&placed.sha256);
+                let is_object = || {
+                    same_file::is_same_file(
+                        root.join(path.as_str()),
+                        cache.object_path(&placed.sha256),
+                    )
+                    .unwrap_or(false)
+                };
+                let changed = *seen != placed.look
+                    || (!self.edited.is_empty() && self.edited.contains(*path));
+                if !changed {
+                    return mark.is_some_and(|mark| {
                         cache::may_follow(mark.found, placed.look.modified.max(placed.checked))
-                            && !(mark.replacement == Some(placed.look.modified)
-                                && same_file::is_same_file(
-                                    root.join(path.as_str()),
-                                    cache.object_path(&placed.sha256),
-                                )
-                                .unwrap_or(false))
+                            && !(mark.replacement == Some(placed.look.modified) && is_object())
+                    });
+                }
+                is_object()
+                    || mark.is_some_and(|mark| {
+                        cache::Identity::of(&root.join(path.as_str()))
+                            .is_ok_and(|copy| mark.copies.contains(&copy))
                     })
-                    && self.disk.get(*path) == Some(&placed.look)
-                    && !self.edited.contains(*path)
             })
             .map(|(path, _)| path.clone())
             .collect())
     }
 
-    /// hashes the files a mark puts in doubt, separating changed links from intact ones.
+    /// hashes the files [`Survey::doubted`] names, separating changed links from intact ones.
     /// an unreadable file stops the check.
     pub(crate) fn check_doubted(&mut self, root: &Path, cache: &Cache) -> Result<(), Error> {
         let doubted = self.doubted(root, cache)?;
@@ -829,6 +850,75 @@ mod tests {
                 "{seconds}"
             );
         }
+    }
+
+    /// a link that changed is damage to the cached copy while it is still the cache's own copy,
+    /// or the copy a mark records the cache found changed after a repair gave the object a new
+    /// one. a file the project put at the link's name is its own edit, which no hash is needed for.
+    #[test]
+    fn a_changed_link_that_is_the_cached_copy_is_doubted_and_found_damaged() {
+        use crate::cache::tests::{hardlinks, rewrite, seal, store};
+
+        let dir = tempfile::tempdir().unwrap();
+        if !hardlinks(dir.path()) {
+            return;
+        }
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        for name in ["mine", "theirs", "replaced"] {
+            fs::hard_link(&object, project.root.join("data").join(name)).unwrap();
+        }
+        let records: Vec<_> = ["mine", "theirs", "replaced"]
+            .iter()
+            .map(|name| {
+                let path = format!("data/{name}");
+                let placed = record(&project.root, &path, b"good", Method::Hardlink);
+                (path, placed)
+            })
+            .collect();
+        let replaced = project.root.join("data/replaced");
+        fs::remove_file(&replaced).unwrap();
+        fs::write(&replaced, b"a file of its own").unwrap();
+        rewrite(
+            &project.root.join("data/mine"),
+            b"good, edited through a link",
+        );
+        seal(&object);
+        let surveyed = || {
+            let mut survey = Survey::read(&project, "data", Threads::default());
+            survey.state.files.extend(records.iter().cloned());
+            survey
+        };
+
+        let mut survey = surveyed();
+        assert_eq!(
+            survey.doubted(&project.root, &cache).unwrap(),
+            ["data/mine", "data/theirs"]
+        );
+        survey.check_doubted(&project.root, &cache).unwrap();
+        assert_eq!(
+            survey.elsewhere,
+            HashSet::from(["data/mine".to_owned(), "data/theirs".to_owned()])
+        );
+
+        assert!(!cache.verify(&stored.digest).unwrap());
+        assert!(store(&cache, b"good").new);
+        fs::remove_file(project.root.join("data/mine")).unwrap();
+        fs::hard_link(&object, project.root.join("data/mine")).unwrap();
+        let mut survey = surveyed();
+        survey.state.files.get_mut("data/mine").unwrap().look =
+            Look::of(&fs::metadata(project.root.join("data/mine")).unwrap());
+        assert_eq!(
+            survey.doubted(&project.root, &cache).unwrap(),
+            ["data/theirs"]
+        );
+        survey.check_doubted(&project.root, &cache).unwrap();
+        assert_eq!(survey.elsewhere, HashSet::from(["data/theirs".to_owned()]));
     }
 
     /// a repair replaces a changed object. its mark must still reach a link to the old copy that

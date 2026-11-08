@@ -55,7 +55,7 @@ pub(super) fn tell(
     warn_kept(output, placement);
     for path in &placement.restored {
         output.warn(&format!(
-            "{path} is a linked file whose contents changed, so the pinned file was restored"
+            "{path} was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml"
         ));
     }
 }
@@ -104,7 +104,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     warn_kept(output, placement);
     for path in &placement.restored {
         output.warn(&format!(
-            "{path} is a linked file whose contents changed, so the pinned file would be restored"
+            "{path} would be put back as pinned: it is linked to the cache's copy, which was changed"
         ));
     }
 }

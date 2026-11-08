@@ -379,7 +379,7 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     );
     if checked.stuck.is_empty() {
         return Err(error.help(if checked.unreadable.is_empty() {
-            "run `fetchloom sync` in each project. a project whose own linked file holds the changed bytes keeps it as an edit; there, save any change you need, then run `fetchloom sync --force`"
+            "run `fetchloom sync` in each project; it puts the pinned file back wherever a project's file is linked to a changed copy"
         } else {
             "close programs using the unreadable files or check their permissions, then run `fetchloom cache verify` again and `fetchloom sync` in each project"
         }));

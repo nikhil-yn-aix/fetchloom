@@ -53,7 +53,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
-placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced paths whose bytes another project changed through a shared hardlink. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks whose edit is shared with the cache, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced hardlinks that were the cache's copy of their bytes, or the copy the cache found changed, after an edit through a link, here or in another project, changed it. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks shared with other projects whose shared copy the cache no longer knows, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
@@ -69,7 +69,7 @@ status arrays:
 | `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
-| `edited_elsewhere` | managed hardlinks showing their recorded size and modification time, whose object the cache marked as changed after fetchloom last knew them, and whose bytes hashing found changed; `sync` puts them back |
+| `edited_elsewhere` | managed hardlinks whose bytes hashing found changed while they are the cache's copy of those bytes: still the cached object, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them. an edit through any link, in this project or another, changes them all; `sync` puts them back |
 | `extra` | scanned paths outside the known targets |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 

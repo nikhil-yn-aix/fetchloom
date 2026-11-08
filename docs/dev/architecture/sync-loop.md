@@ -36,7 +36,7 @@ kept entries move from the old lock into the new one instead of being copied. `r
 
 ### hash files a clock cannot distinguish
 
-racy means a file's recorded modification time is at least as new as the state file's own time. on a coarse clock, an edit during the same tick can leave both size and time unchanged. `Survey::hash_racy` hashes those apparent matches before trusting them. when the data folder and `.fetchloom` sit on different devices, the data folder's clock may be the coarser one, such as fat's, which cuts times down to two seconds, so the state's time is moved two seconds earlier before the comparison. a racy hardlink found edited is kept and warned about, even when a change mark follows, since fetchloom cannot tell whose edit it is.
+racy means a file's recorded modification time is at least as new as the state file's own time. on a coarse clock, an edit during the same tick can leave both size and time unchanged. `Survey::hash_racy` hashes those apparent matches before trusting them. when the data folder and `.fetchloom` sit on different devices, the data folder's clock may be the coarser one, such as fat's, which cuts times down to two seconds, so the state's time is moved two seconds earlier before the comparison. a racy hardlink found edited that is still the cache's copy, or a copy a change mark records, is damage to that shared copy, so sync puts it back; any other racy edit is kept and warned about.
 
 ```mermaid
 flowchart TD

@@ -42,13 +42,19 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |
 | `outdated` | an unchanged managed file needs a new pin or writable placement |
-| `edited_elsewhere` | a shared hardlink was marked changed and its bytes differ |
+| `edited_elsewhere` | a hardlink to the cache's copy holds other bytes, because an edit through a link, here or in another project, changed that shared copy |
 | `extra` | a scanned path is outside known targets |
 | `not_unpacked` | an archive's member record is unavailable here |
 
 files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
 
-a visibly changed hardlink appears as edited, with the path followed by `· changed through a hardlink other projects may share`. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
+files placed as hardlinks are the cache's own copy of their bytes, which every project using that file shares. an edit made in place through any of those links, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back:
+
+```text
+    Damaged data/iris/iris.csv · linked to the cache's copy, which was changed
+```
+
+this holds while the file is still the cache's copy, or the very copy the cache found changed, even after another project's sync gave the cache a new one. a file saved anew, as most editors save, is your own file and stays an edit. a changed hardlink whose shared copy the cache no longer knows appears as edited, followed by `· changed through a hardlink other projects may share`; sync keeps it with reason `shared`, as [local changes](sync.md#local-changes) describes.
 
 human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files placed from it can also appear as extra.
 
@@ -61,6 +67,6 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 | symptom | cause | fix |
 |---|---|---|
 | exit 0 despite missing files | differences are results, not command failures | inspect arrays in JSON |
-| a file shows as edited that you did not touch | another project edited the hardlink you share | `sync --force` puts the original back; use `copy = true` on datasets you edit |
+| a file shows as damaged that you did not touch | an edit through another project's link changed the cache's copy you share | run `fetchloom sync`; use `copy = true` on datasets you edit |
 | fewer paths appear in the terminal | human categories are limited to 20 paths | use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |

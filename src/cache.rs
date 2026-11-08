@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) use changed::{Doubt, may_follow};
+pub(crate) use changed::{Doubt, Identity, may_follow};
 pub(crate) use failure::Failure;
 pub(crate) use held::Access;
 #[cfg(target_os = "linux")]
@@ -1064,7 +1064,7 @@ pub(crate) mod tests {
 
     /// writes `bytes` over the object at `path`, as an edit through a hardlink someone made
     /// writable does.
-    pub(super) fn rewrite(path: &Path, bytes: &[u8]) {
+    pub(crate) fn rewrite(path: &Path, bytes: &[u8]) {
         let mut permissions = fs::metadata(path).unwrap().permissions();
         #[expect(
             clippy::permissions_set_readonly_false,

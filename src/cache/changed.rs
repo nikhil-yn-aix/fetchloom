@@ -3,6 +3,7 @@
 //! no newer than their marks, or newer by less than a coarse clock's two second step.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -83,11 +84,19 @@ impl Cache {
         }
     }
 
-    /// remembers that the object for `digest` no longer held its bytes, as of now.
+    /// remembers that the object for `digest` no longer held its bytes, as of now, and which copy
+    /// it was: the file at its name, which projects that placed it as a link still name after a
+    /// repair gives the object a new copy.
     pub(crate) fn mark_changed(&self, digest: &Sha256) -> io::Result<()> {
-        let folder = self.changed_folder();
-        real_folder(&folder, FolderUse::Cache)?;
-        self.write_atomically(&folder.join(digest.hex()), b"")
+        let mut copies = self.marked_copies(digest);
+        if let Ok(found) = Identity::of(&self.object_path(digest))
+            && !copies.contains(&found)
+        {
+            copies.push(found);
+            let excess = copies.len().saturating_sub(COPIES);
+            copies.drain(..excess);
+        }
+        self.write_mark(digest, None, &copies)
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
@@ -95,12 +104,38 @@ impl Cache {
     /// that replaced the object was written, which stays out of doubt. only a finished
     /// replacement may record it.
     pub(super) fn mark_replaced(&self, digest: &Sha256, written: SystemTime) -> io::Result<()> {
+        let copies = self.marked_copies(digest);
+        self.write_mark(digest, Some(nanos(written)), &copies)
+    }
+
+    /// writes the mark for `digest`: the replacement's time on its first line, empty before a
+    /// replacement, then one line for each copy found changed.
+    fn write_mark(
+        &self,
+        digest: &Sha256,
+        replacement: Option<u64>,
+        copies: &[Identity],
+    ) -> io::Result<()> {
         let folder = self.changed_folder();
         real_folder(&folder, FolderUse::Cache)?;
-        self.write_atomically(
-            &folder.join(digest.hex()),
-            nanos(written).to_string().as_bytes(),
-        )
+        let mut text = replacement
+            .map(|written| written.to_string())
+            .unwrap_or_default();
+        for copy in copies {
+            text.push('\n');
+            text.push_str(&copy.to_string());
+        }
+        self.write_atomically(&folder.join(digest.hex()), text.as_bytes())
+    }
+
+    /// the copies an earlier mark for `digest` names, which a new mark keeps. a mark that cannot
+    /// be read names none.
+    fn marked_copies(&self, digest: &Sha256) -> Vec<Identity> {
+        let path = self.changed_folder().join(digest.hex());
+        fs::symlink_metadata(&path)
+            .and_then(|metadata| Mark::read(&path, &metadata))
+            .map(|mark| mark.copies)
+            .unwrap_or_default()
     }
 
     /// every object found changed, with when it was found, in nanoseconds since 1970 like the
@@ -220,13 +255,16 @@ impl Cache {
 }
 
 /// the record that an object no longer held its bytes, in nanoseconds since 1970.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Mark {
     /// when the change was found, which projects compare with when they last checked a link.
     pub(crate) found: u64,
     /// when the copy a repair put in place of the object was written. a hardlink to that copy
     /// shares its time.
     pub(crate) replacement: Option<u64>,
+    /// the copies found changed, oldest first. a project's link that is still one of them was
+    /// changed through some link to the cache's copy, not made anew by that project.
+    pub(crate) copies: Vec<Identity>,
 }
 
 impl Mark {
@@ -237,20 +275,94 @@ impl Mark {
                 "a change mark must be a plain file",
             ));
         }
-        let replacement = fs::read_to_string(path)?.trim().parse().ok();
+        let text = fs::read_to_string(path)?;
+        let mut lines = text.lines();
+        let replacement = lines.next().and_then(|line| line.trim().parse().ok());
         Ok(Mark {
             found: nanos(metadata.modified()?),
             replacement,
+            copies: lines.filter_map(Identity::parse).collect(),
         })
     }
 
     /// the time an object of the mark's name must be newer than to be out of doubt. a repaired
     /// object counts from before its copy was written, by three of FAT's two second steps: its
     /// time may round up one step and doubt allows another.
-    fn doubt_since(self) -> u64 {
+    fn doubt_since(&self) -> u64 {
         self.replacement
             .map_or(self.found, |written| written.saturating_sub(3 * COARSE))
     }
+}
+
+/// how many changed copies a mark remembers. each repair leaves one behind at most.
+const COPIES: usize = 16;
+
+/// a file apart from its names: its device and inode on unix, its volume and file index on
+/// windows, with its size and time. a mark keeps the copies the cache found changed, so a
+/// project can tell that its link is that very copy. the size and time keep a file made later
+/// under a number a removed copy freed from passing for it, and a copy edited again since the
+/// cache found it changed from passing for what the cache found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Identity {
+    device: u64,
+    index: u64,
+    size: u64,
+    modified: u64,
+}
+
+impl Identity {
+    /// the identity of the plain file at `path`, which is never followed as a link.
+    pub(crate) fn of(path: &Path) -> io::Result<Identity> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !is_plain(&metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a plain file", path.display()),
+            ));
+        }
+        #[cfg(unix)]
+        let (device, index) = {
+            use std::os::unix::fs::MetadataExt;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(windows)]
+        let (device, index) = file_index(path)?;
+        Ok(Identity {
+            device,
+            index,
+            size: metadata.len(),
+            modified: nanos(metadata.modified()?),
+        })
+    }
+
+    fn parse(line: &str) -> Option<Identity> {
+        let mut numbers = line.split_ascii_whitespace().map(str::parse::<u64>);
+        let identity = Identity {
+            device: numbers.next()?.ok()?,
+            index: numbers.next()?.ok()?,
+            size: numbers.next()?.ok()?,
+            modified: numbers.next()?.ok()?,
+        };
+        numbers.next().is_none().then_some(identity)
+    }
+}
+
+impl fmt::Display for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {} {}",
+            self.device, self.index, self.size, self.modified
+        )
+    }
+}
+
+/// the volume and file index of the file at `path`, which windows keeps apart from metadata.
+#[cfg(windows)]
+fn file_index(path: &Path) -> io::Result<(u64, u64)> {
+    let handle = winapi_util::Handle::from_path_any(path)?;
+    let information = winapi_util::file::information(&handle)?;
+    Ok((information.volume_serial_number(), information.file_index()))
 }
 
 fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
@@ -404,6 +516,71 @@ mod tests {
                 assert!(kept.is_err(), "{kept:?}");
             }
         }
+    }
+
+    /// a mark remembers which copy the cache found changed, so a project's link that is still
+    /// that copy is known after a repair gives the object a new one. a repair keeps the copies.
+    #[test]
+    fn a_mark_remembers_the_changed_copy_through_its_repair() {
+        let (dir, cache) = cache();
+        if !super::super::tests::hardlinks(dir.path()) {
+            return;
+        }
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let placed = dir.path().join("placed");
+        fs::hard_link(&object, &placed).unwrap();
+        super::super::tests::rewrite(&object, b"evil, and longer");
+        super::super::tests::seal(&object);
+        let damaged = Identity::of(&placed).unwrap();
+        assert!(!cache.verify(&stored.digest).unwrap());
+        assert_eq!(cache.marks().unwrap()[&stored.digest].copies, [damaged]);
+
+        assert!(store(&cache, b"good").new);
+
+        let mark = &cache.marks().unwrap()[&stored.digest];
+        assert!(mark.replacement.is_some());
+        assert_eq!(mark.copies, [damaged]);
+        assert_ne!(Identity::of(&object).unwrap(), damaged);
+        assert_eq!(Identity::of(&placed).unwrap(), damaged);
+    }
+
+    #[test]
+    fn a_mark_keeps_its_newest_copies_and_skips_lines_it_cannot_read() {
+        let (_dir, cache) = cache();
+        let digest = crate::digest::sha256(b"object");
+        let copies: Vec<Identity> = (0..20)
+            .map(|index| Identity {
+                device: 1,
+                index,
+                size: 4,
+                modified: 5,
+            })
+            .collect();
+        cache.write_mark(&digest, Some(42), &copies).unwrap();
+        let path = cache.changed_folder().join(digest.hex());
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push_str("\nnot a copy\n1 2 3\n");
+        fs::write(&path, text).unwrap();
+        let mark = &cache.marks().unwrap()[&digest];
+        assert_eq!(mark.replacement, Some(42));
+        assert_eq!(mark.copies, copies);
+        // the object is gone, so marking it again adds no copy
+        cache.mark_changed(&digest).unwrap();
+        let mark = &cache.marks().unwrap()[&digest];
+        assert_eq!(mark.replacement, None);
+        assert_eq!(mark.copies, copies);
+        // a new copy pushes the oldest past the cap
+        let stored = store(&cache, b"object");
+        assert_eq!(stored.digest, digest);
+        cache.mark_changed(&digest).unwrap();
+        let mark = &cache.marks().unwrap()[&digest];
+        assert_eq!(mark.copies.len(), COPIES);
+        assert_eq!(mark.copies[..COPIES - 1], copies[20 - (COPIES - 1)..]);
+        assert_eq!(
+            mark.copies[COPIES - 1],
+            Identity::of(&cache.object_path(&digest)).unwrap()
+        );
     }
 
     #[test]

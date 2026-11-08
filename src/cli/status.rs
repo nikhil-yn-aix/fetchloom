@@ -35,8 +35,9 @@ pub(super) struct Status {
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files placed as links whose bytes another project changed through its own link, which
-    /// `sync` puts back.
+    /// files placed as links that are still the cache's copy, or the very copy the cache found
+    /// changed, whose bytes an edit through a link changed, here or in another project. `sync`
+    /// puts them back.
     edited_elsewhere: Vec<String>,
     /// files in the data folder that no dataset places.
     extra: Vec<String>,
@@ -221,7 +222,10 @@ fn list(output: &Output, status: &Status) {
         );
     }
     for path in status.edited_elsewhere.iter().take(SHOWN) {
-        output.mark("Edited", &format!("{path} · linked file has changed"));
+        output.mark(
+            "Damaged",
+            &format!("{path} · linked to the cache's copy, which was changed"),
+        );
     }
     if status.edited_elsewhere.len() > SHOWN {
         let more = status.edited_elsewhere.len() - SHOWN;
