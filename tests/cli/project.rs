@@ -1710,8 +1710,10 @@ fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
 }
 
 /// the owner record only tells a waiting command who holds the project, so a sync that cannot
-/// write it, as on a full disk, still runs under the project lock. a folder this test cannot
-/// write stands in for the full disk.
+/// write it, as on a full disk, still runs under the project lock. so does one that cannot write
+/// the state when all it would record is that files hashed as unchanged, as a filesystem that
+/// keeps whole seconds asks right after an add. a folder this test cannot write stands in for
+/// the full disk.
 #[cfg(unix)]
 #[test]
 fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
@@ -1720,6 +1722,13 @@ fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let own = sandbox.work().join(".fetchloom");
+    // the state as new as the file it records, as a coarse clock leaves them, so sync hashes the
+    // file and would settle it
+    let placed = fs::metadata(sandbox.work().join("data/iris/iris.csv"))?.modified()?;
+    fs::File::options()
+        .write(true)
+        .open(own.join("state"))?
+        .set_times(fs::FileTimes::new().set_modified(placed))?;
     fs::set_permissions(&own, fs::Permissions::from_mode(0o555))?;
     // a user who may write anywhere, such as root, cannot show this
     if fs::write(own.join("probe"), b"").is_ok() {

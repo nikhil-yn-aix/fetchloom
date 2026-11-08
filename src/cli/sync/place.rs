@@ -479,8 +479,18 @@ impl<'a> Placing<'a> {
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;
         state.synced = synced;
-        if removed || adopted || needs_writing || resynced || undone || !tallies.is_empty() {
-            project.write_state(state)?;
+        // what the run placed, removed or took as placed must be recorded. a state that only
+        // settles files hashed as unchanged, or marks the run synced, spares later runs work, so
+        // a project folder that takes no write, as on a full disk, fails no run that changed
+        // nothing
+        let recorded = removed || adopted || undone || !tallies.is_empty();
+        if recorded || needs_writing || resynced {
+            match project.write_state(state) {
+                Err(error) if !recorded => {
+                    tracing::debug!(error = %error, "could not settle the state");
+                }
+                written => written?,
+            }
         }
         if stopped {
             return Err(Stop::stopped());
