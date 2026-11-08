@@ -19,17 +19,17 @@ steps:
         data-${{ runner.os }}-${{ runner.arch }}-
   - name: restore research inputs
     shell: bash
-    run: fetchloom sync --locked --offline || fetchloom sync --locked --yes
+    run: fetchloom sync --locked --yes
   - name: keep only what this lock needs
     shell: bash
     run: fetchloom cache gc --now
 ```
 
-- the exact key hits when `data.lock` is unchanged, and the first sync works without the network.
+- the exact key hits when `data.lock` is unchanged. every file is then in the cache, and sync places them without using the network.
 - after a change to `data.lock`, `restore-keys` brings back the last cache, so only the files that changed download.
 - `cache gc --now` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
 - `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI.
-- remove `--yes` if the job must not approve a download larger than 1 GiB.
+- without `--yes`, a download larger than 1 GiB fails the job with `unconfirmed`, exit 1, instead of starting.
 
 ## gitlab ci
 
@@ -44,7 +44,7 @@ restore-data:
       prefix: data
     paths: [.fetchloom-cache]
   script:
-    - fetchloom sync --locked --offline || fetchloom sync --locked --yes
+    - fetchloom sync --locked --yes
     - fetchloom cache gc --now
 ```
 
