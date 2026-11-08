@@ -94,16 +94,16 @@ pub(crate) struct Error {
     pub(crate) kind: Kind,
     pub(crate) message: String,
     pub(crate) details: Vec<String>,
-    pub(crate) help: Option<String>,
+    pub(crate) help: Option<Box<str>>,
     /// a command's partial result, kept beside the error. boxed, since most errors carry none
     pub(crate) result: Option<Box<serde_json::Value>>,
-    pub(crate) failures: Vec<FileFailure>,
+    pub(crate) failures: Box<[FileFailure]>,
     /// the account that would let the request through, so a person can sign in and retry.
     pub(crate) need: Option<Box<crate::auth::Need>>,
     /// what the person cancelled, such as "the download of x.zip", when they ended a question
     /// on purpose. a person reads that as a plain line, not as an error; `--json` and the exit
     /// code report the error as before.
-    pub(crate) cancelled: Option<String>,
+    pub(crate) cancelled: Option<Box<str>>,
 }
 
 impl Error {
@@ -113,12 +113,12 @@ impl Error {
             message: message.into(),
             details: Vec::new(),
             result: None,
-            failures: Vec::new(),
+            failures: Box::default(),
             need: None,
             cancelled: None,
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
-                    .to_owned()
+                    .into()
             }),
         }
     }
@@ -151,13 +151,13 @@ impl Error {
     }
 
     pub(crate) fn help(mut self, help: impl Into<String>) -> Error {
-        self.help = Some(help.into());
+        self.help = Some(help.into().into_boxed_str());
         self
     }
 
     /// marks the error as a cancel the person chose, of `what`.
     pub(crate) fn cancelled(mut self, what: impl Into<String>) -> Error {
-        self.cancelled = Some(what.into());
+        self.cancelled = Some(what.into().into_boxed_str());
         self
     }
 
@@ -187,7 +187,8 @@ impl Error {
             let named = format!("run `{command}`");
             *help = help
                 .replace("run the same command", &named)
-                .replace("run the command", &named);
+                .replace("run the command", &named)
+                .into_boxed_str();
         }
         self
     }

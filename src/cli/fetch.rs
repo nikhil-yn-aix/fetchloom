@@ -563,7 +563,7 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
             kind: error.kind.name(),
             message: error.message.clone(),
             details: error.details.clone(),
-            help: error.help.clone(),
+            help: error.help.as_deref().map(str::to_owned),
         })
         .collect();
     if failed.len() <= 1 {
@@ -631,7 +631,7 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
     }
     Some(error.help(shared_help.unwrap_or_else(|| {
         "downloaded files stay in the cache. fix the errors above, then run the same command again"
-            .to_owned()
+            .into()
     })))
 }
 
@@ -652,9 +652,10 @@ fn explain(error: Error, job: &Job) -> Error {
     };
     Error {
         message: format!("{} is not the file data.lock records", job.label),
-        help: Some(format!(
-            "if the new version is intended, run `fetchloom lock --upgrade {dataset}`"
-        )),
+        help: Some(
+            format!("if the new version is intended, run `fetchloom lock --upgrade {dataset}`")
+                .into(),
+        ),
         ..error
     }
 }

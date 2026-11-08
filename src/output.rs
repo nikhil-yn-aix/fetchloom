@@ -648,7 +648,7 @@ impl Output {
                 details: &error.details,
                 help: error.help.as_deref(),
                 fix: error.help.as_deref().and_then(fix),
-                failures: (!error.failures.is_empty()).then_some(error.failures.as_slice()),
+                failures: (!error.failures.is_empty()).then_some(&*error.failures),
             }],
         };
         let document = Document {

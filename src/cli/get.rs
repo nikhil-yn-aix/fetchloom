@@ -104,8 +104,8 @@ impl Item {
                 kind: error.kind.name(),
                 message: error.message.clone(),
                 details: error.details.clone(),
-                help: error.help.clone(),
-                failures: error.failures.clone(),
+                help: error.help.as_deref().map(str::to_owned),
+                failures: error.failures.to_vec(),
             }),
         }
     }
@@ -785,7 +785,7 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
             kind: failure.kind.name(),
             message: failure.message.clone(),
             details: failure.details.clone(),
-            help: failure.help.clone(),
+            help: failure.help.as_deref().map(str::to_owned),
         })
         .collect();
     for (index, failure) in failed.iter().take(fetch::NAMED) {
@@ -801,7 +801,7 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
     }
     error.help(shared_help.unwrap_or_else(|| {
         "fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run the same command again"
-            .to_owned()
+            .into()
     }))
 }
 

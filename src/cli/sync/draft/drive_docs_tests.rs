@@ -287,7 +287,7 @@ fn seven_doc_refusal_keeps_every_path_and_lists_the_reason_once() {
     );
     let help = error.help.unwrap();
     assert_eq!(
-        help,
+        &*help,
         "add an --exclude for each entry above to fetch the other files, or ask the owner to add them as files such as pdf or csv"
     );
     assert!(!help.contains("--exclude \""));
