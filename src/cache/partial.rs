@@ -3,7 +3,7 @@
 //! among them, so none of them is ever opened through one.
 
 use std::fs::{self, File, Metadata, OpenOptions, TryLockError};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -271,9 +271,6 @@ impl Partial {
                 && !crate::place::has_other_names(&self.bytes)
         });
         let (file, begun) = match kept {
-            Some(file) if on_nfs(&file) => {
-                self.renew(file, if keep { u64::MAX } else { offset })?
-            }
             Some(file) => (file, None),
             None if offset > 0 => {
                 return Err(io::Error::new(
@@ -302,39 +299,6 @@ impl Partial {
         Ok((file, begun))
     }
 
-    /// copies the first `length` bytes of `kept`, the file an earlier run left, into a file made
-    /// now that takes its name, with that file's [`super::object::begun`] time. on nfs 4.2 a
-    /// seal sticks only on a file the run that writes it made (see
-    /// [`super::object::date_by_birth`]), and there the server copies the bytes itself. when the
-    /// copy fails, the kept file stays.
-    fn renew(&self, kept: File, length: u64) -> io::Result<(File, Option<SystemTime>)> {
-        let temp = self
-            .cache
-            .root
-            .join("tmp")
-            .join(format!("{:016x}.new", fastrand::u64(..)));
-        let copied = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-            .and_then(|mut fresh| {
-                let begun = super::object::begun(&fresh);
-                io::copy(&mut (&kept).take(length), &mut fresh)?;
-                Ok((fresh, begun))
-            });
-        let Ok((fresh, begun)) = copied else {
-            let _ = fs::remove_file(&temp);
-            return Ok((kept, None));
-        };
-        drop(kept);
-        if let Err(err) = fs::rename(&temp, &self.bytes) {
-            let _ = fs::remove_file(&temp);
-            return Err(err);
-        }
-        Ok((fresh, begun))
-    }
-
     fn recorded(&self) -> Option<Record> {
         let text = fs::read(&self.record).ok()?;
         let mut record: Record = serde_json::from_slice(&text).ok()?;
@@ -343,20 +307,6 @@ impl Partial {
         }
         record.url.clone_from(&self.url);
         Some(record)
-    }
-}
-
-/// whether `file` lies on nfs.
-fn on_nfs(file: &File) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        const NFS_SUPER_MAGIC: i128 = 0x6969;
-        rustix::fs::fstatfs(file).is_ok_and(|found| i128::from(found.f_type) == NFS_SUPER_MAGIC)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = file;
-        false
     }
 }
 

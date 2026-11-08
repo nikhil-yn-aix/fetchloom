@@ -51,7 +51,7 @@ python train.py --data "$(fetchloom --offline path iris)"
 
 ## the cache on a shared disk
 
-the cache uses file locks, so `cache gc` never deletes a file another fetchloom is about to use. on NFS, the locks work between machines. on lustre, they work between machines only when the disk is mounted with the `flock` option; with `localflock` each machine sees only its own locks, so run `fetchloom cache gc` only when no job is using the cache. if your cluster mounts it with `noflock`, fetchloom cannot lock the cache and says so; ask your admins, or keep the cache on a disk that allows locks.
+the cache uses file locks, so `cache gc` never deletes a file another fetchloom is about to use. on NFS, the locks work between machines. on an NFS 4.2 server that lets clients keep file times, as recent linux servers do, a file whose download a later run finished, after a stop, is hashed again each time a new project uses it; downloads finished in one run are not. on lustre, they work between machines only when the disk is mounted with the `flock` option; with `localflock` each machine sees only its own locks, so run `fetchloom cache gc` only when no job is using the cache. if your cluster mounts it with `noflock`, fetchloom cannot lock the cache and says so; ask your admins, or keep the cache on a disk that allows locks.
 
 ## one cache for a whole lab
 
