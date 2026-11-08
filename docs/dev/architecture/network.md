@@ -63,7 +63,7 @@ a download must be on disk before it takes its name in the cache, because the ca
 
 splitting requires at least 64 MiB, range support and proof that all answers belong to one version: a pinned SHA-256, a stated MD5 or an `If-Range` validator. one stream starts normally. after a 2 s window below 1 MB/s, with at least 16 MiB left, it hands its writer and remaining response to the split scheduler. the response continues at exactly the accepted offset; those bytes are not fetched again.
 
-the scheduler adds another stream immediately when the slow stream's rate is known. otherwise it waits for a measurement window. it checks every 250 ms, adds streams only while the last addition improved total rate by at least 15%, and stops when the host's four slots or the overall permits are taken. extra streams use separate HTTP/1.1 connections so they do not share one HTTP/2 connection's window.
+the scheduler adds another stream immediately when the slow stream's rate is known. otherwise it waits for a 2 s measurement window. it checks every 250 ms, adds streams only while the last addition improved total rate by at least 15%, and stops when the host's four slots or the overall permits are taken. extra streams use separate HTTP/1.1 connections so they do not share one HTTP/2 connection's window.
 
 a finished stream takes half the largest remaining range only when that half is at least 8 MiB. a `200` response to a range or three failed streams ends further splitting; remaining work falls back to one stream. a changed validator restarts an unpinned file. a file pinned by a SHA-256, or by a stated MD5 and its size, asks for parts without `If-Range` and keeps a part another server labels with other validators, since servers behind one name may do that for the same bytes; the final hash decides. a split checksum mismatch gets one full single-stream restart before failing.
 
@@ -109,16 +109,6 @@ plain URLs a person writes, and manifest URL or dataverse hosts, can name privat
 redirects are checked hop by hop. credentials attach only to their configured host and port over HTTPS: port 443 unless the credential names another, as a key saved for a dataverse installation on another port does, or a `.netrc` machine written with a port. a key for port 443 never reaches another port of its host, nor the other way round, which is curl's CVE-2022-27776. a source key never returns after a redirect leaves the original origin; a `.netrc` login answers its own host on any hop, as curl does, for earthdata's sign-in round trip. the osf key is the other exception: `Account::credentials` adds it for `osf.io` and `files.osf.io` on every hop, since osf download links redirect between the two. offline mode stops both requests and DNS lookup. OSF retries a forbidden XML storage answer only when it explicitly identifies an expired `X-Amz` request.
 
 shown URLs and account arguments share `mask_query`: it masks userinfo and recognized credential fields in both queries and fragments, including URL control-character normalization and wholly percent-encoded pasted URLs. text without credentials is unchanged. project references reject those query or fragment fields before writing data.toml or data.lock; one-off `get` can use them with masked output.
-
-## network experiments
-
-experiment settings come from the run's `Experiments` value and are off by default.
-
-| switch | behavior |
-|---|---|
-| `FETCHLOOM_EXP_NET_SPLIT_LINK_RATE=1` | an eligible uncapped body with a strong range validator starts with one ordinary batched stream. after a positive 250 ms rate window, it retains that response and probes one extra range. later additions require at least 15% aggregate-rate growth over a full probe window after the added stream starts. a probe with insufficient growth, or one that ends before it can be measured, permanently stops additions for that download. an empty initial window waits for progress. the initial-host cap is eight only with this switch, still bounded by jobs. the first error, including 429, stops the other streams and retries as one stream with its original retry delay. missing validators, small bodies, explicit split disable and rate caps retain the ordinary policy. |
-
-explicit forced splitting and saved ranged checkpoints still enter the range scheduler directly, with one response initially.
 
 ## invariants and traps
 

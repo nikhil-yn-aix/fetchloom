@@ -27,17 +27,8 @@ async fn a_stalled_adaptive_stream_keeps_its_idle_deadline() {
     source.send(Bytes::from(vec![b'x'; 3072])).await.unwrap();
     let (sender, mut written) = tokio::sync::mpsc::channel(16);
     let listener = |_| Ok(());
-    let mut reading = std::pin::pin!(net.read_stream(
-        &url,
-        &mut chunks,
-        &sender,
-        0,
-        &listener,
-        Some(Watch {
-            total: 4096,
-            probe: false
-        })
-    ));
+    let mut reading =
+        std::pin::pin!(net.read_stream(&url, &mut chunks, &sender, 0, &listener, Some(4096)));
     assert!(poll(reading.as_mut()).is_pending());
     // only 1024 bytes remain, so probe windows cannot hand the body to another stream.
     for _ in 0..12 {
@@ -905,32 +896,6 @@ fn file_bodies_use_the_separate_connection_pool() {
 }
 
 #[test]
-fn link_probing_needs_a_validator_and_respects_disabled_or_capped_runs() {
-    let url = Url::parse("https://example.org/file").unwrap();
-    let mut net = net(&url);
-    net.split.when = Splitting::WhenSlow;
-    let strong = Validators {
-        etag: Some("\"v1\"".to_owned()),
-        ..Validators::default()
-    };
-    assert!(!net.probe_split(&strong));
-    net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
-    assert!(net.probe_split(&strong));
-    assert!(!net.probe_split(&Validators::default()));
-    for tag in ["v1", "W/\"v1\""] {
-        assert!(!net.probe_split(&Validators {
-            etag: Some(tag.to_owned()),
-            ..Validators::default()
-        }));
-    }
-    net.split.when = Splitting::Never;
-    assert!(!net.probe_split(&strong));
-    net.split.when = Splitting::Always;
-    net.rate = crate::net::rate::Rate::read(&|_| Some("1".into())).unwrap();
-    assert!(!net.probe_split(&strong));
-}
-
-#[test]
 fn a_checksum_restart_reacquires_released_download_slots() {
     let (url, asked) = serve(vec![
         reply(
@@ -970,33 +935,4 @@ fn a_checksum_restart_reacquires_released_download_slots() {
         b"bbbbbbbb"
     );
     assert_eq!(asked.lock().unwrap().len(), 2);
-}
-
-#[test]
-fn a_link_probe_measures_the_batched_stream_before_handover() {
-    let url = Url::parse("https://example.org/file").unwrap();
-    let mut net = net(&url);
-    net.split.when = Splitting::WhenSlow;
-    let validators = Validators {
-        etag: Some("\"v1\"".to_owned()),
-        ..Validators::default()
-    };
-    let ordinary = net.monitor(Some(128 * 1024 * 1024), &validators).unwrap();
-    assert_eq!(ordinary.window(net.split.window), WINDOW);
-    assert!(!ordinary.hand_over(net.split, 20_000_000.0, 0));
-    net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
-    let probe = net.monitor(Some(128 * 1024 * 1024), &validators).unwrap();
-    assert_eq!(probe.window(net.split.window), split::PROBE_WINDOW);
-    assert!(probe.hand_over(net.split, 20_000_000.0, 0));
-    assert!(!probe.hand_over(net.split, 0.0, 0));
-    assert!(!probe.hand_over(
-        net.split,
-        20_000_000.0,
-        probe.total - 2 * net.split.piece + 1
-    ));
-    let unproven = net
-        .monitor(Some(probe.total), &Validators::default())
-        .unwrap();
-    assert_eq!(unproven.window(net.split.window), WINDOW);
-    assert!(!unproven.hand_over(net.split, 20_000_000.0, 0));
 }

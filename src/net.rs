@@ -38,7 +38,6 @@ const IDLE: Duration = Duration::from_secs(30);
 const REDIRECTS: usize = 10;
 /// requests running at once to one host, so no server sees fetchloom as a flood.
 const PER_HOST: usize = 4;
-const LINK_STREAMS: usize = 8;
 /// whether the logs already said a key cannot be sent, which they say once a run.
 static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -356,6 +355,10 @@ impl Net {
     }
 
     /// the experiment settings supplied for this run.
+    #[allow(
+        dead_code,
+        reason = "shared plumbing stays until all adoption changes are merged"
+    )]
     pub(crate) fn exp(&self) -> &Experiments {
         &self.exp
     }
@@ -375,16 +378,6 @@ impl Net {
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
         self.send_on(Lane::Shared, url, shape).await
-    }
-
-    fn link_ranges(&self) -> bool {
-        self.exp().on("NET_SPLIT_LINK_RATE")
-            && self.split.when != Splitting::Never
-            && self.rate.is_none()
-    }
-
-    fn probe_split(&self, validators: &crate::cache::Validators) -> bool {
-        self.link_ranges() && headers::if_range(validators).is_some()
     }
 
     async fn send_body(
@@ -565,14 +558,7 @@ impl Net {
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
             .entry(host(url).to_ascii_lowercase())
-            .or_insert_with(|| {
-                let cap = if self.link_ranges() {
-                    LINK_STREAMS
-                } else {
-                    PER_HOST
-                };
-                Arc::new(Semaphore::new(cap))
-            })
+            .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
             .clone()
     }
 }

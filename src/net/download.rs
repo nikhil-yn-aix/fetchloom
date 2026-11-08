@@ -206,31 +206,6 @@ impl Chunks for reqwest::Response {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Watch {
-    total: u64,
-    probe: bool,
-}
-
-impl Watch {
-    fn window(self, ordinary: std::time::Duration) -> std::time::Duration {
-        if self.probe {
-            split::PROBE_WINDOW
-        } else {
-            ordinary
-        }
-    }
-
-    fn hand_over(self, split: super::Split, rate: f64, reached: u64) -> bool {
-        let remaining = self.total.saturating_sub(reached);
-        if self.probe {
-            rate > 0.0 && remaining >= 2 * split.piece
-        } else {
-            split.hand_over(rate, remaining)
-        }
-    }
-}
-
 /// how one stream of an answer ended.
 enum Run {
     /// every byte arrived.
@@ -605,7 +580,7 @@ impl Net {
         let at_once = self.split.when == Splitting::Always || kept > 0;
         let watch = total.filter(|_| splits);
         // a stream held back by FETCHLOOM_RATE looks slow, and more streams share the same cap
-        let monitor = self.monitor(watch, &validators);
+        let monitor = watch.filter(|_| self.rate.is_none());
         let capped = bounded(fetch, offset, on);
         let (writer, response, total, measured) = match watch {
             Some(total) if at_once => (writer, response, total, None),
@@ -699,13 +674,6 @@ impl Net {
         Ok(Ok(response))
     }
 
-    fn monitor(&self, total: Option<u64>, validators: &Validators) -> Option<Watch> {
-        total.filter(|_| self.rate.is_none()).map(|total| Watch {
-            total,
-            probe: self.probe_split(validators),
-        })
-    }
-
     /// batches a single body on a writer thread, measuring eligible downloads before handing
     /// their accepted offset and remaining response to the range scheduler.
     async fn stream(
@@ -715,7 +683,7 @@ impl Net {
         mut response: reqwest::Response,
         total: Option<u64>,
         on: Listener<'_>,
-        watch: Option<Watch>,
+        watch: Option<u64>,
     ) -> Result<Run, Failure> {
         let reached = writer.written();
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<Vec<Bytes>>(16);
@@ -737,16 +705,11 @@ impl Net {
             .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
             .map_err(|err| Failure::Final(local(&err)))?;
         if let Some((total, rate)) = body? {
-            let message = if watch.is_some_and(|watch| watch.probe) {
-                "one measured stream probes an additional range"
-            } else {
-                "one stream is slow, so the download splits"
-            };
             tracing::debug!(
                 url = %super::Shown(url),
                 rate,
                 at = writer.written(),
-                "{message}"
+                "one stream is slow, so the download splits"
             );
             return Ok(Run::Handover {
                 writer,
@@ -775,7 +738,7 @@ impl Net {
         sender: &tokio::sync::mpsc::Sender<Vec<Bytes>>,
         reached: u64,
         on: Listener<'_>,
-        watch: Option<Watch>,
+        watch: Option<u64>,
     ) -> Result<Option<(u64, f64)>, Failure> {
         let mut batch = Batch::default();
         let read = self
@@ -798,9 +761,9 @@ impl Net {
         batch: &mut Batch,
         mut reached: u64,
         on: Listener<'_>,
-        watch: Option<Watch>,
+        watch: Option<u64>,
     ) -> Result<Option<(u64, f64)>, Failure> {
-        let window = watch.map_or(self.split.window, |watch| watch.window(self.split.window));
+        let window = self.split.window;
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
         let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
@@ -830,10 +793,10 @@ impl Net {
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
                     #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
                     let rate = moved as f64 / seconds;
-                    if let Some(watch) = watch
-                        && watch.hand_over(self.split, rate, reached)
+                    if let Some(total) = watch
+                        && self.split.hand_over(rate, total.saturating_sub(reached))
                     {
-                        break Ok(Some((watch.total, rate)));
+                        break Ok(Some((total, rate)));
                     }
                     (since, moved) = (now, 0);
                     lap.as_mut().reset(tokio::time::Instant::now() + window);
