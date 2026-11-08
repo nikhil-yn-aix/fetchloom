@@ -16,13 +16,13 @@ a dataset is one entry in data.toml: a name, such as iris, and a reference to
 where it is published, such as zenodo:3608990, a DOI or a link. --select and
 --exclude choose which of its files to keep.
 
-a fingerprint is a file's SHA-256 hash. data.lock records one for every file,
-so every machine gets the same bytes. when a source changes a file, sync stops
-and says so instead of using it.
+a fingerprint is a file's SHA-256 hash. to pin a dataset, fetchloom records
+the fingerprint of each of its files in data.lock, so every machine gets the
+same bytes. if a source changes a file, sync stops and says so.
 
-the cache keeps each file once, under its fingerprint. data/ links to it where
-the disk allows, so projects that use the same file store it once. files in
-data/ are read-only by default.
+the cache keeps each file once, under its fingerprint. a file in data/ is a
+link to it where the disk allows, or a copy, so projects that use the same file
+store it once. files in data/ are read-only by default.
 
 commit data.toml and data.lock with your code, and leave data/ out. anyone who
 clones the project runs `fetchloom sync` to place the pinned files. sync warns

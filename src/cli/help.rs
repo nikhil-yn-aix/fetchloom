@@ -28,13 +28,13 @@ a dataset is one entry in data.toml: a name, such as iris, and a reference to
 where it is published, such as zenodo:3608990, a DOI or a link. --select and
 --exclude choose which of its files to keep.
 
-a fingerprint is a file's SHA-256 hash. data.lock records one for every file,
-so every machine gets the same bytes. when a source changes a file, sync stops
-and says so instead of using it.
+a fingerprint is a file's SHA-256 hash. to pin a dataset, fetchloom records
+the fingerprint of each of its files in data.lock, so every machine gets the
+same bytes. if a source changes a file, sync stops and says so.
 
-the cache keeps each file once, under its fingerprint. data/ links to it where
-the disk allows, so projects that use the same file store it once. files in
-data/ are read-only by default.
+the cache keeps each file once, under its fingerprint. a file in data/ is a
+link to it where the disk allows, or a copy, so projects that use the same file
+store it once. files in data/ are read-only by default.
 
 commit data.toml and data.lock with your code, and leave data/ out. anyone who
 clones the project runs `fetchloom sync` to place the pinned files. sync warns
@@ -51,7 +51,7 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_CACHE     the cache folder, instead of the system's cache folder
   FETCHLOOM_OFFLINE   1 works offline, as --offline does
   FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default.
-                      each initial host gets at most 4 at once
+                      each site gets at most 4 at once
   FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
   FETCHLOOM_RETRIES   how many more times a failed request is tried, 0 to 20;
                       4 by default. raise it on a network that drops for minutes
@@ -77,7 +77,7 @@ more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html"
 const EXIT_CODES: &str = "fetchloom exit codes
 
     0  success, even when sync kept edited files; status shows them
-    1  unconfirmed or lock.outdated: approve with --yes, or run fetchloom lock
+    1  unconfirmed or lock.outdated: say yes with --yes, or run fetchloom lock
     2  usage: a mistake on the command line
    10  reference.*, source.invalid: the link or id is wrong, or names nothing
    20  network.*, offline.missing: retry later, or go online
@@ -308,7 +308,7 @@ fn unknown(topic: &[String]) -> Error {
 mod tests {
     use clap::CommandFactory;
 
-    use super::{ENVIRONMENT, EXIT_CODES, TOPICS, args, arguments};
+    use super::{CONCEPTS, ENVIRONMENT, EXIT_CODES, TOPICS, args, arguments};
 
     #[test]
     fn a_short_only_option_keeps_its_spelling_and_its_value() {
@@ -380,6 +380,26 @@ mod tests {
                     .any(|topic| topic.trim_start().starts_with(&format!("{code} "))),
                 "exit {code}"
             );
+        }
+    }
+
+    /// the topics say "pin" with its meaning and name things as the help screens do: a site,
+    /// not an initial host, and yes to a question, not an approval.
+    #[test]
+    fn topics_name_things_plainly() {
+        let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat(CONCEPTS).contains(
+                "to pin a dataset, fetchloom records the fingerprint of each of its files in data.lock"
+            ),
+            "{CONCEPTS}"
+        );
+        assert!(flat(ENVIRONMENT).contains("each site gets at most 4 at once"));
+        assert!(flat(EXIT_CODES).contains("say yes with --yes"));
+        for (name, text) in TOPICS {
+            for word in ["initial host", "approve"] {
+                assert!(!text.contains(word), "{name} says {word}");
+            }
         }
     }
 
