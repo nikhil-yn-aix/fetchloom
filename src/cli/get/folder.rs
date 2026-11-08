@@ -384,7 +384,7 @@ fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, 
         }
     }
     let how = match (changed - copies, copies) {
-        (_, 0) => "linked from the cache".to_owned(),
+        (_, 0) => "linked to the cache".to_owned(),
         (0, _) => format!("copied, {}", units::size(bytes)),
         (_, _) => format!("partly copied, {}", units::size(bytes)),
     };
@@ -479,7 +479,7 @@ mod tests {
                     (Replaced(Method::Reflink), 5),
                 ],
                 (2, 0),
-                "linked from the cache",
+                "linked to the cache",
             ),
         ] {
             let (changed, copies, how) = placement_summary(files.iter().copied());

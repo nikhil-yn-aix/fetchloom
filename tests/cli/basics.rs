@@ -91,8 +91,10 @@ fn help_follows_color_environment() -> Result {
     Ok(())
 }
 
+/// the welcome and `help concepts` follow color flags. only `help concepts` tells the analogy;
+/// the welcome names each thing itself.
 #[test]
-fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
+fn welcome_and_concepts_follow_color_flags() -> Result {
     let sandbox = Sandbox::new()?;
     for (arguments, colored) in [
         (&["--color", "always"][..], true),
@@ -110,13 +112,18 @@ fn welcome_and_concepts_follow_color_flags_and_keep_the_analogy() -> Result {
         assert!(output.stderr.is_empty(), "{arguments:?}");
         let stdout = text(&output.stdout)?;
         assert_eq!(stdout.contains("\x1b["), colored, "{arguments:?}: {stdout}");
+        let concepts = arguments.first() == Some(&"help");
         for analogy in [
             "the shopping list",
             "the receipt",
             "the pantry",
             "restocking",
         ] {
-            assert!(stdout.contains(analogy), "{arguments:?}: {stdout}");
+            assert_eq!(
+                stdout.contains(analogy),
+                concepts,
+                "{arguments:?}: {stdout}"
+            );
         }
         if colored {
             assert!(stdout.contains("\x1b[1mfetchloom\x1b[0m"), "{stdout}");
@@ -279,12 +286,21 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     Ok(())
 }
 
-/// the analogy a beginner meets on the first run, in the top of `--help` and in `help concepts`.
+/// the analogy `help concepts` explains the ideas with, and only it.
 pub(crate) const ANALOGY: [&str; 4] = [
     "data.toml, the shopping list: which datasets you want",
     "data.lock, the receipt: the exact files and their fingerprints",
     "the cache, the pantry: shared by projects using it",
     "sync, restocking: fill data/ from the receipt",
+];
+
+/// what a beginner meets on the first run and at the top of `--help`: each thing by its own name,
+/// and `pin` explained where it first appears.
+const NAMED: [&str; 4] = [
+    "data.toml  the datasets you want",
+    "pin        record a dataset's exact files and their SHA-256 in data.lock",
+    "data.lock  the list of pinned files, so every machine gets the same bytes",
+    "the cache  one folder that keeps each file once, for all your projects",
 ];
 
 #[test]
@@ -293,8 +309,12 @@ fn welcome() -> Result {
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
     assert!(stdout.lines().count() <= 17, "{stdout}");
+    assert!(
+        stdout.contains(&format!("\n  {}\n", NAMED.join("\n  "))),
+        "{stdout}"
+    );
     for line in ANALOGY {
-        assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
+        assert!(!stdout.contains(line), "{line}");
     }
     assert!(
         stdout.contains("\n  fetchloom add iris "),
@@ -705,6 +725,39 @@ fn at_a_narrow_terminal_help_wraps_between_words_and_errors_stay_whole() -> Resu
             .lines()
             .any(|line| line.contains("error: ") && line.contains(&server.url)),
         "{screen}"
+    );
+    Ok(())
+}
+
+/// files that `get` and `sync` link to the cache's copies are said to be linked to the cache,
+/// where the bytes are.
+#[test]
+fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let links = sandbox.links()?;
+    if !links.reflink && !links.hardlink {
+        return Ok(());
+    }
+    let server = crate::support::Server::start(
+        "/files/iris.csv",
+        vec![
+            crate::support::file(b"a,b\n1,2\n", "\"v1\""),
+            crate::support::file(b"a,b\n1,2\n", "\"v1\""),
+        ],
+    )?;
+    let fetched = text(&sandbox.run(&["get", &server.url, "-o", "fetched"])?.stderr)?;
+    assert!(
+        fetched.contains("Fetched iris.csv into fetched · linked to the cache\n"),
+        "{fetched}"
+    );
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\n", server.url),
+    )?;
+    let synced = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(
+        synced.contains("Placed data/iris · 1 file linked to the cache\n"),
+        "{synced}"
     );
     Ok(())
 }

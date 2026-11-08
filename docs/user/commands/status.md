@@ -16,7 +16,7 @@ fetchloom status [options]
 
 | option | effect |
 |---|---|
-| `--verify` | hash every placed file, so a change that kept its size and time shows too |
+| `--verify` | check the SHA-256 of every placed file, so a change that kept its size and time shows too |
 
 [global options](README.md#global-options) also apply.
 

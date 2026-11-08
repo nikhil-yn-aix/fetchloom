@@ -4,16 +4,16 @@ expression: text(&output.stdout)?
 ---
 fetchloom puts the exact research data a project needs into its data/ folder.
 
-  data.toml, the shopping list: which datasets you want
-  data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by projects using it
-  sync, restocking: fill data/ from the receipt
+  data.toml  the datasets you want
+  pin        record a dataset's exact files and their SHA-256 in data.lock
+  data.lock  the list of pinned files, so every machine gets the same bytes
+  the cache  one folder that keeps each file once, for all your projects
 
-  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
-  fetchloom get iris    just download it, without a project
+  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
+  fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name searches hugging face, kaggle and zenodo. a link works as well:
+a name is looked up on hugging face, kaggle and zenodo. a link works too:
   fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
@@ -21,26 +21,26 @@ learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 usage: fetchloom [options] <command>
 
 commands:
-  add          add a dataset, pin it and download it into the data folder
+  add          add a dataset to the project and download it into the data folder
   remove       remove a dataset and the unchanged files fetchloom placed for it
-  sync         place the files pinned in data.lock on this machine
-  lock         update data.lock from data.toml without placing any files
+  sync         put the files data.lock lists into the data folder
+  lock         update data.lock from data.toml, without changing the data folder
   status       list files that are missing, changed locally or extra
   list         list the project's datasets: source, size and folder
   path         print where a dataset or a file in it is, syncing first if needed
   cache        show the cache, free what no project needs, or verify it
   get          fetch something once, without a project
   search       find datasets on hugging face, kaggle and zenodo
-  auth         sign in to sources for private and gated data
+  auth         sign in for private data, or data with terms to accept
   completions  print a script that completes fetchloom's commands in a shell
   help         explain the ideas behind fetchloom, or one command
 
 options:
   -q, --quiet         print only the answer, warnings and errors
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
-      --json          print one JSON document on stdout instead of the story
+      --json          print one JSON document on stdout, not the usual output
       --offline       use only what is already on this machine
-  -y, --yes           approve confirmations, but never choose a dataset for you
+  -y, --yes           answer yes to questions, but never pick a dataset for you
       --color <when>  when to use color: auto, the default, always or never
   -C <dir>            run as if fetchloom started in <dir>
   -h, --help          print help

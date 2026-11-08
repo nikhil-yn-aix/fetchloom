@@ -18,9 +18,9 @@ fetchloom sync [options]
 
 | option | effect |
 |---|---|
-| `--force` | replace conflicting files at locked paths, including untracked files, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder |
+| `--force` | replace files in the data folder that differ from `data.lock`, even ones fetchloom did not place, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
-| `--verify` | hash every placed file, and put back those whose bytes changed though their size and time did not |
+| `--verify` | check the SHA-256 of every placed file, and put back those that changed though their size and time did not |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
 [global options](README.md#global-options) also apply.

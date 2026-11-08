@@ -6,16 +6,16 @@ fetchloom [version]
 
 fetchloom puts the exact research data a project needs into its data/ folder.
 
-  data.toml, the shopping list: which datasets you want
-  data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by projects using it
-  sync, restocking: fill data/ from the receipt
+  data.toml  the datasets you want
+  pin        record a dataset's exact files and their SHA-256 in data.lock
+  data.lock  the list of pinned files, so every machine gets the same bytes
+  the cache  one folder that keeps each file once, for all your projects
 
-  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
-  fetchloom get iris    just download it, without a project
+  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
+  fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name searches hugging face, kaggle and zenodo. a link works as well:
+a name is looked up on hugging face, kaggle and zenodo. a link works too:
   fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`

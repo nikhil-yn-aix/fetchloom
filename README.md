@@ -11,9 +11,9 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
 
-`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you pick. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` just downloads without a project.
+`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you choose. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` downloads once, without a project.
 
-`data.toml` is your shopping list, `data.lock` is the receipt pinning each file by SHA-256 and size, and the shared cache is your pantry. `fetchloom sync` fills `data/` from that receipt by reflink, hardlink or copy.
+`data.toml` lists the datasets you want. `data.lock` pins them: it records the exact files with their SHA-256 and size. the cache is one folder that keeps each file once for all your projects, and `fetchloom sync` puts the pinned files in `data/` as links to the cache, or as copies where a link cannot work.
 
 commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
 
@@ -54,16 +54,16 @@ the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_P
 ```text
 fetchloom puts the exact research data a project needs into its data/ folder.
 
-  data.toml, the shopping list: which datasets you want
-  data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by projects using it
-  sync, restocking: fill data/ from the receipt
+  data.toml  the datasets you want
+  pin        record a dataset's exact files and their SHA-256 in data.lock
+  data.lock  the list of pinned files, so every machine gets the same bytes
+  the cache  one folder that keeps each file once, for all your projects
 
-  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
-  fetchloom get iris    just download it, without a project
+  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
+  fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name searches hugging face, kaggle and zenodo. a link works as well:
+a name is looked up on hugging face, kaggle and zenodo. a link works too:
   fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
@@ -79,7 +79,7 @@ files in `data/` are read-only by default. `sync` keeps your local edits and rep
 |---|---|
 | install and try it for the first time, or uninstall | [getting started](docs/user/getting-started.md) |
 | choose a user topic | [user guide](docs/user/README.md) |
-| understand the shopping list, receipt and pantry | [concepts](docs/user/concepts.md) |
+| understand data.toml, data.lock, the cache and sync | [concepts](docs/user/concepts.md) |
 | look up a command or option | [commands](docs/user/commands/README.md) |
 | use a supported host | [sources](docs/user/sources/README.md) |
 | check supported systems, terminals and versions | [compatibility](docs/user/reference/compatibility.md) |

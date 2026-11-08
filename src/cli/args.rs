@@ -93,7 +93,7 @@ on disk: notes changed cached files, which are downloaded again when next needed
   fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
   fetchloom get -i links.txt
 
-on disk: writes one output folder for each link through the cache. does not create project files";
+on disk: writes one folder for each link, through the cache. does not create data.toml or data.lock";
 
     pub(super) const SEARCH: &str = "examples:
   fetchloom search iris
@@ -101,7 +101,7 @@ on disk: writes one output folder for each link through the cache. does not crea
   fetchloom search iris --source kaggle,zenodo --limit 5
   fetchloom search iris --json
 
-on disk: nothing. prints canonical references without downloading a dataset";
+on disk: nothing. prints the exact reference of each match, such as zenodo:3608990, and downloads nothing";
 
     pub(super) const AUTH: &str = "examples:
   fetchloom auth
@@ -116,9 +116,7 @@ on disk: a key is saved where the source's own tools read it, so one key works i
   fetchloom auth login earthdata
   fetchloom auth login hf --with-token
 
-on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in
-.netrc for curl and wget too, and other keys in the system's credential store. asks before saving.
---with-token reads the key from stdin, as in `echo $HF_TOKEN | fetchloom auth login hf --with-token`";
+on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in .netrc for curl and wget too, and other keys in the system's credential store. asks before saving";
 
     pub(super) const LOGOUT: &str = "examples:
   fetchloom auth logout zenodo
@@ -144,20 +142,21 @@ on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
 
 /// what a beginner meets first, on the first run and at the top of `fetchloom --help`: what
-/// fetchloom does, the analogy, commands to copy and where to learn more.
+/// fetchloom does, each thing by its own name with `pin` explained where it first appears,
+/// commands to copy and where to learn more. the analogy belongs to `help concepts`.
 pub(crate) const INTRO: &str =
     "fetchloom puts the exact research data a project needs into its data/ folder.
 
-  data.toml, the shopping list: which datasets you want
-  data.lock, the receipt: the exact files and their fingerprints
-  the cache, the pantry: shared by projects using it
-  sync, restocking: fill data/ from the receipt
+  data.toml  the datasets you want
+  pin        record a dataset's exact files and their SHA-256 in data.lock
+  data.lock  the list of pinned files, so every machine gets the same bytes
+  the cache  one folder that keeps each file once, for all your projects
 
-  fetchloom add iris    pick an iris dataset, put it in data/ and pin it
-  fetchloom get iris    just download it, without a project
+  fetchloom add iris    choose an iris dataset, put it in data/ and pin it
+  fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name searches hugging face, kaggle and zenodo. a link works as well:
+a name is looked up on hugging face, kaggle and zenodo. a link works too:
   fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`";
@@ -404,7 +403,7 @@ pub(crate) struct Global {
     #[arg(short, long, action = ArgAction::Count, global = true, help_heading = "options")]
     pub(crate) verbose: u8,
 
-    /// print one JSON document on stdout instead of the story
+    /// print one JSON document on stdout, not the usual output
     #[arg(long, global = true, help_heading = "options")]
     pub(crate) json: bool,
 
@@ -412,7 +411,7 @@ pub(crate) struct Global {
     #[arg(long, global = true, help_heading = "options")]
     pub(crate) offline: bool,
 
-    /// approve confirmations, but never choose a dataset for you
+    /// answer yes to questions, but never pick a dataset for you
     #[arg(short, long, global = true, help_heading = "options")]
     pub(crate) yes: bool,
 
@@ -432,7 +431,7 @@ pub(crate) struct Global {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum Command {
-    /// add a dataset, pin it and download it into the data folder
+    /// add a dataset to the project and download it into the data folder
     #[command(override_usage = "fetchloom add [options] <link>", help_template = TEMPLATE, after_help = examples::ADD)]
     Add(Add),
 
@@ -440,11 +439,11 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
     Remove(Remove),
 
-    /// place the files pinned in data.lock on this machine
+    /// put the files data.lock lists into the data folder
     #[command(override_usage = "fetchloom sync [options]", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
 
-    /// update data.lock from data.toml without placing any files
+    /// update data.lock from data.toml, without changing the data folder
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
@@ -472,7 +471,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
     Search(Search),
 
-    /// sign in to sources for private and gated data
+    /// sign in for private data, or data with terms to accept
     #[command(override_usage = "fetchloom auth [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::AUTH)]
     Auth(Auth),
     /// print a script that completes fetchloom's commands in a shell
@@ -541,7 +540,7 @@ pub(crate) enum CacheAction {
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Gc {
     /// also free files no project needs that are less than a day old, such as a `get` from
-    /// today. downloads still running keep their partial files
+    /// today. downloads still running keep what they have so far
     #[arg(long, help_heading = "options")]
     pub(crate) now: bool,
 
@@ -578,7 +577,7 @@ pub(crate) struct Login {
     #[arg(value_name = "account", help_heading = "arguments")]
     pub(crate) account: String,
 
-    /// the dataverse installation, such as demo.dataverse.org. harvard's is the default
+    /// the dataverse site, such as demo.dataverse.org. harvard's is the default
     #[arg(long, value_name = "host", help_heading = "options")]
     pub(crate) host: Option<String>,
 
@@ -595,7 +594,7 @@ pub(crate) struct Logout {
     #[arg(value_name = "account", help_heading = "arguments")]
     pub(crate) account: String,
 
-    /// the dataverse installation
+    /// the dataverse site
     #[arg(long, value_name = "host", help_heading = "options")]
     pub(crate) host: Option<String>,
 }
@@ -607,7 +606,7 @@ pub(crate) struct Search {
     #[arg(value_name = "words", required = true, num_args = 1.., help_heading = "arguments")]
     pub(crate) words: Vec<String>,
 
-    /// ask only this catalog: hf, kaggle or zenodo. repeat it or use commas for more
+    /// search only this site: hf, kaggle or zenodo. repeat it or use commas for more
     #[arg(
         long,
         value_name = "source",
@@ -645,7 +644,7 @@ pub(crate) struct DryRun {
     pub(crate) dry_run: bool,
 }
 
-/// add a dataset, pin it and download it into the data folder
+/// add a dataset to the project and download it into the data folder
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Add {
     /// search words, a link, a DOI, or an id such as zenodo:3608990
@@ -678,10 +677,11 @@ pub(crate) struct Remove {
     pub(crate) dry: DryRun,
 }
 
-/// place the files pinned in data.lock on this machine
+/// put the files data.lock lists into the data folder
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Sync {
-    /// replace conflicting files at locked paths, including untracked files
+    /// replace files in the data folder that differ from data.lock, even ones fetchloom did not
+    /// place
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 
@@ -692,8 +692,8 @@ pub(crate) struct Sync {
     #[command(flatten)]
     pub(crate) dry: DryRun,
 
-    /// hash every placed file, and put back those whose bytes changed though their size and
-    /// time did not
+    /// check the SHA-256 of every placed file, and put back those that changed though their
+    /// size and time did not
     #[arg(long, help_heading = "options")]
     pub(crate) verify: bool,
 }
@@ -701,7 +701,8 @@ pub(crate) struct Sync {
 /// list files that are missing, changed locally or extra
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Status {
-    /// hash every placed file, so a change that kept its size and time shows too
+    /// check the SHA-256 of every placed file, so a change that kept its size and time shows
+    /// too
     #[arg(long, help_heading = "options")]
     pub(crate) verify: bool,
 }
@@ -709,7 +710,7 @@ pub(crate) struct Status {
 /// bring data.lock in line with data.toml
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Lock {
-    /// check sources again, keeping explicitly pinned versions
+    /// check sources again for newer data, keeping any version data.toml names
     #[arg(long, value_name = "name", num_args = 0.., help_heading = "options")]
     pub(crate) upgrade: Option<Vec<String>>,
 
@@ -724,7 +725,7 @@ pub(crate) struct Lock {
 /// list the project's datasets, or the files of one
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct List {
-    /// a dataset's name, to list its locked files
+    /// a dataset's name, to list the files data.lock has for it
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) name: Option<String>,
 }
@@ -740,8 +741,8 @@ pub(crate) struct Path {
 /// fetch something once, without a project
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Get {
-    /// what to download: search words, a link, a DOI, or an id such as zenodo:3608990. several
-    /// links download together, so search words in quotes go alone
+    /// what to download: a link, a DOI, an id such as zenodo:3608990, or search words. several
+    /// links download together, but search words go alone, in quotes
     #[arg(
         value_name = "link",
         required_unless_present = "input_file",
@@ -754,12 +755,13 @@ pub(crate) struct Get {
     #[arg(short, long, value_name = "dir", help_heading = "options")]
     pub(crate) output: Option<PathBuf>,
 
-    /// read links from <file>, one a line, or from stdin for -. blank lines and lines starting
-    /// with # are skipped
+    /// read links from <file>, one per line, or from stdin for -. blank lines and lines
+    /// starting with # are skipped
     #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 
-    /// check the file's SHA-256 before placing it. needs one link to one file
+    /// check that the file has this SHA-256 before putting it in the folder. needs one link to
+    /// one file
     #[arg(long, value_name = "hex", value_parser = sha256, help_heading = "options")]
     pub(crate) sha256: Option<Sha256>,
 
@@ -799,14 +801,14 @@ mod tests {
     use super::Args;
 
     #[test]
-    fn force_help_names_untracked_conflicts() -> Result<(), &'static str> {
+    fn force_help_names_files_fetchloom_did_not_place() -> Result<(), &'static str> {
         let help = Args::command()
             .find_subcommand_mut("sync")
             .ok_or("sync command is missing")?
             .render_help()
             .to_string();
         assert!(
-            help.contains("replace conflicting files at locked paths, including untracked files"),
+            help.contains("replace files in the data folder that differ from data.lock, even"),
             "{help}"
         );
         Ok(())
@@ -856,14 +858,14 @@ mod tests {
     }
 
     #[test]
-    fn upgrade_help_keeps_explicit_pins() -> Result<(), &'static str> {
+    fn upgrade_help_keeps_the_versions_data_toml_names() -> Result<(), &'static str> {
         let help = Args::command()
             .find_subcommand_mut("lock")
             .ok_or("lock command is missing")?
             .render_help()
             .to_string();
         assert!(
-            help.contains("check sources again, keeping explicitly pinned versions"),
+            help.contains("check sources again for newer data, keeping any version data.toml"),
             "{help}"
         );
         Ok(())
@@ -975,6 +977,57 @@ mod tests {
             }
         }
     }
+
+    /// help is read by people whose first language is not english: a screen that says "pin"
+    /// explains it, and no screen uses the kitchen analogy, which belongs to `help concepts`, or
+    /// other words that stand for a thing instead of naming it.
+    #[test]
+    fn help_screens_name_things_plainly() {
+        let mut screens = every_help();
+        let top = match Args::command().try_get_matches_from(["fetchloom", "--help"]) {
+            Ok(_) => String::new(),
+            Err(err) => err.render().to_string(),
+        };
+        screens.push(("fetchloom".to_owned(), top));
+        for (name, help) in &screens {
+            let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
+            if flat.contains(" pin") {
+                assert!(
+                    flat.contains(
+                        "pin record a dataset's exact files and their SHA-256 in data.lock"
+                    ),
+                    "{name} says pin without explaining it\n{help}"
+                );
+            }
+            for word in [
+                "shopping list",
+                "receipt",
+                "pantry",
+                "restocking",
+                "fingerprint",
+                "the story",
+                "approve",
+                "catalog",
+                "canonical",
+                "gated",
+                "untracked",
+                "locked paths",
+                "partial files",
+                "one a line",
+            ] {
+                assert!(!flat.contains(word), "{name} says {word}\n{help}");
+            }
+        }
+        let top = &screens.last().unwrap().1;
+        let flat = top.split_whitespace().collect::<Vec<_>>().join(" ");
+        for option in [
+            "--json print one JSON document on stdout, not the usual output",
+            "-y, --yes answer yes to questions, but never pick a dataset for you",
+        ] {
+            assert!(flat.contains(option), "{option}\n{top}");
+        }
+    }
+
     #[test]
     fn every_command_shows_examples_to_copy_and_what_it_changes_on_disk() {
         for (name, help) in every_help() {

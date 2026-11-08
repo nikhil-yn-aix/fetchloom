@@ -18,7 +18,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
-| `help concepts` | explain the shopping list, receipt and pantry | learn the [project model](../concepts.md) |
+| `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy | learn the [project model](../concepts.md) |
 | `help environment`, `help exit-codes` | summarize settings, or explain what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |
 | `help <command>` | show a command's help | check syntax at the terminal |
 | bare `fetchloom` | show project status or the welcome | find your next command |
@@ -34,7 +34,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 | `-vv` | also enable debug logs |
 | `--json` | print one result document on stdout, including failures; never prompt |
 | `--offline` | prevent HTTP and DNS requests by fetchloom |
-| `-y`, `--yes` | approve confirmations, but never choose a dataset for you |
+| `-y`, `--yes` | answer yes to questions, but never pick a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running; help, version and completions ignore it |
 | `-n`, `--dry-run` | with `add`, `remove`, `sync` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. explicit `FETCHLOOM_TRACE` output is still written |

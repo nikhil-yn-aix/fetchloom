@@ -20,8 +20,8 @@ fetchloom get [options] <link>...
 | option | effect |
 |---|---|
 | `-o <dir>`, `--output <dir>` | choose the output folder; with several links, the folder that holds one folder for each |
-| `-i <file>`, `--input-file <file>` | read links from a file, one a line, or from stdin for `-` |
-| `--sha256 <hex>` | check the one downloaded file against this SHA-256 before placing it |
+| `-i <file>`, `--input-file <file>` | read links from a file, one per line, or from stdin for `-` |
+| `--sha256 <hex>` | check the one downloaded file against this SHA-256 before putting it in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed |
@@ -43,13 +43,13 @@ stderr excerpt from a snapshot for a single-file download on a filesystem that s
 
 ```text
  Downloaded iris.csv · 81 B in [time]
-    Fetched iris.csv into iris · linked from the cache
+    Fetched iris.csv into iris · linked to the cache
 ```
 
 when a dataset has several files, the `Fetched` line is followed by the folder's top level, largest first, so the main file is easy to find. a folder shows how many files it holds. at most ten names are listed, then how many more there are:
 
 ```text
-    Fetched 7 files into wine-quality · linked from the cache
+    Fetched 7 files into wine-quality · linked to the cache
             winequality-white.csv  258.2 KiB
             data/                  2 files · 101.7 KiB
             winequality-red.csv    82.2 KiB

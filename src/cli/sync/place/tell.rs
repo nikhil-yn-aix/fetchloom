@@ -30,7 +30,7 @@ pub(super) fn tell(
         .filter(|(dataset, _)| told != Some(**dataset))
     {
         let how = match (tally.links, tally.files - tally.links) {
-            (_, 0) => "linked from the cache".to_owned(),
+            (_, 0) => "linked to the cache".to_owned(),
             (0, _) => format!("copied, {}", units::size(tally.copied)),
             (_, _) => format!("partly copied, {}", units::size(tally.copied)),
         };

@@ -84,7 +84,7 @@ the folder now holds:
 | path | what it is |
 |---|---|
 | `data.toml` | the datasets this project wants, one entry named `iris` |
-| `data.lock` | the exact files, with their sizes and SHA-256 fingerprints |
+| `data.lock` | the exact files, with their sizes and SHA-256 |
 | `data/iris/Iris.csv` | the table, next to the other files the dataset ships, all read-only so you cannot change them by accident |
 | `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
 

@@ -1,6 +1,5 @@
 ---
 source: tests/cli/basics.rs
-assertion_line: 219
 expression: text(&output.stdout)?
 ---
 fetch something once, without a project
@@ -8,18 +7,19 @@ fetch something once, without a project
 usage: fetchloom get [options] <link>...
 
 arguments:
-  [link]...  what to download: search words, a link, a DOI, or an id such as
-             zenodo:3608990. several links download together, so search words in
-             quotes go alone
+  [link]...  what to download: a link, a DOI, an id such as zenodo:3608990, or
+             search words. several links download together, but search words go
+             alone, in quotes
 
 options:
   -o, --output <dir>       put the download in <dir> instead of a new folder
                            named after it. with several links, each gets its own
                            folder inside <dir>
-  -i, --input-file <file>  read links from <file>, one a line, or from stdin for
-                           -. blank lines and lines starting with # are skipped
-      --sha256 <hex>       check the file's SHA-256 before placing it. needs one
-                           link to one file
+  -i, --input-file <file>  read links from <file>, one per line, or from stdin
+                           for -. blank lines and lines starting with # are
+                           skipped
+      --sha256 <hex>       check that the file has this SHA-256 before putting
+                           it in the folder. needs one link to one file
       --select <glob>      keep only files matching this pattern, such as
                            "**/*.csv". repeat it for more
       --exclude <glob>     leave out files matching this pattern. repeat it for
@@ -29,10 +29,10 @@ options:
   -q, --quiet              print only the answer, warnings and errors
   -v, --verbose...         say more: -v adds detail and counters, -vv adds debug
                            logs
-      --json               print one JSON document on stdout instead of the
-                           story
+      --json               print one JSON document on stdout, not the usual
+                           output
       --offline            use only what is already on this machine
-  -y, --yes                approve confirmations, but never choose a dataset for
+  -y, --yes                answer yes to questions, but never pick a dataset for
                            you
       --color <when>       when to use color: auto, the default, always or never
   -C <dir>                 run as if fetchloom started in <dir>
@@ -44,7 +44,7 @@ examples:
   fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
   fetchloom get -i links.txt
 
-on disk: writes one output folder for each link through the cache. does not
-create project files
+on disk: writes one folder for each link, through the cache. does not create
+data.toml or data.lock
 
 docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/get.html

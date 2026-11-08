@@ -31,7 +31,7 @@ apfs supports copy-on-write clones: a clone shares its blocks with the cached fi
 stderr excerpt when the project and cache share an apfs disk:
 
 ```text
-     Placed data/iris · 1 file linked from the cache
+     Placed data/iris · 1 file linked to the cache
 ```
 
 ## icloud drive and cloud storage

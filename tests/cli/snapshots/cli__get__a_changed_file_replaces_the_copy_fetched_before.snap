@@ -4,4 +4,4 @@ expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
    Replaced iris/iris.csv
-    Fetched iris.csv into iris · linked from the cache
+    Fetched iris.csv into iris · linked to the cache

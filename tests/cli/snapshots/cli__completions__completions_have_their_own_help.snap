@@ -13,9 +13,9 @@ arguments:
 options:
   -q, --quiet         print only the answer, warnings and errors
   -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
-      --json          print one JSON document on stdout instead of the story
+      --json          print one JSON document on stdout, not the usual output
       --offline       use only what is already on this machine
-  -y, --yes           approve confirmations, but never choose a dataset for you
+  -y, --yes           answer yes to questions, but never pick a dataset for you
       --color <when>  when to use color: auto, the default, always or never
   -C <dir>            run as if fetchloom started in <dir>
   -h, --help          print help

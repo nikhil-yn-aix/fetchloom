@@ -1,6 +1,6 @@
 # fetchloom
 
-fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64. `data.toml` is the shopping list, `data.lock` is the receipt pinning files by SHA-256 and size, and the shared cache is the pantry. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
+fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64. `data.toml` lists the datasets, `data.lock` pins their files by SHA-256 and size, and one cache folder keeps each file once for every project. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
 
 ## using fetchloom
 
