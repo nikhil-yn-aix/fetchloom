@@ -1108,15 +1108,10 @@ fn tell_fetched(
     if let ([path], [fetched], [remote]) = (paths, fetched, files) {
         match fetched.origin {
             Origin::Network => {
-                let mut text = format!(
-                    "{path} · {} in {}",
-                    units::size(fetched.size),
-                    units::duration(elapsed)
+                let text = format!(
+                    "{path} · {}",
+                    units::downloaded([(fetched.size, fetched.moved)], elapsed)
                 );
-                if elapsed >= Duration::from_secs(1) {
-                    text.push_str(" · ");
-                    text.push_str(&units::rate(fetched.size, elapsed));
-                }
                 output.step("Downloaded", &text);
             }
             Origin::NotModified => output.step(
@@ -1142,17 +1137,16 @@ fn tell_fetched(
         );
         return;
     }
-    let bytes: u64 = downloaded.iter().map(|fetched| fetched.size).sum();
-    let mut text = format!(
-        "{} · {} in {}",
+    let text = format!(
+        "{} · {}",
         units::count(downloaded.len() as u64, "file", "files"),
-        units::size(bytes),
-        units::duration(elapsed)
+        units::downloaded(
+            downloaded
+                .iter()
+                .map(|fetched| (fetched.size, fetched.moved)),
+            elapsed
+        )
     );
-    if elapsed >= Duration::from_secs(1) {
-        text.push_str(" · ");
-        text.push_str(&units::rate(bytes, elapsed));
-    }
     output.step("Downloaded", &text);
 }
 

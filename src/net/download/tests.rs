@@ -656,6 +656,28 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
     );
     assert_eq!(net.work.counts().resumes, 1);
     assert_eq!(asked.lock().unwrap().len(), 2);
+    assert_eq!(
+        fetched.moved,
+        u64::try_from(body.len() - received).unwrap(),
+        "the bytes the first run kept are not moved again"
+    );
+}
+
+#[test]
+fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
+    let (url, _) = serve(vec![reply("200 OK", &[], "abcd")]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url);
+    let mut fetch = Fetch::new(url.clone());
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        (fetched.origin, fetched.size, fetched.moved),
+        (Origin::Network, 4, 4)
+    );
+    fetch.expect.sha256 = Some(fetched.digest);
+    let found = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!((found.origin, found.moved), (Origin::Cache, 0));
 }
 
 /// a whole answer carrying `body` as it is.

@@ -108,6 +108,7 @@ impl Fetch {
         Some(Fetched {
             digest,
             size,
+            moved: 0,
             name: None,
             origin: Origin::Cache,
         })
@@ -158,6 +159,9 @@ pub(crate) enum Origin {
 pub(crate) struct Fetched {
     pub(crate) digest: Sha256,
     pub(crate) size: u64,
+    /// the bytes this run received for the file: less than `size` when an earlier run's bytes
+    /// were kept, more when a try started over, none when the cache or the server's 304 answered.
+    pub(crate) moved: u64,
     /// the file name the server gave, when it gave one.
     pub(crate) name: Option<String>,
     pub(crate) origin: Origin,
@@ -261,6 +265,7 @@ impl Batch {
 struct Reach {
     held: AtomicU64,
     furthest: AtomicU64,
+    moved: AtomicU64,
 }
 
 impl Reach {
@@ -269,6 +274,7 @@ impl Reach {
             Event::Started { resumed, .. } => self.held.store(*resumed, Ordering::Relaxed),
             Event::Bytes(bytes) => {
                 self.held.fetch_add(*bytes, Ordering::Relaxed);
+                self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
             Event::Waiting | Event::WebPage { .. } => {}
         }
@@ -404,7 +410,10 @@ impl Net {
                     name,
                     resumed,
                 }) => match verify(&fetch.url, &fetch.expect, &stored) {
-                    Ok(()) => return Ok(self.remember(fetch, cache, &stored, validators, name)),
+                    Ok(()) => {
+                        let moved = reach.moved.load(Ordering::Relaxed);
+                        return Ok(self.remember(fetch, cache, &stored, validators, name, moved));
+                    }
                     // bytes from two connections may not belong together, so a resumed or split
                     // download that does not match starts over once, as one stream, before it
                     // counts as a mismatch
@@ -420,23 +429,7 @@ impl Net {
                     tracing::debug!("the earlier download cannot be continued, starting over");
                     partial.discard();
                 }
-                Ok(Answer::Divert(next)) => {
-                    diversions += 1;
-                    if diversions > DIVERSIONS {
-                        return Err(Error::new(
-                            Kind::SourceInvalid,
-                            format!(
-                                "{} kept sending pages instead of the file",
-                                host(&fetch.url)
-                            ),
-                        ));
-                    }
-                    self.typed
-                        .check(&next)
-                        .map_err(|reason| failure::refused(&next, &reason))?;
-                    tracing::debug!(next = %super::Shown(&next), "the page points elsewhere");
-                    from = next;
-                }
+                Ok(Answer::Divert(next)) => from = self.divert(fetch, next, &mut diversions)?,
                 Err(Failure::Final(err)) => return Err(progress_kept(err, partial)),
                 Err(Failure::Limited { reason }) => {
                     retry
@@ -455,6 +448,26 @@ impl Net {
                 }
             }
         }
+    }
+
+    /// the link a page pointed to, once it is checked, unless pages have pointed elsewhere too
+    /// often already.
+    fn divert(&self, fetch: &Fetch, next: Url, diversions: &mut u32) -> Result<Url, Error> {
+        *diversions += 1;
+        if *diversions > DIVERSIONS {
+            return Err(Error::new(
+                Kind::SourceInvalid,
+                format!(
+                    "{} kept sending pages instead of the file",
+                    host(&fetch.url)
+                ),
+            ));
+        }
+        self.typed
+            .check(&next)
+            .map_err(|reason| failure::refused(&next, &reason))?;
+        tracing::debug!(next = %super::Shown(&next), "the page points elsewhere");
+        Ok(next)
     }
 
     fn in_cache(&self, fetch: &Fetch, cache: &Cache) -> Option<Fetched> {
@@ -904,6 +917,7 @@ impl Net {
         stored: &Stored,
         validators: Validators,
         name: Option<String>,
+        moved: u64,
     ) -> Fetched {
         if stored.new {
             Work::add(&self.work.objects_written, 1);
@@ -931,6 +945,7 @@ impl Net {
         Fetched {
             digest: stored.digest,
             size: stored.size,
+            moved,
             name,
             origin: Origin::Network,
         }
@@ -1124,6 +1139,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
     Fetched {
         digest: record.sha256,
         size: record.size,
+        moved: 0,
         name: record.name,
         origin,
     }

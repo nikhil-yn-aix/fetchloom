@@ -27,6 +27,29 @@ pub(crate) fn rate(bytes: u64, elapsed: Duration) -> String {
     size(per_second) + "/s"
 }
 
+/// what downloads brought, from each file's size and the bytes this run moved for it:
+/// `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the rate counts only the
+/// bytes moved, so a resumed file does not look faster than the link.
+pub(crate) fn downloaded(files: impl IntoIterator<Item = (u64, u64)>, elapsed: Duration) -> String {
+    let (mut total, mut moved, mut earlier) = (0_u64, 0_u64, 0_u64);
+    for (file, moved_for_it) in files {
+        total = total.saturating_add(file);
+        moved = moved.saturating_add(moved_for_it);
+        earlier = earlier.saturating_add(file.saturating_sub(moved_for_it));
+    }
+    let mut text = format!("{} in {}", size(total), duration(elapsed));
+    if elapsed >= Duration::from_secs(1) {
+        text.push_str(" · ");
+        text.push_str(&rate(moved, elapsed));
+    }
+    if earlier > 0 {
+        text.push_str(" · ");
+        text.push_str(&size(earlier));
+        text.push_str(" from an earlier run");
+    }
+    text
+}
+
 /// a rate that is already in bytes per second, such as a moving average: `3.4 MiB/s`.
 pub(crate) fn speed(per_second: f64) -> String {
     const UNITS: [&str; 5] = ["KiB", "MiB", "GiB", "TiB", "PiB"];
@@ -182,6 +205,36 @@ mod tests {
     fn clocks_tick_in_whole_seconds() {
         assert_eq!(seconds(Duration::from_millis(12_900)), "12 s");
         assert_eq!(seconds(Duration::from_secs(245)), "4 min 05 s");
+    }
+
+    #[test]
+    fn a_download_rates_only_the_bytes_this_run_moved() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(
+            downloaded([(80 * MIB, 80 * MIB)], Duration::from_secs(2)),
+            "80.0 MiB in 2.0 s · 40.0 MiB/s"
+        );
+        assert_eq!(
+            downloaded([(80 * MIB, 80 * MIB)], Duration::from_millis(803)),
+            "80.0 MiB in 803 ms",
+            "below a second a rate would only be noise"
+        );
+        assert_eq!(
+            downloaded(
+                [(40 * MIB, 10 * MIB), (40 * MIB, 40 * MIB)],
+                Duration::from_secs(2)
+            ),
+            "80.0 MiB in 2.0 s · 25.0 MiB/s · 30.0 MiB from an earlier run",
+            "an earlier run's bytes count in the size, not in the rate"
+        );
+        assert_eq!(
+            downloaded(
+                [(40 * MIB, 10 * MIB), (40 * MIB, 60 * MIB)],
+                Duration::from_secs(2)
+            ),
+            "80.0 MiB in 2.0 s · 35.0 MiB/s · 30.0 MiB from an earlier run",
+            "a file fetched twice does not hide another's kept bytes"
+        );
     }
 
     #[test]

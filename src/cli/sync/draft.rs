@@ -853,6 +853,7 @@ mod tests {
             &Fetched {
                 digest: stored.digest,
                 size: stored.size,
+                moved: stored.size,
                 name: Some("other.txt".to_owned()),
                 origin: crate::net::Origin::Network,
             },
@@ -948,6 +949,7 @@ mod tests {
             let fetched = Fetched {
                 digest: stored.digest,
                 size: stored.size,
+                moved: stored.size,
                 name: None,
                 origin: crate::net::Origin::Network,
             };

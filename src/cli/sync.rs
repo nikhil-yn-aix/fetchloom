@@ -7,7 +7,6 @@ pub(super) mod place;
 pub(super) mod unpack;
 
 use std::collections::{BTreeSet, HashSet};
-use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
@@ -508,17 +507,16 @@ impl<'a> Loop<'a> {
             .filter(|fetched| fetched.origin == Origin::Network)
             .collect();
         if !downloaded.is_empty() {
-            let bytes: u64 = downloaded.iter().map(|fetched| fetched.size).sum();
-            let elapsed = started.elapsed();
-            let mut text = format!(
-                "{} · {} in {}",
+            let text = format!(
+                "{} · {}",
                 units::count(downloaded.len() as u64, "file", "files"),
-                units::size(bytes),
-                units::duration(elapsed)
+                units::downloaded(
+                    downloaded
+                        .iter()
+                        .map(|fetched| (fetched.size, fetched.moved)),
+                    started.elapsed()
+                )
             );
-            if elapsed.as_secs() >= 1 {
-                let _ = write!(text, " · {}", units::rate(bytes, elapsed));
-            }
             self.context.output.step("Downloaded", &text);
         }
     }

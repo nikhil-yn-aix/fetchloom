@@ -1318,13 +1318,12 @@ async fn learn_name(
             remote.path = given;
         }
         if fetched.origin == crate::net::Origin::Network {
-            let elapsed = crate::units::duration(started.elapsed());
             context.output.step(
                 "Downloaded",
                 &format!(
-                    "{} · {} in {elapsed}",
+                    "{} · {}",
                     remote.path,
-                    crate::units::size(fetched.size)
+                    crate::units::downloaded([(fetched.size, fetched.moved)], started.elapsed())
                 ),
             );
         }
