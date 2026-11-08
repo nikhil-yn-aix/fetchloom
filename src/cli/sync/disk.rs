@@ -236,6 +236,9 @@ impl Survey {
                 continue;
             };
             self.disk.insert(path.clone(), look);
+            if self.writable.remove(&previous) {
+                self.writable.insert(path.clone());
+            }
             if let Some(record) = record {
                 self.state.files.remove(&previous);
                 self.state.files.insert(path.clone(), record);
@@ -1469,6 +1472,29 @@ mod tests {
         assert_eq!(survey.listed["data/caf\u{e9}.txt"], listed);
         assert!(survey.state.files.is_empty());
         assert!(!survey.needs_writing);
+    }
+
+    // runs where the disk sees composed and decomposed unicode as one name, as macos disks do
+    #[test]
+    fn a_writable_file_listed_in_another_composition_stays_writable_under_the_targets_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/cafe\u{301}.txt"), b"a").unwrap();
+        if !project.root.join("data/caf\u{e9}.txt").is_file() {
+            return;
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        assert_eq!(survey.writable.len(), 1);
+        let locked = locked("caf\u{e9}.txt", b"a");
+        survey.retarget(&project.root, &[target(&locked, "data/caf\u{e9}.txt")]);
+        assert!(
+            survey.writable.contains("data/caf\u{e9}.txt"),
+            "{:?}",
+            survey.writable
+        );
     }
 
     // runs where the disk ignores case, as windows and macos disks do by default
