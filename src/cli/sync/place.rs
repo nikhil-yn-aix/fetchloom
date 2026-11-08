@@ -1044,6 +1044,20 @@ mod tests {
     use crate::output::{Level, Style};
     use crate::project::state::State;
 
+    /// a project's data folder cannot leave the project, so a sync whose cache is on another
+    /// drive tells the person to move the project, while other reasons name the data folder.
+    #[test]
+    fn a_copy_warning_names_the_project_when_the_cache_is_on_another_drive() {
+        assert!(
+            tell::copy_warning(crate::place::Unlinked::OtherDrive, "data").starts_with(
+                "the cache is on another drive than the project, so files were copied. "
+            )
+        );
+        assert_eq!(
+            tell::copy_warning(crate::place::Unlinked::NoLinks, "data"),
+            "the drive holding data cannot link files, so files were copied"
+        );
+    }
 
     /// a cached file that cannot be checked or noted as changed is named as a file in the cache,
     /// without the words fetchloom uses inside for those steps.

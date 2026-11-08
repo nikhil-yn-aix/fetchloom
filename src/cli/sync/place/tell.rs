@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::put::Tally;
 use super::{Blocker, Entry, Placement, Preview, Reason};
 use crate::output::Output;
-use crate::place::Placer;
+use crate::place::{Placer, Unlinked};
 use crate::plan;
 use crate::project::manifest::Manifest;
 use crate::units;
@@ -56,7 +56,7 @@ pub(super) fn tell(
     if tallies.values().any(|tally| tally.unlinked > 0)
         && let Some(why) = placer.unlinked()
     {
-        output.warn(&why.copied_because(&manifest.data_dir, "files were"));
+        output.warn(&copy_warning(why, &manifest.data_dir));
     }
     warn_kept(output, placement);
     for path in &placement.restored {
@@ -69,6 +69,15 @@ pub(super) fn tell(
                 "{path} was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml"
             ));
         }
+    }
+}
+
+/// why a sync copied files it would rather have linked. a data folder stays inside its project,
+/// so when the cache is on another drive, it is the project that moves.
+pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> String {
+    match why {
+        Unlinked::OtherDrive => why.copied_because("the project", "files were"),
+        Unlinked::Synced(_) | Unlinked::NoLinks => why.copied_because(data_dir, "files were"),
     }
 }
 

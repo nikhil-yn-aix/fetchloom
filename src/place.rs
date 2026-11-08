@@ -133,7 +133,7 @@ impl Unlinked {
                 format!("the drive holding {place} cannot link files, so {subject} copied")
             }
             Self::OtherDrive => format!(
-                "the cache is on another drive, so {subject} copied. set FETCHLOOM_CACHE to a folder on this drive to let fetchloom try links"
+                "the cache is on another drive than {place}, so {subject} copied. to link files instead, put both on one drive: move {place} to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of {place}. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
             ),
         }
     }
