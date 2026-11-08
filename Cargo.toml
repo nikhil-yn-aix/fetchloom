@@ -73,6 +73,10 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }
 
+# turning off transparent huge pages for the process needs prctl
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["thread"] }
+
 # block cloning on other systems; linux uses rustix
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reflink-copy = { version = "0.1", default-features = false }

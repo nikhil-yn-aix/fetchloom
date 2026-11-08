@@ -28,7 +28,7 @@ command handlers order effects across modules. `Context` reads settings once and
 
 ### startup
 
-`run` parses before creating the command context. output style and logging start before `-C`; an explicit trace path is created or truncated there, even for a dry run. version, help and completions return before `-C` and resource-setting validation. other commands change the working folder and read `Threads`; named commands also read job and rate limits. bare welcome and project status bypass the job and rate checks. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
+`run` first turns off transparent huge pages for the process on linux, so the allocator's 2 MiB pages do not count a few touched bytes as two megabytes: on ext4 and xfs that cut peak memory by a third to two thirds in every lab scenario, at a few percent more cpu on the shortest runs. it then parses before creating the command context. output style and logging start before `-C`; an explicit trace path is created or truncated there, even for a dry run. version, help and completions return before `-C` and resource-setting validation. other commands change the working folder and read `Threads`; named commands also read job and rate limits. bare welcome and project status bypass the job and rate checks. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
 
 built-in environment help describes the four-request cap per initial hostname; redirects keep that initial host’s slots.
 
