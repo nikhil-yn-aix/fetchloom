@@ -113,7 +113,10 @@ fn cli_output_ctrl_c_cancels_an_open_link_list() -> Result {
     let stderr = text(&output.stderr)?;
     assert!(ended.is_ok(), "{ended:?}\n{stderr}");
     assert_eq!(output.status.code(), Some(130), "{stderr}");
-    assert!(stderr.contains("stopped"), "{stderr}");
+    assert!(
+        stderr.contains("    Stopped at your request\n") && !stderr.contains("error:"),
+        "{stderr}"
+    );
     assert!(
         !sandbox.cache().exists(),
         "cancelled input must not open the cache"

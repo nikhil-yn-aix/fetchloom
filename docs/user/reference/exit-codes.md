@@ -14,7 +14,7 @@ exit codes group failures, while error kinds identify the cause.
 | 50 | `local.io`, `local.not_empty`, `project.invalid`, `project.changed` |
 | 130 | `interrupted` |
 
-a cancel you choose at a question keeps its exit code: q at the dataset list exits 2, no exits 1 and ctrl-c exits 130. a person sees one `Cancelled` line instead of `error:`, and `--json`, which never asks, reports errors as before.
+a cancel you choose at a question keeps its exit code: q at the dataset list exits 2, no exits 1 and ctrl-c exits 130. a person sees one `Cancelled` line instead of `error:`, and `--json`, which never asks, reports errors as before. a stop you ask for with ctrl-c during other work is no error either: it exits 130, a person sees a `Stopped` line instead of `error:`, and `--json` reports it as `interrupted`.
 
 `--json` returns the kind in `errors[0].kind`; verbose output also shows it. help text is a suggestion for a person to check, not a command for a script to run unchecked.
 

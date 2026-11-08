@@ -520,7 +520,7 @@ impl Net {
     /// waits for a free slot for this host, then for one overall.
     async fn permit(&self, url: &Url) -> Result<Permits, Error> {
         let per_host = self.slots(url);
-        let closed = |_| Error::new(Kind::Interrupted, "stopped");
+        let closed = |_| failure::interrupted(url);
         let wait = async {
             let host = per_host.acquire_owned().await.map_err(closed)?;
             let all = self.jobs.clone().acquire_owned().await.map_err(closed)?;

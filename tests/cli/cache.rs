@@ -410,7 +410,10 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     let status = child.wait()?;
     let report = reader.join().unwrap();
     assert_eq!(status.code(), Some(130), "{report}");
-    assert!(report.contains("stopped"), "{report}");
+    assert!(
+        report.contains("    Stopped at your request\n") && !report.contains("error:"),
+        "{report}"
+    );
     assert!(object.exists());
     assert_eq!(fs::read_dir(cache.join("changed"))?.count(), 0);
     Ok(())

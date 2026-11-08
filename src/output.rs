@@ -400,19 +400,12 @@ impl Output {
     }
 
     /// a failure: the sentence, its supporting lines, and what to do next. a cancel the person
-    /// chose is no failure, so it is one plain line of what was cancelled, then the help as a hint.
+    /// chose is no failure, so it is one plain line of what was cancelled, then the help as a
+    /// hint, and neither is a stop they asked for, which is one plain line of where it stopped.
     pub(crate) fn error(&self, error: &Error) {
-        if self.json {
-            return;
+        if !self.json {
+            self.line(&failure_text(error, self.level, self.style.color));
         }
-        if let Some(what) = &error.cancelled {
-            self.line(&verb_line("Cancelled", what, Tone::Warn, self.style.color));
-            if let Some(help) = &error.help {
-                self.line(&hint_line(help, self.style.color));
-            }
-            return;
-        }
-        self.line(&error_text(error, self.level, self.style.color));
     }
 
     /// a bar for one download, hidden unless a person is watching the terminal.
@@ -750,7 +743,7 @@ impl Output {
 
     /// says that a first ctrl-c was heard, and what a second one does.
     pub(crate) fn stopping(&self) {
-        self.mark("Stopping", "press ctrl-c again to quit now");
+        self.mark("Stopping", "(press ctrl-c again to quit at once)");
     }
 
     /// clears the bars and shows the cursor again, for a run that ends at once, as at a second
@@ -998,6 +991,53 @@ fn verb_line(verb: &str, text: &str, tone: Tone, color: bool) -> String {
         "{style}{verb:>11}{style:#} {}",
         subject(&plain(text), color)
     )
+}
+
+/// what [`Output::error`] writes for `error`.
+fn failure_text(error: &Error, level: Level, color: bool) -> String {
+    if let Some(what) = &error.cancelled {
+        let mut text = verb_line("Cancelled", what, Tone::Warn, color);
+        if let Some(help) = &error.help {
+            text.push('\n');
+            text.push_str(&hint_line(help, color));
+        }
+        return text;
+    }
+    if error.kind == crate::error::Kind::Interrupted {
+        return stopped_text(error, color);
+    }
+    error_text(error, level, color)
+}
+
+/// a stop the person asked for: a `Stopped` line made from the error's sentence, which every stop
+/// starts with "stopped", its supporting lines dim under it, and its help as a hint.
+fn stopped_text(error: &Error, color: bool) -> String {
+    let style = toned(color, Tone::Warn);
+    let dim = paint(color, Paint::new().dimmed());
+    let message = plain(&error.message);
+    let rest = match message.strip_prefix("stopped") {
+        Some(rest) => Cow::Borrowed(rest),
+        // a sentence that does not say so still reads, after a colon
+        None => Cow::Owned(format!(": {message}")),
+    };
+    let mut text = format!(
+        "{style}{:>11}{style:#}{}",
+        "Stopped",
+        accented(&rest, Paint::new(), color)
+    );
+    for line in &error.details {
+        let _ = write!(
+            text,
+            "\n{:>11} {dim}{}{dim:#}",
+            "",
+            accented(&plain(line), dim, color)
+        );
+    }
+    if let Some(help) = &error.help {
+        text.push('\n');
+        text.push_str(&hint_line(help, color));
+    }
+    text
 }
 
 fn error_text(error: &Error, level: Level, color: bool) -> String {
@@ -1311,6 +1351,57 @@ mod tests {
                 &format!("  {said}"),
                 &format!("  help: {help}"),
             ]
+        );
+    }
+
+    /// a stop the person asked for is no failure, as a cancel they chose is not: a `Stopped`
+    /// line in the warning color made from the error's sentence, its supporting lines dim under
+    /// it and its help as a hint, never `error:`, even with -v.
+    #[test]
+    fn a_stop_is_a_plain_line_not_an_error() {
+        use crate::error::{Error, Kind};
+        let kept = "the 18.3 MiB downloaded so far is kept, and the next run continues from there";
+        let stop = Error::new(Kind::Interrupted, "stopped while talking to 127.0.0.1")
+            .detail(kept)
+            .help("run `fetchloom sync` again");
+        assert_eq!(
+            super::failure_text(&stop, Level::Verbose, false)
+                .lines()
+                .collect::<Vec<_>>(),
+            [
+                "    Stopped while talking to 127.0.0.1",
+                &format!("            {kept}"),
+                "  hint: run `fetchloom sync` again",
+            ]
+        );
+        for (message, shown) in [
+            ("stopped", "    Stopped"),
+            (
+                "stopped, and nothing was added",
+                "    Stopped, and nothing was added",
+            ),
+            ("the list closed", "    Stopped: the list closed"),
+        ] {
+            let stop = Error::new(Kind::Interrupted, message);
+            assert_eq!(super::failure_text(&stop, Level::Normal, false), shown);
+        }
+        let warn = super::toned(true, super::Tone::Warn);
+        let dim = Paint::new().dimmed();
+        assert_eq!(
+            super::failure_text(&stop, Level::Normal, true)
+                .lines()
+                .take(2)
+                .collect::<Vec<_>>(),
+            [
+                format!("{warn}    Stopped{warn:#} while talking to 127.0.0.1"),
+                format!("            {dim}{kept}{dim:#}"),
+            ]
+        );
+        // a cancel at a question, which ctrl-c ends as interrupted too, still says what it cancelled
+        let cancel = Error::new(Kind::Interrupted, "stopped").cancelled("the question");
+        assert_eq!(
+            super::failure_text(&cancel, Level::Normal, false),
+            "  Cancelled the question"
         );
     }
 

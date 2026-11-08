@@ -770,14 +770,18 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
         .all(|(_, error)| error.help == first.help)
         .then(|| first.help.clone())
         .flatten();
-    let mut error = Error::new(
-        first.kind,
-        format!(
-            "{} of {} could not be fetched",
-            failed.len(),
-            units::count(links.len() as u64, "link", "links")
-        ),
+    let failed_links = format!(
+        "{} of {} could not be fetched",
+        failed.len(),
+        units::count(links.len() as u64, "link", "links")
     );
+    // a stop says first that it stopped, as every stop does
+    let message = if first.kind == Kind::Interrupted {
+        format!("stopped, and {failed_links}")
+    } else {
+        failed_links
+    };
+    let mut error = Error::new(first.kind, message);
     error.failures = failed
         .iter()
         .map(|(index, failure)| FileFailure {
@@ -1204,6 +1208,24 @@ mod tests {
             "https://***@example.org/a.csv?token=***&v=1"
         );
         assert_eq!(shown("zenodo:1"), "zenodo:1");
+    }
+
+    /// links that a stop kept from their folders end the run as that stop, which says first that
+    /// it stopped, as every stop does.
+    #[test]
+    fn links_a_stop_kept_from_their_folders_end_as_a_stop() {
+        let links = [
+            "https://example.org/a.csv".to_owned(),
+            "zenodo:1".to_owned(),
+        ];
+        let stopped = some_failed(&links, &[(1, crate::stop::Stop::stopped())]);
+        assert_eq!(stopped.kind, Kind::Interrupted);
+        assert_eq!(
+            stopped.message,
+            "stopped, and 1 of 2 links could not be fetched"
+        );
+        let failed = some_failed(&links, &[(0, Error::new(Kind::SourceInvalid, "x"))]);
+        assert_eq!(failed.message, "1 of 2 links could not be fetched");
     }
 
     fn approval_context() -> Context {

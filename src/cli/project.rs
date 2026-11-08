@@ -319,9 +319,9 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
     }
 }
 
-/// `error`, once it has told a person what state the project is in when a stop ended the add:
-/// the stop's own message does not. `restored` says whether the add left no change of its own
-/// in data.toml and data.lock, having made none or put back what it made.
+/// `error`, once it says what state the project is in when a stop ended the add, which the stop's
+/// own message does not. `restored` says whether the add left no change of its own in data.toml
+/// and data.lock, having made none or put back what it made.
 fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     // a cancel the person chose says itself what it cancelled, and a stop asked once the add was
     // in place changed nothing about it
@@ -330,18 +330,22 @@ fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     {
         return error;
     }
-    if restored {
-        context.output.done(
-            "Stopped",
-            "nothing was added, and the add left data.toml and data.lock unchanged; anything downloaded so far stays in the cache, so the same add continues from there",
-        );
-    } else {
+    if !restored {
         // the error's details give the steps that put them back
         context
             .output
             .warn("stopped, but data.toml and data.lock could not be put back as they were");
+        return error;
     }
-    error
+    // what a stopped download kept stays in the details, so the same add continues from there.
+    // an error of another kind, met as the stop took effect, ends as the stop
+    let mut stop = if error.kind == Kind::Interrupted {
+        error
+    } else {
+        crate::stop::Stop::stopped()
+    };
+    "stopped, and nothing was added".clone_into(&mut stop.message);
+    stop
 }
 
 /// the add once the project is held: everything but the steps before holding it.

@@ -229,6 +229,50 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
     Ok(())
 }
 
+/// ctrl-c during a download is a stop the person asked for, not an error: a note says a second
+/// ctrl-c quits at once, then one `Stopped` line says where it stopped and a dim line under it
+/// what the download kept. the exit code stays 130.
+#[cfg(unix)]
+#[test]
+fn a_stopped_get_says_so_in_a_plain_line() -> Result {
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let sandbox = Sandbox::new()?;
+    let server = Server::slow_file("/big.bin", body)?;
+    let mut child = sandbox
+        .command(&["get", &server.url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let arrived = part_reaches(&sandbox, 1, &mut child)?;
+    let sent = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()?;
+    let output = child.wait_with_output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(arrived > 0 && sent.success(), "{stderr}");
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    let told: Vec<&str> = stderr.lines().collect();
+    assert!(
+        told.contains(&"   Stopping (press ctrl-c again to quit at once)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("error:"), "{stderr}");
+    let [.., stopped, kept] = told.as_slice() else {
+        return Err(format!("stderr ends before the stop's lines: {stderr}").into());
+    };
+    assert_eq!(
+        *stopped, "    Stopped while talking to 127.0.0.1",
+        "{stderr}"
+    );
+    assert!(
+        kept.starts_with("            the ")
+            && kept.ends_with(" downloaded so far is kept, and the next run continues from there"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// waits until an unfinished download in the cache holds `size` bytes, or the run ends, and says
 /// how many it holds.
 fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {

@@ -2170,11 +2170,56 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     running.interrupt()?;
     let (code, stderr) = running.finish()?;
     assert_eq!(code, Some(130), "{stderr}");
+    told_a_stop(&stderr, "    Stopped, and nothing was added")?;
+    assert!(!stderr.contains("could not be put back"), "{stderr}");
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
+    Ok(())
+}
+
+/// the line under `stopped` in `stderr`, which says what a stopped download kept, once stderr
+/// shows a stop as a person asked for it: a note that a second ctrl-c quits at once, then
+/// `stopped` and that line last, and no `error:`.
+#[cfg(unix)]
+fn told_a_stop<'s>(stderr: &'s str, stopped: &str) -> Result<&'s str> {
+    let told: Vec<&str> = stderr.lines().collect();
     assert!(
-        stderr.contains("nothing was added") && !stderr.contains("could not be put back"),
+        told.contains(&"   Stopping (press ctrl-c again to quit at once)"),
         "{stderr}"
     );
-    assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
+    assert!(!stderr.contains("error:"), "{stderr}");
+    let [.., last, kept] = told.as_slice() else {
+        return Err(format!("stderr ends before the stop's lines: {stderr}").into());
+    };
+    assert_eq!(*last, stopped, "{stderr}");
+    assert!(
+        kept.ends_with(" downloaded so far is kept, and the next run continues from there"),
+        "{stderr}"
+    );
+    Ok(kept)
+}
+
+/// ctrl-c during a sync's download is a stop, not an error: one `Stopped` line says where it
+/// stopped, and a dim line under it what the download kept. the exit code stays 130.
+#[cfg(unix)]
+#[test]
+fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let slow = Server::slow_file("/files/cows.csv", body)?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.cows]\nref = \"{}\"\n", slow.url),
+    )?;
+    let running = Background::start(sandbox.command(&["sync"]))?;
+    wait_until(
+        "bytes to arrive",
+        || Ok(partial_bytes(&sandbox.cache()) > 0),
+    )?;
+    running.interrupt()?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    let kept = told_a_stop(&stderr, "    Stopped while talking to 127.0.0.1")?;
+    assert!(kept.starts_with("            the "), "{stderr}");
     Ok(())
 }
 
@@ -2211,11 +2256,9 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
     running.interrupt()?;
     let (code, stderr) = running.finish()?;
     assert_eq!(code, Some(130), "{stderr}");
-    assert!(
-        stderr.contains("Stopped")
-            && stderr.contains("the add left data.toml and data.lock unchanged"),
-        "{stderr}"
-    );
+    let kept = told_a_stop(&stderr, "    Stopped, and nothing was added")?;
+    assert!(kept.starts_with("            the "), "{stderr}");
+    assert_eq!(stderr.matches("nothing was added").count(), 1, "{stderr}");
     assert_eq!(
         (
             fs::read(work.join("data.toml"))?,
