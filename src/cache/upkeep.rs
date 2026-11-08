@@ -50,14 +50,16 @@ pub(crate) struct Unfinished {
     pub(crate) bytes: u64,
 }
 
+/// what a sweep removed, or a dry run would remove, and what it kept.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Freed {
-    pub(crate) objects: u64,
-    pub(crate) bytes: u64,
-    /// unfinished downloads and temporary files nobody came back for.
-    pub(crate) leftovers: u64,
+    pub(crate) removed_objects: u64,
+    /// the payload bytes of the objects removed.
+    pub(crate) removed_bytes: u64,
+    /// unfinished downloads and temporary files nobody came back for, removed.
+    pub(crate) removed_leftovers: u64,
     /// the bytes those leftovers held.
-    pub(crate) leftover_bytes: u64,
+    pub(crate) removed_leftover_bytes: u64,
     pub(crate) not_removed: Vec<Failure>,
     /// objects no project needs that stay because they are younger than a day.
     pub(crate) kept_objects: u64,
@@ -277,8 +279,8 @@ impl Cache {
                 self.remove_inside(&object.path),
                 &mut freed.not_removed,
             ) {
-                freed.objects += 1;
-                freed.bytes += object.size;
+                freed.removed_objects += 1;
+                freed.removed_bytes += object.size;
             }
         }
         for entry in scan_entries(&self.root.join("unpacked"), &mut freed.not_removed, stop)? {
@@ -296,7 +298,7 @@ impl Cache {
         }
         let abandoned = |modified: SystemTime| grace.is_zero() || old(modified);
         self.sweep_partials(&abandoned, stop, &mut freed)?;
-        freed.leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
+        freed.removed_leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
         stop.check()?;
         self.forget_changed_reporting(&needed.objects, stop, &mut freed.not_removed)?;
         self.forget_url_records(stop, &mut freed.not_removed)?;
@@ -313,8 +315,8 @@ impl Cache {
                     &mut freed.not_removed,
                 )
             {
-                freed.leftovers += 1;
-                freed.leftover_bytes += size;
+                freed.removed_leftovers += 1;
+                freed.removed_leftover_bytes += size;
             }
         }
         stop.check()?;
@@ -386,8 +388,8 @@ impl Cache {
                     self.remove_inside(&leftover),
                     &mut freed.not_removed,
                 ) {
-                    freed.leftovers += 1;
-                    freed.leftover_bytes += size;
+                    freed.removed_leftovers += 1;
+                    freed.removed_leftover_bytes += size;
                 }
             }
             // an empty lock file frees nothing worth counting, and one left behind costs nothing
@@ -778,7 +780,7 @@ mod tests {
                 &Stop::default(),
             )
             .unwrap();
-        assert_eq!(now.objects, 1);
+        assert_eq!(now.removed_objects, 1);
         assert!(!object.exists());
     }
 
@@ -847,7 +849,14 @@ mod tests {
             &Needed::default(),
             SystemTime::now() + GRACE + Duration::from_secs(60),
         );
-        assert_eq!((freed.objects, freed.bytes, freed.leftovers), (0, 0, 0));
+        assert_eq!(
+            (
+                freed.removed_objects,
+                freed.removed_bytes,
+                freed.removed_leftovers
+            ),
+            (0, 0, 0)
+        );
         let report = serde_json::to_value(&freed).unwrap();
         let paths = report["not_removed"].as_array().unwrap();
         assert_eq!(paths.len(), 2);
@@ -876,12 +885,12 @@ mod tests {
                 ..Needed::default()
             };
             assert_eq!(
-                cache.sweep(&keep, SystemTime::now()).objects,
+                cache.sweep(&keep, SystemTime::now()).removed_objects,
                 0,
                 "nothing is old yet"
             );
             let freed = cache.sweep(&keep, later);
-            assert_eq!((freed.objects, freed.bytes), (1, 8));
+            assert_eq!((freed.removed_objects, freed.removed_bytes), (1, 8));
             assert!(cache.find(&needed.digest, Some(6)).is_some());
             assert!(cache.find(&unneeded.digest, Some(8)).is_none());
         }
@@ -904,7 +913,7 @@ mod tests {
                 seal(path);
             }
             let later = SystemTime::now() + GRACE + Duration::from_secs(60);
-            assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 3);
+            assert_eq!(cache.sweep(&Needed::default(), later).removed_leftovers, 3);
             assert!(sealed.iter().all(|path| !path.exists()));
             let left: Vec<String> = fs::read_dir(partial)
                 .unwrap()
@@ -925,7 +934,7 @@ mod tests {
         };
         fs::write(lock("https://example.org/finished"), b"").unwrap();
         let freed = cache.sweep(&Needed::default(), SystemTime::now());
-        assert_eq!(freed.leftovers, 0, "a lock file frees nothing");
+        assert_eq!(freed.removed_leftovers, 0, "a lock file frees nothing");
         assert!(lock("https://example.org/running").exists());
         assert!(!lock("https://example.org/finished").exists());
         drop(running);
@@ -941,7 +950,7 @@ mod tests {
             fs::write(&member, b"unfinished").unwrap();
             seal(&member);
             let freed = cache.sweep(&Needed::default(), SystemTime::now());
-            assert_eq!(freed.leftovers, 1);
+            assert_eq!(freed.removed_leftovers, 1);
             assert!(!folder.exists());
         }
     }
@@ -963,17 +972,17 @@ mod tests {
                 .set_modified(written)
                 .unwrap();
             seal(&member);
-            assert_eq!(cache.sweep(&Needed::default(), now).leftovers, 0);
+            assert_eq!(cache.sweep(&Needed::default(), now).removed_leftovers, 0);
             assert_eq!(
                 cache
                     .sweep(&Needed::default(), written + Duration::from_secs(60))
-                    .leftovers,
+                    .removed_leftovers,
                 0,
                 "a recent write keeps a member in an older folder"
             );
             assert!(member.exists());
             let later = written + GRACE + Duration::from_secs(60);
-            assert_eq!(cache.sweep(&Needed::default(), later).leftovers, 1);
+            assert_eq!(cache.sweep(&Needed::default(), later).removed_leftovers, 1);
             assert!(!folder.exists());
         }
     }

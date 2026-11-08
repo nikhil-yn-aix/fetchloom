@@ -163,7 +163,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     }
     tell_forgotten(output, &freed.forgotten);
     let kept = kept(&freed);
-    if freed.objects == 0 && freed.leftovers == 0 && freed.not_removed.is_empty() {
+    if freed.removed_objects == 0 && freed.removed_leftovers == 0 && freed.not_removed.is_empty() {
         match &kept {
             Some(kept) => {
                 output.done("Ok", "nothing to free yet");
@@ -174,26 +174,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         hint_forgotten(output, &freed);
         return Ok(collected(freed));
     }
-    if freed.objects > 0 {
-        output.step(
-            "Removed",
-            &format!(
-                "{} · {} from the cache",
-                units::count(freed.objects, "file", "files"),
-                units::size(freed.bytes)
-            ),
-        );
-    }
-    if freed.leftovers > 0 {
-        output.step(
-            "Removed",
-            &format!(
-                "{} · {} of unfinished downloads and temporary files",
-                units::count(freed.leftovers, "leftover item", "leftover items"),
-                units::size(freed.leftover_bytes)
-            ),
-        );
-    }
+    tell_removed(output, "Removed", "Removed", &freed);
     if !freed.not_removed.is_empty() {
         let result = serde_json::to_value(&freed).map_err(|err| {
             Error::new(
@@ -225,6 +206,31 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     }
     hint_forgotten(output, &freed);
     Ok(collected(freed))
+}
+
+/// the lines for the objects and the leftovers a sweep removed, or would remove, under `objects`
+/// and `leftovers` as their verbs.
+fn tell_removed(output: &Output, objects: &str, leftovers: &str, freed: &Freed) {
+    if freed.removed_objects > 0 {
+        output.step(
+            objects,
+            &format!(
+                "{} · {} from the cache",
+                units::count(freed.removed_objects, "file", "files"),
+                units::size(freed.removed_bytes)
+            ),
+        );
+    }
+    if freed.removed_leftovers > 0 {
+        output.step(
+            leftovers,
+            &format!(
+                "{} · {} of unfinished downloads and temporary files",
+                units::count(freed.removed_leftovers, "leftover item", "leftover items"),
+                units::size(freed.removed_leftover_bytes)
+            ),
+        );
+    }
 }
 
 fn collected(freed: Freed) -> Collected {
@@ -280,31 +286,12 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
             root.display()
         ));
     }
-    if freed.objects > 0 {
-        output.step(
-            "Would free",
-            &format!(
-                "{} · {} from the cache",
-                units::count(freed.objects, "file", "files"),
-                units::size(freed.bytes)
-            ),
-        );
-    }
-    if freed.leftovers > 0 {
-        output.step(
-            "Would drop",
-            &format!(
-                "{} · {} of unfinished downloads and temporary files",
-                units::count(freed.leftovers, "leftover item", "leftover items"),
-                units::size(freed.leftover_bytes)
-            ),
-        );
-    }
+    tell_removed(output, "Would free", "Would drop", &freed);
     for path in &remove {
         output.detail(&path.display().to_string());
     }
     let nothing = match (
-        freed.objects == 0 && freed.leftovers == 0,
+        freed.removed_objects == 0 && freed.removed_leftovers == 0,
         freed.kept_objects > 0,
     ) {
         (false, _) => None,

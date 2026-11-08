@@ -443,9 +443,9 @@ fn gc_reports_refused_removals_to_people_and_scripts() -> Result {
                 document["result"]["not_removed"][0]["path"],
                 serde_json::json!(object)
             );
-            assert_eq!(document["result"]["objects"], 0);
-            assert_eq!(document["result"]["bytes"], 0);
-            assert_eq!(document["result"]["leftovers"], 0);
+            assert_eq!(document["result"]["removed_objects"], 0);
+            assert_eq!(document["result"]["removed_bytes"], 0);
+            assert_eq!(document["result"]["removed_leftovers"], 0);
             assert!(
                 document["warnings"]
                     .as_array()
@@ -542,8 +542,8 @@ fn gc_reports_failed_registration_removal_with_partial_counts() -> Result {
         if json {
             let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(report["errors"][0]["kind"], "local.io");
-            assert_eq!(report["result"]["objects"], 1);
-            assert_eq!(report["result"]["bytes"], 3);
+            assert_eq!(report["result"]["removed_objects"], 1);
+            assert_eq!(report["result"]["removed_bytes"], 3);
             assert_eq!(report["result"]["not_removed"].as_array().unwrap().len(), 1);
             assert_eq!(
                 report["result"]["not_removed"][0]["path"],
@@ -884,6 +884,6 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     assert!(!partial.join(format!("{left}.part")).exists(), "{report}");
     assert!(!partial.join(format!("{left}.json")).exists(), "{report}");
     assert!(partial.join(format!("{running}.part")).exists(), "{report}");
-    assert_eq!(report["result"]["leftover_bytes"], 3002, "{report}");
+    assert_eq!(report["result"]["removed_leftover_bytes"], 3002, "{report}");
     Ok(())
 }

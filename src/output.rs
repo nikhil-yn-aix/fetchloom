@@ -576,7 +576,7 @@ impl Output {
             (counts.retries, "retry", "retries"),
             (counts.resumes, "resume", "resumes"),
             (counts.objects_written, "new object", "new objects"),
-            (counts.cache_hits, "cache hit", "cache hits"),
+            (counts.cache_hits, "download skipped", "downloads skipped"),
             (counts.reflinks, "reflink", "reflinks"),
             (counts.hardlinks, "hardlink", "hardlinks"),
             (counts.copies, "copy", "copies"),
@@ -586,6 +586,14 @@ impl Output {
             .filter(|(n, _, _)| *n > 0)
             .map(|(n, one, many)| units::count(*n, one, many))
             .collect();
+        if counts.placed_from_cache > 0 {
+            let placed = counts.reflinks + counts.hardlinks + counts.copies;
+            text.push(format!(
+                "{} from the cache, {} downloaded",
+                counts.placed_from_cache,
+                placed.saturating_sub(counts.placed_from_cache)
+            ));
+        }
         if counts.bytes_down > 0 {
             text.insert(
                 1.min(text.len()),

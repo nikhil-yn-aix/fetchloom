@@ -404,7 +404,7 @@ mod tests {
                 scratch
                     .cache
                     .sweep(&crate::cache::Needed::default(), later)
-                    .leftovers,
+                    .removed_leftovers,
                 0
             );
             assert!(folder.is_dir());

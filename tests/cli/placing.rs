@@ -1833,3 +1833,39 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     }
     Ok(())
 }
+
+/// the work counters say how many files a run placed from bytes the cache already held, so a
+/// sync that downloads nothing does not read as one that found nothing in the cache. `-v` says
+/// it in words.
+#[test]
+fn the_counters_tell_files_placed_from_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["--json", "add", &server.url])?;
+    let report: serde_json::Value = serde_json::from_slice(&added.stdout)?;
+    assert_eq!(report["work"]["placed_from_cache"], 0, "{report}");
+    assert!(report["work"].get("cache_hits").is_none(), "{report}");
+    for (name, args) in [
+        ("clone", &["--json", "sync"][..]),
+        ("other", &["-v", "sync"][..]),
+    ] {
+        let clone = sandbox.folder(name)?;
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(sandbox.work().join(file), clone.join(file))?;
+        }
+        let synced = sandbox.command_in(&clone, args).output()?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        if name == "clone" {
+            let report: serde_json::Value = serde_json::from_slice(&synced.stdout)?;
+            assert_eq!(report["work"]["placed_from_cache"], 1, "{report}");
+            assert_eq!(report["work"]["requests"], 0, "{report}");
+        } else {
+            let stderr = text(&synced.stderr)?;
+            assert!(
+                stderr.contains("1 from the cache, 0 downloaded"),
+                "{stderr}"
+            );
+        }
+    }
+    Ok(())
+}

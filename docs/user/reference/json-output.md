@@ -45,7 +45,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `path` | absolute path string, for a dataset, file or subfolder |
 | `status` | `project`: absolute path; ten arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array; `unfinished_downloads`: downloads kept under `partial/` to continue later; `unfinished_bytes`: their bytes |
-| `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `leftover_bytes`: their bytes; `not_removed`: failure records for paths that could not be removed or inspected for cleanup; `forgotten`: root paths of projects whose registration gc removed because their `data.toml` is gone; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
+| `cache gc` | `removed_objects`: removed object count; `removed_bytes`: their payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `removed_leftovers`: removed partial or temporary file count; `removed_leftover_bytes`: their bytes; `not_removed`: failure records for paths that could not be removed or inspected for cleanup; `forgotten`: root paths of projects whose registration gc removed because their `data.toml` is gone; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user` and `valid`; [auth](../commands/auth.md#json) |
 | `auth login`, `auth logout` | `account` with `user` and `saved_to`, or `removed_from` |
 | `help` | `options`: the options fetchloom itself takes, which are those every command takes and `--version`; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
@@ -104,9 +104,9 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 {"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
 
-for `cache gc`, `objects`, `bytes`, `kept_objects`, `kept_bytes`, `leftovers` and `leftover_bytes` count what gc would delete and keep, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
+for `cache gc`, `removed_objects`, `removed_bytes`, `kept_objects`, `kept_bytes`, `removed_leftovers` and `removed_leftover_bytes` count what gc would remove and keep, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 
-the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks` and `copies` stay 0.
+the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks`, `copies` and `placed_from_cache` stay 0.
 
 ## search candidates
 
@@ -134,10 +134,11 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `retries` | scheduled retry waits |
 | `resumes` | accepted nonzero range starts |
 | `objects_written` | new objects counted after successful downloads and archive unpacking |
-| `cache_hits` | download-layer hash or MD5 shortcuts, not every object used by placement |
+| `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
+| `placed_from_cache` | placements by `add`, `sync` and `path` from objects the cache held before the run began, by the object's modification time; the other placements took bytes the run downloaded or unpacked |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 
-a warm project can place cached files with zero cache hits. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.
+`-v` ends with the same counters in words, and, when a run placed files from the cache, how many came from it and how many it downloaded, as in `8 from the cache, 0 downloaded`. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.
 
 a killed process may leave no valid JSON. treat a missing or invalid document as a failure. [scripting](../scripting.md) shows checks for exit codes, schema versions and preserved conflicts.

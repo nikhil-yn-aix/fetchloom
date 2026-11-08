@@ -1026,9 +1026,9 @@ pub(crate) mod tests {
 
         let later = std::time::SystemTime::now() + std::time::Duration::from_hours(48);
         let freed = cache.sweep(&Needed::default(), later);
-        assert_eq!(freed.objects, 1);
-        assert_eq!(freed.bytes, 3);
-        assert_eq!(freed.leftovers, 0);
+        assert_eq!(freed.removed_objects, 1);
+        assert_eq!(freed.removed_bytes, 3);
+        assert_eq!(freed.removed_leftovers, 0);
         for name in ["notes.txt", "unknown"] {
             assert_eq!(
                 fs::read(cache.root.join(name)).unwrap(),

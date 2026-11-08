@@ -13,6 +13,13 @@ use crate::project::Project;
 use crate::project::state::{Look, State};
 use crate::work::Work;
 
+/// where placing counts its work: each method, and the files placed from objects in `present`,
+/// which the cache held before the run downloaded anything.
+pub(super) struct Counted<'w> {
+    pub(super) work: &'w Work,
+    pub(super) present: Option<&'w std::collections::HashSet<crate::digest::Sha256>>,
+}
+
 /// what one dataset's placing cost, for its summary line.
 #[derive(Default)]
 pub(super) struct Tally {
@@ -32,7 +39,7 @@ pub(super) fn put_all<'t>(
     todo: &[&'t Target],
     state: &mut State,
     checked: u64,
-    work: &Work,
+    counted: &Counted,
 ) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
     let order = |index: usize| {
         let target = todo[index];
@@ -64,7 +71,13 @@ pub(super) fn put_all<'t>(
             target.path.clone(),
             placed(target, method, look, writable, checked),
         );
-        count(work, method);
+        count(counted.work, method);
+        if counted
+            .present
+            .is_some_and(|present| present.contains(&target.sha256))
+        {
+            Work::add(&counted.work.placed_from_cache, 1);
+        }
         let tally = tallies.entry(target.dataset).or_default();
         tally.files += 1;
         if method == Method::Copy {
@@ -219,7 +232,19 @@ mod tests {
         std::thread::scope(|scope| {
             let placing = scope.spawn(|| {
                 let mut placer = placer;
-                put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work)
+                let counted = Counted {
+                    work: &work,
+                    present: None,
+                };
+                put_all(
+                    &project,
+                    &mut placer,
+                    &cache,
+                    &todo,
+                    &mut state,
+                    0,
+                    &counted,
+                )
             });
             let observed = ready.recv();
             let changed = if observed.is_ok() {
