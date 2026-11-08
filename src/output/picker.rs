@@ -164,8 +164,8 @@ fn selection_key(
         Err(_) => return Err(cancelled()),
     };
     match key {
-        Key::CtrlC => return Err(Error::new(Kind::Interrupted, "stopped")),
-        Key::Escape | Key::Char('q' | 'n') => return Err(cancelled()),
+        Key::CtrlC => return Err(Error::new(Kind::Interrupted, "stopped").cancelled("the choice")),
+        Key::Escape | Key::Char('q' | 'n') => return Err(cancelled().cancelled("the choice")),
         Key::ArrowUp | Key::Char('k') => *cursor = cursor.saturating_sub(1),
         Key::ArrowDown | Key::Char('j') => *cursor = (*cursor + 1).min(count.saturating_sub(1)),
         Key::Enter if *cursor < count => return Ok(Some(*cursor)),
@@ -180,7 +180,7 @@ fn selection_key(
 
 fn cancelled() -> Error {
     Error::new(Kind::Usage, "nothing was chosen")
-        .help("run it again with one of the references above, or with a link or an id")
+        .help("run it again to choose, or give a link or an id instead")
 }
 
 /// one option: the reference, then from `column` on its title and facts, dim unless the cursor
@@ -283,28 +283,29 @@ mod tests {
         );
     }
 
+    /// q, esc and n are a cancel the person chose; a terminal that closed is not.
     #[test]
     fn cancellation_and_eof_stop_without_choosing() {
-        for key in [
-            Ok(Key::Escape),
-            Ok(Key::Char('q')),
-            Ok(Key::Char('n')),
-            Err(std::io::ErrorKind::UnexpectedEof.into()),
+        for (key, chosen) in [
+            (Ok(Key::Escape), true),
+            (Ok(Key::Char('q')), true),
+            (Ok(Key::Char('n')), true),
+            (Err(std::io::ErrorKind::UnexpectedEof.into()), false),
         ] {
             let error = selection_key(key, &mut 0, 3).unwrap_err();
             assert_eq!(error.kind, Kind::Usage);
             assert_eq!(error.message, "nothing was chosen");
-            assert!(error.help.unwrap().contains("references above"));
+            assert!(error.help.unwrap().contains("give a link or an id instead"));
+            assert_eq!(error.cancelled.is_some(), chosen);
         }
     }
 
     #[test]
     fn ctrl_c_and_interrupted_reads_stop_as_an_interruption() {
         for key in [Ok(Key::CtrlC), Err(std::io::ErrorKind::Interrupted.into())] {
-            assert_eq!(
-                selection_key(key, &mut 0, 3).unwrap_err().kind,
-                Kind::Interrupted
-            );
+            let error = selection_key(key, &mut 0, 3).unwrap_err();
+            assert_eq!(error.kind, Kind::Interrupted);
+            assert_eq!(error.cancelled.as_deref(), Some("the choice"));
         }
     }
 

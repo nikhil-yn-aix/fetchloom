@@ -488,6 +488,39 @@ fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
     Ok(())
 }
 
+/// at a terminal, no or ctrl-c at the question about a large download is a cancel, not an
+/// error: one line says what was cancelled, and the exit codes stay 1 and 130.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
+    let server = Server::start("/huge.bin", vec![huge(), huge()])?;
+    let command = sandbox.command(&["get", &server.url]);
+    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+        // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
+        let Some((exit, screen)) = crate::support::typed(
+            &sandbox.work(),
+            &command,
+            "-isig",
+            "download huge.bin (2.0 GiB)?",
+            keys,
+        )?
+        else {
+            return Ok(());
+        };
+        assert!(screen.contains("download huge.bin (2.0 GiB)?"), "{screen}");
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert!(
+            screen.contains("  Cancelled the download of huge.bin (2.0 GiB)\n"),
+            "{keys:?}: {screen}"
+        );
+        assert!(!screen.contains("error:"), "{keys:?}: {screen}");
+        assert!(!sandbox.work().join("huge").exists(), "{screen}");
+    }
+    Ok(())
+}
+
 #[test]
 fn the_server_can_name_the_file() -> Result {
     let sandbox = Sandbox::new()?;

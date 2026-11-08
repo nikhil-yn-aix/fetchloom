@@ -77,7 +77,11 @@ pub(super) async fn pick(
     } else {
         String::new()
     };
-    if let Some(index) = context.output.choose("which one?", &rows, &footer)? {
+    let chosen = context
+        .output
+        .choose("which one?", &rows, &footer)
+        .map_err(|error| error.cancelling("the choice of a dataset, so nothing changed"))?;
+    if let Some(index) = chosen {
         let reference = report.candidates[index].reference.to_string();
         context.output.step("Chose", &reference);
         Ok(reference)

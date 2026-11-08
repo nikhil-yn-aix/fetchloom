@@ -51,7 +51,15 @@ pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Er
         None | Some(AuthAction::Status) => status(context).await,
         Some(AuthAction::Login(login)) => {
             let account = Account::parse(&login.account, login.host.as_deref())?;
-            sign_in(context, &account, &login).await.map(Report::Login)
+            sign_in(context, &account, &login)
+                .await
+                .map(Report::Login)
+                .map_err(|error| {
+                    error.cancelling(format!(
+                        "signing in to {}, so nothing changed",
+                        title(&account)
+                    ))
+                })
         }
         Some(AuthAction::Logout(logout)) => sign_out(context, &logout),
     }
@@ -493,7 +501,11 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             let shared = account.shared_with();
             if let Some(tools) = shared {
                 let question = format!("{tools} read {} too. remove it?", path.display());
-                match output.ask_yes_no(&question, false)? {
+                let removing = format!("removing the {} key, so nothing changed", title(&account));
+                match output
+                    .ask_yes_no(&question, false)
+                    .map_err(|error| error.cancelling(removing))?
+                {
                     Some(true) => {}
                     None if context.yes => {}
                     Some(false) => {
@@ -568,10 +580,15 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
             "{:>11} some datasets wait for the owner's approval",
             "2."
         ));
-        return Ok(output.ask_yes_no("try again now?", true)? == Some(true));
+        let again = output
+            .ask_yes_no("try again now?", true)
+            .map_err(|error| error.cancelling("trying again"))?;
+        return Ok(again == Some(true));
     }
+    let signing = format!("signing in to {}", title(account));
     if !output
-        .ask_yes_no(&format!("sign in to {} now?", title(account)), true)?
+        .ask_yes_no(&format!("sign in to {} now?", title(account)), true)
+        .map_err(|error| error.cancelling(&signing))?
         .unwrap_or(false)
     {
         return Ok(false);
@@ -588,7 +605,9 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
         host: None,
         with_token: false,
     };
-    sign_in(context, account, &login).await?;
+    sign_in(context, account, &login)
+        .await
+        .map_err(|error| error.cancelling(signing))?;
     Ok(true)
 }
 

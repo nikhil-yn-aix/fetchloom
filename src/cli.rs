@@ -690,12 +690,15 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str) -> Result<(), Error> 
     if yes {
         return Ok(());
     }
-    match output.confirm(&format!("download {what} ({size})?"))? {
+    let cancel = format!("the download of {what} ({size})");
+    match output
+        .confirm(&format!("download {what} ({size})?"))
+        .map_err(|error| error.cancelling(&cancel))?
+    {
         Some(true) => Ok(()),
-        Some(false) => Err(Error::new(
-            Kind::Unconfirmed,
-            format!("did not download {what}"),
-        )),
+        Some(false) => {
+            Err(Error::new(Kind::Unconfirmed, format!("did not download {what}")).cancelled(cancel))
+        }
         None => Err(Error::new(
             Kind::Unconfirmed,
             format!(

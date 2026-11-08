@@ -2426,3 +2426,70 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     assert_eq!(server.requests().len(), 0, "{screen}");
     Ok(())
 }
+
+/// a cancel the person chose is no error: q at the list of search results, ctrl-c there, and no
+/// or ctrl-c at the question about starting a project in the home folder each say what was
+/// cancelled and that nothing changed on a line of their own, never `error:`. the exit codes
+/// stay those scripts know: 2 for q, 1 for no, 130 for ctrl-c.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn a_cancel_at_a_question_is_no_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut catalogs = Vec::new();
+    let mut command = sandbox.command(&["add", "iris"]);
+    for (variable, body) in SEARCHED {
+        let catalog = Server::start(
+            "/",
+            vec![
+                reply("200 OK", &[("Content-Type", "application/json")], body),
+                reply("200 OK", &[("Content-Type", "application/json")], body),
+            ],
+        )?;
+        command.env(variable, &catalog.url);
+        catalogs.push(catalog);
+    }
+    for (keys, code) in [("q", 2), ("\u{3}", 130)] {
+        // -isig lets ctrl-c reach the list as the key it reads, whenever it is typed
+        let Some((exit, screen)) =
+            crate::support::typed(&sandbox.work(), &command, "-isig", "which one?", keys)?
+        else {
+            return Ok(());
+        };
+        assert!(screen.contains("which one?"), "{screen}");
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert!(
+            screen.contains("  Cancelled the choice of a dataset, so nothing changed\n"),
+            "{keys:?}: {screen}"
+        );
+        assert!(!screen.contains("error:"), "{keys:?}: {screen}");
+        assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{screen}");
+    }
+    let home = sandbox.folder("home")?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let asked = sandbox.command(&["add", &server.url]);
+    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+        let Some((exit, screen)) = crate::support::typed(
+            &home,
+            &asked,
+            "-isig",
+            "start the project there anyway?",
+            keys,
+        )?
+        else {
+            return Ok(());
+        };
+        assert!(screen.contains("your home folder"), "{screen}");
+        assert_eq!(exit, Some(code), "{keys:?}: {screen}");
+        assert!(
+            screen.contains(&format!(
+                "  Cancelled starting a project in {}, so nothing changed\n",
+                home.display()
+            )),
+            "{keys:?}: {screen}"
+        );
+        assert!(!screen.contains("error:"), "{keys:?}: {screen}");
+        assert_eq!(listed(&home)?, Vec::<String>::new(), "{screen}");
+    }
+    assert_eq!(server.requests().len(), 0);
+    Ok(())
+}

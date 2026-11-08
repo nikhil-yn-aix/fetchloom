@@ -294,9 +294,14 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
         root.display()
     );
     let elsewhere = "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then run the command again";
+    let cancel = format!(
+        "starting a project in {}, so nothing changed",
+        root.display()
+    );
     match context
         .output
-        .ask_yes_no(&format!("{why}. start the project there anyway?"), false)?
+        .ask_yes_no(&format!("{why}. start the project there anyway?"), false)
+        .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(
@@ -306,7 +311,8 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
                 root.display()
             ),
         )
-        .help(elsewhere)),
+        .help(elsewhere)
+        .cancelled(cancel)),
         None => Err(Error::new(Kind::Unconfirmed, why).help(format!(
             "{elsewhere}, or add --yes to start the project there anyway"
         ))),
@@ -317,8 +323,11 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
 /// the stop's own message does not. `restored` says whether the add left no change of its own
 /// in data.toml and data.lock, having made none or put back what it made.
 fn stopped(context: &Context, error: Error, restored: bool) -> Error {
-    // a stop asked once the add was in place changed nothing about it
-    if error.kind != Kind::Interrupted && context.stop.check_unfinished().is_ok() {
+    // a cancel the person chose says itself what it cancelled, and a stop asked once the add was
+    // in place changed nothing about it
+    if error.cancelled.is_some()
+        || (error.kind != Kind::Interrupted && context.stop.check_unfinished().is_ok())
+    {
         return error;
     }
     if restored {

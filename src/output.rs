@@ -379,9 +379,17 @@ impl Output {
         }
     }
 
-    /// a failure: the sentence, its supporting lines, and what to do next.
+    /// a failure: the sentence, its supporting lines, and what to do next. a cancel the person
+    /// chose is no failure, so it is one plain line of what was cancelled, then the help as a hint.
     pub(crate) fn error(&self, error: &Error) {
         if self.json {
+            return;
+        }
+        if let Some(what) = &error.cancelled {
+            self.line(&verb_line("Cancelled", what, Tone::Warn, self.style.color));
+            if let Some(help) = &error.help {
+                self.line(&hint_line(help, self.style.color));
+            }
             return;
         }
         self.line(&error_text(error, self.level, self.style.color));
@@ -509,7 +517,8 @@ impl Output {
                     Ok(text) if hidden => text,
                     Ok(text) => text.trim().to_owned(),
                     Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                        return Err(Error::new(crate::error::Kind::Interrupted, "stopped"));
+                        return Err(Error::new(crate::error::Kind::Interrupted, "stopped")
+                            .cancelled("the question"));
                     }
                     Err(err) => return Err(Error::io("could not read from the terminal", &err)),
                 };
@@ -1113,7 +1122,9 @@ fn confirmation_key(
         Err(_) => return Ok(Some(false)),
     };
     match key {
-        console::Key::CtrlC => Err(Error::new(crate::error::Kind::Interrupted, "stopped")),
+        console::Key::CtrlC => {
+            Err(Error::new(crate::error::Kind::Interrupted, "stopped").cancelled("the question"))
+        }
         console::Key::Char('y' | 'Y') => Ok(Some(true)),
         console::Key::Char('n' | 'N') => Ok(Some(false)),
         console::Key::Enter => Ok(Some(default)),

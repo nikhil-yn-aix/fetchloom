@@ -100,6 +100,10 @@ pub(crate) struct Error {
     pub(crate) failures: Vec<FileFailure>,
     /// the account that would let the request through, so a person can sign in and retry.
     pub(crate) need: Option<Box<crate::auth::Need>>,
+    /// what the person cancelled, such as "the download of x.zip", when they ended a question
+    /// on purpose. a person reads that as a plain line, not as an error; `--json` and the exit
+    /// code report the error as before.
+    pub(crate) cancelled: Option<String>,
 }
 
 impl Error {
@@ -111,6 +115,7 @@ impl Error {
             result: None,
             failures: Vec::new(),
             need: None,
+            cancelled: None,
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
                     .to_owned()
@@ -148,6 +153,22 @@ impl Error {
     pub(crate) fn help(mut self, help: impl Into<String>) -> Error {
         self.help = Some(help.into());
         self
+    }
+
+    /// marks the error as a cancel the person chose, of `what`.
+    pub(crate) fn cancelled(mut self, what: impl Into<String>) -> Error {
+        self.cancelled = Some(what.into());
+        self
+    }
+
+    /// names what a cancelled question was about, once the caller knows it. any other error
+    /// stays as it is.
+    pub(crate) fn cancelling(self, what: impl Into<String>) -> Error {
+        if self.cancelled.is_some() {
+            self.cancelled(what)
+        } else {
+            self
+        }
     }
 
     /// the help, unless the error has one already.
@@ -359,6 +380,20 @@ mod tests {
             full.or_help("fallback").help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
+    }
+
+    /// a question names what was cancelled once its caller knows it, and leaves the message
+    /// scripts read as it was. an error that is no cancel stays one.
+    #[test]
+    fn only_a_cancel_takes_the_name_of_what_was_cancelled() {
+        let failed = Error::new(Kind::LocalIo, "x").cancelling("the download of x");
+        assert_eq!(failed.cancelled, None);
+        let cancel = Error::new(Kind::Interrupted, "stopped")
+            .cancelled("the question")
+            .cancelling("the download of x");
+        assert_eq!(cancel.cancelled.as_deref(), Some("the download of x"));
+        assert_eq!(cancel.message, "stopped");
+        assert_eq!(cancel.kind.exit_code(), 130);
     }
 
     #[test]
