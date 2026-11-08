@@ -166,10 +166,7 @@ impl Partial {
         md5: bool,
         keep: bool,
     ) -> io::Result<PartialWriter> {
-        let lean = self.cache.experiments().on("CACHE_LEAN_PARTIAL")
-            && offset == 0
-            && !keep
-            && length.is_some_and(|length| length <= SMALL);
+        let lean = offset == 0 && !keep && length.is_some_and(|length| length <= SMALL);
         let file = Arc::new(self.open(offset, keep, lean)?);
         let mut hasher = if md5 {
             Hasher::with_md5()

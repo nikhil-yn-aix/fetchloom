@@ -81,7 +81,7 @@ a download joins a group flush only when its writing handle belongs to the files
 
 an early publication for another download of the same URL uses the original batch flush handle and the same publication lock. a failed batch flush prevents early publication too. discarding a partial waits for that publication before its path can be reused.
 
-the default-off `CACHE_LEAN_PARTIAL` experiment skips the closing checkpoint for a complete, known-size download of at most 1 MiB started at offset 0 without kept ranges. interrupted or slow small downloads still checkpoint their incomplete prefixes. exclusive creation and shared finishing metadata remove redundant filesystem calls; sealing and the durability flush are unchanged.
+a known-size download of at most 1 MiB, started at offset 0 without kept ranges, skips its closing checkpoint once every byte has arrived. interrupted or slow small downloads still checkpoint their incomplete prefixes. exclusive creation and shared finishing metadata remove redundant filesystem calls; sealing and the durability flush are unchanged.
 
 on linux ext4 and xfs, the default-off `CACHE_LOCAL_FSYNC` experiment flushes downloads of at most 1 MiB through their original writing handle after sealing and before publication. these downloads never enter the deferred group. larger downloads, other filesystems and archive batching keep their existing flush policy. a failed file flush publishes no name; journal and device queues are still shared, so this is not I/O isolation.
 
@@ -111,7 +111,7 @@ inspection, verification reads and cleanup retain each failed path with its I/O 
 
 deferred-publication tests inject a real failed `syncfs` through an `O_PATH` descriptor. they check that failed or latched flushes publish no names and that discarding one duplicate changes digest tracking only after its last pending copy is gone.
 
-shared-cache CLI tests gate real requests with channels before releasing cold downloads. two and eight processes use identical or overlapping URL sets, both cold and warm, with cache experiments off and with lean partials, local fsync and no-replace publication enabled together. every process must complete, every placement and cached object must match, and warm runs must make no body requests. pipe readers drain output concurrently; a watchdog kills a stuck cohort without using elapsed time as a correctness assertion.
+shared-cache CLI tests gate real requests with channels before releasing cold downloads. two and eight processes use identical or overlapping URL sets, both cold and warm. every process must complete, every placement and cached object must match, and warm runs must make no body requests. pipe readers drain output concurrently; a watchdog kills a stuck cohort without using elapsed time as a correctness assertion.
 
 cache-lock tests keep conflicting guards alive while checking wait and stop behavior. they check clone lifetime through weak handles: after the last guard drops, a forked test helper may still hold an inherited file descriptor until exec, so immediate lock reacquisition is not a deterministic assertion about that guard.
 

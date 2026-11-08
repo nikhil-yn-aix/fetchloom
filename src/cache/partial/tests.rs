@@ -491,124 +491,100 @@ fn pipelined_writes_preserve_full_disk_errors() {
 }
 
 #[test]
-fn lean_partials_keep_the_same_bytes_and_sealing() {
-    for enabled in [false, true] {
-        let (_dir, cache) = cache();
-        let cache = cache.with_experiments(
-            crate::exp::Experiments::default()
-                .with("CACHE_LEAN_PARTIAL", if enabled { "1" } else { "0" }),
-        );
-        for (index, bytes) in [Vec::new(), b"small".to_vec(), vec![7; BUFFER + 1]]
-            .iter()
-            .enumerate()
-        {
-            let partial = owned(&cache, &format!("https://example.org/lean/{index}"));
-            let mut writer = partial
-                .writer(
-                    0,
-                    Some(bytes.len() as u64),
-                    Validators::default(),
-                    true,
-                    false,
-                )
-                .unwrap();
-            writer.write_all(bytes).unwrap();
-            writer.save().unwrap();
-            assert_eq!(partial.record.exists(), !enabled || bytes.len() > BUFFER);
-            let stored = writer.finish().unwrap();
-            let mut expected = Hasher::with_md5();
-            expected.update(bytes);
-            assert_eq!((stored.digest, stored.md5), expected.finish());
-            let object = cache.object_path(&stored.digest);
-            assert_eq!(fs::read(&object).unwrap(), *bytes);
-            assert!(fs::metadata(object).unwrap().permissions().readonly());
-            assert!(!partial.bytes.exists());
-            assert!(!partial.record.exists());
-        }
-    }
-}
-
-#[test]
-fn lean_partials_keep_checkpoints_for_incomplete_downloads() {
-    for enabled in [false, true] {
-        let (_dir, cache) = cache();
-        let cache = cache.with_experiments(
-            crate::exp::Experiments::default()
-                .with("CACHE_LEAN_PARTIAL", if enabled { "1" } else { "0" }),
-        );
-        let partial = owned(&cache, "https://example.org/incomplete");
+fn complete_small_partials_skip_checkpoints_and_keep_their_bytes() {
+    let (_dir, cache) = cache();
+    for (index, bytes) in [Vec::new(), b"small".to_vec(), vec![7; BUFFER + 1]]
+        .iter()
+        .enumerate()
+    {
+        let partial = owned(&cache, &format!("https://example.org/lean/{index}"));
         let mut writer = partial
-            .writer(0, Some(6), Validators::default(), true, false)
+            .writer(
+                0,
+                Some(bytes.len() as u64),
+                Validators::default(),
+                true,
+                false,
+            )
             .unwrap();
-        writer.write_all(b"abc").unwrap();
+        writer.write_all(bytes).unwrap();
         writer.save().unwrap();
-        drop(writer);
-        let (offset, validators) = partial.resumable().unwrap();
-        assert_eq!(offset, 3);
-        let mut writer = partial
-            .writer(offset, Some(6), validators, true, false)
-            .unwrap();
-        assert!(!writer.lean);
-        writer.write_all(b"def").unwrap();
-        assert_eq!(writer.finish().unwrap().digest, digest::sha256(b"abcdef"));
+        assert_eq!(partial.record.exists(), bytes.len() > BUFFER);
+        let stored = writer.finish().unwrap();
+        let mut expected = Hasher::with_md5();
+        expected.update(bytes);
+        assert_eq!((stored.digest, stored.md5), expected.finish());
+        let object = cache.object_path(&stored.digest);
+        assert_eq!(fs::read(&object).unwrap(), *bytes);
+        assert!(fs::metadata(object).unwrap().permissions().readonly());
+        assert!(!partial.bytes.exists());
+        assert!(!partial.record.exists());
     }
 }
 
 #[test]
-fn lean_partials_never_reopen_a_sealed_object_for_writing() {
-    for enabled in [false, true] {
-        for ((dir, cache), links) in [(cache(), true), (fat(), false)] {
-            let cache = cache.with_experiments(
-                crate::exp::Experiments::default()
-                    .with("CACHE_LEAN_PARTIAL", if enabled { "1" } else { "0" }),
-            );
-            let stored = store(&cache, b"old");
-            let object = cache.object_path(&stored.digest);
-            let partial = owned(&cache, "https://example.org/sealed");
-            if links && hardlinks(dir.path()) {
-                fs::hard_link(&object, &partial.bytes).unwrap();
-            } else {
-                fs::write(&partial.bytes, b"old").unwrap();
-                seal(&partial.bytes);
-            }
-            let mut writer = partial
-                .writer(0, Some(3), Validators::default(), false, false)
-                .unwrap();
-            writer.write_all(b"new").unwrap();
-            let replacement = writer.finish().unwrap();
-            assert_eq!(
-                fs::read(cache.object_path(&replacement.digest)).unwrap(),
-                b"new"
-            );
-            assert_eq!(fs::read(&object).unwrap(), b"old");
-            assert!(fs::metadata(object).unwrap().permissions().readonly());
-        }
-    }
+fn incomplete_small_partials_keep_resumable_checkpoints() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/incomplete");
+    let mut writer = partial
+        .writer(0, Some(6), Validators::default(), true, false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    let (offset, validators) = partial.resumable().unwrap();
+    assert_eq!(offset, 3);
+    let mut writer = partial
+        .writer(offset, Some(6), validators, true, false)
+        .unwrap();
+    assert!(!writer.lean);
+    writer.write_all(b"def").unwrap();
+    assert_eq!(writer.finish().unwrap().digest, digest::sha256(b"abcdef"));
 }
 
 #[test]
-fn lean_partials_leave_split_and_unknown_lengths_unchanged() {
-    for enabled in [false, true] {
-        let (_dir, cache) = cache();
-        let cache = cache.with_experiments(
-            crate::exp::Experiments::default()
-                .with("CACHE_LEAN_PARTIAL", if enabled { "1" } else { "0" }),
-        );
-        let partial = owned(&cache, "https://example.org/kinds");
-        for (length, keep) in [(None, false), (Some(SMALL + 1), false), (Some(12), true)] {
-            let writer = partial
-                .writer(0, length, Validators::default(), false, keep)
-                .unwrap();
-            assert!(!writer.lean);
+fn small_partials_never_reopen_a_sealed_object_for_writing() {
+    for ((dir, cache), links) in [(cache(), true), (fat(), false)] {
+        let stored = store(&cache, b"old");
+        let object = cache.object_path(&stored.digest);
+        let partial = owned(&cache, "https://example.org/sealed");
+        if links && hardlinks(dir.path()) {
+            fs::hard_link(&object, &partial.bytes).unwrap();
+        } else {
+            fs::write(&partial.bytes, b"old").unwrap();
+            seal(&partial.bytes);
         }
-        fs::write(&partial.bytes, b"an earlier longer version").unwrap();
         let mut writer = partial
             .writer(0, Some(3), Validators::default(), false, false)
             .unwrap();
         writer.write_all(b"new").unwrap();
-        let stored = writer.finish().unwrap();
-        assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"new");
+        let replacement = writer.finish().unwrap();
+        assert_eq!(
+            fs::read(cache.object_path(&replacement.digest)).unwrap(),
+            b"new"
+        );
+        assert_eq!(fs::read(&object).unwrap(), b"old");
+        assert!(fs::metadata(object).unwrap().permissions().readonly());
     }
+}
+
+#[test]
+fn split_and_unknown_lengths_keep_their_checkpoint_policy() {
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/kinds");
+    for (length, keep) in [(None, false), (Some(SMALL + 1), false), (Some(12), true)] {
+        let writer = partial
+            .writer(0, length, Validators::default(), false, keep)
+            .unwrap();
+        assert!(!writer.lean);
+    }
+    fs::write(&partial.bytes, b"an earlier longer version").unwrap();
+    let mut writer = partial
+        .writer(0, Some(3), Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"new").unwrap();
+    let stored = writer.finish().unwrap();
+    assert_eq!(fs::read(cache.object_path(&stored.digest)).unwrap(), b"new");
 }
 
 #[cfg(target_os = "linux")]

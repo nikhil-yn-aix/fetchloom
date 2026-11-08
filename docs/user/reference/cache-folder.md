@@ -69,7 +69,7 @@ lookup requires the matching fingerprint and restores the request URL only in me
 
 `ranges` lists pieces finished past the prefix, each with `start`, `end` and the `sha256` of its bytes; it is an empty array when there are none. every declared URL, validator and partial-record field is required. optional values are explicit nulls, not missing fields. incomplete records are discarded as hints; there is no record migration.
 
-progress is saved about once a second while writing. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
+progress is saved about once a second while writing. a complete known-size download of at most 1 MiB, started at offset 0 without retained ranges, needs no closing checkpoint; an interrupted prefix still gets one. resumption rehashes the prefix, keeps the ranges whose bytes still hash to their record when the download may split again, and truncates or overwrites the rest.
 
 the `.lock` file coordinates writers; its contents are unused. a run waiting for another writer first flushes and publishes its own finished downloads, so runs sharing a cold cache do not wait for each other's unpublished files. gc removes an abandoned download's `.part` and `.json`, and the `.lock` of any download nobody holds, finished or abandoned, without counting it among the freed leftovers. a run that opened a `.lock` just before gc removed it notices, once it holds the lock, that the name now points elsewhere or nowhere, and opens the name again, so two runs never own one download. without OS file locks, downloads use unique names under `tmp/` and cannot resume across runs.
 

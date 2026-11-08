@@ -152,11 +152,7 @@ fn sha256(bytes: &[u8]) -> String {
 fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
     for switches in [
         &[][..],
-        &[
-            "CACHE_LEAN_PARTIAL",
-            "CACHE_LOCAL_FSYNC",
-            "CACHE_RENAME_NOREPLACE",
-        ][..],
+        &["CACHE_LOCAL_FSYNC", "CACHE_RENAME_NOREPLACE"][..],
     ] {
         check_shared_cache_syncs(processes, overlapping, warm, switches)?;
     }

@@ -37,10 +37,7 @@ fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
     let sealed = named("part").is_some_and(|path| {
         fs::metadata(path).is_ok_and(|metadata| metadata.permissions().readonly())
     });
-    assert!(
-        sealed && named("json").is_some(),
-        "the first run left {left:?}"
-    );
+    assert!(sealed, "the first run left {left:?}");
     for blocker in &blockers {
         fs::remove_file(blocker)?;
     }
@@ -620,12 +617,11 @@ fn unreadable_change_marks_stop_a_settled_sync() -> Result {
 
 #[test]
 fn small_downloads_keep_their_bytes_with_lean_partials() -> Result {
-    for (enabled, local) in [("0", "0"), ("0", "1"), ("1", "0"), ("1", "1")] {
+    for local in ["0", "1"] {
         let sandbox = Sandbox::new()?;
         let server = Server::start("/abc.bin", vec![file(b"abc", "\"v1\"")])?;
         let output = sandbox
             .command(&["--json", "get", &server.url])
-            .env("FETCHLOOM_EXP_CACHE_LEAN_PARTIAL", enabled)
             .env("FETCHLOOM_EXP_CACHE_LOCAL_FSYNC", local)
             .output()?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
