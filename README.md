@@ -10,6 +10,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
     Started a project in /home/ada/iris-study
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
+  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
 `fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you choose. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` downloads once, without a project.

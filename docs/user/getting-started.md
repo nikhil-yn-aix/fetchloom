@@ -77,6 +77,7 @@ either way, it ends with:
     Started a project in /home/ada/iris-study
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
+  next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
 the folder now holds:

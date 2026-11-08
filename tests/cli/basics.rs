@@ -257,8 +257,14 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
             "every command takes ",
         ),
         (
-            &[&["add"][..], &["remove"], &["sync"], &["cache", "gc"]][..],
-            "`add`, `remove`, `sync` and `cache gc` also take ",
+            &[
+                &["add"][..],
+                &["remove"],
+                &["sync"],
+                &["lock"],
+                &["cache", "gc"],
+            ][..],
+            "`add`, `remove`, `sync`, `lock` and `cache gc` also take ",
         ),
         (&[&["add"][..], &["get"]], "`add` and `get` also take "),
         (&[&["add"][..]], "`add` takes "),

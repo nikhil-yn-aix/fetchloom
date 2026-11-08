@@ -83,7 +83,7 @@ fetchloom auth
 
 ```text
   Signed in hugging face as ada · /home/ada/.cache/huggingface/token
- Signed out kaggle, zenodo, figshare, osf, dataverse at dataverse.harvard.edu, nasa earthdata, physionet
+ Signed out kaggle, zenodo, figshare, osf, nasa earthdata, physionet
 ```
 
 a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.

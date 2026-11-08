@@ -25,7 +25,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add`, `remove`, `sync` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-C <dir>`. `add`, `remove`, `sync`, `lock` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <dir>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
 
 | option | effect |
 |---|---|
@@ -37,7 +37,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color` and `-
 | `-y`, `--yes` | answer yes to questions, but never pick a dataset for you |
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running; help, version and completions ignore it |
-| `-n`, `--dry-run` | with `add`, `remove`, `sync` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. explicit `FETCHLOOM_TRACE` output is still written |
+| `-n`, `--dry-run` | with `add`, `remove`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. explicit `FETCHLOOM_TRACE` output is still written |
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
