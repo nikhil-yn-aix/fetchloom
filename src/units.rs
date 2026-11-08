@@ -122,6 +122,8 @@ pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
         }
         _ => head,
     };
+    // a cut after a comma or a colon reads better without it
+    let kept = kept.trim_end_matches([',', ';', ':', ' ']);
     format!("{kept}{more}")
 }
 
@@ -257,6 +259,15 @@ mod tests {
         assert_eq!(
             clip(&"é".repeat(60), 50, "…"),
             format!("{}…", "é".repeat(50))
+        );
+        assert_eq!(
+            clip(
+                "Data files © Original Authors, as the description says",
+                32,
+                "…"
+            ),
+            "Data files © Original Authors…",
+            "a comma before the cut goes with it"
         );
     }
 }

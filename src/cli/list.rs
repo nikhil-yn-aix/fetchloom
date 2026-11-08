@@ -142,22 +142,32 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
     Report { datasets }
 }
 
+/// a license longer than this is cut, so one long statement does not push the table off screen.
+const LICENSE: usize = 32;
+
 /// the datasets as aligned columns, one per line, for a person or for `grep`. on a terminal
-/// too narrow for every column, the source gives way, since `--json` and data.toml keep it.
+/// too narrow for every column, the source gives way, then the license, since `--json` and
+/// `list <name>` keep them.
 fn table(datasets: &[Listed], width: Option<usize>) -> String {
-    let full = columns(datasets, true);
-    let widest = full
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or_default();
-    match width {
-        Some(width) if widest > width => columns(datasets, false),
-        _ => full,
+    let widest = |text: &str| {
+        text.lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or_default()
+    };
+    let full = columns(datasets, true, true);
+    let Some(width) = width.filter(|width| widest(&full) > *width) else {
+        return full;
+    };
+    let licensed = columns(datasets, false, true);
+    if widest(&licensed) <= width {
+        return licensed;
     }
+    columns(datasets, false, false)
 }
 
-fn columns(datasets: &[Listed], with_source: bool) -> String {
+fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String {
+    let licensed = with_license && datasets.iter().any(|dataset| dataset.license.is_some());
     let rows: Vec<Vec<String>> = datasets
         .iter()
         .map(|dataset| {
@@ -174,6 +184,10 @@ fn columns(datasets: &[Listed], with_source: bool) -> String {
                 row.push(dataset.reference.clone());
             }
             row.extend([contents, dataset.folder.clone()]);
+            if licensed {
+                let license = dataset.license.as_deref().unwrap_or_default();
+                row.push(units::clip(license, LICENSE, "\u{2026}"));
+            }
             row
         })
         .collect();
@@ -197,6 +211,9 @@ fn columns(datasets: &[Listed], with_source: bool) -> String {
             let _ = write!(text, "{cell}{:pad$}  ", "");
         }
         text.push_str(&row[last]);
+        // a dataset with no license leaves no spaces at the end of its line
+        let kept = text.trim_end_matches(' ').len();
+        text.truncate(kept);
     }
     text
 }
@@ -240,6 +257,50 @@ mod tests {
             "iris          not locked yet  data/iris\n\
              mnist-digits  not locked yet  data/mnist-digits",
             "a narrow terminal drops the source"
+        );
+    }
+
+    #[test]
+    fn the_license_comes_last_and_gives_way_after_the_source() {
+        let listed = |name: &str, license: Option<&str>| Listed {
+            name: name.to_owned(),
+            reference: format!("zenodo:{}", name.len()),
+            resolved: Some(format!("zenodo:{}@1", name.len())),
+            files: Some(1),
+            bytes: Some(4551),
+            folder: format!("data/{name}"),
+            title: None,
+            license: license.map(str::to_owned),
+            doi: None,
+            locked_files: Some(Vec::new()),
+        };
+        let datasets = [
+            listed("iris", Some("cc-by-4.0")),
+            listed(
+                "tweets",
+                Some("Data files © Original Authors, as the description says"),
+            ),
+            listed("wine", None),
+        ];
+        assert_eq!(
+            table(&datasets, None),
+            "iris    zenodo:4  1 file · 4.4 KiB  data/iris    cc-by-4.0\n\
+             tweets  zenodo:6  1 file · 4.4 KiB  data/tweets  Data files © Original Authors…\n\
+             wine    zenodo:4  1 file · 4.4 KiB  data/wine"
+        );
+        assert_eq!(
+            table(&datasets, Some(70)),
+            "iris    1 file · 4.4 KiB  data/iris    cc-by-4.0\n\
+             tweets  1 file · 4.4 KiB  data/tweets  Data files © Original Authors…\n\
+             wine    1 file · 4.4 KiB  data/wine",
+            "the source gives way first"
+        );
+        assert_eq!(
+            table(&datasets, Some(40)),
+            "iris    1 file · 4.4 KiB  data/iris\n\
+             tweets  1 file · 4.4 KiB  data/tweets\n\
+             wine    1 file · 4.4 KiB  data/wine",
+            "then the license"
         );
     }
 }

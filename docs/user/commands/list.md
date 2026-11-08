@@ -1,6 +1,6 @@
 # list
 
-`list` shows the datasets in a project, their references, locked sizes and destination folders. with a name it shows that dataset's files.
+`list` shows the datasets in a project, their references, locked sizes, destination folders and licenses. with a name it shows that dataset's files.
 
 ```sh
 fetchloom list
@@ -18,7 +18,7 @@ fetchloom list [options] [name]
 
 ## what it reads
 
-`list` finds the nearest `data.toml` and reads it with `data.lock` if present. it prints a table on stdout, ordered by dataset name, and changes nothing. it does not download, sync or inspect placed files.
+`list` finds the nearest `data.toml` and reads it with `data.lock` if present. it prints a table on stdout, ordered by dataset name, and changes nothing. the license the source states comes last, cut at 32 characters; on a terminal too narrow for the whole table the reference is left out first, then the license. it does not download, sync or inspect placed files.
 
 a dataset without a lock entry says it is not locked yet. counts and bytes come from locked source files, so an archive counts as one packed file, not its extracted members. a stale lock can still supply these values; use [lock --check](lock.md) to check freshness and [status](status.md) to inspect local files.
 
