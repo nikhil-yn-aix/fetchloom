@@ -3,6 +3,7 @@
 fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64.
 
 ```text
+$ mkdir iris-study && cd iris-study
 $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
    Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
  Downloaded 4 files · 18.1 KiB in 287 ms
