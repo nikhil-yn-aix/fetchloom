@@ -73,6 +73,7 @@
     - [windows defender](dev/performance/windows-defender.md)
     - [benchmark design](dev/performance/benchmark-design.md)
     - [native comparison](dev/performance/native.md)
+    - [native checks](dev/performance/native-checks.md)
     - [budgets](dev/performance/budgets.md)
   - [decisions](dev/decisions.md)
   - [roadmap](dev/roadmap.md)

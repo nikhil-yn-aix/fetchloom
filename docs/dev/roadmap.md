@@ -2,9 +2,9 @@
 
 pending work concerns remaining performance costs and publishing tested releases.
 
-## pending code
+## measurement work
 
-1. close the remaining [budget miss](performance/budgets.md): warm-cache placement on windows, where NTFS hardlink creation dominates. the [observations](performance/measurements.md) did not establish a repeatable gain from readback removal, folder checks or thread-count changes.
+1. remeasure the historical windows warm-cache [budget miss](performance/budgets.md) on native filesystems before choosing another optimization. the [native checks](performance/native-checks.md) cover placement, durability and resource use; linux results do not establish native latency.
 2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). use the [recorded experiments](performance/measurements.md) and [defender study](performance/windows-defender.md) to avoid repeating discarded changes without new evidence.
 3. run the implemented [benchmark suite](performance/benchmark-design.md) in full, retain its raw records and publish the generated results.
 

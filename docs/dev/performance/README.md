@@ -20,7 +20,9 @@ use release builds and keep cache state, filesystem, machine load, run counts an
 
 elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. [benchmark design](benchmark-design.md) describes the implemented linux suite. reproduce the named workload and record the conditions before treating an old timing as a baseline.
 
-[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) sets fat LTO, one codegen unit, abort-on-panic and stripped symbols for release builds. [historical observations](measurements.md#observations-and-rejected-experiments) record the LTO and allocator experiments.
+[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) sets fat LTO, one codegen unit, panic unwinding and stripped symbols for release builds. unwinding lets the CLI report a runtime-worker startup failure as `local.io`.
+
+[historical observations](measurements.md#observations-and-rejected-experiments) record the LTO and allocator experiments.
 
 ## pages
 
@@ -31,6 +33,7 @@ elapsed time is not a CI assertion. work counters catch extra requests, download
 | [windows defender](windows-defender.md) | why random small-file writes can be expensive on windows |
 | [benchmark design](benchmark-design.md) | implemented scenarios, fairness rules and checking boundaries |
 | [native comparison](native.md) | two builds on windows, macos or any filesystem, without the lab |
+| [native checks](native-checks.md) | independent bytes, durability, credentials and resource use on windows and macos |
 | [running benchmarks](../engineering/benchmarks.md) | setup, smoke runs, full comparisons and retained results |
 | [profiling](../engineering/profiling.md) | timelines, CPU samples and allocation investigations |
 | [network](../architecture/network.md) | queues, hashing and adaptive splitting |

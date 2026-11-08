@@ -8,7 +8,7 @@ release measurements on 2026-10-30 and 2026-10-31 used one laptop: an 11th gen i
 
 baseline f9bbda5 used at least ten runs after three warm-ups without other work running. follow-ups have their own counts and load conditions in [measurements](measurements.md). these baseline timings share the [historical evidence limits](measurements.md#evidence-limits); they are observations, not reproducible current benchmark results. ranges are observed minima and maxima, not confidence intervals. a single reported value has no recorded range unless one is stated.
 
-## targets and observations
+## targets and historical observations
 
 | workload | budget | windows observation | linux observation |
 |---|---|---|---|

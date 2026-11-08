@@ -1,34 +1,55 @@
 # native comparison
 
-the [lab](benchmark-design.md) needs linux namespaces, loop mounts and `tc`, so it cannot measure windows or macos. `bench/native.py` compares two fetchloom builds on the machine it runs on, on the filesystem you point it at: ntfs or a dev drive with defender as configured, apfs, an exfat drive, or a linux filesystem. it needs python 3.9 or later and nothing else.
+`bench/native.py` compares two fetchloom builds on a native filesystem without the linux lab's namespaces, mounts or traffic shaping.
 
-## what it measures
+the runner needs python 3.9 or later and its standard library. use it on ntfs, ReFS/dev drive, apfs, exfat or a linux filesystem. [native checks](native-checks.md) adds independent byte verification, resource measurements and platform-specific checks.
 
-three scenarios, each from files it generates once under `ROOT/www` and serves from a local http server with keep-alive:
+## workloads
 
-| scenario | files | what it stresses |
+fixtures are generated under `ROOT/www` and served from `127.0.0.1` over HTTP with keep-alive.
+
+| scenario | files | work |
 |---|---|---|
-| small | 10,000 files of 4 KiB | per-file cost: cache publication, placement, defender's scan of each new file |
-| zip | one stored zip of 10,000 members of 4 KiB | archive unpacking and member placement |
-| large | one file, 1 GiB by default (`--large-mib`) | hashing and write throughput |
+| `small` | 10,000 files of 4 KiB, one dataset per file | requests, object publication and placement across dataset folders |
+| `zip` | one stored zip of 10,000 members of 4 KiB | extraction and placement of many files in one dataset |
+| `large` | one file, 1 GiB by default | hashing and writes; `--large-mib` changes its size |
 
-each round runs both builds in a seeded random order. for each build it starts from an empty cache and times four phases with the build's own lock:
+preparation locks each scenario once per build, outside timing, then removes that preparation cache. each round runs both builds in a seeded random order, with an empty cache per build:
 
-1. cold: `sync` in a fresh project, downloading everything.
-2. warm: `sync` in a second fresh project, placing everything from the cache.
-3. settled: `sync` again in that project, which has nothing to do.
-4. path: `path f00000` in that project.
+| phase | command and state |
+|---|---|
+| cold | `fetchloom -q --yes sync` in a fresh project |
+| warm | the same command in a second fresh project, with the cache retained |
+| settled | the same command again in that second project |
+| path | `fetchloom -q path f00000` in the settled project |
 
-the report pairs the builds round by round: the median of candidate/baseline time ratios with a 95% bootstrap interval (the same statistics as [ab.py](../../../bench/ab.py)). "candidate faster" means the whole interval is below 1, "candidate slower" above 1; anything else is "no clear difference".
+there is no warmup round or page-cache drop. cold means an empty fetchloom cache, not a cold OS or server cache. preparation, cleanup and fixture generation are outside timing.
 
-## running it
+## run
 
+```sh
+python3 bench/native.py --baseline /path/to/baseline --candidate /path/to/candidate --root /path/to/new-run --scenarios small,zip --rounds 10 --seed 1729 --out /path/to/new-results
 ```
-python bench/native.py --baseline OLD --candidate NEW --root FOLDER [--rounds 5] [--scenarios small,zip,large] [--large-mib 1024]
-```
 
-`FOLDER` is an empty folder on the filesystem to measure; fixtures, caches and projects go there, and results go to `FOLDER/results` (`native.json` with every timing, the machine, the filesystem and the binaries' SHA-256; `native.md` with the table). use `py -3` on windows. close other heavy work while it runs, and run the same command again for a second sample before trusting a small difference.
+use `py -3` and native executable paths on windows. run from the repository root. every invocation needs a fresh, owned `--root`; do not reuse a root whose templates still name an earlier loopback server. do not point it at a shared cache or existing project: the runner deletes and recreates its workload folders, clearing read-only flags during cleanup.
 
-the report records what changes the numbers most: on windows the volume's filesystem (`fsutil fsinfo volumeinfo`), whether it is a dev drive (`fsutil devdrv query`, which may need an administrator) and whether defender's real-time protection is on; on macos the mount's filesystem. measure a dev drive and an ordinary ntfs volume separately, and an exfat drive separately on either system: exfat serializes file creation.
+| option | default |
+|---|---|
+| `--baseline`, `--candidate`, `--root` | required paths |
+| `--scenarios` | `small,zip,large` |
+| `--rounds` | `5`, a positive integer |
+| `--large-mib` | `1024`, a positive integer |
+| `--seed` | `1729` |
+| `--out` | `ROOT/results` |
 
-it does not shape the network: the server is local, so it measures the work fetchloom does on the machine, not transfer over a real link. use the lab for that.
+the child environment is inherited, apart from `FETCHLOOM_CACHE` and removal of `NO_COLOR`. clear unrelated fetchloom settings, proxies and trace output before a default comparison, or record the identical settings applied to both builds. close other heavy work and repeat with another fresh root before trusting a small difference.
+
+## results and limits
+
+`native.json` retains phase wall times, settings, machine information and executable SHA-256s. `native.md` contains the summary table. filesystem and Defender probes are best effort; unavailable or localized system output can leave fields empty, so record the actual volume and protection settings separately.
+
+the ratio is the exponential of the median paired log ratio, candidate over baseline. its 95% percentile bootstrap interval uses 20,000 resamples through [ab.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/ab.py). with at least three positive pairs, an interval wholly below 1 says `candidate faster`, wholly above 1 says `candidate slower`, and otherwise says `no clear difference`. this is not the linux a/b runner's minimum-pair or effect-size acceptance gate.
+
+the runner checks process exit codes, not output hashes independently. it captures but does not retain successful stdout and stderr, records no CPU time, memory, work counters or server request counts, and has no per-command timeout. a failed command aborts the run before the final report. keep failures and use the [native verification steps](native-checks.md#verify-the-fixture-bytes) before interpreting timings.
+
+it measures loopback work, not a real network link. use the [lab](benchmark-design.md) for controlled latency, loss and bandwidth. WSL measures linux behavior, not native windows behavior.

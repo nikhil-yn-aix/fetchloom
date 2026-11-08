@@ -48,6 +48,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [developer guide](docs/dev/README.md): setup, tests, debugging and the component map
 - [architecture](docs/dev/architecture/README.md): code organization and data flow
 - [performance](docs/dev/performance/README.md): performance work and its conditions
+- [native checks](docs/dev/performance/native-checks.md): byte verification, native filesystems, credentials and resource measurements
 - [engineering](docs/dev/engineering/README.md): builds, tests and releases
 - [running benchmarks](docs/dev/engineering/benchmarks.md): linux setup, smoke runs and full comparisons
 - [style](docs/dev/style.md): prose, code and commit conventions

@@ -90,7 +90,7 @@ live numbers vary with the service, so they show ranges and no ratios. quick run
 | far | 150 ms | 1% | 50 Mbit/s | 4 MiB | 50 |
 | poor | 300 ms | 3% | 10 Mbit/s | 1 MiB | 20 |
 
-ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the published xfs comparison runs only s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
+ext4 runs s1 and s2 on every profile, s3 to s6 on lan, and s7 on home. the full-run recipe uses xfs only for s5 and s6 on lan, where reflinks affect reuse and no-op work. `run.py` can accept a broader combination, so use the explicit selectors in the [run instructions](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run).
 
 ## platforms
 
@@ -105,7 +105,7 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 | metric | how |
 |---|---|
 | wall time | monotonic clock around the whole command |
-| CPU time, user and system | the resource-usage result from `os.wait4` for GNU time, which starts the command; it covers the command, its children and under 2 ms of launcher work |
+| CPU time, user and system | the resource-usage result from `os.wait4` for GNU time, which starts the command; it covers the command, its children and GNU time's own CPU work; that overhead is not subtracted or bounded by a fixed duration |
 | peak memory | the largest resident set among the command's processes, as GNU time reports it. the harness spawns GNU time without a forked copy of itself, so no command inherits the harness's own peak memory |
 | bytes and requests | the server's access log for that run |
 | disk used | free-space change of the dedicated filesystem, so links and reflinks count once |
@@ -113,7 +113,7 @@ the harness does not produce windows numbers. namespaces, `tc`, loop mounts and 
 
 ## runs and statistics
 
-lab cases run 5 rounds on lan and home and 7 on far and poor, after one warmup round. a lossy link holds one TCP stream to roughly 120 KB/s at 1% loss and 150 ms, and 35 KB/s at 3% loss and 300 ms, so their sizes keep each run under a minute, and one tool's runs there can differ by several times, so they get more rounds for a median that holds. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
+lab cases run 5 rounds on lan and home and 7 on far and poor, after one warmup round. the smaller far and poor fixtures target shorter runs, but packet loss and retries can still push a run past a minute. those profiles get more rounds because one tool's runs can differ by several times. no fixed single-stream throughput is assumed. results report the median with the minimum and maximum, and each tool's median divided by fetchloom's. a difference under 5% is reported as even.
 
 ## results and presentation
 
