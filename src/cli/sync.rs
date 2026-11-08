@@ -98,6 +98,20 @@ impl<'a> Loop<'a> {
         survey: Survey,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
+        let placing = self.prepare(manifest, lock, plan, force, survey).await?;
+        self.apply(placing, synced)
+    }
+
+    /// puts in the cache every byte placing `plan` needs, downloading and unpacking what it
+    /// lacks, and returns the placing ready to apply. nothing in the project changes.
+    pub(super) async fn prepare<'p>(
+        &'p self,
+        manifest: &'p Manifest,
+        lock: &'p Lock,
+        plan: plan::Plan<'p>,
+        force: bool,
+        survey: Survey,
+    ) -> Result<Placing<'p>, Error> {
         let mut placing = Placing::from_plan(self.project, manifest, plan, force, survey)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
@@ -111,6 +125,15 @@ impl<'a> Loop<'a> {
             .partition(|(_, file)| file.unpacks_to.is_some());
         self.download_prepared(lock, &files).await?;
         self.unpack_locked(lock, &archives).await?;
+        Ok(placing)
+    }
+
+    /// places what [`Loop::prepare`] readied, and records `synced` in the state.
+    pub(super) fn apply(
+        &self,
+        placing: Placing<'_>,
+        synced: Option<Synced>,
+    ) -> Result<Placement, Error> {
         placing.apply(
             &self.context.output,
             &self.context.work,

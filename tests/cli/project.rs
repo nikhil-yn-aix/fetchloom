@@ -2,7 +2,9 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
+use crate::support::{
+    Part, Result, Sandbox, Server, delete, edit, file, json, reply, text, wait_until,
+};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -1064,12 +1066,14 @@ fn failed_add_reports_manifest_and_lock_rollback_and_recovery() -> Result {
             if let Some(before) = before {
                 fs::write(&manifest, before)?;
             }
+            // data.toml turns into a folder while the add downloads, so writing it fails, and so
+            // does putting it back
             let blocked = manifest.clone();
             let mut response = vec![crate::support::Part::Action(Box::new(move || {
-                fs::remove_file(&blocked).unwrap();
+                let _ = fs::remove_file(&blocked);
                 fs::create_dir(&blocked).unwrap();
             }))];
-            response.extend(reply("403 Forbidden", &[], b"denied"));
+            response.extend(file(IRIS, "\"v1\""));
             let server = Server::start(PATH, vec![response])?;
             let mut args = vec!["add", server.url.as_str(), "--as", "iris"];
             if machine {
@@ -1357,11 +1361,13 @@ fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result 
     let lock = sandbox.work().join("data.lock");
     let before_lock = fs::read_to_string(&lock)?;
     let before_manifest = fs::read(sandbox.work().join("data.toml"))?;
+    // data.lock turns into a folder while the add downloads, so writing it fails, and so does
+    // putting it back, while data.toml is put back
     let mut response = vec![crate::support::Part::Action(Box::new(move || {
         fs::remove_file(&lock).unwrap();
         fs::create_dir(&lock).unwrap();
     }))];
-    response.extend(reply("403 Forbidden", &[], b"denied"));
+    response.extend(file(b"experiment\n", "\"e1\""));
     let server = Server::start("/experiment.csv", vec![response])?;
     let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
     let stderr = text(&output.stderr)?;
@@ -1455,7 +1461,7 @@ fn rollback_recovery_keeps_exact_private_files_without_echoing_secrets() -> Resu
             fs::remove_file(&blocked).unwrap();
             fs::create_dir(&blocked).unwrap();
         }))];
-        response.extend(reply("403 Forbidden", &[], b"denied"));
+        response.extend(file(b"a\n", "\"a1\""));
         let server = Server::start("/a.csv", vec![response])?;
         let mut args = vec!["add", server.url.as_str(), "--as", "a"];
         if machine {
@@ -1982,6 +1988,152 @@ fn an_add_into_a_read_only_project_folder_names_it_and_leaves_no_copies() -> Res
             fs::read(work.join("data.lock"))?
         ),
         before
+    );
+    Ok(())
+}
+
+/// a server that sends the head of `body` and its first `sent` bytes, then holds the rest until
+/// the returned sender is dropped, as a download still running.
+fn held(path: &str, body: &[u8], sent: usize) -> Result<(Server, std::sync::mpsc::Sender<()>)> {
+    let (release, wait) = std::sync::mpsc::channel();
+    let length = body.len().to_string();
+    let mut response = reply(
+        "200 OK",
+        &[("Content-Length", &length), ("ETag", "\"held\"")],
+        &body[..sent],
+    );
+    response.push(Part::Wait(wait));
+    response.push(Part::Bytes(body[sent..].to_vec()));
+    Ok((Server::start(path, vec![response])?, release))
+}
+
+/// a command running in the background, with its stderr read as it comes.
+struct Background {
+    child: std::process::Child,
+    stderr: std::thread::JoinHandle<String>,
+}
+
+impl Background {
+    fn start(mut command: std::process::Command) -> Result<Background> {
+        let mut child = command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        let mut stream = child.stderr.take().ok_or("no stderr")?;
+        let stderr = std::thread::spawn(move || {
+            let mut told = String::new();
+            let _ = std::io::Read::read_to_string(&mut stream, &mut told);
+            told
+        });
+        Ok(Background { child, stderr })
+    }
+
+    /// sends SIGINT, as ctrl-c at a terminal does.
+    #[cfg(unix)]
+    fn interrupt(&self) -> Result {
+        let sent = std::process::Command::new("kill")
+            .args(["-INT", &self.child.id().to_string()])
+            .status()?;
+        if sent.success() {
+            Ok(())
+        } else {
+            Err("kill -INT failed".into())
+        }
+    }
+
+    fn finish(mut self) -> Result<(Option<i32>, String)> {
+        let status = self.child.wait()?;
+        let stderr = self.stderr.join().map_err(|_| "reading stderr failed")?;
+        Ok((status.code(), stderr))
+    }
+}
+
+/// the sizes of the partial downloads in `cache`.
+#[cfg(unix)]
+fn partial_bytes(cache: &std::path::Path) -> u64 {
+    fs::read_dir(cache.join("partial")).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".part"))
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|metadata| metadata.len())
+            .sum()
+    })
+}
+
+/// an add cut off while it downloads, as by a second ctrl-c, a closed terminal or a killed job,
+/// has not changed data.toml or data.lock: it writes them only once every byte is in the cache.
+#[test]
+fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let before = (
+        fs::read_to_string(work.join("data.toml"))?,
+        fs::read_to_string(work.join("data.lock"))?,
+    );
+    let body = vec![b'x'; 1 << 20];
+    let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
+    let mut running = Background::start(sandbox.command(&["add", &cows.url, "--as", "cows"]))?;
+    wait_until("the download to start", || Ok(!cows.requests().is_empty()))?;
+    running.child.kill()?;
+    let (_, stderr) = running.finish()?;
+    drop(release);
+    assert_eq!(
+        (
+            fs::read_to_string(work.join("data.toml"))?,
+            fs::read_to_string(work.join("data.lock"))?
+        ),
+        before,
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// ctrl-c during an add's download ends it with the project as it was, says so, and keeps what
+/// arrived in the cache, so the same add continues from there.
+#[cfg(unix)]
+#[test]
+fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let before = (
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    );
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let slow = Server::slow_file("/files/cows.csv", body.clone())?;
+    let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
+    wait_until(
+        "bytes to arrive",
+        || Ok(partial_bytes(&sandbox.cache()) > 0),
+    )?;
+    running.interrupt()?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    assert!(
+        stderr.contains("Stopped") && stderr.contains("data.toml and data.lock are as they were"),
+        "{stderr}"
+    );
+    assert_eq!(
+        (
+            fs::read(work.join("data.toml"))?,
+            fs::read(work.join("data.lock"))?
+        ),
+        before,
+        "{stderr}"
+    );
+    let rerun = sandbox.run(&["add", &slow.url, "--as", "cows"])?;
+    assert_eq!(rerun.status.code(), Some(0), "{}", text(&rerun.stderr)?);
+    assert_eq!(fs::read(work.join("data/cows/cows.csv"))?, body);
+    let requests = slow.requests();
+    assert!(
+        requests.len() == 2 && requests[1].contains("range: bytes="),
+        "{requests:?}"
     );
     Ok(())
 }

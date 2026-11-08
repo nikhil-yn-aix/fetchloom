@@ -61,8 +61,46 @@ struct AddProject {
     project: Project,
     /// none for a dry run, which changes nothing and so needs no hold.
     _held: Option<Held>,
+    /// data.toml as read, or none when there was none.
     text: Option<String>,
     manifest: Manifest,
+    /// data.lock as read, until the add takes it to lock again.
+    old: Option<Lock>,
+    /// the text data.lock was read from.
+    lock_text: Option<String>,
+}
+
+impl AddProject {
+    /// reads data.toml and data.lock as the add finds them once it holds the project.
+    fn read(&mut self) -> Result<(), Error> {
+        if self.project.manifest_path().is_file() {
+            let (text, manifest) = self.project.manifest()?;
+            self.text = Some(text);
+            self.manifest = manifest;
+        }
+        (self.old, self.lock_text) = self.project.lock_and_text()?.unzip();
+        Ok(())
+    }
+
+    /// whether data.toml and data.lock are as the add found them.
+    fn unchanged(&self) -> bool {
+        [(manifest::FILE, &self.text), (lock::FILE, &self.lock_text)]
+            .iter()
+            .all(
+                |(name, found)| match std::fs::read(self.project.root.join(name)) {
+                    Ok(bytes) => found.as_ref().is_some_and(|text| text.as_bytes() == bytes),
+                    Err(err) => found.is_none() && err.kind() == std::io::ErrorKind::NotFound,
+                },
+            )
+    }
+}
+
+/// a dataset data.toml already has, which an add asked for again.
+#[derive(Clone, Copy)]
+struct Present<'a> {
+    name: &'a str,
+    entry: &'a manifest::Entry,
+    listing: &'a Listing,
 }
 
 struct Addition {
@@ -119,9 +157,67 @@ impl Drop for BeforeAdd<'_> {
     }
 }
 
-pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
+pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
-    let adding = discover_add(context, dry_run).await?;
+    let here =
+        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
+    let project = Project::find(&here).unwrap_or(Project { root: here });
+    let held = if dry_run {
+        None
+    } else {
+        Some(
+            hold(context, &project, "add")
+                .await
+                .map_err(|error| stopped(context, error, true))?,
+        )
+    };
+    let mut adding = AddProject {
+        project,
+        _held: held,
+        text: None,
+        manifest: Manifest::parse("")?,
+        old: None,
+        lock_text: None,
+    };
+    let added = match adding.read() {
+        Ok(()) => add_held(context, &mut adding, args).await,
+        Err(error) => Err(error),
+    };
+    added.map_err(|error| stopped(context, error, adding.unchanged()))
+}
+
+/// `error`, once it has told a person what state the project is in when a stop ended the add:
+/// the stop's own message does not. `unchanged` says whether data.toml and data.lock are as
+/// they were.
+fn stopped(context: &Context, error: Error, unchanged: bool) -> Error {
+    if error.kind != Kind::Interrupted && !context.stop.is_asked() {
+        return error;
+    }
+    if unchanged {
+        context.output.done(
+            "Stopped",
+            "nothing was added, and data.toml and data.lock are as they were; anything downloaded so far stays in the cache, so the same add continues from there",
+        );
+    } else {
+        context
+            .output
+            .warn("stopped, but data.toml and data.lock could not be put back as they were");
+        for detail in &error.details {
+            context.output.warn(detail);
+        }
+    }
+    error
+}
+
+/// the add once the project is held: everything but the steps before holding it.
+async fn add_held(
+    context: &Context,
+    adding: &mut AddProject,
+    mut args: Add,
+) -> Result<Report, Error> {
+    let dry_run = args.dry.dry_run;
+    let old = adding.old.take();
+    let adding = &*adding;
     let project = &adding.project;
     if !dry_run {
         project.check_writable()?;
@@ -135,29 +231,16 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         open_cache()?
     };
     let mut addition = resolve_add(context, &net, &args, &parsed).await?;
-    let (old, lock_text) = project.lock_and_text()?.unzip();
-    let lock_seen = lock_text
-        .as_deref()
-        .map(|text| digest::sha256(text.as_bytes()));
     if args.name.is_none()
         && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
     {
         let work = Loop::new(context, project, net, cache);
-        let seen = Seen {
-            manifest: digest::sha256(adding.text.as_deref().unwrap_or_default().as_bytes()),
-            lock: lock_seen,
+        let present = Present {
+            name: &name,
+            entry: &addition.entry,
+            listing: &addition.listing,
         };
-        return again(
-            &work,
-            manifest,
-            old,
-            &name,
-            &addition.entry,
-            &addition.listing,
-            dry_run,
-            &seen,
-        )
-        .await;
+        return again(&work, adding, old, &present, dry_run).await;
     }
     // a dry run downloads nothing, so it names the dataset from the link alone. patterns were
     // written against the link's own name, which the server's name would replace before they apply
@@ -182,55 +265,22 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     if dry_run {
         return preview_add(&work, &new_manifest, old, name, addition.listing).await;
     }
-    let mut before = BeforeAdd::save(project, (adding.text.as_deref(), lock_text.as_deref()))?;
-    project
-        .write(manifest::FILE, updated.as_bytes())
-        .map_err(|error| restore(project, &mut before, &name, error))?;
-    // data.toml as just written and data.lock as read, for the state to record as synced
-    let seen = Seen {
-        manifest: digest::sha256(updated.as_bytes()),
-        lock: lock_seen,
-    };
     let outcome = sync_add(
         &work,
+        adding,
         &new_manifest,
+        Some(&updated),
         old,
-        &mut before,
-        &seen,
-        &name,
-        addition.listing,
+        (&name, Some(addition.listing)),
     )
     .await?;
     render_add(&work, &new_manifest, &name)?;
     Ok(Report {
-        project: adding.project.root,
+        project: project.root.clone(),
         datasets: vec![name],
         lock_changed: outcome.lock_changed,
         placement: Some(outcome.placed),
         ..Report::default()
-    })
-}
-
-async fn discover_add(context: &Context, dry_run: bool) -> Result<AddProject, Error> {
-    let here =
-        std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let project = Project::find(&here).unwrap_or(Project { root: here });
-    let held = if dry_run {
-        None
-    } else {
-        Some(hold(context, &project, "add").await?)
-    };
-    let text = if project.manifest_path().is_file() {
-        Some(project.manifest()?.0)
-    } else {
-        None
-    };
-    let manifest = Manifest::parse(text.as_deref().unwrap_or_default())?;
-    Ok(AddProject {
-        project,
-        _held: held,
-        text,
-        manifest,
     })
 }
 
@@ -332,26 +382,78 @@ async fn preview_add(
     Ok(Report::dry(work.project.root.clone(), vec![name], outcome))
 }
 
+/// brings the project in line with `manifest`, an add's data.toml, whose text is `updated`
+/// when the add changes data.toml, with data.lock as read, `old`. `dataset` names the dataset
+/// added and gives its listing when that was resolved already. every byte the project needs goes
+/// into the cache first, and only then are data.toml and data.lock written and the files placed,
+/// so an add cut off while it downloads, even killed, has changed nothing. a failure or a stop
+/// once the project is changing puts data.toml and data.lock back.
 async fn sync_add(
     work: &Loop<'_>,
+    adding: &AddProject,
     manifest: &Manifest,
+    updated: Option<&str>,
     old: Option<Lock>,
-    before: &mut BeforeAdd<'_>,
-    seen: &Seen,
-    name: &str,
-    listing: Listing,
+    dataset: (&str, Option<Listing>),
 ) -> Result<Outcome<Placement>, Error> {
-    sync_all(
-        work,
-        manifest,
-        old,
-        &Upgrade::Nothing,
-        false,
-        Some((name.to_owned(), listing)),
-        Read::Planned(seen),
-    )
-    .await
-    .map_err(|error| restore(work.project, before, name, error))
+    let (name, listing) = dataset;
+    let project = work.project;
+    let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads);
+    survey.check_doubted(&project.root, &work.cache)?;
+    disk::audit(project, &survey, &work.cache)?;
+    let given = listing.map(|listing| (name.to_owned(), listing));
+    let (lock, before) = work
+        .relock(manifest, old, &Upgrade::Nothing, given)
+        .instrument(tracing::debug_span!("relock"))
+        .await?;
+    // a lock whose files cannot all land is refused before anything is written, so data.lock
+    // never pins what no sync can place
+    let plan = plan::from_cache(manifest, &lock, &work.cache)?;
+    let placing = work.prepare(manifest, &lock, plan, false, survey).await?;
+    // every byte is in the cache now, and a stop asked meanwhile ends the add before anything in
+    // the project changed
+    work.context.stop.check()?;
+    let mut saved = if updated.is_some() || !before.holds(&lock) {
+        Some(BeforeAdd::save(
+            project,
+            (adding.text.as_deref(), adding.lock_text.as_deref()),
+        )?)
+    } else {
+        None
+    };
+    let manifest_text = updated.or(adding.text.as_deref()).unwrap_or_default();
+    let committed = (|| -> Result<Outcome<Placement>, Error> {
+        if let Some(updated) = updated {
+            project.write(manifest::FILE, updated.as_bytes())?;
+        }
+        let written = work.write_lock(&before, &lock)?;
+        let lock_text = written.as_deref().or(adding.lock_text.as_deref());
+        let synced = lock_text.map(|text| Synced {
+            manifest: digest::sha256(manifest_text.as_bytes()),
+            lock: digest::sha256(text.as_bytes()),
+            complete: false,
+        });
+        let placement = work.apply(placing, synced)?;
+        // a stop that came while files were placed undoes the add as well, so every stop ends
+        // the same way
+        work.context.stop.check()?;
+        Ok(Outcome {
+            lock_changed: written.is_some(),
+            pins: engine::repinned(&before, &lock),
+            placed: placement,
+        })
+    })();
+    match committed {
+        Ok(outcome) => {
+            work.drop_unpacked(&lock);
+            register(work);
+            Ok(outcome)
+        }
+        Err(error) => Err(match saved.as_mut() {
+            Some(saved) => restore(project, saved, name, error),
+            None => error,
+        }),
+    }
 }
 
 fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
@@ -464,23 +566,22 @@ fn present(
         .map(|(name, _)| name.clone())
 }
 
-/// `add` of a dataset data.toml already has. with the same settings nothing changes, so running
-/// the same `add` twice is safe; other settings need a choice only the person can make. `seen`
-/// holds data.toml and data.lock as read.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the add it continues has resolved each of them already"
-)]
+/// `add` of a dataset data.toml already has, as `present`. with the same settings nothing
+/// changes, so running the same `add` twice is safe; other settings need a choice only the person
+/// can make.
 async fn again(
     work: &Loop<'_>,
-    manifest: &Manifest,
+    adding: &AddProject,
     old: Option<Lock>,
-    name: &str,
-    entry: &manifest::Entry,
-    listing: &Listing,
+    present: &Present<'_>,
     dry_run: bool,
-    seen: &Seen,
 ) -> Result<Report, Error> {
+    let Present {
+        name,
+        entry,
+        listing,
+    } = *present;
+    let manifest = &adding.manifest;
     let existing = &manifest.datasets[name];
     let differs = if existing.select != entry.select || existing.exclude != entry.exclude {
         Some(("other patterns", "the patterns of"))
@@ -510,16 +611,7 @@ async fn again(
         );
         return Ok(Report::dry(work.project.root.clone(), Vec::new(), outcome));
     }
-    let outcome = sync_all(
-        work,
-        manifest,
-        old,
-        &Upgrade::Nothing,
-        false,
-        None,
-        Read::Planned(seen),
-    )
-    .await?;
+    let outcome = sync_add(work, adding, manifest, None, old, (name, None)).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest)?;
     let contents = if has_files(work, manifest, name)? {

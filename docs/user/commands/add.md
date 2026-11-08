@@ -29,8 +29,8 @@ fetchloom add [options] <link>
 
 1. find the nearest project manifest, or create one in the current folder.
 2. resolve the reference, filter its listed files and choose a dataset name.
-3. write the entry in `data.toml` and pin selected files in `data.lock`.
-4. sync the whole project, using cached bytes or downloading missing files.
+3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
+4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
 there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
@@ -48,6 +48,10 @@ commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rule
 adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. a resolved reference from an old lock identifies that entry only while its manifest reference is unchanged; editing `ref` does not make the old source count as already added. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads and files already placed are not rolled back.
+
+## stopping an add
+
+ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were. `add` writes them only once every file is in the cache, so an add stopped while it downloads, or ended at once by a second ctrl-c, has changed neither; one stopped while it places files puts both back, as a failed addition does. a `Stopped` line says so before the error, and what arrived stays in the cache, so running the same add again continues where it stopped. exit code 130 means interrupted.
 
 ## dry run
 
