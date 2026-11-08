@@ -54,7 +54,7 @@ if a new addition fails to sync, fetchloom attempts to restore both `data.toml` 
 
 ## stopping an add
 
-ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were. `add` writes them only once every file is in the cache, so an add stopped while it downloads, or ended at once by a second ctrl-c, has changed neither; one stopped while it places files puts both back, as a failed addition does. a `Stopped` line says so before the error, and what arrived stays in the cache, so running the same add again continues where it stopped. exit code 130 means interrupted.
+ctrl-c stops an add and leaves `data.toml` and `data.lock` as they were. `add` writes them only once every file is in the cache, so an add stopped while it downloads, or ended at once by a second ctrl-c, has changed neither; one stopped while it places files puts both back, as a failed addition does. a `Stopped` line says so before the error, and what arrived stays in the cache, so running the same add again continues where it stopped. exit code 130 means interrupted. once every file is placed the add is done, and a ctrl-c while it prints its last lines no longer stops it.
 
 a first add that ends without adding anything, because it failed, was stopped or was cancelled, leaves its folder as it was: it removes the `.fetchloom` folder it made, and the data folder it made when that holds no file. search words are answered before the project is touched, so q or ctrl-c at the list of results changes nothing. a first add ended at once by a second ctrl-c or a kill can leave `.fetchloom` behind; the next command in that folder takes it over.
 

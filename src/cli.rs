@@ -778,7 +778,9 @@ fn block_on<T>(
     {
         return outcome;
     }
-    context.stop.check()?;
+    // work a stop cut short may still end well, so it ends as stopped, unless the command had
+    // finished it before the stop was asked
+    context.stop.check_unfinished()?;
     outcome
 }
 
@@ -791,7 +793,7 @@ fn blocking<T: Send + 'static>(
         let task = tokio::task::spawn_blocking(move || command(&owned));
         tokio::select! {
             biased;
-            () = context.stop.asked() => Err(Error::new(Kind::Interrupted, "stopped at your request")),
+            () = context.stop.asked() => Err(Stop::stopped()),
             outcome = task => outcome.map_err(|err| Error::new(Kind::LocalIo, format!("could not finish the scan: {err}")))?,
         }
     })
@@ -918,6 +920,44 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a stop asked once a command marked its work as finishing, as by ctrl-c while it prints its
+    /// last lines, leaves it finished, while one asked before the mark ends it as stopped.
+    #[test]
+    fn a_stop_after_a_command_finished_its_work_leaves_it_finished() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let quiet = || {
+            Context::new(Output::new(
+                crate::output::Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                },
+                Level::Quiet,
+                false,
+                false,
+            ))
+        };
+        let finished = quiet();
+        let outcome = block_on(&finished, async {
+            finished.stop.finish();
+            finished.stop.ask();
+            Ok(())
+        });
+        assert!(outcome.is_ok());
+        let unfinished = quiet();
+        let outcome = block_on(&unfinished, async {
+            unfinished.stop.ask();
+            Ok(())
+        });
+        assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
+    }
 
     #[test]
     fn a_key_no_header_can_carry_is_told_once_per_run() {

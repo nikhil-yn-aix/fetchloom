@@ -227,7 +227,7 @@ async fn read_list(path: &Path, stop: &Stop) -> Result<(String, String), Error> 
     let reading = tokio::task::spawn_blocking(move || read_list_text(&path));
     tokio::select! {
         biased;
-        () = stop.asked() => Err(Error::new(Kind::Interrupted, "stopped at your request")),
+        () = stop.asked() => Err(Stop::stopped()),
         outcome = reading => outcome.map_err(|err| Error::new(
             Kind::LocalIo,
             format!("could not read the link list: {err}"),

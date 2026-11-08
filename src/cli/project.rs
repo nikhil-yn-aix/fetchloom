@@ -293,7 +293,8 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
 /// the stop's own message does not. `unchanged` says whether data.toml and data.lock are as
 /// they were.
 fn stopped(context: &Context, error: Error, unchanged: bool) -> Error {
-    if error.kind != Kind::Interrupted && !context.stop.is_asked() {
+    // a stop asked once the add was in place changed nothing about it
+    if error.kind != Kind::Interrupted && context.stop.check_unfinished().is_ok() {
         return error;
     }
     if unchanged {
@@ -539,6 +540,7 @@ async fn sync_add(
         // placed for the new dataset, so the add is undone whole. once every file is in, the
         // add is complete, and a later stop finds it so
         let placement = work.apply(placing, synced)?;
+        work.context.stop.finish();
         Ok(Outcome {
             lock_changed: written.is_some(),
             pins: engine::repinned(&before, &lock),
@@ -822,6 +824,10 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         };
         return Ok(Report::dry(project.root, vec![args.name], outcome));
     }
+    // a stop asked while the data folder was read leaves the project as it was; once the files
+    // change, the removal runs to its end
+    context.stop.check()?;
+    context.stop.finish();
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
     let placement = placing.remove_only(&context.output).map_err(|error| {
@@ -1029,6 +1035,9 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         open_cache()?,
     );
     let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
+    // a stop asked while the datasets were resolved leaves data.lock as it was
+    context.stop.check()?;
+    context.stop.finish();
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
     engine::tell_upgrades(
@@ -1444,6 +1453,7 @@ async fn sync_all(
     let placement = work
         .place(manifest, &lock, plan, force, survey, synced)
         .await?;
+    work.context.stop.finish();
     work.drop_unpacked(&lock);
     register(work);
     Ok(Outcome {

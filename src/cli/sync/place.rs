@@ -28,6 +28,7 @@ use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::project::state::{Look, Placed, Synced};
+use crate::stop::Stop;
 use crate::work::Work;
 
 #[derive(Debug, Default, Serialize)]
@@ -431,7 +432,7 @@ impl<'a> Placing<'a> {
         cache: &Cache,
         synced: Option<Synced>,
         told: Option<&str>,
-        stop: &std::sync::Arc<crate::stop::Stop>,
+        stop: &std::sync::Arc<Stop>,
     ) -> Result<Placement, Error> {
         stop.check()?;
         let _span = tracing::debug_span!("place").entered();
@@ -487,8 +488,11 @@ impl<'a> Placing<'a> {
         };
         let (tallies, failure) =
             put_all(project, &mut placer, cache, &todo, state, checked, &counted);
+        // one look at the stop decides flushing, taking back an add's files and the result, so
+        // a stop asked between them cannot leave an add's files placed and the add rolled back
+        let stopped = stop.is_asked();
         // place_all has flushed published copies; a stop discards its unfinished batch.
-        let flushed = if stop.is_asked() {
+        let flushed = if stopped {
             Ok(())
         } else {
             placer
@@ -496,21 +500,21 @@ impl<'a> Placing<'a> {
                 .map_err(|err| Error::io("could not flush the copied files to disk", &err))
         };
         // an add that fails is rolled back, so what it placed for its dataset goes too
-        let undone = (stop.is_asked() || failure.is_some() || flushed.is_err())
+        let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
         flushed?;
-        let complete = !stop.is_asked()
-            && failure.is_none()
-            && placement.kept.is_empty()
-            && unknown.is_empty();
+        let complete =
+            !stopped && failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;
         state.synced = synced;
         if removed || adopted || needs_writing || resynced || undone || !tallies.is_empty() {
             project.write_state(state)?;
         }
-        stop.check()?;
+        if stopped {
+            return Err(Stop::stopped());
+        }
         if let Some(error) = failure {
             return Err(error);
         }
