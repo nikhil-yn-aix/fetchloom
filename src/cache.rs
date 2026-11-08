@@ -744,7 +744,8 @@ pub(crate) mod tests {
         let key = "ab".repeat(32);
         let shard = cache.partial_folder(&key);
         fs::create_dir_all(&shard).unwrap();
-        fs::write(shard.join(format!("{key}.part")), [0; 2048]).unwrap();
+        let part = shard.join(format!("{key}.part"));
+        fs::write(&part, [0; 2048]).unwrap();
         let error = crate::error::Error::io(
             "could not write to the cache",
             &cache.explained(&partial, full()),
@@ -752,8 +753,9 @@ pub(crate) mod tests {
         assert_eq!(
             error.message,
             format!(
-                "could not write to the cache: the disk is full; unfinished downloads in {} hold 2.0 KiB of it, which `fetchloom cache gc --now` frees",
-                partial.display()
+                "could not write to the cache: the disk is full; unfinished downloads in {} hold {} of it, which `fetchloom cache gc --now` frees",
+                partial.display(),
+                crate::units::size(upkeep::on_disk(&fs::metadata(&part).unwrap()))
             )
         );
         assert_eq!(

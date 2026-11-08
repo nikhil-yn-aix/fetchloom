@@ -47,6 +47,7 @@ pub(crate) struct Needed {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Unfinished {
     pub(crate) downloads: u64,
+    /// what their files take on the disk.
     pub(crate) bytes: u64,
 }
 
@@ -58,7 +59,7 @@ pub(crate) struct Freed {
     pub(crate) removed_bytes: u64,
     /// unfinished downloads and temporary files nobody came back for, removed.
     pub(crate) removed_leftovers: u64,
-    /// the bytes those leftovers held.
+    /// what those leftovers took on the disk.
     pub(crate) removed_leftover_bytes: u64,
     pub(crate) not_removed: Vec<Failure>,
     /// objects no project needs that stay because they are younger than a day.
@@ -119,8 +120,8 @@ impl Cache {
         crate::volume::set_read_only(&path, true)
     }
 
-    /// how many unfinished downloads the partial folder keeps, and their bytes. a folder that
-    /// cannot be read holds none.
+    /// how many unfinished downloads the partial folder keeps, and what they take on the disk. a
+    /// folder that cannot be read holds none.
     pub(crate) fn unfinished(&self) -> Unfinished {
         let mut unfinished = Unfinished::default();
         for folder in self.partial_folders() {
@@ -133,7 +134,7 @@ impl Cache {
                     && metadata.is_file()
                 {
                     unfinished.downloads += 1;
-                    unfinished.bytes += metadata.len();
+                    unfinished.bytes += on_disk(&metadata);
                 }
             }
         }
@@ -309,7 +310,7 @@ impl Cache {
             let stale = entry
                 .metadata()
                 .is_ok_and(|metadata| metadata.is_file() && metadata.modified().is_ok_and(old));
-            let size = entry.metadata().map_or(0, |metadata| metadata.len());
+            let size = entry.metadata().map_or(0, |metadata| on_disk(&metadata));
             if stale
                 && removed(
                     &entry.path(),
@@ -396,7 +397,7 @@ impl Cache {
             }
             for leftover in [bytes, folder.join(format!("{key}.json"))] {
                 stop.check()?;
-                let size = fs::symlink_metadata(&leftover).map_or(0, |metadata| metadata.len());
+                let size = fs::symlink_metadata(&leftover).map_or(0, |metadata| on_disk(&metadata));
                 if removed(
                     &leftover,
                     self.remove_inside(&leftover),
@@ -540,6 +541,22 @@ pub(super) fn removed(path: &Path, result: io::Result<()>, not_removed: &mut Vec
 
 fn unreadable(path: &Path, error: &io::Error) -> Error {
     Error::io(format!("cannot read {}", path.display()), error)
+}
+
+/// what the file `metadata` describes takes on its disk. a split download writes each part where
+/// it belongs, so until it finishes its file has holes the disk does not hold, and its length
+/// says more than the disk gives up when it goes. windows makes no holes in these files, so there
+/// the length is what the disk holds.
+pub(super) fn on_disk(metadata: &fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.blocks().saturating_mul(512)
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.len()
+    }
 }
 
 fn hash(path: &Path, stop: &Stop) -> io::Result<Sha256> {
@@ -980,9 +997,13 @@ mod tests {
         writer.write_all(b"abc").unwrap();
         writer.save().unwrap();
         drop(writer);
-        assert!(shard.join(format!("{key}.part")).is_file());
+        let part = shard.join(format!("{key}.part"));
+        assert!(part.is_file());
         let unfinished = cache.unfinished();
-        assert_eq!((unfinished.downloads, unfinished.bytes), (1, 3));
+        assert_eq!(
+            (unfinished.downloads, unfinished.bytes),
+            (1, on_disk(&fs::metadata(&part).unwrap()))
+        );
         drop(partial);
         let later = SystemTime::now() + GRACE + Duration::from_secs(60);
         assert_eq!(
@@ -992,6 +1013,42 @@ mod tests {
         );
         assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);
         assert_eq!(cache.unfinished().downloads, 0);
+    }
+
+    /// a split download writes each part where it belongs, so its file has holes the disk does
+    /// not hold. what unfinished downloads hold, and what gc frees of them, is what the disk
+    /// holds, not the length of their files.
+    #[test]
+    fn unfinished_downloads_count_what_the_disk_holds() {
+        let (_dir, cache) = cache();
+        let key = "ab".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        let part = shard.join(format!("{key}.part"));
+        let record = shard.join(format!("{key}.json"));
+        let mut file = fs::File::create(&part).unwrap();
+        file.write_all(b"abc").unwrap();
+        file.set_len(64 << 20).unwrap();
+        drop(file);
+        fs::write(&record, b"{}").unwrap();
+        fs::write(shard.join(format!("{key}.lock")), b"").unwrap();
+        #[cfg(unix)]
+        let held = |path: &Path| {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(path).unwrap().blocks() * 512
+        };
+        #[cfg(unix)]
+        let (part_held, record_held) = (held(&part), held(&record));
+        let unfinished = cache.unfinished();
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        let freed = cache.sweep(&Needed::default(), later);
+        assert_eq!((unfinished.downloads, freed.removed_leftovers), (1, 2));
+        // windows makes no holes in these files, so there their length is what the disk holds
+        #[cfg(unix)]
+        assert_eq!(
+            (unfinished.bytes, freed.removed_leftover_bytes),
+            (part_held, part_held + record_held)
+        );
     }
 
     /// unfinished downloads sit only in the 16 folders under `partial/`, so what lies at its top,

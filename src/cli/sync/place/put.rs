@@ -164,8 +164,9 @@ mod tests {
         assert_eq!(
             told.details,
             [format!(
-                "unfinished downloads in {} hold 2.0 KiB of it, which `fetchloom cache gc --now` frees",
-                cache.root().join("partial").display()
+                "unfinished downloads in {} hold {} of it, which `fetchloom cache gc --now` frees",
+                cache.root().join("partial").display(),
+                crate::units::size(cache.unfinished().bytes)
             )]
         );
         let denied = io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });

@@ -22,7 +22,7 @@ fetchloom cache verify [options]
 
 `fetchloom cache` reports the cache path, the bytes it holds and the projects using it. it prints the bare path on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`.
 
-byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
+byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. what they hold is the space they take on the disk: a download split into parts writes each part where it belongs, so until it finishes its file can be far longer than what the disk holds for it. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 
 ## gc
 

@@ -893,9 +893,11 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let info = sandbox.run(&["--json", "cache"])?;
     let report: serde_json::Value = serde_json::from_slice(&info.stdout)?;
     assert_eq!(report["result"]["unfinished_downloads"], 2, "{report}");
-    assert_eq!(report["result"]["unfinished_bytes"], 4000, "{report}");
+    let held = on_disk(&at(&left, "part"))? + on_disk(&at(&running, "part"))?;
+    assert_eq!(report["result"]["unfinished_bytes"], held, "{report}");
     let told = text(&sandbox.run(&["cache"])?.stderr)?;
-    assert!(told.contains("Unfinished 2 downloads · 3.9 KiB"), "{told}");
+    assert!(told.contains("Unfinished 2 downloads · "), "{told}");
+    let freed = on_disk(&at(&left, "part"))? + on_disk(&at(&left, "json"))?;
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(young.status.code(), Some(0), "{}", text(&young.stderr)?);
     assert!(at(&left, "part").exists(), "a day's grace without --now");
@@ -908,6 +910,20 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     assert!(!at(&left, "part").exists(), "{report}");
     assert!(!at(&left, "json").exists(), "{report}");
     assert!(at(&running, "part").exists(), "{report}");
-    assert_eq!(report["result"]["removed_leftover_bytes"], 3002, "{report}");
+    assert_eq!(
+        report["result"]["removed_leftover_bytes"], freed,
+        "{report}"
+    );
     Ok(())
+}
+
+/// what the file at `path` takes on its disk, as fetchloom counts unfinished downloads: its
+/// blocks on unix, and its length on windows, which makes no holes in them.
+fn on_disk(path: &std::path::Path) -> Result<u64> {
+    let metadata = fs::metadata(path)?;
+    #[cfg(unix)]
+    let held = std::os::unix::fs::MetadataExt::blocks(&metadata) * 512;
+    #[cfg(not(unix))]
+    let held = metadata.len();
+    Ok(held)
 }
