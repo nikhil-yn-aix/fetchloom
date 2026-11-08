@@ -292,7 +292,9 @@ fn leaks(name: &str) -> bool {
                 | "CONEMUANSI"
                 | "VTE_VERSION"
                 | "KONSOLE_VERSION"
-                // set when a coding agent runs the tests, which would turn questions off
+                // set by CI services and by coding agents running the tests, which turn
+                // questions off even at a terminal
+                | "CI"
                 | "AI_AGENT"
                 | "VSCODE_AGENT"
                 | "CLAUDECODE"
