@@ -129,6 +129,19 @@ fn a_second_run_moves_zero_bytes() -> Result {
 }
 
 #[test]
+fn files_placed_from_bytes_the_cache_held_are_counted() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    let first = json(&sandbox.run(&["--json", "get", &server.url])?)?;
+    assert_eq!(first["work"]["placed_from_cache"], 0, "{first}");
+    let again = json(&sandbox.run(&["--json", "get", &server.url, "-o", "again"])?)?;
+    assert_eq!(again["work"]["bytes_down"], 0, "{again}");
+    assert_eq!(again["work"]["placed_from_cache"], 1, "{again}");
+    Ok(())
+}
+
+#[test]
 fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
     let cut = 150_000;
