@@ -266,3 +266,33 @@ fn a_key_the_source_refuses_is_not_saved() -> Result {
     );
     Ok(())
 }
+
+/// q typed to quit at the question whether to save a key is no answer: the question asks again,
+/// and the key is never saved as if it were a yes, though enter alone means yes there.
+#[cfg(target_os = "linux")]
+#[test]
+fn q_at_the_question_to_save_a_key_asks_again_and_saves_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let login = sandbox.command(&["auth", "login", "hf", "--offline"]);
+    let Some((_, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_test1234567890\rq\rn\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert!(
+        !home(&sandbox).join(".cache/huggingface/token").exists(),
+        "{screen}"
+    );
+    assert!(!screen.contains("saved to"), "{screen}");
+    assert!(screen.contains("? [Y/n] q\n"), "{screen}");
+    assert!(
+        screen.contains("type y or n, or press ctrl-c to cancel\n"),
+        "{screen}"
+    );
+    Ok(())
+}

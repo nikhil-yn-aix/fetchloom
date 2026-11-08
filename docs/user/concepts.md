@@ -120,7 +120,7 @@ approval is required above 1 GiB, not at exactly 1 GiB.
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
 
-`--yes` or `-y` approves downloads, never a [dataset search choice](commands/search.md#choosing-a-dataset). questions default to no and require interactive stdin and stderr. pipes, CI, [coding agents](ai-agents.md) and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`. a run asks before it places any file, so a no at the question says that nothing changed. the exception is a `sync` that has already written `data.lock`, which it does before it downloads what placing needs: that change stays, and the `Cancelled` line does not say nothing changed.
+`--yes` or `-y` approves downloads, never a [dataset search choice](commands/search.md#choosing-a-dataset). questions default to no and require interactive stdin and stderr. answer with y or yes, or n or no, then enter; enter alone takes the default, and any other answer, such as q, asks the question again. pipes, CI, [coding agents](ai-agents.md) and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`. a run asks before it places any file, so a no at the question says that nothing changed. the exception is a `sync` that has already written `data.lock`, which it does before it downloads what placing needs: that change stays, and the `Cancelled` line does not say nothing changed.
 
 ## interruptions
 

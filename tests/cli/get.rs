@@ -541,7 +541,7 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let server = Server::start("/huge.bin", vec![huge(), huge()])?;
     let command = sandbox.command(&["get", &server.url]);
-    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+    for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
         let Some((exit, screen)) = crate::support::typed(
             &sandbox.work(),

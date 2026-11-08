@@ -471,7 +471,8 @@ impl Output {
         !self.json && self.style.interactive && std::io::stdin().is_terminal()
     }
 
-    /// a yes or no question whose enter key means `default`, or none when nobody can answer.
+    /// a yes or no question whose enter key means `default`, or none when nobody can answer. an
+    /// answer that is neither yes nor no asks it again.
     pub(crate) fn ask_yes_no(&self, question: &str, default: bool) -> Result<Option<bool>, Error> {
         if !self.can_ask() {
             return Ok(None);
@@ -479,23 +480,34 @@ impl Output {
         let ask = || {
             let terminal = console::Term::stderr();
             let choices = if default { "[Y/n]" } else { "[y/N]" };
-            let _ = terminal.write_str(&format!("{question} {choices} "));
-            // read ctrl-c as a key on both platforms instead of leaving a blocking read
-            // waiting after the signal handler asks network tasks to stop.
-            let answer = loop {
-                match confirmation_key(terminal.read_key_raw(), default) {
-                    Ok(None) => {}
-                    answer => break answer,
+            loop {
+                let _ = terminal.write_str(&format!("{question} {choices} "));
+                let mut shown = 0_usize;
+                // read ctrl-c as a key on both platforms instead of leaving a blocking read
+                // waiting after the signal handler asks network tasks to stop.
+                let answer = answer(
+                    || terminal.read_key_raw(),
+                    |edit| {
+                        match edit {
+                            Edit::Typed(_) => shown += 1,
+                            Edit::Erased(_) => shown -= 1,
+                        }
+                        echo(&terminal, edit);
+                    },
+                    default,
+                );
+                // enter alone shows what it chose, after the question, which may have wrapped
+                let chosen = match answer {
+                    Ok(Some(true)) if shown == 0 => "yes",
+                    Ok(Some(false)) if shown == 0 => "no",
+                    _ => "",
+                };
+                let _ = terminal.write_line(chosen);
+                if !matches!(answer, Ok(None)) {
+                    return answer;
                 }
-            };
-            // the question may have wrapped, so the answer goes after it rather than over it
-            let selected = match &answer {
-                Ok(Some(true)) => "yes",
-                Ok(Some(false)) => "no",
-                _ => "",
-            };
-            let _ = terminal.write_line(selected);
-            answer
+                let _ = terminal.write_line("type y or n, or press ctrl-c to cancel");
+            }
         };
         self.asking(ask)
     }
@@ -516,14 +528,9 @@ impl Output {
                 let read = typed_line(
                     || terminal.read_key_raw(),
                     |edit| {
-                        let mut bytes = [0; 4];
-                        let _ = match edit {
-                            _ if hidden => Ok(()),
-                            Edit::Typed(typed) => terminal.write_str(typed.encode_utf8(&mut bytes)),
-                            Edit::Erased(erased) => terminal.clear_chars(
-                                console::measure_text_width(erased.encode_utf8(&mut bytes)),
-                            ),
-                        };
+                        if !hidden {
+                            echo(&terminal, edit);
+                        }
                     },
                 );
                 // keys read one by one bring no line break of their own
@@ -1181,24 +1188,41 @@ fn typed_line(
     }
 }
 
-fn confirmation_key(
-    key: std::io::Result<console::Key>,
+/// one answer to a yes or no question, a line typed with `key` and each change told to
+/// `edited`: y or yes, n or no in any case, or enter alone for `default`. any other line, such as
+/// q typed to quit, is none, so the question is asked again rather than taking the default.
+/// ctrl-c cancels the question, and a terminal that closed answers no.
+fn answer(
+    key: impl FnMut() -> std::io::Result<console::Key>,
+    edited: impl FnMut(Edit),
     default: bool,
 ) -> Result<Option<bool>, Error> {
-    let key = match key {
-        Ok(key) => key,
-        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => console::Key::CtrlC,
+    let line = match typed_line(key, edited) {
+        Ok(line) => line,
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return Err(
+                Error::new(crate::error::Kind::Interrupted, "stopped").cancelled("the question")
+            );
+        }
         Err(_) => return Ok(Some(false)),
     };
-    match key {
-        console::Key::CtrlC => {
-            Err(Error::new(crate::error::Kind::Interrupted, "stopped").cancelled("the question"))
-        }
-        console::Key::Char('y' | 'Y') => Ok(Some(true)),
-        console::Key::Char('n' | 'N') => Ok(Some(false)),
-        console::Key::Enter => Ok(Some(default)),
+    match line.trim().to_lowercase().as_str() {
+        "" => Ok(Some(default)),
+        "y" | "yes" => Ok(Some(true)),
+        "n" | "no" => Ok(Some(false)),
         _ => Ok(None),
     }
+}
+
+/// shows on `terminal` a change to an answer as it is typed.
+fn echo(terminal: &console::Term, edit: Edit) {
+    let mut bytes = [0; 4];
+    let _ = match edit {
+        Edit::Typed(typed) => terminal.write_str(typed.encode_utf8(&mut bytes)),
+        Edit::Erased(erased) => {
+            terminal.clear_chars(console::measure_text_width(erased.encode_utf8(&mut bytes)))
+        }
+    };
 }
 
 /// a pasted secret shown without giving it away: a long key keeps 4 characters at each end so a
@@ -1618,29 +1642,49 @@ mod tests {
             Ok(console::Key::CtrlC),
             Err(std::io::ErrorKind::Interrupted.into()),
         ] {
-            let error = super::confirmation_key(key, false).unwrap_err();
+            let mut keys = std::iter::once(key);
+            let error = super::answer(|| keys.next().unwrap(), |_| {}, false).unwrap_err();
             assert_eq!(error.kind, crate::error::Kind::Interrupted);
             assert_eq!(error.kind.exit_code(), 130);
             assert_eq!(error.message, "stopped");
+            assert_eq!(error.cancelled.as_deref(), Some("the question"));
         }
     }
 
+    /// y or yes and n or no answer a question in any case, and enter alone takes its default.
+    /// anything else, such as q typed to quit, is asked again, so it never saves or downloads
+    /// anything as a yes would.
     #[test]
-    fn a_question_keeps_yes_no_and_default_answers() {
-        for (key, answer) in [
-            (console::Key::Char('y'), Some(true)),
-            (console::Key::Char('Y'), Some(true)),
-            (console::Key::Char('n'), Some(false)),
-            (console::Key::Char('N'), Some(false)),
-            (console::Key::Enter, Some(false)),
-            (console::Key::Unknown, None),
-        ] {
-            assert_eq!(super::confirmation_key(Ok(key), false).unwrap(), answer);
+    fn an_answer_other_than_yes_or_no_is_asked_again_not_taken_as_the_default() {
+        for default in [true, false] {
+            for (typed, said) in [
+                ("y", Some(true)),
+                ("Yes", Some(true)),
+                (" yes ", Some(true)),
+                ("n", Some(false)),
+                ("NO", Some(false)),
+                ("", Some(default)),
+                ("q", None),
+                ("quit", None),
+                ("yeah", None),
+                ("y n", None),
+            ] {
+                let mut keys = typed
+                    .chars()
+                    .map(console::Key::Char)
+                    .chain([console::Key::Enter])
+                    .map(Ok);
+                let read = super::answer(|| keys.next().unwrap(), |_| {}, default);
+                assert_eq!(read.unwrap(), said, "{typed:?}, {default} by default");
+            }
         }
-        assert_eq!(
-            super::confirmation_key(Err(std::io::ErrorKind::UnexpectedEof.into()), false).unwrap(),
-            Some(false)
-        );
+    }
+
+    /// a terminal that closed before an answer came, as at the end of its input, answers no.
+    #[test]
+    fn a_question_whose_terminal_closed_is_answered_no() {
+        let closed = || Err(std::io::ErrorKind::UnexpectedEof.into());
+        assert_eq!(super::answer(closed, |_| {}, true).unwrap(), Some(false));
     }
 
     #[test]

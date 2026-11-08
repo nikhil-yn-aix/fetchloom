@@ -2461,7 +2461,7 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     let home = sandbox.folder("home")?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let asked = sandbox.command(&["add", &server.url]);
-    let Some((code, screen)) = crate::support::typed(&home, &asked, "", "", "n")? else {
+    let Some((code, screen)) = crate::support::typed(&home, &asked, "", "", "n\r")? else {
         return Ok(());
     };
     assert!(screen.contains("your home folder"), "{screen}");
@@ -2511,7 +2511,7 @@ fn a_cancel_at_a_question_is_no_error() -> Result {
     let home = sandbox.folder("home")?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let asked = sandbox.command(&["add", &server.url]);
-    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+    for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
         let Some((exit, screen)) = crate::support::typed(
             &home,
             &asked,
@@ -2554,7 +2554,7 @@ fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let large = Server::start("/huge.bin", (0..4).map(|_| huge()).collect())?;
     let command = sandbox.command(&["add", &large.url]);
-    for (keys, code) in [("n", 1), ("\u{3}", 130)] {
+    for (keys, code) in [("n\r", 1), ("\u{3}", 130)] {
         // -isig lets ctrl-c reach the question as the key it reads, whenever it is typed
         let Some((exit, screen)) = crate::support::typed(
             &work,
@@ -2607,7 +2607,7 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
     delete(&work.join("data/huge/huge.bin"))?;
     let sync = sandbox.command(&["sync"]);
     let question = "download 1 file (2.0 GiB)?";
-    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n")? else {
+    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n\r")? else {
         return Ok(());
     };
     assert_eq!(exit, Some(1), "{screen}");
@@ -2623,7 +2623,7 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
         .filter(|table| !table.starts_with("[datasets.cows]"))
         .collect();
     fs::write(work.join("data.toml"), kept.join("\n\n"))?;
-    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n")? else {
+    let Some((exit, screen)) = crate::support::typed(&work, &sync, "", question, "n\r")? else {
         return Ok(());
     };
     assert_eq!(exit, Some(1), "{screen}");
