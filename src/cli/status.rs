@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use super::Context;
-use super::sync::disk::Survey;
+use super::sync::disk::{Blocker, Entry, Survey};
 use super::sync::place;
 use crate::error::Error;
 use crate::output::Output;
@@ -43,6 +43,11 @@ pub(super) struct Status {
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// entries in the way of files data.lock places, by path: a link or special file at a
+    /// file's path, a folder there, or a file, link or special file where a folder on a file's
+    /// way belongs. `sync --force` replaces them, except a folder that holds anything.
+    #[serde(serialize_with = "blocker_paths")]
+    blocked: Vec<Blocker>,
     /// edited files placed as hardlinks, whose change every project sharing the link sees.
     #[serde(skip)]
     shared: HashSet<String>,
@@ -58,7 +63,7 @@ pub(super) fn run(context: &Context) -> Result<Status, Error> {
                 "`fetchloom sync` places missing or updated files and reports any conflicts it keeps",
             );
         }
-        if !status.edited.is_empty() || !status.untracked.is_empty() {
+        if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
             output.hint("save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock");
         }
     }
@@ -112,7 +117,19 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
         let seen = survey.disk.get(&target.path);
         let file = project.root.join(&target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
-            (None, _) => &mut status.missing,
+            (None, _) => match survey.blocker(&target.path) {
+                Some(blocker) => {
+                    if !status
+                        .blocked
+                        .iter()
+                        .any(|known| known.path == blocker.path)
+                    {
+                        status.blocked.push(blocker);
+                    }
+                    continue;
+                }
+                None => &mut status.missing,
+            },
             (Some(_), Some(_)) if survey.elsewhere.contains(&target.path) => {
                 &mut status.edited_elsewhere
             }
@@ -143,7 +160,9 @@ fn check(project: &Project, threads: Threads) -> Result<Status, Error> {
         };
         list.push(target.path.clone());
     }
-    let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
+    let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
+    // a file in the way is listed as blocking, not also as extra
+    wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
     status.extra = extra(&survey, &wanted);
     Ok(status)
 }
@@ -161,6 +180,26 @@ fn extra(survey: &Survey, wanted: &HashSet<&str>) -> Vec<String> {
         .collect();
     extra.sort();
     extra
+}
+
+fn blocker_paths<S: serde::Serializer>(
+    blocked: &[Blocker],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(blocked.iter().map(|blocker| &blocker.path))
+}
+
+/// what stands in a file's way, in a few words.
+fn in_the_way(blocker: &Blocker) -> &'static str {
+    match (blocker.found, blocker.folder) {
+        (Entry::File, _) => "a file is where a folder belongs",
+        (Entry::Link, true) => "a link is where a folder belongs",
+        (Entry::Special, true) => "a special file is where a folder belongs",
+        (Entry::Link, false) => "a link is where a file belongs",
+        (Entry::Special, false) => "a special file is where a file belongs",
+        (Entry::Folder, _) if blocker.clearable => "an empty folder is where a file belongs",
+        (Entry::Folder, _) => "a folder with files in it is where a file belongs",
+    }
 }
 
 impl Status {
@@ -221,6 +260,16 @@ fn list(output: &Output, status: &Status) {
             &format!("{archive} · not unpacked on this machine yet"),
         );
     }
+    for blocker in status.blocked.iter().take(SHOWN) {
+        output.mark(
+            "Blocked",
+            &format!("{} · {}", blocker.path, in_the_way(blocker)),
+        );
+    }
+    if status.blocked.len() > SHOWN {
+        let more = status.blocked.len() - SHOWN;
+        output.mark("", &format!("and {more} more"));
+    }
     for path in status.edited_elsewhere.iter().take(SHOWN) {
         output.mark(
             "Damaged",
@@ -239,6 +288,7 @@ fn sum_up(output: &Output, status: &Status) -> bool {
         + status.unlocked.len()
         + status.not_unpacked.len()
         + status.edited_elsewhere.len()
+        + status.blocked.len()
         + status
             .lists()
             .iter()

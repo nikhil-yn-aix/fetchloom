@@ -1692,3 +1692,98 @@ fn a_later_get_conflict_preserves_earlier_files() -> Result {
     );
     Ok(())
 }
+
+/// a link someone put where data.lock places a file is in the way: status calls it blocked
+/// rather than missing, a plain sync leaves it with a warning, and `--force` replaces the link
+/// itself, never what it points to.
+#[cfg(unix)]
+#[test]
+fn force_replaces_a_link_at_a_pinned_path_without_following_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let precious = sandbox.folder("important")?.join("thesis.txt");
+    fs::write(&precious, b"precious")?;
+    delete(&placed)?;
+    std::os::unix::fs::symlink(&precious, &placed)?;
+
+    let status = sandbox.run(&["--json", "status"])?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        report["result"]["blocked"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    assert_eq!(
+        report["result"]["missing"],
+        serde_json::json!([]),
+        "{report}"
+    );
+    let kept = sandbox.run(&["sync"])?;
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("data/iris/iris.csv is a link where data.lock places a file"),
+        "{stderr}"
+    );
+    assert!(fs::symlink_metadata(&placed)?.file_type().is_symlink());
+    let forced = sandbox.run(&["sync", "--force"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert!(
+        fs::symlink_metadata(&placed)?.file_type().is_file(),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    assert_eq!(fs::read(&precious)?, b"precious");
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock\n"
+    );
+    Ok(())
+}
+
+/// a file where a dataset's folder belongs keeps every file of the dataset out. status names
+/// that one file as blocking rather than each file as missing, a plain sync leaves it with a
+/// warning, and `--force` replaces it with the folder and its files.
+#[test]
+fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data").join("iris");
+    delete(&folder.join("iris.csv"))?;
+    fs::remove_dir(&folder)?;
+    fs::write(&folder, b"notes\n")?;
+
+    let status = sandbox.run(&["--json", "status"])?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        report["result"]["blocked"],
+        serde_json::json!(["data/iris"]),
+        "{report}"
+    );
+    assert_eq!(
+        report["result"]["missing"],
+        serde_json::json!([]),
+        "{report}"
+    );
+    assert_eq!(report["result"]["extra"], serde_json::json!([]), "{report}");
+    let kept = sandbox.run(&["sync"])?;
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("data/iris is a file where data.lock needs a folder"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&folder)?, b"notes\n");
+    let forced = sandbox.run(&["sync", "--force"])?;
+    let stderr = text(&forced.stderr)?;
+    assert_eq!(forced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(folder.join("iris.csv"))?, V1, "{stderr}");
+    Ok(())
+}

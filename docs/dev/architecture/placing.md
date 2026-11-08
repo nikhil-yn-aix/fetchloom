@@ -54,6 +54,10 @@ flowchart TD
 | place | no file occupies the target |
 | replace | old managed data is superseded, an unchanged alias is proven damaged, a matching file needs writable placement, or force permits replacement |
 | leave | preserve an edited or foreign file and report why it stayed |
+| unblock | with force, remove the entry in a missing file's way, without following it, then place |
+| blocked | without force, or for a folder that holds anything, keep the entry in a missing file's way and report it |
+
+a target with no plain file at its path can still be blocked. the scan records folders, links and special files beside the files it lists, so `Survey::blocker` finds, without another call, a file, link or special file where a folder on the target's way belongs, or a link, special file or folder at its own path. `settle` removes such an entry once, through the placer's pinned parent, after checking it is still what the scan listed: a link or special file, an empty folder, or a file whose size and time are unchanged.
 
 equal files are adopted only when their writable mode fits the dataset. a read-only file whose bytes match is replaced when `copy = true`, whether tracked or untracked; differing untracked bytes still require force. a tracked changed file holding the target bytes can recover an interruption between placement and state writing. adoption detects when the existing file is the cache object under another name and records it as a hardlink.
 

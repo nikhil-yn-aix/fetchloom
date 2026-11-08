@@ -41,6 +41,35 @@ pub(crate) struct Survey {
     pub(crate) needs_writing: bool,
     /// files under the hidden names placement stages files in, by their paths in the project.
     temporaries: Vec<String>,
+    /// what else the data folder holds, by path in the project: folders, and links and special
+    /// files, which the survey never follows or reads.
+    pub(crate) entries: HashMap<String, Entry>,
+    /// the data folder's path in the project, below which entries can stand in a file's way.
+    data_dir: String,
+}
+
+/// what stands at a path in the data folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Entry {
+    File,
+    Folder,
+    Link,
+    /// a device, a socket or a named pipe.
+    Special,
+}
+
+/// an entry that keeps a file data.lock places from its path: one that is not a folder where
+/// the file needs a folder on its way, or one that is not a plain file at the file's own path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Blocker {
+    /// the entry's path in the project.
+    pub(crate) path: String,
+    pub(crate) found: Entry,
+    /// whether data.lock needs a folder at that path, rather than a file.
+    pub(crate) folder: bool,
+    /// whether `sync --force` may remove it. a folder holding anything stays, since its files
+    /// may be someone's work.
+    pub(crate) clearable: bool,
 }
 
 impl Survey {
@@ -49,7 +78,7 @@ impl Survey {
     pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
         let started = nanos(SystemTime::now());
         let (state, written) = project.state();
-        let (disk, temporaries) = scan(&project.root, data_dir, threads);
+        let (disk, temporaries, entries) = scan(&project.root, data_dir, threads);
         let mut survey = Survey {
             threads,
             started,
@@ -61,6 +90,8 @@ impl Survey {
             edited: HashSet::new(),
             needs_writing: false,
             temporaries,
+            entries,
+            data_dir: data_dir.to_owned(),
         };
         let other_device = !survey.state.files.is_empty()
             && apart(&project.root.join(data_dir), &project.own_folder());
@@ -207,6 +238,52 @@ impl Survey {
                 placed.look.size = u64::MAX;
             }
         }
+    }
+
+    /// what keeps a file data.lock places at `path` from being placed, when no plain file stands
+    /// there: a file, link or special file where a folder on its way belongs, or a folder, link
+    /// or special file at the path itself. none when nothing does, as when the path is free.
+    pub(crate) fn blocker(&self, path: &str) -> Option<Blocker> {
+        let start = self.data_dir.len() + 1;
+        let below = path
+            .strip_prefix(self.data_dir.as_str())?
+            .strip_prefix('/')?;
+        for (end, _) in below.match_indices('/') {
+            let folder = &path[..start + end];
+            let found = if self.disk.contains_key(folder) {
+                Entry::File
+            } else {
+                match self.entries.get(folder) {
+                    Some(Entry::Folder) => continue,
+                    Some(entry) => *entry,
+                    None => return None,
+                }
+            };
+            return Some(Blocker {
+                path: folder.to_owned(),
+                found,
+                folder: true,
+                clearable: true,
+            });
+        }
+        let found = *self.entries.get(path)?;
+        let clearable = found != Entry::Folder || self.holds_nothing_under(path);
+        Some(Blocker {
+            path: path.to_owned(),
+            found,
+            folder: false,
+            clearable,
+        })
+    }
+
+    /// whether the folder at `path` was empty when the survey listed it.
+    fn holds_nothing_under(&self, path: &str) -> bool {
+        let prefix = format!("{path}/");
+        !self
+            .disk
+            .keys()
+            .chain(self.entries.keys())
+            .any(|inner| inner.starts_with(&prefix))
     }
 
     /// the files an interrupted placement left under the hidden names it stages files in, which
@@ -415,36 +492,47 @@ fn apart(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// every file under the data folder and how it looks, by its path in the project, and the paths
-/// of those under the hidden names placement stages files in. links are neither followed nor
-/// touched.
-fn scan(root: &Path, data_dir: &str, threads: Threads) -> (HashMap<String, Look>, Vec<String>) {
+/// what a scan of the data folder found: every file and how it looks, by its path in the
+/// project, the paths of those under the hidden names placement stages files in, and every other
+/// entry.
+type Scanned = (HashMap<String, Look>, Vec<String>, HashMap<String, Entry>);
+
+/// every file under the data folder and how it looks, by its path in the project, the paths of
+/// those under the hidden names placement stages files in, and the folders, links and special
+/// files beside them. links are neither followed nor touched.
+fn scan(root: &Path, data_dir: &str, threads: Threads) -> Scanned {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut found = HashMap::new();
     let mut temporaries = Vec::new();
+    let mut entries = HashMap::new();
     let mut pending = Vec::new();
     let mut last_parent = None;
     let mut parents = 0;
-    visit_files(root, data_dir, |entry, path, temporary, parent| {
-        if last_parent != Some(parent) {
-            // DirEntry retains its parent handle on unix; bound distinct parents too.
-            if parents == 8 {
+    visit_files(
+        root,
+        data_dir,
+        &mut entries,
+        |entry, path, temporary, parent| {
+            if last_parent != Some(parent) {
+                // DirEntry retains its parent handle on unix; bound distinct parents too.
+                if parents == 8 {
+                    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+                    parents = 0;
+                }
+                parents += 1;
+                last_parent = Some(parent);
+            }
+            pending.push((entry, path, temporary));
+            if pending.len() == 4096 {
                 scan_pending(&mut pending, threads, &mut found, &mut temporaries);
                 parents = 0;
+                last_parent = None;
             }
-            parents += 1;
-            last_parent = Some(parent);
-        }
-        pending.push((entry, path, temporary));
-        if pending.len() == 4096 {
-            scan_pending(&mut pending, threads, &mut found, &mut temporaries);
-            parents = 0;
-            last_parent = None;
-        }
-    });
+        },
+    );
     scan_pending(&mut pending, threads, &mut found, &mut temporaries);
     span.record("files", found.len());
-    (found, temporaries)
+    (found, temporaries, entries)
 }
 
 fn scan_pending(
@@ -473,6 +561,7 @@ fn scan_pending(
 fn visit_files(
     root: &Path,
     data_dir: &str,
+    others: &mut HashMap<String, Entry>,
     mut visit: impl FnMut(fs::DirEntry, String, bool, usize),
 ) {
     let mut folders = vec![(root.join(data_dir), data_dir.to_owned())];
@@ -490,10 +579,15 @@ fn visit_files(
             let name = name.to_string_lossy();
             let path = format!("{relative}/{name}");
             if kind.is_dir() {
+                others.insert(path.clone(), Entry::Folder);
                 folders.push((entry.path(), path));
             } else if kind.is_file() {
                 let temporary = place::is_copy_temporary(&name);
                 visit(entry, path, temporary, parent);
+            } else if kind.is_symlink() {
+                others.insert(path, Entry::Link);
+            } else {
+                others.insert(path, Entry::Special);
             }
         }
     }
@@ -559,7 +653,7 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        let (found, _) = scan(dir.path(), "data", Threads::default());
+        let (found, _, _) = scan(dir.path(), "data", Threads::default());
         assert_eq!(found.len(), 512);
     }
 
@@ -593,7 +687,10 @@ mod tests {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
             let actual = scan(root, "data", threads);
             assert_eq!(actual, expected);
-            assert_eq!(scan(root, "absent", threads), (HashMap::new(), Vec::new()));
+            assert_eq!(
+                scan(root, "absent", threads),
+                (HashMap::new(), Vec::new(), HashMap::new())
+            );
         }
     }
 
@@ -1130,6 +1227,55 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn whatever_stands_in_a_files_way_is_found_from_the_scan_alone() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let data = project.root.join("data");
+        for folder in ["real", "empty.csv", "full.csv/inner"] {
+            fs::create_dir_all(data.join(folder)).unwrap();
+        }
+        fs::write(data.join("file"), b"notes").unwrap();
+        fs::write(data.join("full.csv/inner/kept"), b"work").unwrap();
+        symlink(dir.path(), data.join("linked")).unwrap();
+        symlink(dir.path().join("elsewhere"), data.join("real/link.csv")).unwrap();
+        let survey = Survey::read(&project, "data", Threads::default());
+        let blocker = |path: &str| {
+            survey
+                .blocker(path)
+                .map(|found| (found.path, found.found, found.folder, found.clearable))
+        };
+
+        assert_eq!(
+            blocker("data/file/a.csv"),
+            Some(("data/file".to_owned(), Entry::File, true, true))
+        );
+        assert_eq!(
+            blocker("data/linked/deep/a.csv"),
+            Some(("data/linked".to_owned(), Entry::Link, true, true))
+        );
+        assert_eq!(
+            blocker("data/real/link.csv"),
+            Some(("data/real/link.csv".to_owned(), Entry::Link, false, true))
+        );
+        assert_eq!(
+            blocker("data/empty.csv"),
+            Some(("data/empty.csv".to_owned(), Entry::Folder, false, true))
+        );
+        assert_eq!(
+            blocker("data/full.csv"),
+            Some(("data/full.csv".to_owned(), Entry::Folder, false, false))
+        );
+        assert_eq!(blocker("data/real/free.csv"), None);
+        assert_eq!(blocker("data/absent/a.csv"), None);
+        assert_eq!(blocker("elsewhere/a.csv"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn scanning_skips_links_even_when_their_targets_are_files_or_folders() {
         use std::os::unix::fs::symlink;
 
@@ -1148,10 +1294,18 @@ mod tests {
             dir.path().join("data/file-link"),
         )
         .unwrap();
-        let (files, leftovers) = scan(dir.path(), "data", Threads::default());
+        let (files, leftovers, entries) = scan(dir.path(), "data", Threads::default());
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
         assert_eq!(leftovers, Vec::<String>::new());
+        assert_eq!(
+            entries,
+            HashMap::from([
+                ("data/nested".to_owned(), Entry::Folder),
+                ("data/folder-link".to_owned(), Entry::Link),
+                ("data/file-link".to_owned(), Entry::Link),
+            ])
+        );
         assert_eq!(scan(dir.path(), "missing", Threads::default()).0.len(), 0);
     }
 }

@@ -43,7 +43,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, and nullable `locked_files`, an array of `path` and `size` records; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
 | `path` | absolute path string, for a dataset, file or subfolder |
-| `status` | `project`: absolute path; nine arrays below |
+| `status` | `project`: absolute path; ten arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array |
 | `cache gc` | `objects`: deleted count; `bytes`: deleted object payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `leftovers`: deleted partial or temporary file count; `not_removed`: failure records for paths that could not be removed or inspected for cleanup; `forgotten`: root paths of projects whose registration gc removed because their `data.toml` is gone; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |
 | `auth` | `accounts`: records with `account`, `signed_in`, `from`, `user` and `valid`; [auth](../commands/auth.md#json) |
@@ -53,7 +53,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 
 project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
 
-placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced hardlinks that were the cache's copy of their bytes, or the copy the cache found changed, after an edit through a link, here or in another project, changed it. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks shared with other projects whose shared copy the cache no longer knows, `foreign` for other bytes at a target, and `unneeded` for edited managed files no longer wanted. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
+placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced hardlinks that were the cache's copy of their bytes, or the copy the cache found changed, after an edit through a link, here or in another project, changed it. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks shared with other projects whose shared copy the cache no longer knows, `foreign` for other bytes at a target, `unneeded` for edited managed files no longer wanted, and `blocked` for targets another entry stands in the way of, whose path that entry's record adds as `blocked_by`. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
 `get.files` lists placement targets, so an unpacked archive is replaced by its members. each record has `path`, `size`, `sha256`, `url`, `origin`, `method`, `unpacked_from`. the path is relative to `folder`. origin is `network`, `not_modified` or `cache`; method is `reflink`, `hardlink`, `copy`, or null when already present. `unpacked_from` is the selected archive path or null. unpacked members inherit the archive's URL and origin.
 
@@ -70,7 +70,8 @@ status arrays:
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
 | `edited_elsewhere` | managed hardlinks whose bytes hashing found changed while they are the cache's copy of those bytes: still the cached object, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them. an edit through any link, in this project or another, changes them all; `sync` puts them back |
-| `extra` | scanned paths outside the known targets |
+| `blocked` | paths of entries in a target's way: a link, special file or folder at the target's path, or a file, link or special file where a folder on its way belongs. `sync --force` replaces them, except a folder that holds anything |
+| `extra` | scanned paths outside the known targets, apart from files listed as blocked |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
 status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.

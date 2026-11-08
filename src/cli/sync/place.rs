@@ -17,7 +17,7 @@ use serde::Serialize;
 use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::tell_preview;
-use super::disk::Survey;
+use super::disk::{Blocker, Entry, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
 use crate::error::Error;
@@ -41,12 +41,46 @@ pub(crate) struct Placement {
     /// files replaced because they were linked to the cache's copy, which an edit through a
     /// link changed, here or in another project.
     pub(crate) restored: Vec<String>,
+    /// entries `--force` removed from the way of placed files, by path.
+    #[serde(skip)]
+    pub(crate) cleared: Vec<(String, Entry)>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Kept {
     pub(crate) path: String,
     pub(crate) reason: Reason,
+    /// for reason `blocked`, the entry in the way, as `blocked_by`: its path in the project.
+    #[serde(
+        rename = "blocked_by",
+        serialize_with = "blocker_path",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) blocker: Option<Blocker>,
+}
+
+impl Kept {
+    fn new(path: String, reason: Reason) -> Kept {
+        Kept {
+            path,
+            reason,
+            blocker: None,
+        }
+    }
+}
+
+#[expect(
+    clippy::ref_option,
+    reason = "serde hands a field to its serializer by reference"
+)]
+fn blocker_path<S: serde::Serializer>(
+    blocker: &Option<Blocker>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match blocker {
+        Some(blocker) => serializer.serialize_str(&blocker.path),
+        None => serializer.serialize_none(),
+    }
 }
 
 /// what a dry run would change, path by path, as `--json` prints it.
@@ -117,11 +151,18 @@ pub(crate) enum Reason {
     Foreign,
     /// no dataset needs it now, but it changed since fetchloom placed it.
     Unneeded,
+    /// another entry stands in its way: a link or special file at its path, or a file where a
+    /// folder on its way belongs. `--force` replaces that entry, though never a folder that
+    /// holds anything.
+    Blocked,
 }
 
 enum Action {
     Keep,
     Place,
+    /// `--force` removes the entry in the way, without following it, and places the file.
+    Unblock(Blocker),
+    Blocked(Blocker),
     Replace,
     Adopt(Look),
     /// a hardlink a mark put in doubt that still holds the locked bytes: kept, with the time
@@ -231,7 +272,9 @@ impl<'a> Placing<'a> {
             .targets
             .iter()
             .zip(&self.actions)
-            .filter(|(_, action)| matches!(action, Action::Place | Action::Replace))
+            .filter(|(_, action)| {
+                matches!(action, Action::Place | Action::Replace | Action::Unblock(_))
+            })
             .map(|(target, _)| target)
             .collect();
         let mut unique = HashSet::new();
@@ -268,11 +311,14 @@ impl<'a> Placing<'a> {
         for (target, action) in self.targets.iter().zip(&self.actions) {
             match action {
                 Action::Keep | Action::Adopt(_) | Action::Vouch(_) => placement.unchanged += 1,
-                Action::Leave(reason) => placement.kept.push(Kept {
-                    path: target.path.clone(),
-                    reason: *reason,
+                Action::Leave(reason) => {
+                    placement.kept.push(Kept::new(target.path.clone(), *reason))
+                }
+                Action::Blocked(blocker) => placement.kept.push(Kept {
+                    blocker: Some(blocker.clone()),
+                    ..Kept::new(target.path.clone(), Reason::Blocked)
                 }),
-                Action::Replace => {
+                Action::Replace | Action::Unblock(_) => {
                     if self.survey.elsewhere.contains(&target.path) {
                         placement.restored.push(target.path.clone());
                     }
@@ -319,10 +365,10 @@ impl<'a> Placing<'a> {
                     preview.placement.removed += 1;
                     preview.changes.remove.push(path);
                 }
-                Unwanted::Keep => preview.placement.kept.push(Kept {
-                    path,
-                    reason: Reason::Unneeded,
-                }),
+                Unwanted::Keep => preview
+                    .placement
+                    .kept
+                    .push(Kept::new(path, Reason::Unneeded)),
                 Unwanted::Gone => {}
             }
         }
@@ -506,10 +552,39 @@ fn settle<'t, 'a>(
 ) -> Result<(Vec<&'t Target<'a>>, bool), Error> {
     let mut todo = Vec::new();
     let mut adopted = false;
+    // each entry in the way once, by path: whether it is gone
+    let mut cleared: BTreeMap<String, bool> = BTreeMap::new();
     for (target, action) in targets.iter().zip(actions) {
         placer.stop().check()?;
         match action {
             Action::Keep => placement.unchanged += 1,
+            Action::Unblock(blocker) => {
+                let gone = if let Some(gone) = cleared.get(&blocker.path) {
+                    *gone
+                } else {
+                    let gone = clear(project, placer, survey, &blocker)?;
+                    cleared.insert(blocker.path.clone(), gone);
+                    if gone {
+                        placement
+                            .cleared
+                            .push((blocker.path.clone(), blocker.found));
+                    }
+                    gone
+                };
+                if gone {
+                    placement.replaced += 1;
+                    todo.push(target);
+                } else {
+                    placement.kept.push(Kept {
+                        blocker: Some(blocker),
+                        ..Kept::new(target.path.clone(), Reason::Blocked)
+                    });
+                }
+            }
+            Action::Blocked(blocker) => placement.kept.push(Kept {
+                blocker: Some(blocker),
+                ..Kept::new(target.path.clone(), Reason::Blocked)
+            }),
             Action::Adopt(seen) => {
                 let found = adoption(
                     target,
@@ -530,10 +605,7 @@ fn settle<'t, 'a>(
                 placement.unchanged += 1;
                 adopted = true;
             }
-            Action::Leave(reason) => placement.kept.push(Kept {
-                path: target.path.clone(),
-                reason,
-            }),
+            Action::Leave(reason) => placement.kept.push(Kept::new(target.path.clone(), reason)),
             Action::Replace => {
                 let destination = project.root.join(&target.path);
                 match now(&destination) {
@@ -543,10 +615,7 @@ fn settle<'t, 'a>(
                         } else {
                             Reason::Foreign
                         };
-                        placement.kept.push(Kept {
-                            path: target.path.clone(),
-                            reason,
-                        });
+                        placement.kept.push(Kept::new(target.path.clone(), reason));
                         continue;
                     }
                     Some(_) => {
@@ -572,11 +641,58 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
+/// removes the entry in the way of placing, without following it, once it still is what the
+/// survey listed: a link or special file, an empty folder, or a file whose size and time are
+/// unchanged, so a file written to since the scan stays. says whether it is gone.
+fn clear(
+    project: &Project,
+    placer: &mut Placer,
+    survey: &Survey,
+    blocker: &Blocker,
+) -> Result<bool, Error> {
+    let path = project.root.join(&blocker.path);
+    let Ok(metadata) = fs::symlink_metadata(&path) else {
+        return Ok(true);
+    };
+    let file_type = metadata.file_type();
+    let unchanged = match blocker.found {
+        Entry::File => {
+            file_type.is_file() && survey.disk.get(&blocker.path) == Some(&Look::of(&metadata))
+        }
+        Entry::Folder => file_type.is_dir(),
+        Entry::Link => file_type.is_symlink(),
+        Entry::Special => !file_type.is_file() && !file_type.is_dir() && !file_type.is_symlink(),
+    };
+    if !unchanged {
+        return Ok(false);
+    }
+    let removed = if blocker.found == Entry::Folder {
+        placer.delete_folder(&path)
+    } else {
+        // windows removes a link to a folder as a folder
+        placer
+            .remove(&path, false, None)
+            .or_else(|err| match blocker.found {
+                Entry::Link if cfg!(windows) => placer.delete_folder(&path),
+                _ => Err(err),
+            })
+    };
+    match removed {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(false),
+        Err(err) => Err(Error::io(
+            format_args!("could not remove {}, which is in the way", path.display()),
+            &err,
+        )),
+    }
+}
+
 /// what the file at `destination` needs, as `survey` saw it. a hardlink a mark put in doubt is
 /// replaced when hashing found its bytes changed and kept when it found them intact, and a file
 /// hashing found changed is an edit, though its size and time may not show either. a changed file
 /// that holds the locked bytes is taken as placed if its mode fits the dataset: a run cut off
 /// after it replaced a file and before it wrote the state leaves the new bytes recorded as old.
+/// an entry in the way of a file that is not there stays unless `force` may replace it.
 fn decide(
     target: &Target,
     survey: &Survey,
@@ -585,7 +701,11 @@ fn decide(
 ) -> Result<Action, Error> {
     let path = &target.path;
     let Some(look) = survey.disk.get(path) else {
-        return Ok(Action::Place);
+        return Ok(match survey.blocker(path) {
+            None => Action::Place,
+            Some(blocker) if force && blocker.clearable => Action::Unblock(blocker),
+            Some(blocker) => Action::Blocked(blocker),
+        });
     };
     match survey.state.files.get(path) {
         Some(_) if survey.elsewhere.contains(path) => Ok(Action::Replace),
@@ -662,17 +782,11 @@ fn remove_unwanted(
                             .map_err(|err| local(&file, &err))?;
                         placement.removed += 1;
                     }
-                    Some(_) => placement.kept.push(Kept {
-                        path,
-                        reason: Reason::Unneeded,
-                    }),
+                    Some(_) => placement.kept.push(Kept::new(path, Reason::Unneeded)),
                     None => {}
                 }
             }
-            Unwanted::Keep => placement.kept.push(Kept {
-                path,
-                reason: Reason::Unneeded,
-            }),
+            Unwanted::Keep => placement.kept.push(Kept::new(path, Reason::Unneeded)),
         }
     }
     Ok(changed)
