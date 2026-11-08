@@ -51,10 +51,10 @@ if a new addition fails to sync, fetchloom attempts to restore both `data.toml` 
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. explicit `FETCHLOOM_TRACE` output is still created or truncated. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr from a git repository with no manifest yet, matching a test snapshot:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. explicit `FETCHLOOM_TRACE` output is still created or truncated. it still resolves the link, so a source may be asked what the link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr from a git repository with no manifest yet, matching a test snapshot, where `[port]` stands for the test server's port:
 
 ```text
- Would lock iris · 1 file in data.lock
+  Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
 Would fetch iris/iris.csv · size unknown
 Would place data/iris · 1 file
   Would add data/ to .gitignore, since its files come from data.lock

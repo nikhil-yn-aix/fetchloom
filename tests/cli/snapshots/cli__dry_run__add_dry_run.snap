@@ -2,7 +2,7 @@
 source: tests/cli/dry_run.rs
 expression: stderr
 ---
- Would lock iris · 1 file in data.lock
+  Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
 Would fetch iris/iris.csv · size unknown
 Would place data/iris · 1 file
   Would add data/ to .gitignore, since its files come from data.lock

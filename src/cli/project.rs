@@ -1114,7 +1114,14 @@ async fn preview_all(
     let changed = !before.holds(&lock);
     let output = &work.context.output;
     if changed {
-        engine::tell_lock(output, &before, &lock, ("Would lock", "Would drop"), None);
+        engine::tell_lock(
+            output,
+            &before,
+            &lock,
+            engine::Verbs::WOULD,
+            None,
+            &engine::sizeless(&jobs),
+        );
     }
     let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged)?;
     for download in &preview.changes.download {

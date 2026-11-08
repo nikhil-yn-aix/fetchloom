@@ -29,6 +29,8 @@ fetchloom lock [options]
 3. resolve changed entries and learn file sizes, hashes and archive trees. this may download data into the cache.
 4. write `data.lock` without placing files or registering the project with the cache.
 
+each dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title when the source gives one, its file count and its size, so a typo in an id that pins an unrelated record stands out. up to 20 first pins get a line each; the rest, and changed pins of datasets locked before, are counted in one `Locked` line.
+
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
 `lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.

@@ -147,7 +147,10 @@ fn sync_dry_run_tells_the_lock_a_new_dataset_would_get() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        " Would lock cows · 1 file in data.lock\nWould fetch cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n"
+        format!(
+            "  Would pin cows, new in data.lock: {} · 1 file · size unknown\nWould fetch cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n",
+            other.url
+        )
     );
     let document = json(&sandbox.run(&["--json", "sync", "-n"])?)?;
     let result = &document["result"];

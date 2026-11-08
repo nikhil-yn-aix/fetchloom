@@ -1812,3 +1812,38 @@ fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
     );
     Ok(())
 }
+
+/// a dataset that `lock` or `sync` pins for the first time gets a line of its own with what it
+/// pinned, so a typo in data.toml that pins an unrelated record stands out.
+#[test]
+fn a_first_pin_by_lock_or_sync_gets_a_line_of_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    for (command, name) in [("lock", "cows"), ("sync", "hens")] {
+        let other = Server::start(
+            &format!("/files/{name}.csv"),
+            vec![file(b"cow\nbess\n", "\"c1\"")],
+        )?;
+        let updated = format!(
+            "{}\n[datasets.{name}]\nref = \"{}\"\n",
+            fs::read_to_string(&manifest)?,
+            other.url
+        );
+        fs::write(&manifest, updated)?;
+        let output = sandbox.run(&[command])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let line = format!(
+            "     Pinned {name}, new in data.lock: {} · 1 file · 9 B\n",
+            other.url
+        );
+        assert!(stderr.contains(&line), "{command}: {stderr}");
+        assert!(
+            !stderr.contains(&format!("Locked {name}")),
+            "{command}: {stderr}"
+        );
+    }
+    Ok(())
+}

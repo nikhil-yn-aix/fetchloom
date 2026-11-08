@@ -349,8 +349,9 @@ impl<'a> Loop<'a> {
             &self.context.output,
             before,
             lock,
-            ("Locked", "Removed"),
+            Verbs::DONE,
             self.told.as_deref(),
+            &HashSet::new(),
         );
         Ok(Some(text))
     }
@@ -665,41 +666,148 @@ impl Before {
     }
 }
 
+/// the words lock changes are told with: as done, or as a dry run would do them.
+#[derive(Clone, Copy)]
+pub(super) struct Verbs {
+    /// for datasets data.lock pinned before and pins anew.
+    locked: &'static str,
+    /// for datasets data.lock pins for the first time.
+    pinned: &'static str,
+    /// for datasets data.lock no longer has.
+    dropped: &'static str,
+}
+
+impl Verbs {
+    pub(super) const DONE: Verbs = Verbs {
+        locked: "Locked",
+        pinned: "Pinned",
+        dropped: "Removed",
+    };
+    pub(super) const WOULD: Verbs = Verbs {
+        locked: "Would lock",
+        pinned: "Would pin",
+        dropped: "Would drop",
+    };
+}
+
+/// the most datasets pinned for the first time that get a line each; the rest are counted.
+const FIRST_PINS: usize = 20;
+
+/// the labels, as `<dataset>/<path>`, of the files among `jobs` whose size only their download
+/// can tell.
+pub(super) fn sizeless(jobs: &[Job]) -> HashSet<String> {
+    jobs.iter()
+        .filter(|job| job.fetch.expect.size.is_none())
+        .map(|job| job.label.clone())
+        .collect()
+}
+
 /// says which datasets `lock` pins anew and which it no longer has, beside data.lock as it was
-/// `before`, with `verbs` for each, such as `Locked` and `Removed`. `told` is left out, since a
-/// later line tells about it.
+/// `before`, with `verbs` for each. a dataset pinned for the first time gets a line of its own
+/// with what it pinned, so a typo in data.toml that pins an unrelated record stands out. `told`
+/// is left out, since a later line tells about it.
 pub(super) fn tell_lock(
     output: &Output,
     before: &Before,
     lock: &Lock,
-    verbs: (&str, &str),
+    verbs: Verbs,
     told: Option<&str>,
+    sizeless: &HashSet<String>,
 ) {
-    let pinned: Vec<&Locked> = lock
-        .datasets
+    for (verb, text) in lock_lines(output, before, lock, verbs, told, sizeless) {
+        output.step(verb, &text);
+    }
+}
+
+/// the lines [`tell_lock`] prints, each a verb and its text.
+fn lock_lines(
+    output: &Output,
+    before: &Before,
+    lock: &Lock,
+    verbs: Verbs,
+    told: Option<&str>,
+    sizeless: &HashSet<String>,
+) -> Vec<(&'static str, String)> {
+    let mut first = Vec::new();
+    let mut again: Vec<&Locked> = Vec::new();
+    for dataset in &lock.datasets {
+        if told == Some(dataset.name.as_str()) {
+            continue;
+        }
+        match before.get(lock, &dataset.name) {
+            None => first.push(dataset),
+            Some(old) if old != dataset => again.push(dataset),
+            Some(_) => {}
+        }
+    }
+    let shown = first.len().min(FIRST_PINS);
+    let mut lines: Vec<(&'static str, String)> = first[..shown]
         .iter()
-        .filter(|dataset| before.get(lock, &dataset.name) != Some(*dataset))
-        .filter(|dataset| told != Some(dataset.name.as_str()))
+        .map(|dataset| (verbs.pinned, first_pin(output, dataset, sizeless)))
         .collect();
-    let files: usize = pinned.iter().map(|dataset| dataset.files.len()).sum();
-    let which = match pinned.as_slice() {
+    again.extend(&first[shown..]);
+    let files: usize = again.iter().map(|dataset| dataset.files.len()).sum();
+    let which = match again.as_slice() {
         [] => None,
         [only] => Some(only.name.clone()),
         many => Some(units::count(many.len() as u64, "dataset", "datasets")),
     };
     if let Some(which) = which {
-        output.step(
-            verbs.0,
-            &format!(
+        lines.push((
+            verbs.locked,
+            format!(
                 "{which} · {} in {}",
                 units::count(files as u64, "file", "files"),
                 lock::FILE
             ),
-        );
+        ));
     }
     for dataset in before.dropped(lock) {
-        output.step(verbs.1, &format!("{} from {}", dataset.name, lock::FILE));
+        lines.push((
+            verbs.dropped,
+            format!("{} from {}", dataset.name, lock::FILE),
+        ));
     }
+    lines
+}
+
+/// a dataset data.lock pins for the first time: its name, then what it resolved to, its title,
+/// and how many files and bytes it pins. `sizeless` labels, as `<dataset>/<path>`, the files whose
+/// size only a download can tell, as a dry run does not.
+fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> String {
+    let resolved = Reference::parse(&locked.resolved).map_or_else(
+        |_| locked.resolved.clone(),
+        |parsed| short_revision(parsed.reference.shown()),
+    );
+    let mut facts = vec![resolved];
+    facts.extend(
+        locked
+            .title
+            .as_deref()
+            .map(|title| output.clip(title, TITLE)),
+    );
+    facts.push(units::count(locked.files.len() as u64, "file", "files"));
+    let known = !locked
+        .files
+        .iter()
+        .any(|file| sizeless.contains(&format!("{}/{}", locked.name, file.path)));
+    facts.push(if known {
+        units::size(
+            locked
+                .files
+                .iter()
+                .map(|file| file.size)
+                .fold(0, u64::saturating_add),
+        )
+    } else {
+        "size unknown".to_owned()
+    });
+    format!(
+        "{}, new in {}: {}",
+        locked.name,
+        lock::FILE,
+        facts.join(" · ")
+    )
 }
 
 pub(super) use draft::filter;
@@ -1239,6 +1347,67 @@ mod tests {
         assert_eq!(
             tell_upgrades(&context.output, &Before::whole(Some(old.clone())), &old),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_first_pin_names_what_it_pinned_and_many_are_counted() {
+        let context = context();
+        let mut typo = locked("climate-precip");
+        typo.resolved = "zenodo:8014494".to_owned();
+        typo.title = Some(
+            "Abb. 9 in Natur- und Fotoreise zu den Heuschrecken Mallorcas, Teil zwei".to_owned(),
+        );
+        let lock = Lock {
+            datasets: vec![typo, locked("kept")],
+        };
+        let before = Before::whole(Some(Lock {
+            datasets: vec![locked("gone"), locked("kept")],
+        }));
+        let sized = HashSet::new();
+        assert_eq!(
+            lock_lines(&context.output, &before, &lock, Verbs::DONE, None, &sized),
+            [
+                (
+                    "Pinned",
+                    "climate-precip, new in data.lock: zenodo:8014494 · Abb. 9 in Natur- und Fotoreise zu den Heuschrecken... · 1 file · 4 B".to_owned()
+                ),
+                ("Removed", "gone from data.lock".to_owned()),
+            ]
+        );
+        assert_eq!(
+            lock_lines(
+                &context.output,
+                &before,
+                &lock,
+                Verbs::DONE,
+                Some("climate-precip"),
+                &sized
+            ),
+            [("Removed", "gone from data.lock".to_owned())],
+            "the dataset the last line tells about is left out"
+        );
+        let many = Lock {
+            datasets: (0..25).map(|n| locked(&format!("set-{n:02}"))).collect(),
+        };
+        let sizeless = HashSet::from(["set-00/data.csv".to_owned()]);
+        let lines = lock_lines(
+            &context.output,
+            &Before::whole(None),
+            &many,
+            Verbs::WOULD,
+            None,
+            &sizeless,
+        );
+        assert_eq!(lines.len(), 21);
+        assert_eq!(
+            lines[0].1,
+            "set-00, new in data.lock: zenodo:2 · 1 file · size unknown"
+        );
+        assert!(lines[..20].iter().all(|(verb, _)| *verb == "Would pin"));
+        assert_eq!(
+            lines[20],
+            ("Would lock", "5 datasets · 5 files in data.lock".to_owned())
         );
     }
 
