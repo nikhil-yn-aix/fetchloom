@@ -53,6 +53,8 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default.
                       each initial host gets at most 4 at once
   FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
+  FETCHLOOM_RETRIES   how many more times a failed request is tried, 0 to 20;
+                      4 by default. raise it on a network that drops for minutes
   FETCHLOOM_THREADS   a cap on local worker threads, 1 to 256
   FETCHLOOM_SPLIT     0 never splits a slow download into parts, 1 always does
   FETCHLOOM_LOG       a log filter such as fetchloom=debug, as -vv uses

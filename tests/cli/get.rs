@@ -259,6 +259,45 @@ fn a_busy_server_is_tried_again() -> Result {
     Ok(())
 }
 
+#[test]
+fn fetchloom_retries_sets_how_often_a_request_is_tried_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let busy = || {
+        reply(
+            "503 Service Unavailable",
+            &[("Content-Length", "0"), ("Retry-After", "0")],
+            b"",
+        )
+    };
+    let server = Server::start(PATH, vec![busy(), busy(), file(IRIS, "\"v1\"")])?;
+    let output = sandbox
+        .command(&["get", &server.url])
+        .env("FETCHLOOM_RETRIES", "1")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains("after 2 tries"), "{stderr}");
+    assert!(stderr.contains("(try 2 of 2)"), "{stderr}");
+    assert_eq!(server.requests().len(), 2);
+
+    let output = sandbox
+        .command(&["get", &server.url])
+        .env("FETCHLOOM_RETRIES", "many")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("FETCHLOOM_RETRIES is \"many\", which is not a number from 0 to 20"),
+        "{stderr}"
+    );
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "a bad setting stops before any request"
+    );
+    Ok(())
+}
+
 /// zenodo's answer once its limit is used up: a 429 that says when the limit resets.
 fn rate_limited(date: &str, reset: u64, retry_after: u64) -> Vec<Part> {
     reply(

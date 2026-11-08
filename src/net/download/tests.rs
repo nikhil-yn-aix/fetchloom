@@ -391,7 +391,7 @@ fn tries_that_move_the_file_on_earn_the_tries_back() {
             .into_bytes(),
         );
     }
-    assert!(responses.len() > crate::net::ATTEMPTS as usize);
+    assert!(responses.len() > crate::net::RETRIES as usize + 1);
     let (url, asked) = serve(responses);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();

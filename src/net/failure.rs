@@ -11,7 +11,12 @@ use crate::error::{Error, Kind};
 use crate::units;
 use crate::work::Work;
 
-pub(crate) const ATTEMPTS: u32 = 5;
+/// tries after the first that a request gets once it stops making progress, when
+/// `FETCHLOOM_RETRIES` says nothing.
+pub(crate) const RETRIES: u32 = 4;
+/// the most retries `FETCHLOOM_RETRIES` may ask for. each wait is a random part of a ceiling
+/// that doubles up to a minute, so this many ride out about eight minutes without network.
+pub(crate) const MOST_RETRIES: u32 = 20;
 /// tries one request gets in all, however often progress earned tries back, so a server that
 /// sends a few bytes before every break still ends.
 const MOST_TRIES: u32 = 50;
@@ -80,7 +85,7 @@ impl<'a> Retry<'a> {
         asked: Option<Duration>,
         has_copy: bool,
     ) -> Result<(), Error> {
-        if self.attempt >= ATTEMPTS || self.tries >= MOST_TRIES {
+        if self.attempt > self.net.retries || self.tries >= MOST_TRIES {
             return Err(gave_up(self.url, self.tries, &reason, has_copy));
         }
         let wait = backoff(self.attempt, asked).map_err(|asked| rate_limited(self.url, asked))?;
@@ -89,14 +94,25 @@ impl<'a> Retry<'a> {
         tracing::debug!(attempt = self.attempt, ?wait, %reason, "retrying");
         Work::add(&self.net.work.retries, 1);
         (self.net.notify)(Notice::Retrying {
+            host: host(self.url).to_owned(),
             reason,
             wait,
             next: self.attempt,
+            of: self.net.retries + 1,
         });
         tokio::select! {
             () = tokio::time::sleep(wait) => Ok(()),
             () = self.net.stop.asked() => Err(interrupted(self.url)),
         }
+    }
+}
+
+impl Net {
+    /// how often a request that stops making progress is tried again, as `FETCHLOOM_RETRIES`
+    /// sets it.
+    pub(crate) fn with_retries(mut self, retries: u32) -> Net {
+        self.retries = retries;
+        self
     }
 }
 
@@ -289,7 +305,11 @@ pub(super) fn interrupted(url: &Url) -> Error {
 }
 
 fn gave_up(url: &Url, tries: u32, reason: &str, has_copy: bool) -> Error {
-    let message = format!("gave up on {} after {tries} tries: {reason}", host(url));
+    let message = format!(
+        "gave up on {} after {}: {reason}",
+        host(url),
+        units::count(u64::from(tries), "try", "tries")
+    );
     let later = if has_copy {
         "run the same command again later, or add --offline to use the copy downloaded earlier"
     } else {
@@ -525,7 +545,7 @@ mod tests {
     fn exhausting_retries_only_suggests_offline_when_a_copy_exists() {
         let url = Url::parse("https://example.org/list").unwrap();
         for has_copy in [false, true] {
-            let error = gave_up(&url, ATTEMPTS, "connection broke", has_copy);
+            let error = gave_up(&url, RETRIES + 1, "connection broke", has_copy);
             assert_eq!(error.kind, Kind::NetworkUnreachable);
             assert!(error.message.contains("5 tries"));
             assert!(error.message.contains("connection broke"));
@@ -557,10 +577,10 @@ mod tests {
     #[test]
     fn running_out_of_tries_says_whose_side_the_trouble_is_on() {
         let url = Url::parse("https://example.org/list").unwrap();
-        let limited = gave_up(&url, ATTEMPTS, "example.org answered 429", false);
+        let limited = gave_up(&url, RETRIES + 1, "example.org answered 429", false);
         assert_eq!(limited.kind, Kind::NetworkRateLimited);
         assert!(limited.help.unwrap().contains("limiting requests"));
-        let down = gave_up(&url, ATTEMPTS, "example.org answered 503", true);
+        let down = gave_up(&url, RETRIES + 1, "example.org answered 503", true);
         assert_eq!(down.kind, Kind::NetworkStatus);
         let help = down.help.unwrap();
         assert!(
@@ -593,7 +613,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind, Kind::Interrupted);
         assert_eq!(net.work.counts().retries, 1);
-        retry.attempt = ATTEMPTS;
+        retry.attempt = RETRIES + 1;
         let error = block_on(retry.wait("still busy".to_owned(), None, true)).unwrap_err();
         assert_eq!(error.kind, Kind::NetworkUnreachable);
         assert!(error.help.unwrap().contains("--offline"));
@@ -620,7 +640,7 @@ mod tests {
         );
         net.stop.ask();
         let mut retry = Retry::new(&net, &url);
-        retry.attempt = ATTEMPTS;
+        retry.attempt = RETRIES + 1;
         retry.progressed();
         let error = block_on(retry.wait("broke".to_owned(), None, false)).unwrap_err();
         assert_eq!(error.kind, Kind::Interrupted, "progress earned another try");
@@ -633,5 +653,51 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_request_gets_the_retries_the_setting_allows() {
+        use crate::net::{Notice, Options, Splitting};
+        use std::sync::{Arc, Mutex};
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        for retries in [0, 2, MOST_RETRIES] {
+            let heard = Arc::new(Mutex::new(Vec::new()));
+            let kept = heard.clone();
+            let net = Net::new(
+                Options {
+                    offline: Offline::No,
+                    jobs: 1,
+                    credentials: Vec::new(),
+                    split: Splitting::Never,
+                },
+                Arc::default(),
+                Arc::default(),
+                Arc::new(move |notice| {
+                    if let Notice::Retrying { host, next, of, .. } = notice {
+                        kept.lock().unwrap().push((host, next, of));
+                    }
+                }),
+            )
+            .with_retries(retries);
+            let mut retry = Retry::new(&net, &url);
+            let error = loop {
+                if let Err(error) = retry.wait("broke".to_owned(), None, false).await {
+                    break error;
+                }
+            };
+            let tries = retries + 1;
+            let said = if tries == 1 {
+                "after 1 try:".to_owned()
+            } else {
+                format!("after {tries} tries:")
+            };
+            assert!(error.message.contains(&said), "{}", error.message);
+            let heard = heard.lock().unwrap();
+            let expected: Vec<_> = (2..=tries)
+                .map(|next| ("example.org".to_owned(), next, tries))
+                .collect();
+            assert_eq!(*heard, expected);
+        }
     }
 }

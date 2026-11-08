@@ -39,12 +39,18 @@ const JOBS: usize = 8;
 /// a download larger than this asks first.
 const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
 
+/// how long retries to one host stay quiet after the line that told one, so downloads that lost
+/// the network together do not fill the screen with the same line.
+const RETRY_LINES: Duration = Duration::from_secs(30);
+
 /// what every command gets: where to print, the settings, the counters and the stop signal.
 struct Context {
     output: Arc<Output>,
     offline: net::Offline,
     yes: bool,
     jobs: usize,
+    /// tries after the first that a stalled request gets, which `FETCHLOOM_RETRIES` sets.
+    retries: u32,
     rate: Option<Arc<net::Rate>>,
     threads: Threads,
     /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
@@ -68,6 +74,7 @@ impl Context {
             offline: net::Offline::No,
             yes: false,
             jobs: JOBS,
+            retries: net::RETRIES,
             rate: None,
             threads: Threads::default(),
             split: net::Splitting::WhenSlow,
@@ -123,13 +130,21 @@ impl Context {
     /// the network with only `credentials`, as checking one key needs.
     fn net_with(&self, credentials: Vec<net::Credential>) -> Net {
         let output = self.output.clone();
+        let lines = RetryLines::default();
         let notify: net::Notify = Arc::new(move |notice| match notice {
-            Notice::Retrying { reason, wait, next } => {
-                output.warn(&format!(
-                    "{reason}. trying again in {} (try {next} of {})",
-                    units::duration(wait),
-                    net::ATTEMPTS
-                ));
+            Notice::Retrying {
+                host,
+                reason,
+                wait,
+                next,
+                of,
+            } => {
+                if lines.tell(&host, Instant::now()) {
+                    output.warn(&format!(
+                        "{reason}. trying again in {} (try {next} of {of})",
+                        units::duration(wait)
+                    ));
+                }
             }
             Notice::Waiting {
                 host,
@@ -144,7 +159,34 @@ impl Context {
             credentials,
             split: self.split,
         };
-        Net::new(options, self.work.clone(), self.stop.clone(), notify).with_rate(self.rate.clone())
+        Net::new(options, self.work.clone(), self.stop.clone(), notify)
+            .with_rate(self.rate.clone())
+            .with_retries(self.retries)
+    }
+}
+
+/// when each host's retries last got a line.
+#[derive(Default)]
+struct RetryLines {
+    told: std::sync::Mutex<std::collections::HashMap<String, Instant>>,
+}
+
+impl RetryLines {
+    /// whether a retry to `host` at `now` gets a line: the first does, and then one every
+    /// [`RETRY_LINES`] while the trouble lasts.
+    fn tell(&self, host: &str, now: Instant) -> bool {
+        let mut told = self
+            .told
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if told
+            .get(host)
+            .is_some_and(|at| now.saturating_duration_since(*at) < RETRY_LINES)
+        {
+            return false;
+        }
+        told.insert(host.to_owned(), now);
+        true
     }
 }
 
@@ -185,23 +227,45 @@ fn splits(value: Option<std::ffi::OsString>) -> net::Splitting {
 
 /// `FETCHLOOM_JOBS`, or the default.
 fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error> {
-    let Some(value) = var("FETCHLOOM_JOBS").filter(|value| !value.is_empty()) else {
-        return Ok(JOBS);
+    number(var, "FETCHLOOM_JOBS", 1..=256, JOBS)
+}
+
+/// `FETCHLOOM_RETRIES`, or the default.
+fn retries(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<u32, Error> {
+    number(
+        var,
+        "FETCHLOOM_RETRIES",
+        0..=net::MOST_RETRIES,
+        net::RETRIES,
+    )
+}
+
+/// the whole number the setting `name` holds, within `range`, or `default` when it is unset or
+/// empty. surrounding whitespace is accepted.
+fn number<T: std::str::FromStr + PartialOrd + std::fmt::Display>(
+    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+    name: &str,
+    range: std::ops::RangeInclusive<T>,
+    default: T,
+) -> Result<T, Error> {
+    let Some(value) = var(name).filter(|value| !value.is_empty()) else {
+        return Ok(default);
     };
+    let (low, high) = (range.start(), range.end());
     value
         .to_str()
-        .and_then(|text| text.trim().parse::<usize>().ok())
-        .filter(|jobs| (1..=256).contains(jobs))
+        .and_then(|text| text.trim().parse::<T>().ok())
+        .filter(|number| range.contains(number))
         .ok_or_else(|| {
             Error::new(
                 Kind::Usage,
                 format!(
-                    "FETCHLOOM_JOBS is \"{}\", which is not a number from 1 to 256",
+                    "{name} is \"{}\", which is not a number from {low} to {high}",
                     value.display()
                 ),
             )
             .help(format!(
-                "unset FETCHLOOM_JOBS to use the default of {JOBS}, or set it to a number from 1 to 256"
+                "unset {name} to use the default of {default}, or set it to a number from {low} to {high}"
             ))
         })
 }
@@ -391,6 +455,10 @@ pub(crate) fn run() -> ExitCode {
     };
     match jobs(&var) {
         Ok(jobs) => context.jobs = jobs,
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    match retries(&var) {
+        Ok(retries) => context.retries = retries,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     match net::Rate::read(&var) {
@@ -1034,6 +1102,53 @@ mod tests {
         for other in ["", "2", "yes", " 1"] {
             assert_eq!(splits(Some(other.into())), WhenSlow, "{other:?}");
         }
+    }
+
+    #[test]
+    fn retries_come_from_the_setting_within_its_range() {
+        let setting = |value: &'static str| {
+            move |name: &str| (name == "FETCHLOOM_RETRIES").then(|| value.into())
+        };
+        assert_eq!(retries(&|_| None).unwrap(), net::RETRIES);
+        assert_eq!(retries(&setting("")).unwrap(), net::RETRIES);
+        assert_eq!(retries(&setting("0")).unwrap(), 0);
+        assert_eq!(retries(&setting(" 12 ")).unwrap(), 12);
+        assert_eq!(retries(&setting("20")).unwrap(), net::MOST_RETRIES);
+        for bad in ["21", "-1", "many", "1.5"] {
+            let error = retries(&setting(bad)).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{bad}");
+            assert_eq!(
+                error.message,
+                format!("FETCHLOOM_RETRIES is \"{bad}\", which is not a number from 0 to 20")
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "unset FETCHLOOM_RETRIES to use the default of 4, or set it to a number from 0 to 20"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn retries_get_one_line_per_host_every_half_minute_at_most() {
+        let lines = RetryLines::default();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        assert!(lines.tell("huggingface.co", at(0)));
+        assert!(
+            !lines.tell("huggingface.co", at(3)),
+            "a second download's retry"
+        );
+        assert!(
+            lines.tell("zenodo.org", at(3)),
+            "another host has its own line"
+        );
+        assert!(!lines.tell("huggingface.co", at(29)));
+        assert!(
+            lines.tell("huggingface.co", at(30)),
+            "a long outage is told again"
+        );
     }
 
     #[test]

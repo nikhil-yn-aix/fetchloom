@@ -22,7 +22,7 @@ use url::Url;
 
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
-pub(crate) use failure::ATTEMPTS;
+pub(crate) use failure::{MOST_RETRIES, RETRIES};
 pub(crate) use rate::Rate;
 pub(crate) use shown::{Shown, mask_query, secret};
 
@@ -55,10 +55,14 @@ pub(crate) struct Credential {
 
 /// something the person watching should hear about while the network works.
 pub(crate) enum Notice {
+    /// a request to `host` failed for `reason` and goes out again after `wait`, as try `next`
+    /// of `of`.
     Retrying {
+        host: String,
         reason: String,
         wait: Duration,
         next: u32,
+        of: u32,
     },
     /// requests to `host` wait for its rate limit to reset. `quota` and `window` are the limit,
     /// when the host stated them.
@@ -160,6 +164,8 @@ pub(crate) struct Net {
     rate: Option<Arc<Rate>>,
     split: Split,
     idle: Duration,
+    /// tries after the first that a request gets once it stops making progress.
+    retries: u32,
     work: Arc<Work>,
     stop: Arc<Stop>,
     notify: Notify,
@@ -304,6 +310,7 @@ impl Net {
             paces: pace::Paces::default(),
             rate: None,
             idle: IDLE,
+            retries: RETRIES,
             split: Split {
                 when: options.split,
                 above: download::SPLIT_ABOVE,
