@@ -830,11 +830,7 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
 
 pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
     let project = find(&context.output)?;
-    let before = context
-        .exp
-        .on("PROJECT_WAIT_READY")
-        .then(|| state_stamp(&project))
-        .flatten();
+    let before = state_stamp(&project);
     let (_, manifest) = project.manifest()?;
     let (name, file) = match args.target.split_once('/') {
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
@@ -1222,9 +1218,6 @@ async fn hold_path(
     file: Option<&str>,
     mut before: Option<Look>,
 ) -> Result<Waited<PathBuf>, Error> {
-    if !context.exp.on("PROJECT_WAIT_READY") {
-        return hold(context, project, "path").await.map(Waited::Held);
-    }
     hold_until(context, project, "path", || {
         let current = state_stamp(project);
         if current == before {
@@ -1617,82 +1610,64 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn path_waiters_recheck_changed_state_without_claiming_the_owner() {
-        for enabled in [false, true] {
-            let (dir, project, mut context) = waiting_project();
-            if enabled {
-                context.exp = crate::exp::Experiments::default().with("PROJECT_WAIT_READY", "1");
-            }
-            let owner = project.own_folder().join("owner");
-            let owner_before = std::fs::read(&owner).unwrap();
-            let stamp = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
-            let state = waiter_state(&project, stamp);
-            let mut cache = Some(Cache::open(dir.path().join("cache")).unwrap());
-            let mut waiting = Box::pin(hold_path(
-                &context,
-                &project,
-                &mut cache,
-                "a",
-                Some("x"),
-                None,
-            ));
-            std::future::poll_fn(|task| {
-                assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
-                std::task::Poll::Ready(())
-            })
-            .await;
-            let state_path = project.own_folder().join("state");
-            project.write_state(&state, &context.exp).unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&state_path)
-                .unwrap()
-                .set_modified(stamp + Duration::from_secs(5))
-                .unwrap();
-            tokio::time::advance(Duration::from_millis(200)).await;
-            std::future::poll_fn(|task| {
-                assert!(
-                    std::future::Future::poll(waiting.as_mut(), task).is_pending(),
-                    "state alone cannot vouch for a missing file"
-                );
-                std::task::Poll::Ready(())
-            })
-            .await;
-            let target = project.root.join("data/a/x");
-            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            std::fs::write(&target, b"data").unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&target)
-                .unwrap()
-                .set_modified(stamp)
-                .unwrap();
-            project.write_state(&state, &context.exp).unwrap();
-            std::fs::File::options()
-                .write(true)
-                .open(&state_path)
-                .unwrap()
-                .set_modified(stamp + Duration::from_secs(6))
-                .unwrap();
-            tokio::time::advance(Duration::from_millis(200)).await;
-            if enabled {
-                let Waited::Ready(answer) = waiting.await.unwrap() else {
-                    panic!("a ready reader must not claim the owner");
-                };
-                assert_eq!(answer, target);
-            } else {
-                std::future::poll_fn(|task| {
-                    assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
-                    std::task::Poll::Ready(())
-                })
-                .await;
-                context.stop.ask();
-                let Err(error) = waiting.await else {
-                    panic!("the unchanged path must wait for its owner");
-                };
-                assert_eq!(error.kind, Kind::Interrupted);
-            }
-            assert_eq!(std::fs::read(owner).unwrap(), owner_before);
-        }
+        let (dir, project, context) = waiting_project();
+        let owner = project.own_folder().join("owner");
+        let owner_before = std::fs::read(&owner).unwrap();
+        let stamp = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        let state = waiter_state(&project, stamp);
+        let mut cache = Some(Cache::open(dir.path().join("cache")).unwrap());
+        let mut waiting = Box::pin(hold_path(
+            &context,
+            &project,
+            &mut cache,
+            "a",
+            Some("x"),
+            None,
+        ));
+        std::future::poll_fn(|task| {
+            assert!(std::future::Future::poll(waiting.as_mut(), task).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let state_path = project.own_folder().join("state");
+        project.write_state(&state, &context.exp).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&state_path)
+            .unwrap()
+            .set_modified(stamp + Duration::from_secs(5))
+            .unwrap();
+        tokio::time::advance(Duration::from_millis(200)).await;
+        std::future::poll_fn(|task| {
+            assert!(
+                std::future::Future::poll(waiting.as_mut(), task).is_pending(),
+                "state alone cannot vouch for a missing file"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        let target = project.root.join("data/a/x");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"data").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        project.write_state(&state, &context.exp).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&state_path)
+            .unwrap()
+            .set_modified(stamp + Duration::from_secs(6))
+            .unwrap();
+        tokio::time::advance(Duration::from_millis(200)).await;
+        let Waited::Ready(answer) = waiting.await.unwrap() else {
+            panic!("a ready reader must not claim the owner");
+        };
+        assert_eq!(answer, target);
+        assert_eq!(std::fs::read(owner).unwrap(), owner_before);
     }
 
     fn offline_context() -> Context {
