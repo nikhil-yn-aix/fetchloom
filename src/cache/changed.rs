@@ -106,21 +106,35 @@ impl Cache {
 
     /// remembers that `copy`, a file other projects may link that once was the object for
     /// `digest` and now is not, was found changed, so their links to it are checked. a copy the
-    /// mark records already changes nothing. the object at the name, if the cache holds one, is
-    /// another file, and its time keeps it out of the doubt.
+    /// mark records already changes nothing. a mark already there keeps what it says of the
+    /// object at the name: changed, while it holds no replacement time, or replaced then. with no
+    /// mark yet, the object at the name, if the cache holds one, is another file, and its time
+    /// keeps it out of the doubt.
     pub(crate) fn mark_copy_changed(&self, digest: &Sha256, copy: Identity) -> io::Result<()> {
-        let mut copies = self.marked_copies(digest);
+        let path = self.changed_folder().join(digest.hex());
+        let marked = match fs::symlink_metadata(&path).and_then(|found| Mark::read(&path, &found)) {
+            Ok(mark) => Some(mark),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => return Err(err),
+        };
+        let mut copies = marked
+            .as_ref()
+            .map(|mark| mark.copies.clone())
+            .unwrap_or_default();
         if copies.contains(&copy) {
             return Ok(());
         }
         copies.push(copy);
         let excess = copies.len().saturating_sub(COPIES);
         copies.drain(..excess);
-        let object = fs::symlink_metadata(self.object_path(digest))
-            .and_then(|found| found.modified())
-            .ok()
-            .map(nanos);
-        self.write_mark(digest, object, &copies)
+        let replacement = match marked {
+            Some(mark) => mark.replacement,
+            None => fs::symlink_metadata(self.object_path(digest))
+                .and_then(|found| found.modified())
+                .ok()
+                .map(nanos),
+        };
+        self.write_mark(digest, replacement, &copies)
     }
 
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
@@ -744,6 +758,32 @@ mod tests {
             mark.copies[COPIES - 1],
             Identity::of(&cache.object_path(&digest)).unwrap()
         );
+    }
+
+    /// a changed copy found later elsewhere never vouches for an object the mark already holds
+    /// changed, as one `cache verify` found rotted with its size and time kept, before a repair.
+    #[test]
+    fn a_changed_copy_found_later_leaves_a_changed_object_in_doubt() {
+        let (dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        let object = cache.object_path(&stored.digest);
+        let sealed = fs::metadata(&object).unwrap().modified().unwrap();
+        rewrite(&object, b"evil");
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(sealed)
+            .unwrap();
+        seal(&object);
+        cache.mark_changed(&stored.digest).unwrap();
+        let other = dir.path().join("another copy");
+        fs::write(&other, b"evil").unwrap();
+        cache
+            .mark_copy_changed(&stored.digest, Identity::of(&other).unwrap())
+            .unwrap();
+        let found = cache.trusted(&stored.digest, Some(4), &cache.doubts().unwrap());
+        assert!(matches!(found, Ok(None)), "the rotted object was trusted");
     }
 
     #[test]
