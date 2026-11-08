@@ -90,14 +90,18 @@ impl AddProject {
     fn changed(&self) -> Vec<&'static str> {
         [(manifest::FILE, &self.text), (lock::FILE, &self.lock_text)]
             .into_iter()
-            .filter(
-                |(name, found)| match std::fs::read(self.project.root.join(name)) {
-                    Ok(bytes) => found.as_ref().is_none_or(|text| text.as_bytes() != bytes),
-                    Err(err) => found.is_some() || err.kind() != std::io::ErrorKind::NotFound,
-                },
-            )
+            .filter(|(name, found)| self.differs(name, found.as_deref()))
             .map(|(name, _)| name)
             .collect()
+    }
+
+    /// whether the project file `name` no longer holds `found`, what the add read of it, or
+    /// exists when the add found none.
+    fn differs(&self, name: &str, found: Option<&str>) -> bool {
+        match std::fs::read(self.project.root.join(name)) {
+            Ok(bytes) => found.is_none_or(|text| text.as_bytes() != bytes),
+            Err(err) => found.is_some() || err.kind() != std::io::ErrorKind::NotFound,
+        }
     }
 
     /// ends an add that set out to start the project and added nothing, leaving its folder as
@@ -183,6 +187,8 @@ impl<'a> BeforeAdd<'a> {
                 };
             }
         }
+        #[cfg(test)]
+        tests::reached("saved", &project.root);
         Ok(saved)
     }
 
@@ -567,6 +573,12 @@ async fn sync_add(
     } else {
         None
     };
+    // the recovery copies are flushed to disk, which takes a while, so it looks again right
+    // before the first write
+    let changed = adding.changed();
+    if !changed.is_empty() {
+        return Err(changed_meanwhile(&changed));
+    }
     let manifest_text = updated.or(adding.text.as_deref()).unwrap_or_default();
     let committed = (|| -> Result<Outcome<Placement>, Error> {
         if let Some(updated) = updated {
@@ -574,6 +586,13 @@ async fn sync_add(
                 saved.writing(manifest::FILE, updated.as_bytes());
             }
             project.write(manifest::FILE, updated.as_bytes())?;
+            #[cfg(test)]
+            tests::reached("wrote data.toml", &project.root);
+            // writing data.lock would lose a change made to it meanwhile, so the add stops
+            // instead, and its failure puts data.toml back
+            if relocked.is_some() && adding.differs(lock::FILE, adding.lock_text.as_deref()) {
+                return Err(lock_changed_meanwhile());
+            }
         }
         let written = match relocked {
             Some(text) => {
@@ -633,6 +652,16 @@ fn changed_meanwhile(changed: &[&str]) -> Error {
     .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
+/// the error of an add that found data.lock changed once it wrote data.toml: it leaves data.lock
+/// as it is, and puts data.toml back as it found it.
+fn lock_changed_meanwhile() -> Error {
+    Error::new(
+        Kind::ProjectChanged,
+        "data.lock changed while the add wrote data.toml, so the add stopped before writing data.lock",
+    )
+    .help("your change is kept. run the same add again; what it downloaded is in the cache")
+}
+
 fn render_add(
     work: &Loop<'_>,
     manifest: &Manifest,
@@ -682,7 +711,7 @@ fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
 /// by hand, since restoring it would lose their change.
 fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure: Error) -> Error {
     let mut complete = true;
-    let mut changed = false;
+    let mut restored = Vec::new();
     for file in &saved.files {
         let now = std::fs::read(project.root.join(file.name));
         let unchanged = match (&file.before, &now) {
@@ -703,8 +732,7 @@ fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure
                 file.name
             ));
         } else {
-            changed = true;
-            let restored = match file.before {
+            let put_back = match file.before {
                 BeforeFile::Saved { text, .. } => project.write(file.name, text.as_bytes()),
                 BeforeFile::Absent => match std::fs::remove_file(project.root.join(file.name)) {
                     Ok(()) => Ok(()),
@@ -712,7 +740,8 @@ fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure
                     Err(err) => Err(Error::io(format!("could not remove {}", file.name), &err)),
                 },
             };
-            let Err(err) = restored else {
+            let Err(err) = put_back else {
+                restored.push(file.name);
                 continue;
             };
             failure = failure.detail(format!("could not restore {}: {err}", file.name));
@@ -734,14 +763,19 @@ fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure
         };
     }
     saved.keep = !complete;
-    if complete && !changed {
-        return failure;
+    if !complete {
+        return failure.detail(
+            "could not finish rolling back data.toml and data.lock; follow the recovery steps above",
+        );
     }
-    failure.detail(if complete {
-        "restored data.toml and data.lock to their state before add"
-    } else {
-        "could not finish rolling back data.toml and data.lock; follow the recovery steps above"
-    })
+    match restored.as_slice() {
+        [] => failure,
+        [file] => failure.detail(format!("restored {file} to its state before add")),
+        files => failure.detail(format!(
+            "restored {} to their state before add",
+            files.join(" and ")
+        )),
+    }
 }
 
 /// the dataset in data.toml that already pins what was just resolved, under any spelling of its
@@ -1978,6 +2012,22 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
+    /// a named point of an add, and an edit made in the project folder there.
+    type EditAt = (&'static str, fn(&Path));
+
+    thread_local! {
+        /// an edit a test makes at a point of an add, as a person's edit landing there would.
+        static EDIT_AT: std::cell::Cell<Option<EditAt>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// makes the edit a test set for `point`, once, in the project folder `root`.
+    pub(super) fn reached(point: &str, root: &Path) {
+        match EDIT_AT.take() {
+            Some((at, edit)) if at == point => edit(root),
+            other => EDIT_AT.set(other),
+        }
+    }
+
     fn waiting_project() -> (tempfile::TempDir, Project, Context) {
         let dir = tempfile::tempdir().unwrap();
         let project = Project {
@@ -2523,5 +2573,119 @@ mod tests {
             "data.lock lists a path twice"
         );
         assert!(Lock::parse(&old.render()).is_ok());
+    }
+
+    /// a project whose data.toml and data.lock pin dataset a, as an add of dataset b holds and
+    /// reads it, with both files in the cache. returns data.toml with b added, and b's listing.
+    fn adding_b(dir: &Path) -> (AddProject, Cache, String, Listing) {
+        let project = Project {
+            root: dir.join("project"),
+        };
+        std::fs::create_dir(&project.root).unwrap();
+        let text = "[datasets.a]\nref = \"https://example.org/a\"\n";
+        let manifest = Manifest::parse(text).unwrap();
+        let old = Lock {
+            datasets: vec![pinned(
+                "a",
+                lock::spec(&manifest.datasets["a"]),
+                vec![pinned_file("a", "https://example.org/a", b"a")],
+            )],
+        };
+        project.write(manifest::FILE, text.as_bytes()).unwrap();
+        project.write(lock::FILE, old.render().as_bytes()).unwrap();
+        let cache = Cache::open(dir.join("cache")).unwrap();
+        for bytes in [b"a", b"b"] {
+            crate::cache::tests::store(&cache, bytes);
+        }
+        let mut adding = AddProject {
+            project,
+            held: None,
+            text: None,
+            manifest: Manifest::parse("").unwrap(),
+            old: None,
+            lock_text: None,
+            unrestored: AtomicBool::new(false),
+        };
+        adding.read().unwrap();
+        let updated = format!("{text}\n[datasets.b]\nref = \"https://example.org/b\"\n");
+        let listing = listed(
+            "https://example.org/b",
+            vec![stated("b", "https://example.org/b", b"b")],
+        );
+        (adding, cache, updated, listing)
+    }
+
+    /// runs the add of b that [`adding_b`] readies, with `edit` made at `point` of it, and says
+    /// how it ended.
+    fn add_b_editing(dir: &Path, point: &'static str, edit: fn(&Path)) -> (AddProject, Error) {
+        let (mut adding, cache, updated, listing) = adding_b(dir);
+        let context = offline_context();
+        let manifest = Manifest::parse(&updated).unwrap();
+        let old = adding.old.take();
+        let work = Loop::new(&context, &adding.project, Arc::new(context.net()), cache);
+        EDIT_AT.set(Some((point, edit)));
+        let outcome = block_on(sync_add(
+            &work,
+            &adding,
+            &manifest,
+            Some(&updated),
+            old,
+            ("b", Some(listing)),
+        ));
+        EDIT_AT.set(None);
+        drop(work);
+        let error = outcome.err();
+        (
+            adding,
+            error.unwrap_or_else(|| Error::new(Kind::LocalIo, "the add went through")),
+        )
+    }
+
+    /// an edit to data.toml made while the add saves its recovery copies, which it flushes to
+    /// disk, stays: the add looks again right before its first write, and writes neither file.
+    #[test]
+    fn an_add_keeps_an_edit_made_while_it_saves_its_recovery_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let (adding, error) = add_b_editing(dir.path(), "saved", |root| {
+            std::fs::write(root.join(manifest::FILE), "# a note made meanwhile\n").unwrap();
+        });
+        let root = &adding.project.root;
+        assert_eq!(
+            std::fs::read_to_string(root.join(manifest::FILE)).unwrap(),
+            "# a note made meanwhile\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(lock::FILE)).unwrap(),
+            adding.lock_text.clone().unwrap()
+        );
+        assert_eq!(error.kind, Kind::ProjectChanged, "{error:?}");
+        assert!(!root.join("data").join("b").exists());
+    }
+
+    /// an edit to data.lock made once the add wrote data.toml stays: the add does not write
+    /// data.lock, and its failure puts data.toml back as it found it.
+    #[test]
+    fn an_add_keeps_an_edit_to_data_lock_made_after_it_wrote_data_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let (adding, error) = add_b_editing(dir.path(), "wrote data.toml", |root| {
+            std::fs::write(root.join(lock::FILE), "# a note made meanwhile\n").unwrap();
+        });
+        let root = &adding.project.root;
+        assert_eq!(
+            std::fs::read_to_string(root.join(lock::FILE)).unwrap(),
+            "# a note made meanwhile\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(manifest::FILE)).unwrap(),
+            adding.text.clone().unwrap()
+        );
+        assert_eq!(error.kind, Kind::ProjectChanged, "{error:?}");
+        assert!(
+            error
+                .details
+                .contains(&"restored data.toml to its state before add".to_owned()),
+            "{error:?}"
+        );
+        assert!(!root.join("data").join("b").exists());
     }
 }
