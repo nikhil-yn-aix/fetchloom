@@ -2303,8 +2303,17 @@ mod tests {
             .set_modified(stamp + Duration::from_secs(6))
             .unwrap();
         tokio::time::advance(Duration::from_millis(200)).await;
-        let Waited::Ready(answer) = waiting.await.unwrap() else {
-            panic!("a ready reader must not claim the owner");
+        // a waiter that never sees the project ready fails here, saying what it saw, rather than
+        // waiting for ever
+        let waited = tokio::time::timeout(Duration::from_secs(60), waiting).await;
+        let look = |path: &Path| std::fs::metadata(path).map(|metadata| Look::of(&metadata));
+        let Ok(Ok(Waited::Ready(answer))) = waited else {
+            panic!(
+                "the waiter never answered: state {:?}, file {:?}, recorded {:?}",
+                look(&state_path),
+                look(&target),
+                state.files.get("data/a/x").map(|placed| placed.look),
+            );
         };
         assert_eq!(answer, target);
         assert_eq!(std::fs::read(owner).unwrap(), owner_before);
