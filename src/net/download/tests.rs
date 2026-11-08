@@ -923,47 +923,42 @@ fn early_splitting_needs_a_validator_and_respects_disabled_or_capped_runs() {
 
 #[test]
 fn a_checksum_restart_reacquires_released_download_slots() {
-    for enabled in [false, true] {
-        let (url, asked) = serve(vec![
-            reply(
-                "206 Partial Content",
-                &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
-                "bbbb",
-            ),
-            reply("200 OK", &[("ETag", "\"v1\"")], "bbbbbbbb"),
-        ]);
-        let folder = tempfile::tempdir().unwrap();
-        let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
-            panic!("the fixture owns its partial")
-        };
-        let mut writer = partial
-            .writer(
-                0,
-                Some(8),
-                Validators {
-                    etag: Some("\"v1\"".to_owned()),
-                    ..Validators::default()
-                },
-                false,
-                false,
-            )
-            .unwrap();
-        writer.write_all(b"aaaa").unwrap();
-        writer.save().unwrap();
-        drop(writer);
-        drop(partial);
-        let mut net = net(&url);
-        if enabled {
-            net.exp = crate::exp::Experiments::default().with("CACHE_RELEASE_PERMITS", "1");
-        }
-        let mut fetch = Fetch::new(url.clone());
-        fetch.expect.sha256 = Some(crate::digest::sha256(b"bbbbbbbb"));
-        let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
-        assert_eq!(
-            fs::read(cache.object_path(&fetched.digest)).unwrap(),
-            b"bbbbbbbb"
-        );
-        assert_eq!(asked.lock().unwrap().len(), 2);
-    }
+    let (url, asked) = serve(vec![
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
+            "bbbb",
+        ),
+        reply("200 OK", &[("ETag", "\"v1\"")], "bbbbbbbb"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let Claim::Owned(partial) = cache.claim(url.as_str()).unwrap() else {
+        panic!("the fixture owns its partial")
+    };
+    let mut writer = partial
+        .writer(
+            0,
+            Some(8),
+            Validators {
+                etag: Some("\"v1\"".to_owned()),
+                ..Validators::default()
+            },
+            false,
+            false,
+        )
+        .unwrap();
+    writer.write_all(b"aaaa").unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    drop(partial);
+    let net = net(&url);
+    let mut fetch = Fetch::new(url.clone());
+    fetch.expect.sha256 = Some(crate::digest::sha256(b"bbbbbbbb"));
+    let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"bbbbbbbb"
+    );
+    assert_eq!(asked.lock().unwrap().len(), 2);
 }

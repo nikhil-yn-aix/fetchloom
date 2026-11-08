@@ -549,9 +549,7 @@ impl Net {
         permits: &mut Option<Permits>,
         finish: impl Future<Output = T>,
     ) -> T {
-        if self.exp().on("CACHE_RELEASE_PERMITS") {
-            drop(permits.take());
-        }
+        drop(permits.take());
         finish.await
     }
 
@@ -726,42 +724,32 @@ mod tests {
     fn finished_bodies_release_slots_before_the_publication_future_runs() {
         use crate::source::recorded::block_on;
 
-        for enabled in [false, true] {
-            let exp = if enabled {
-                Experiments::default().with("CACHE_RELEASE_PERMITS", "1")
-            } else {
-                Experiments::default()
-            };
-            let net = Net::new(
-                Options {
-                    exp,
-                    offline: Offline::No,
-                    jobs: 2,
-                    credentials: Vec::new(),
-                    split: Splitting::Never,
-                },
-                Arc::default(),
-                Arc::default(),
-                Arc::new(|_| {}),
-            );
-            let url = Url::parse("https://example.org/file").unwrap();
-            block_on(async {
-                let mut permits = Some(net.permit(&url).await.unwrap());
-                assert_eq!(net.jobs.available_permits(), 1);
-                assert_eq!(net.slots(&url).available_permits(), 3);
-                let value = net
-                    .after_body(&mut permits, async {
-                        assert_eq!(net.jobs.available_permits(), if enabled { 2 } else { 1 });
-                        assert_eq!(
-                            net.slots(&url).available_permits(),
-                            if enabled { 4 } else { 3 }
-                        );
-                        "published"
-                    })
-                    .await;
-                assert_eq!(value, "published");
-                assert_eq!(permits.is_none(), enabled);
-            });
-        }
+        let net = Net::new(
+            Options {
+                exp: Experiments::default(),
+                offline: Offline::No,
+                jobs: 2,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(|_| {}),
+        );
+        let url = Url::parse("https://example.org/file").unwrap();
+        block_on(async {
+            let mut permits = Some(net.permit(&url).await.unwrap());
+            assert_eq!(net.jobs.available_permits(), 1);
+            assert_eq!(net.slots(&url).available_permits(), 3);
+            let value = net
+                .after_body(&mut permits, async {
+                    assert_eq!(net.jobs.available_permits(), 2);
+                    assert_eq!(net.slots(&url).available_permits(), 4);
+                    "published"
+                })
+                .await;
+            assert_eq!(value, "published");
+            assert!(permits.is_none());
+        });
     }
 }
