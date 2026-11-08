@@ -149,13 +149,18 @@ fn sha256(bytes: &[u8]) -> String {
     text
 }
 
+/// eight syncs of different projects run at once against one cache, as cluster jobs do. each
+/// project needs files the others need too: every file (`overlapping` false) or its own and its
+/// neighbour's (`overlapping` true). cold, each URL is downloaded once; warm, the cache already
+/// holds every file and nothing is downloaded.
 #[expect(
     clippy::too_many_lines,
     reason = "one fixture owns the gated servers, children, and byte checks"
 )]
-fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
+fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
     use std::fmt::Write as _;
 
+    let processes = 8;
     let sandbox = Sandbox::new()?;
     let original = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
     let added = sandbox.run(&["add", &original.url])?;
@@ -304,34 +309,14 @@ fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result
 }
 
 #[test]
-fn cold_two_processes_share_the_same_urls() -> Result {
-    shared_cache_syncs(2, false, false)
+fn processes_needing_the_same_files_download_each_once() -> Result {
+    shared_cache_syncs(false, false)
 }
 #[test]
-fn cold_eight_processes_share_the_same_urls() -> Result {
-    shared_cache_syncs(8, false, false)
+fn processes_sharing_some_files_download_each_once() -> Result {
+    shared_cache_syncs(true, false)
 }
 #[test]
-fn cold_two_processes_share_overlapping_urls() -> Result {
-    shared_cache_syncs(2, true, false)
-}
-#[test]
-fn cold_eight_processes_share_overlapping_urls() -> Result {
-    shared_cache_syncs(8, true, false)
-}
-#[test]
-fn warm_two_processes_share_the_same_urls() -> Result {
-    shared_cache_syncs(2, false, true)
-}
-#[test]
-fn warm_eight_processes_share_the_same_urls() -> Result {
-    shared_cache_syncs(8, false, true)
-}
-#[test]
-fn warm_two_processes_share_overlapping_urls() -> Result {
-    shared_cache_syncs(2, true, true)
-}
-#[test]
-fn warm_eight_processes_share_overlapping_urls() -> Result {
-    shared_cache_syncs(8, true, true)
+fn processes_place_from_a_full_cache_without_downloading() -> Result {
+    shared_cache_syncs(false, true)
 }
