@@ -164,6 +164,12 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
         } else {
             assert!(stderr.contains("Searching hugging face, kaggle and zenodo for \"iris\""));
             assert!(stderr.contains("Found"));
+            for hint in [
+                "each site's first 3 matches are shown; `--limit 20` shows up to 20 from each",
+                "sizes are as each site lists them, and a zipped download is larger once unpacked",
+            ] {
+                assert!(stderr.contains(hint), "{stderr}");
+            }
             // nobody watches stderr here, so stdout alone carries the list
             assert!(!stderr.contains("Iris Species"));
         }

@@ -13,7 +13,7 @@ options:
       --source <source>  ask only this catalog: hf, kaggle or zenodo. repeat it
                          or use commas for more [possible values: hf, kaggle,
                          zenodo]
-      --limit <n>        keep up to this many matches from each catalog, 1 to 20
+      --limit <n>        keep up to this many matches from each site, 1 to 20
                          [default: 3]
   -q, --quiet            print only the answer, warnings and errors
   -v, --verbose...       say more: -v adds detail and counters, -vv adds debug

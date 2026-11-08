@@ -116,7 +116,7 @@ the work counters still count metadata requests a dry run makes to resolve chang
 | `reference` | canonical reference string to pass to add or get |
 | `title` | catalog title, or the repository id for hugging face |
 | `source` | `hugging face`, `kaggle` or `zenodo` |
-| `size` | byte count, or null when unknown |
+| `size` | byte count as the site lists it, which for kaggle is the zipped download; null when unknown |
 | `downloads` | catalog download count, or null |
 | `note` | access note, or null |
 

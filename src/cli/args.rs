@@ -614,7 +614,7 @@ pub(crate) struct Search {
     )]
     pub(crate) source: Vec<crate::source::search::Catalog>,
 
-    /// keep up to this many matches from each catalog, 1 to 20
+    /// keep up to this many matches from each site, 1 to 20
     #[arg(long, value_name = "n", default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=20), help_heading = "options")]
     pub(crate) limit: u8,
 }

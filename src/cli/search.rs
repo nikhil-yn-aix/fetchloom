@@ -43,8 +43,17 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     }
     if limit < 20 && more(&report.candidates, limit) {
         output.hint(&format!(
-            "that is {limit} from each catalog; `--limit 20` shows up to 20 from each"
+            "each site's first {limit} matches are shown; `--limit 20` shows up to 20 from each"
         ));
+    }
+    if report
+        .candidates
+        .iter()
+        .any(|candidate| candidate.size.is_some())
+    {
+        output.hint(
+            "sizes are as each site lists them, and a zipped download is larger once unpacked",
+        );
     }
     Ok(report)
 }
