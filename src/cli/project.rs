@@ -1780,10 +1780,11 @@ async fn hold_until<T>(
         }
         match project.hold(command)? {
             Hold::Held(held) => return Ok(Waited::Held(held)),
-            Hold::Busy if !told => {
+            Hold::Busy(holder) if !told => {
+                let who = holder.as_deref().unwrap_or("another fetchloom");
                 context
                     .output
-                    .step("Waiting", "for another fetchloom working in this project");
+                    .step("Waiting", &format!("for {who} working in this project"));
                 told = true;
             }
             Hold::Owner(message) if !told_owner => {
@@ -1791,7 +1792,7 @@ async fn hold_until<T>(
                 told = true;
                 told_owner = true;
             }
-            Hold::Busy | Hold::Owner(_) => {}
+            Hold::Busy(_) | Hold::Owner(_) => {}
         }
         tokio::select! {
             () = tokio::time::sleep(Duration::from_millis(200)) => {}

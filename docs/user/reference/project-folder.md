@@ -32,6 +32,8 @@ inside the data folder, a file being copied or cloned into place is first writte
 | `started` | UTC time when the command claimed the project, in `YYYY-MM-DDTHH:MM:SSZ` form |
 | `command` | subcommand name, without arguments or credentials |
 
+a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``.
+
 fetchloom takes the OS lock, writes and flushes the complete owner JSON to `owner.<pid>.<16 hex digits>.tmp` beside `owner`, then hardlinks that file to `owner`. the hardlink fails if `owner` already exists, so a newly published owner is never empty, and a power cut leaves a whole record, which the next command takes over. the temporary name is removed after the attempt.
 
 when hardlinks fail for another reason, fetchloom falls back to exclusive creation, then renames the temporary file over it; only this fallback can expose an empty reservation.

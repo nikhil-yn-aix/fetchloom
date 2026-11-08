@@ -34,8 +34,9 @@ pub(crate) struct Held {
 
 pub(crate) enum Hold {
     Held(Held),
-    /// another fetchloom is changing this project right now.
-    Busy,
+    /// another fetchloom is changing this project right now: the command its owner record names,
+    /// when it can be read.
+    Busy(Option<String>),
     /// the owner record blocks this command; tell the user who holds it and how to recover.
     Owner(String),
 }
@@ -187,6 +188,13 @@ fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Re
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err),
     }
+}
+
+/// the command the owner record at `path` names, as a waiting command tells it.
+fn holder(path: &Path) -> Option<String> {
+    let (bytes, _) = read_owner(path).ok()?;
+    let owner = serde_json::from_slice::<Owner>(&bytes).ok()?;
+    Some(format!("`fetchloom {}` (pid {})", owner.command, owner.pid))
 }
 
 fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
@@ -439,7 +447,9 @@ impl Project {
                 // nobody out
                 Ok(()) if !named(&path, &file).map_err(opening)? => continue,
                 Ok(()) => Some(file),
-                Err(TryLockError::WouldBlock) => return Ok(Hold::Busy),
+                Err(TryLockError::WouldBlock) => {
+                    return Ok(Hold::Busy(holder(&folder.join("owner"))));
+                }
                 Err(TryLockError::Error(err)) => {
                     tracing::debug!(%err, "this filesystem has no file locks");
                     None
@@ -881,7 +891,7 @@ mod tests {
         };
         assert!(matches!(
             project.hold("sync").unwrap(),
-            Hold::Busy | Hold::Owner(_)
+            Hold::Busy(_) | Hold::Owner(_)
         ));
         drop(held);
         assert!(!project.own_folder().join("owner").exists());
@@ -889,6 +899,21 @@ mod tests {
             fs::read_to_string(project.root.join(".fetchloom/.gitignore")).unwrap(),
             "*\n"
         );
+    }
+
+    /// a command that waits names the one holding the project, so a forgotten terminal is found.
+    #[test]
+    fn a_waiting_command_learns_which_command_holds_the_project() {
+        let (_dir, project) = project(&[("data.toml", "")]);
+        let Hold::Held(held) = project.hold("add").unwrap() else {
+            panic!("free")
+        };
+        // without OS locks the owner record itself answers, through `Hold::Owner`
+        if let Hold::Busy(holder) = project.hold("sync").unwrap() {
+            let expected = format!("`fetchloom add` (pid {})", std::process::id());
+            assert_eq!(holder.as_deref(), Some(expected.as_str()));
+        }
+        drop(held);
     }
 
     fn owner_record(os: &str) -> Vec<u8> {
