@@ -224,6 +224,88 @@ impl Sandbox {
     }
 }
 
+/// what a person at a terminal sees from `inner`, run in `folder` through a pseudo terminal that
+/// `script` opens, after typing `keys` once the screen shows `after`, with its exit code. `stty`
+/// settings apply to that terminal first: `rows 30 cols 40` makes it 40 columns wide, and
+/// `-isig` lets a typed ctrl-c reach fetchloom as the key a question reads rather than as a
+/// signal. keys typed before `stty` runs would still be read the old way, so a ctrl-c waits for
+/// its question. none when `script` is not installed.
+#[cfg(target_os = "linux")]
+pub(crate) fn typed(
+    folder: &Path,
+    inner: &Command,
+    stty: &str,
+    after: &str,
+    keys: &str,
+) -> Result<Option<(Option<i32>, String)>> {
+    let mut line: Vec<String> = std::iter::once(inner.get_program())
+        .chain(inner.get_args())
+        .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+        .collect();
+    if !stty.is_empty() {
+        line.insert(0, format!("stty {stty} &&"));
+    }
+    let mut script = Command::new("script");
+    script
+        .args(["-qec", &line.join(" "), "/dev/null"])
+        .current_dir(folder)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    for (name, value) in inner.get_envs() {
+        match value {
+            Some(value) => script.env(name, value),
+            None => script.env_remove(name),
+        };
+    }
+    script
+        .env("SHELL", "/bin/sh")
+        .env_remove("ENV")
+        .env_remove("BASH_ENV");
+    let mut child = match script.spawn() {
+        Ok(child) => child,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let shown = Arc::new(Mutex::new(Vec::new()));
+    let mut stdout = child.stdout.take().ok_or("script has no stdout")?;
+    let reader = {
+        let shown = Arc::clone(&shown);
+        std::thread::spawn(move || {
+            let mut bytes = [0; 4096];
+            while let Ok(read @ 1..) = stdout.read(&mut bytes) {
+                shown
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(&bytes[..read]);
+            }
+        })
+    };
+    let screen = || {
+        String::from_utf8_lossy(
+            &shown
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .replace("\r\n", "\n")
+    };
+    if !after.is_empty()
+        && let Err(err) = wait_until(&format!("{after:?} on the screen"), || {
+            Ok(screen().contains(after))
+        })
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{err}\n{}", screen()).into());
+    }
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(keys.as_bytes())?;
+    }
+    let status = child.wait()?;
+    reader.join().map_err(|_| "reading the screen failed")?;
+    Ok(Some((status.code(), screen())))
+}
+
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8(bytes.to_vec())?)
 }

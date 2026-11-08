@@ -1234,6 +1234,42 @@ mod tests {
         );
     }
 
+    /// a word wider than the help's width, such as a link, goes on a line of its own, whole.
+    #[test]
+    fn help_keeps_a_word_wider_than_the_terminal_whole() {
+        let link = "https://huggingface.co/datasets/ILSVRC/imagenet-1k/resolve/main/train.tar";
+        let text = format!("request access and accept the terms at {link} while signed in");
+        let wrapped = super::wrap_help(&text, 40);
+        assert!(wrapped.lines().any(|line| line == link), "{wrapped}");
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>(),
+            text.split_whitespace().collect::<Vec<_>>()
+        );
+    }
+
+    /// fetchloom never wraps an error: each line of it is written whole, and a terminal narrower
+    /// than a line wraps it where its last column falls, even inside a word.
+    #[test]
+    fn an_error_is_written_one_line_for_each_part() {
+        let said = "huggingface.co says: Access to dataset ILSVRC/imagenet-1k is restricted. You must have access to it and be authenticated to access it. Please log in.";
+        let help = "request access and accept the terms at https://huggingface.co/datasets/ILSVRC/imagenet-1k while signed in, then sign in here with `fetchloom auth login hf`";
+        let error = crate::error::Error::new(
+            crate::error::Kind::AuthRequired,
+            "hf:datasets/ILSVRC/imagenet-1k requires permission to download its files",
+        )
+        .detail(said)
+        .help(help);
+        let shown = super::error_text(&error, Level::Normal, false);
+        assert_eq!(
+            shown.lines().collect::<Vec<_>>(),
+            [
+                "error: hf:datasets/ILSVRC/imagenet-1k requires permission to download its files",
+                &format!("  {said}"),
+                &format!("  help: {help}"),
+            ]
+        );
+    }
+
     #[test]
     fn a_pasted_secret_shows_only_its_ends_and_length() {
         assert_eq!(

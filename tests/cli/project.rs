@@ -2320,48 +2320,6 @@ fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Res
     Ok(())
 }
 
-/// what a person at a terminal sees from `command` after typing `keys`, through a pseudo
-/// terminal `script` opens, with its exit code. none when `script` is not installed.
-#[cfg(target_os = "linux")]
-fn typed(
-    folder: &std::path::Path,
-    inner: &std::process::Command,
-    keys: &str,
-) -> Result<Option<(Option<i32>, String)>> {
-    let line: Vec<String> = std::iter::once(inner.get_program())
-        .chain(inner.get_args())
-        .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
-        .collect();
-    let mut script = std::process::Command::new("script");
-    script
-        .args(["-qec", &line.join(" "), "/dev/null"])
-        .current_dir(folder)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    for (name, value) in inner.get_envs() {
-        match value {
-            Some(value) => script.env(name, value),
-            None => script.env_remove(name),
-        };
-    }
-    script
-        .env("SHELL", "/bin/sh")
-        .env_remove("ENV")
-        .env_remove("BASH_ENV");
-    let mut child = match script.spawn() {
-        Ok(child) => child,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    if let Some(mut stdin) = child.stdin.take() {
-        std::io::Write::write_all(&mut stdin, keys.as_bytes())?;
-    }
-    let output = child.wait_with_output()?;
-    let screen = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
-    Ok(Some((output.status.code(), screen)))
-}
-
 /// at a terminal, q at the list of search results, or no to starting a project in the home
 /// folder, cancels the add and leaves the folder as it was.
 #[cfg(all(target_os = "linux", debug_assertions))]
@@ -2382,7 +2340,8 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
         command.env(variable, &catalog.url);
         catalogs.push(catalog);
     }
-    let Some((code, screen)) = typed(&sandbox.work(), &command, "q")? else {
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &command, "", "", "q")?
+    else {
         return Ok(());
     };
     assert!(screen.contains("which one?"), "{screen}");
@@ -2391,7 +2350,7 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     let home = sandbox.folder("home")?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let asked = sandbox.command(&["add", &server.url]);
-    let Some((code, screen)) = typed(&home, &asked, "n")? else {
+    let Some((code, screen)) = crate::support::typed(&home, &asked, "", "", "n")? else {
         return Ok(());
     };
     assert!(screen.contains("your home folder"), "{screen}");

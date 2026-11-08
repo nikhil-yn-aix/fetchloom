@@ -941,6 +941,29 @@ mod tests {
             .collect()
     }
 
+    /// help wraps at the terminal's width between words: no width from 40 to 100 columns, the
+    /// range help uses, splits a word or loses one.
+    #[test]
+    fn help_wraps_between_words_and_never_inside_one() {
+        let mut screens = every_help();
+        let top = match Args::command().try_get_matches_from(["fetchloom", "--help"]) {
+            Ok(_) => String::new(),
+            Err(err) => err.render().to_string(),
+        };
+        screens.push(("fetchloom".to_owned(), top));
+        for (name, help) in screens {
+            let words: Vec<&str> = help.split_whitespace().collect();
+            assert!(words.len() > 20, "{name}\n{help}");
+            for width in 40..=100 {
+                let wrapped = crate::output::wrap_help(&help, width);
+                assert_eq!(
+                    wrapped.split_whitespace().collect::<Vec<_>>(),
+                    words,
+                    "{name} at {width} columns\n{wrapped}"
+                );
+            }
+        }
+    }
     #[test]
     fn every_command_shows_examples_to_copy_and_what_it_changes_on_disk() {
         for (name, help) in every_help() {

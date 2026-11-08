@@ -658,3 +658,53 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
     }
     Ok(())
 }
+
+/// a terminal narrower than a line wraps it at its last column, even inside a word: a
+/// 120-column terminal showed "authenticat" and "ed" on two lines of a long error. fetchloom
+/// itself wraps only help, and only between words, and writes each line of an error whole.
+#[cfg(target_os = "linux")]
+#[test]
+fn at_a_narrow_terminal_help_wraps_between_words_and_errors_stay_whole() -> Result {
+    let sandbox = Sandbox::new()?;
+    let wide = text(&sandbox.run(&["get", "--help"])?.stdout)?;
+    let help = sandbox.command(&["get", "--help"]);
+    let Some((code, narrow)) =
+        crate::support::typed(&sandbox.work(), &help, "rows 30 cols 40", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{narrow}");
+    assert!(
+        narrow.lines().count() > wide.lines().count(),
+        "help wraps to the terminal\n{narrow}"
+    );
+    assert_eq!(
+        narrow.split_whitespace().collect::<Vec<_>>(),
+        wide.split_whitespace().collect::<Vec<_>>(),
+        "no word is split or lost\n{narrow}"
+    );
+    let long = format!("/records/{}/iris.csv", "a".repeat(60));
+    let server = crate::support::Server::start(
+        &long,
+        vec![crate::support::reply(
+            "404 Not Found",
+            &[("Content-Length", "0")],
+            b"",
+        )],
+    )?;
+    let get = sandbox.command(&["get", &server.url]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &get, "rows 30 cols 40", "", "")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(10), "{screen}");
+    // the terminal may clear a progress line first, so the error need not start its line
+    assert!(
+        screen
+            .lines()
+            .any(|line| line.contains("error: ") && line.contains(&server.url)),
+        "{screen}"
+    );
+    Ok(())
+}
