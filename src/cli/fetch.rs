@@ -36,13 +36,13 @@ pub(super) struct Job {
 pub(super) struct Description {
     pub(super) label: String,
     pub(super) size: Option<u64>,
-    host: Option<String>,
+    host: String,
 }
 
 impl Description {
     /// drops the fetch and recovery copies, keeping one parsed URL for infallible reconstruction.
-    pub(super) fn take(job: Job, interleave: bool) -> (Self, Url) {
-        let host = interleave.then(|| crate::net::host(&job.fetch.from).to_ascii_lowercase());
+    pub(super) fn take(job: Job) -> (Self, Url) {
+        let host = crate::net::host(&job.fetch.from).to_ascii_lowercase();
         (
             Self {
                 label: job.label,
@@ -329,12 +329,9 @@ pub(super) async fn prepared(
     let count = descriptions.len();
     let batched = cache.defer_downloads().unwrap_or(false);
     let overall = Arc::new(Overall::described(context, &descriptions));
-    let queue = Queue::grouped(urls, context.exp.on("NET_INTERLEAVE_HOSTS"), |index, _| {
-        descriptions[index].host.clone().unwrap_or_default()
+    let queue = Queue::grouped(urls, |index, _| {
+        std::mem::take(&mut descriptions[index].host)
     });
-    for description in &mut descriptions {
-        description.host = None;
-    }
     let jobs = queue.map(|(index, url)| (index, make(index, url)));
     let results = run_each(context, net, cache, count, overall, jobs, false).await;
     let published = publish(cache, batched);
@@ -394,35 +391,31 @@ fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
 }
 
 struct Queue<T> {
-    original: std::iter::Enumerate<std::vec::IntoIter<T>>,
     hosts: VecDeque<VecDeque<(usize, T)>>,
 }
 
 impl Queue<Job> {
-    fn new(jobs: Vec<Job>, interleave: bool) -> Self {
-        Self::grouped(jobs, interleave, |_, job| {
+    fn new(jobs: Vec<Job>) -> Self {
+        Self::grouped(jobs, |_, job| {
             crate::net::host(&job.fetch.from).to_ascii_lowercase()
         })
     }
 }
 
 impl<T> Queue<T> {
-    fn grouped(items: Vec<T>, interleave: bool, host: impl Fn(usize, &T) -> String) -> Self {
-        let mut original = items.into_iter().enumerate();
+    fn grouped(items: Vec<T>, mut host: impl FnMut(usize, &T) -> String) -> Self {
         let mut hosts = VecDeque::<VecDeque<_>>::new();
-        if interleave {
-            let mut by_host = HashMap::new();
-            for (index, job) in original.by_ref() {
-                let host = host(index, &job);
-                let next = hosts.len();
-                let group = *by_host.entry(host).or_insert(next);
-                if group == hosts.len() {
-                    hosts.push_back(VecDeque::new());
-                }
-                hosts[group].push_back((index, job));
+        let mut by_host = HashMap::new();
+        for (index, job) in items.into_iter().enumerate() {
+            let host = host(index, &job);
+            let next = hosts.len();
+            let group = *by_host.entry(host).or_insert(next);
+            if group == hosts.len() {
+                hosts.push_back(VecDeque::new());
             }
+            hosts[group].push_back((index, job));
         }
-        Self { original, hosts }
+        Self { hosts }
     }
 }
 
@@ -430,9 +423,7 @@ impl<T> Iterator for Queue<T> {
     type Item = (usize, T);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(mut host) = self.hosts.pop_front() else {
-            return self.original.next();
-        };
+        let mut host = self.hosts.pop_front()?;
         let job = host.pop_front();
         if !host.is_empty() {
             self.hosts.push_back(host);
@@ -452,7 +443,7 @@ async fn each(
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
     let overall = Arc::new(Overall::new(context, &jobs));
-    let queue = Queue::new(jobs, context.exp.on("NET_INTERLEAVE_HOSTS"));
+    let queue = Queue::new(jobs);
     run_each(context, net, cache, count, overall, queue, apart).await
 }
 
@@ -677,89 +668,73 @@ mod tests {
 
     #[test]
     fn host_interleaving_keeps_job_identity_and_per_host_order() {
-        for (enabled, expected) in [
-            (false, vec![0, 1, 2, 3, 4, 5]),
-            (true, vec![0, 3, 5, 1, 4, 2]),
-        ] {
-            let jobs: Vec<_> = [
-                "slow.example",
-                "SLOW.example:8443",
-                "slow.example",
-                "fast.example",
-                "fast.example",
-                "other.example",
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, host)| Job {
-                fetch: Fetch::new(Url::parse(&format!("https://{host}/{index}")).unwrap()),
-                label: index.to_string(),
-                dataset: None,
-                again: None,
+        let jobs: Vec<_> = [
+            "slow.example",
+            "SLOW.example:8443",
+            "slow.example",
+            "fast.example",
+            "fast.example",
+            "other.example",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, host)| Job {
+            fetch: Fetch::new(Url::parse(&format!("https://{host}/{index}")).unwrap()),
+            label: index.to_string(),
+            dataset: None,
+            again: None,
+        })
+        .collect();
+        let indexes: Vec<_> = Queue::new(jobs)
+            .map(|(index, job)| {
+                assert_eq!(job.label, index.to_string());
+                index
             })
             .collect();
-            let exp = if enabled {
-                crate::exp::Experiments::default().with("NET_INTERLEAVE_HOSTS", "1")
-            } else {
-                crate::exp::Experiments::default()
-            };
-            let queue = Queue::new(jobs, exp.on("NET_INTERLEAVE_HOSTS"));
-            let indexes: Vec<_> = queue
-                .map(|(index, job)| {
-                    assert_eq!(job.label, index.to_string());
-                    index
-                })
-                .collect();
-            assert_eq!(indexes, expected);
-        }
+        assert_eq!(indexes, [0, 3, 5, 1, 4, 2]);
     }
 
     #[test]
     fn prepared_descriptions_keep_initial_hosts_sizes_and_input_indexes() {
-        for (interleave, expected) in [(false, vec![0, 1, 2, 3]), (true, vec![0, 2, 1, 3])] {
-            let exp = if interleave {
-                crate::exp::Experiments::default().with("NET_INTERLEAVE_HOSTS", "1")
-            } else {
-                crate::exp::Experiments::default()
-            };
-            let (descriptions, urls): (Vec<_>, Vec<_>) = [
-                "slow.example",
-                "SLOW.example:8443",
-                "fast.example",
-                "fast.example",
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, host)| {
-                let mut fetch =
-                    Fetch::new(Url::parse(&format!("https://storage.example/{index}")).unwrap());
-                fetch.from = Url::parse(&format!("https://{host}/{index}")).unwrap();
-                fetch.expect.size = (index != 0).then_some(0);
-                Description::take(
-                    Job {
-                        fetch,
-                        label: index.to_string(),
-                        dataset: None,
-                        again: None,
-                    },
-                    exp.on("NET_INTERLEAVE_HOSTS"),
-                )
+        let (mut descriptions, urls): (Vec<_>, Vec<_>) = [
+            "slow.example",
+            "SLOW.example:8443",
+            "fast.example",
+            "fast.example",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, host)| {
+            let mut fetch =
+                Fetch::new(Url::parse(&format!("https://storage.example/{index}")).unwrap());
+            fetch.from = Url::parse(&format!("https://{host}/{index}")).unwrap();
+            fetch.expect.size = (index != 0).then_some(0);
+            Description::take(Job {
+                fetch,
+                label: index.to_string(),
+                dataset: None,
+                again: None,
             })
-            .unzip();
-            assert_eq!(descriptions[0].size, None);
-            assert_eq!(descriptions[1].size, Some(0));
-            let queue = Queue::grouped(urls, exp.on("NET_INTERLEAVE_HOSTS"), |index, _| {
-                descriptions[index].host.clone().unwrap_or_default()
-            });
-            let got: Vec<_> = queue
-                .map(|(index, url)| {
-                    assert_eq!(descriptions[index].label, index.to_string());
-                    assert_eq!(url.as_str(), format!("https://storage.example/{index}"));
-                    index
-                })
-                .collect();
-            assert_eq!(got, expected);
-        }
+        })
+        .unzip();
+        assert_eq!(descriptions[0].size, None);
+        assert_eq!(descriptions[1].size, Some(0));
+        let queue = Queue::grouped(urls, |index, _| {
+            std::mem::take(&mut descriptions[index].host)
+        });
+        let got: Vec<_> = queue
+            .map(|(index, url)| {
+                assert_eq!(descriptions[index].label, index.to_string());
+                assert_eq!(url.as_str(), format!("https://storage.example/{index}"));
+                index
+            })
+            .collect();
+        assert_eq!(got, [0, 2, 1, 3]);
+        assert!(
+            descriptions
+                .iter()
+                .all(|description| description.host.is_empty())
+        );
     }
 
     #[test]
@@ -783,17 +758,12 @@ mod tests {
         let net = Arc::new(context.net());
         let (descriptions, urls): (Vec<_>, Vec<_>) = (0..32)
             .map(|index| {
-                Description::take(
-                    Job {
-                        fetch: Fetch::new(
-                            Url::parse(&format!("https://example.org/{index}")).unwrap(),
-                        ),
-                        label: index.to_string(),
-                        dataset: None,
-                        again: None,
-                    },
-                    false,
-                )
+                Description::take(Job {
+                    fetch: Fetch::new(Url::parse(&format!("https://example.org/{index}")).unwrap()),
+                    label: index.to_string(),
+                    dataset: None,
+                    again: None,
+                })
             })
             .unzip();
         let made = std::cell::Cell::new(0);

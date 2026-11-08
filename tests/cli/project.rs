@@ -1623,10 +1623,7 @@ fn prepared_downloads_keep_pins_and_shared_object_claims() -> Result {
             .join(&digest[..2])
             .join(&digest[2..]),
     )?;
-    let output = sandbox
-        .command_in(&project, &["--json", "sync"])
-        .env("FETCHLOOM_EXP_NET_INTERLEAVE_HOSTS", "1")
-        .output()?;
+    let output = sandbox.command_in(&project, &["--json", "sync"]).output()?;
     assert!(output.status.success(), "{}", text(&output.stdout)?);
     let document = json(&output)?;
     assert_eq!(document["work"]["requests"], 1);

@@ -73,6 +73,8 @@ unpinned `get` revalidates URL records with conditional requests. project pins c
 
 ### request policy
 
+the bounded download queue takes one job from each initial hostname in turn, retaining order within a host and returning results in input order. a grouped slow host cannot fill the waiting task queue before another host is admitted. host grouping uses the initial request destination, not the cache identity or a redirect destination; ports of one hostname share a group.
+
 file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a TCP connection. metadata keeps protocol negotiation and HTTP/2 multiplexing. both clients share cookies, checked redirects, credential scope, request permits and the byte-rate budget.
 
 | control | value |
@@ -110,7 +112,6 @@ experiment settings come from the run's `Experiments` value and are off by defau
 
 | switch | behavior |
 |---|---|
-| `FETCHLOOM_EXP_NET_INTERLEAVE_HOSTS=1` | the bounded download queue takes one job from each initial hostname in turn, retaining order within a host and returning results in input order. a grouped slow host cannot fill the waiting task queue before another host is admitted. off keeps input order. |
 | `FETCHLOOM_EXP_NET_SPLIT_LINK_RATE=1` | an eligible uncapped body with a strong range validator starts four ranges immediately. after all start, 250 ms aggregate-rate windows add streams only while each addition improves throughput by 15%, capped at eight. an empty rate window waits for progress instead of adding requests. this raises the initial-host request cap to eight, still bounded by jobs. the first error, including 429, stops the other streams and retries as one stream with its original retry delay. missing validators, small bodies, explicit split disable and rate caps retain the ordinary policy. |
 
 ## invariants and traps

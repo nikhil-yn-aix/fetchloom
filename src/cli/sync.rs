@@ -455,10 +455,8 @@ impl<'a> Loop<'a> {
         }
         let mut descriptions = Vec::with_capacity(files.len());
         let mut urls = Vec::with_capacity(files.len());
-        let interleave = self.context.exp.on("NET_INTERLEAVE_HOSTS");
         for (dataset, file) in files {
-            let (description, url) =
-                fetch::Description::take(job(lock, dataset, file)?, interleave);
+            let (description, url) = fetch::Description::take(job(lock, dataset, file)?);
             descriptions.push(description);
             urls.push(url);
         }
