@@ -8,7 +8,8 @@ use crate::error::{Error, Kind};
 
 pub(crate) struct Stop {
     asked: watch::Sender<bool>,
-    /// the run's work was done before any stop was asked.
+    /// the run marked its work as finishing, which it does after its last look for a stop, so a
+    /// stop asked after that look no longer ends it, even one asked before the mark.
     finished: AtomicBool,
 }
 

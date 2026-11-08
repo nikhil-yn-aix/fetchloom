@@ -795,8 +795,9 @@ fn block_on<T>(
     {
         return outcome;
     }
-    // work a stop cut short may still end well, so it ends as stopped, unless the command had
-    // finished it before the stop was asked
+    // work a stop cut short may still end well, so it ends as stopped, unless the command marked
+    // its work as finishing: it does that after its last look for a stop, so one asked after that
+    // look, even before the mark, leaves the work done
     context.stop.check_unfinished()?;
     outcome
 }
