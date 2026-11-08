@@ -302,12 +302,10 @@ fn stopped(context: &Context, error: Error, unchanged: bool) -> Error {
             "nothing was added, and data.toml and data.lock are as they were; anything downloaded so far stays in the cache, so the same add continues from there",
         );
     } else {
+        // the error's details give the steps that put them back
         context
             .output
             .warn("stopped, but data.toml and data.lock could not be put back as they were");
-        for detail in &error.details {
-            context.output.warn(detail);
-        }
     }
     error
 }

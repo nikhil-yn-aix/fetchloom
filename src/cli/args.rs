@@ -40,8 +40,9 @@ on disk: updates the data folder from data.lock, writing data.lock first if need
   fetchloom lock
   fetchloom lock --check
   fetchloom lock --upgrade iris
+  fetchloom lock --upgrade --dry-run
 
-on disk: writes data.lock and may add files to the cache. --check writes nothing";
+on disk: writes data.lock and may add files to the cache. --check and --dry-run write nothing";
 
     pub(super) const STATUS: &str = "examples:
   fetchloom status

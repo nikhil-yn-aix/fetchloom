@@ -74,6 +74,7 @@ either way, it ends with:
 ```text
    Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
  Downloaded 4 files · 18.1 KiB in 287 ms
+    Started a project in /home/ada/iris-study
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```

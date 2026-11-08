@@ -771,6 +771,13 @@ fn block_on<T>(
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|err| Error::new(Kind::LocalIo, format!("cannot run the command: {err}")))?;
     let outcome = runtime.block_on(command);
+    // a command that stopped says itself what it left behind
+    if outcome
+        .as_ref()
+        .is_err_and(|error| error.kind == Kind::Interrupted)
+    {
+        return outcome;
+    }
     context.stop.check()?;
     outcome
 }

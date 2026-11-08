@@ -6,6 +6,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
    Resolved hf:datasets/scikit-learn/iris@0bda0ce · 4 files · 18.1 KiB · cc0-1.0
  Downloaded 4 files · 18.1 KiB in 287 ms
+    Started a project in /home/ada/iris-study
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
