@@ -2287,7 +2287,7 @@ mod tests {
             .write(true)
             .open(&state_path)
             .unwrap()
-            .set_modified(stamp + Duration::from_secs(5))
+            .set_modified(stamp + Duration::from_secs(4))
             .unwrap();
         tokio::time::advance(Duration::from_millis(200)).await;
         std::future::poll_fn(|task| {
@@ -2308,11 +2308,12 @@ mod tests {
             .set_modified(stamp)
             .unwrap();
         project.write_state(&state).unwrap();
+        // whole even seconds apart, so a clock that keeps two second steps tells the writes apart
         std::fs::File::options()
             .write(true)
             .open(&state_path)
             .unwrap()
-            .set_modified(stamp + Duration::from_secs(6))
+            .set_modified(stamp + Duration::from_secs(8))
             .unwrap();
         tokio::time::advance(Duration::from_millis(200)).await;
         // a waiter that never sees the project ready fails here, saying what it saw, rather than

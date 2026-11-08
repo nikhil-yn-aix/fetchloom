@@ -186,7 +186,8 @@ mod tests {
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let held = crate::cache::tests::store(&cache, b"held before the run\n");
         let written = crate::cache::tests::store(&cache, b"written by the run\n");
-        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
+        // the start of 2000: FAT and exFAT keep no time before 1980
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_hours(262_968);
         for digest in [held.digest, written.digest] {
             let mut options = fs::OpenOptions::new();
             options.read(true);
