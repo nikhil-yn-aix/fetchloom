@@ -246,7 +246,7 @@ python3 -c 'import json,sys; from native_audit import verify; verify(sys.argv[1]
 
 on windows choose a fresh project on an existing second volume, copy the same two template files with `Copy-Item`, set `$env:FETCHLOOM_CACHE` to the source cache, and use the process measurement below. require `work.copies == 10000`, `work.reflinks == 0` and `work.hardlinks == 0` for a forced-copy sample. otherwise the sample did not measure copy flushing. a same-volume apfs control should use clones when supported; read-only ntfs/ReFS controls try hardlinks first.
 
-repeat one-folder and 100-folder samples at `FETCHLOOM_THREADS` 1, 2, 4 and 8. repeat on exfat rather than transferring a linux driver result to the native driver. collect both CPU and wall time. include handle counts for many folders: when enabled, the parent cache can retain 128 directory handles; low-descriptor-limit behavior has separate regression coverage.
+repeat one-folder and 100-folder samples at `FETCHLOOM_THREADS` 1, 2, 4 and 8. repeat on exfat rather than transferring a linux driver result to the native driver. collect both CPU and wall time. include handle counts for many folders: placement keeps one root handle and opens each parent as it needs it; low-descriptor-limit behavior has separate regression coverage.
 
 ## native memory and CPU
 

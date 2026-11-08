@@ -35,7 +35,6 @@ python3 -m unittest discover -s bench
 | `cargo test --locked --lib archive::` | decoder, guard or staging changes |
 | `cargo test --locked --test cli placing::` | placement behavior through the executable |
 | `cargo test --locked --test cli` | changes that need the full command scenario suite |
-| `cargo test --locked --doc` | runnable rust documentation examples |
 | `cargo fmt --all -- --check` | formatting gate |
 | `cargo clippy --all-targets --locked -- -D warnings` | warnings and configured rust/clippy lints |
 | `cargo clippy --release --locked -- -D warnings` | release-only code and dead-code checks |

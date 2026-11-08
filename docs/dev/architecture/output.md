@@ -82,7 +82,7 @@ flag help initializes the same palette as the `help` command. both apply `FETCHL
 - snapshot filters remove paths, ports, times and rates. inspect unfiltered output when changing a value those filters can hide.
 - literal error kinds are stable script interfaces. prose can improve without renaming them.
 - masked display URLs do not sanitize raw URL values stored elsewhere. semantic argument errors, such as an unknown auth account, need the same masking as clap errors.
-- an unhandled panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`. the known runtime-worker startup panic is caught and reported as `local.io`; [worker budgets](primitives.md#worker-budgets) explains that exception.
+- an unhandled panic is fetchloom's own bug: `main` installs a hook that says so and where to report it, then hands over to rust's default report. normal errors use `Error` and `Kind`. a system that refuses the runtime's threads is found by a probe thread first and reported as `local.io`, while a refusal later, as tokio adds workers, still panics, and release builds abort; [worker budgets](primitives.md#worker-budgets) explains that exception.
 
 ## tests
 

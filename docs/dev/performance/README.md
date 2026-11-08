@@ -20,7 +20,7 @@ use release builds and keep cache state, filesystem, machine load, run counts an
 
 elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. [benchmark design](benchmark-design.md) describes the implemented linux suite. reproduce the named workload and record the conditions before treating an old timing as a baseline.
 
-[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) sets fat LTO, one codegen unit, panic unwinding and stripped symbols for release builds. unwinding lets the CLI report a runtime-worker startup failure as `local.io`.
+[Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) sets fat LTO, one codegen unit, `panic = "abort"` and stripped symbols for release builds. a probe thread started before the runtime lets the CLI report a system that refuses threads as `local.io`; [the a/b passes](measurements.md#ab-passes-on-the-linux-lab-2026-11) kept abort, since unwinding was no faster and made the binary 14.5% larger.
 
 [historical observations](measurements.md#observations-and-rejected-experiments) record the LTO and allocator experiments.
 
