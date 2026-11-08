@@ -11,7 +11,8 @@ use crate::glob::Glob;
 use crate::name;
 
 pub(crate) const FILE: &str = "data.toml";
-const DATA_DIR: &str = "data";
+/// the data folder of a project whose data.toml names none.
+pub(crate) const DATA_DIR: &str = "data";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 6] = ["ref", "select", "exclude", "extract", "copy", "path"];

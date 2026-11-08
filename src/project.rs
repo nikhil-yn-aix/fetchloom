@@ -375,24 +375,76 @@ impl Project {
     }
 
     fn hold_at(&self, command: &str, now: SystemTime) -> Result<Hold, Error> {
-        let folder = self.inner()?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(folder.join("lock"))
-            .map_err(|err| Error::io("could not open the project lock", &err))?;
-        let lock = match file.try_lock() {
-            Ok(()) => Some(file),
-            Err(TryLockError::WouldBlock) => return Ok(Hold::Busy),
-            Err(TryLockError::Error(err)) => {
-                tracing::debug!(%err, "this filesystem has no file locks");
-                None
-            }
+        let opening = |err: io::Error| Error::io("could not open the project lock", &err);
+        loop {
+            let folder = self.inner()?;
+            let path = folder.join("lock");
+            let file = match OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+            {
+                Ok(file) => file,
+                // a command that set out to start this project, and did not, removed the folder
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(opening(err)),
+            };
+            let lock = match file.try_lock() {
+                // such a command also removes the lock, and a lock on a file with no name keeps
+                // nobody out
+                Ok(()) if !names(&path, &file).map_err(opening)? => continue,
+                Ok(()) => Some(file),
+                Err(TryLockError::WouldBlock) => return Ok(Hold::Busy),
+                Err(TryLockError::Error(err)) => {
+                    tracing::debug!(%err, "this filesystem has no file locks");
+                    None
+                }
+            };
+            return Held { lock, owner: None }
+                .claim(&folder.join("owner"), command, now)
+                .map_err(|err| Error::io("could not claim the project owner", &err));
+        }
+    }
+
+    /// ends `held`, the hold of a command that set out to start this project and did not, so its
+    /// folder is as it was. `data`, the data folder it did not find there, goes when it holds only
+    /// empty folders. `.fetchloom` goes when `own` says the command made it and it holds only
+    /// fetchloom's own records, the state among them only once no data folder is left for it to
+    /// describe. a folder holding anything else stays, with all it holds.
+    pub(crate) fn unstart(&self, mut held: Held, data: Option<&Path>, own: bool) {
+        if let Some(data) = data {
+            remove_empty_folders(data);
+        }
+        if !own {
+            return;
+        }
+        let folder = self.own_folder();
+        let described = data.is_none_or(Path::exists);
+        let Ok(entries) = fs::read_dir(&folder) else {
+            return;
         };
-        Held { lock, owner: None }
-            .claim(&folder.join("owner"), command, now)
-            .map_err(|err| Error::io("could not claim the project owner", &err))
+        for entry in entries {
+            let ours = entry.is_ok_and(|entry| match entry.file_name().to_str() {
+                Some(".gitignore" | "lock" | "owner") => true,
+                Some("state") => !described,
+                _ => false,
+            });
+            if !ours {
+                return;
+            }
+        }
+        if let Some(owner) = held.owner.take() {
+            let _ = fs::remove_file(owner);
+        }
+        for name in [".gitignore", "state"] {
+            let _ = fs::remove_file(folder.join(name));
+        }
+        // the lock goes last and while it is still held. a command that waited for it opens its
+        // name again, and finds the lock it takes there to be the only one
+        let _ = fs::remove_file(folder.join("lock"));
+        drop(held);
+        let _ = fs::remove_dir(&folder);
     }
 
     /// the data folder, made sure to be a real folder inside the project with no link on the way,
@@ -550,6 +602,47 @@ impl Project {
             err,
         )
     }
+}
+
+/// whether `path` still names the file `file` has open.
+fn names(path: &Path, file: &File) -> io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held = file.metadata()?;
+        match fs::symlink_metadata(path) {
+            Ok(named) => Ok(named.dev() == held.dev() && named.ino() == held.ino()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let held = winapi_util::file::information(file)?;
+        let named = match crate::cache::read_unfollowed(path) {
+            Ok(named) => winapi_util::file::information(&named)?,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err),
+        };
+        Ok(held.volume_serial_number() == named.volume_serial_number()
+            && held.file_index() == named.file_index())
+    }
+}
+
+/// removes `folder` and the folders in it, when none of them holds anything but empty folders,
+/// and says whether it did. a link is never followed.
+fn remove_empty_folders(folder: &Path) -> bool {
+    if !fs::symlink_metadata(folder).is_ok_and(|found| found.is_dir()) {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    let mut empty = true;
+    for entry in entries {
+        empty &= entry.is_ok_and(|entry| remove_empty_folders(&entry.path()));
+    }
+    empty && fs::remove_dir(folder).is_ok()
 }
 
 /// whether `err` means `folder` takes no new entries from this user: the folder, or the disk it
@@ -1205,6 +1298,62 @@ mod tests {
             }
             assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"before");
         }
+    }
+
+    /// a command that set out to start a project and did not leaves the folder as it found it,
+    /// but never removes what it did not make.
+    #[test]
+    fn a_project_never_started_leaves_its_folder_as_it_was() {
+        let (dir, project) = project(&[]);
+        let data = project.root.join("data");
+        let Hold::Held(held) = project.hold("add").unwrap() else {
+            panic!("free")
+        };
+        fs::create_dir_all(data.join("iris").join("empty")).unwrap();
+        project.unstart(held, Some(&data), true);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+
+        let Hold::Held(held) = project.hold("add").unwrap() else {
+            panic!("free")
+        };
+        fs::create_dir_all(data.join("iris")).unwrap();
+        fs::write(data.join("iris").join("mine.csv"), b"mine").unwrap();
+        fs::write(project.own_folder().join("notes"), b"mine").unwrap();
+        project.unstart(held, Some(&data), true);
+        assert_eq!(
+            fs::read(data.join("iris").join("mine.csv")).unwrap(),
+            b"mine"
+        );
+        assert_eq!(
+            fs::read(project.own_folder().join("notes")).unwrap(),
+            b"mine"
+        );
+        assert!(
+            !project.own_folder().join("owner").exists(),
+            "the hold ended all the same"
+        );
+        assert!(matches!(project.hold("add").unwrap(), Hold::Held(_)));
+    }
+
+    /// a lock taken on a file that lost its name keeps nobody out, as when a command that started
+    /// no project removed `.fetchloom` while another waited, so the name is opened again.
+    #[test]
+    fn a_lock_file_that_lost_its_name_is_not_taken() {
+        let (_dir, project) = project(&[]);
+        let path = project.inner().unwrap().join("lock");
+        let waiting = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        assert!(names(&path, &waiting).unwrap());
+        fs::remove_file(&path).unwrap();
+        assert!(!names(&path, &waiting).unwrap());
+        let Hold::Held(held) = project.hold("sync").unwrap() else {
+            panic!("free")
+        };
+        assert!(names(&path, held.lock.as_ref().unwrap()).unwrap());
     }
 
     #[test]

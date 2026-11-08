@@ -4,6 +4,8 @@
 
 `.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, owner, state or ignore file.
 
+a first `add` that adds nothing removes the `.fetchloom` it made, unless something other than its own records is in it. it removes the lock file last, while it still holds the lock; a command waiting for the lock checks, once it has it, that the lock file still has its name, and opens the name again when it does not.
+
 | path | contents |
 |---|---|
 | `.fetchloom/.gitignore` | `*` and LF, written when the folder is created |

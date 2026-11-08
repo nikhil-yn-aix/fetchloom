@@ -1992,6 +1992,15 @@ fn an_add_into_a_read_only_project_folder_names_it_and_leaves_no_copies() -> Res
     Ok(())
 }
 
+/// what is in `folder`, by name.
+fn listed(folder: &std::path::Path) -> Result<Vec<String>> {
+    let mut names = fs::read_dir(folder)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    names.sort();
+    Ok(names)
+}
+
 /// a server that sends the head of `body` and its first `sent` bytes, then holds the rest until
 /// the returned sender is dropped, as a download still running.
 fn held(path: &str, body: &[u8], sent: usize) -> Result<(Server, std::sync::mpsc::Sender<()>)> {
@@ -2135,5 +2144,154 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
         requests.len() == 2 && requests[1].contains("range: bytes="),
         "{requests:?}"
     );
+    Ok(())
+}
+
+/// a first add that fails or is refused leaves its folder as it was: no `.fetchloom`, no data
+/// folder and no data.toml or data.lock.
+#[test]
+fn a_first_add_that_fails_leaves_the_folder_as_it_was() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![reply("403 Forbidden", &[], b"denied")])?;
+    let output = sandbox.run(&["add", &server.url])?;
+    assert!(!output.status.success());
+    assert_eq!(
+        listed(&sandbox.work())?,
+        Vec::<String>::new(),
+        "{}",
+        text(&output.stderr)?
+    );
+    let named = sandbox.run(&["add", &server.url, "--as", "Not A Name"])?;
+    assert_eq!(named.status.code(), Some(2));
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+const SEARCHED: [(&str, &[u8]); 3] = [
+    (
+        "FETCHLOOM_TEST_HF_API",
+        include_bytes!("../fixtures/sources/search/hf.json"),
+    ),
+    (
+        "FETCHLOOM_TEST_KAGGLE_API",
+        include_bytes!("../fixtures/sources/search/kaggle.json"),
+    ),
+    (
+        "FETCHLOOM_TEST_ZENODO_API",
+        include_bytes!("../fixtures/sources/search/zenodo.json"),
+    ),
+];
+
+/// a first add of search words that ends without a dataset, because nobody can choose one here
+/// or because ctrl-c stopped the search, leaves its folder as it was.
+#[cfg(debug_assertions)]
+#[test]
+fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut catalogs = Vec::new();
+    let mut command = sandbox.command(&["add", "iris"]);
+    for (variable, body) in SEARCHED {
+        let catalog = Server::start(
+            "/",
+            vec![reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                body,
+            )],
+        )?;
+        command.env(variable, &catalog.url);
+        catalogs.push(catalog);
+    }
+    let output = command.output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new());
+    #[cfg(unix)]
+    {
+        let (release, wait) = std::sync::mpsc::channel();
+        let stalled = Server::start("/", vec![vec![Part::Wait(wait)]])?;
+        let mut command = sandbox.command(&["add", "iris"]);
+        for (variable, _) in SEARCHED {
+            command.env(variable, &stalled.url);
+        }
+        let running = Background::start(command)?;
+        wait_until("the search to start", || Ok(!stalled.requests().is_empty()))?;
+        running.interrupt()?;
+        let (code, stderr) = running.finish()?;
+        drop(release);
+        assert_eq!(code, Some(130), "{stderr}");
+        assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{stderr}");
+    }
+    Ok(())
+}
+
+/// what a person at a terminal sees from `command` after typing `keys`, through a pseudo
+/// terminal `script` opens, with its exit code. none when `script` is not installed.
+#[cfg(target_os = "linux")]
+fn typed(
+    folder: &std::path::Path,
+    inner: &std::process::Command,
+    keys: &str,
+) -> Result<Option<(Option<i32>, String)>> {
+    let line: Vec<String> = std::iter::once(inner.get_program())
+        .chain(inner.get_args())
+        .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+        .collect();
+    let mut script = std::process::Command::new("script");
+    script
+        .args(["-qec", &line.join(" "), "/dev/null"])
+        .current_dir(folder)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (name, value) in inner.get_envs() {
+        match value {
+            Some(value) => script.env(name, value),
+            None => script.env_remove(name),
+        };
+    }
+    script
+        .env("SHELL", "/bin/sh")
+        .env_remove("ENV")
+        .env_remove("BASH_ENV");
+    let mut child = match script.spawn() {
+        Ok(child) => child,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        std::io::Write::write_all(&mut stdin, keys.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    let screen = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    Ok(Some((output.status.code(), screen)))
+}
+
+/// at a terminal, q at the list of search results cancels a first add and leaves the folder as
+/// it was.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut catalogs = Vec::new();
+    let mut command = sandbox.command(&["add", "iris"]);
+    for (variable, body) in SEARCHED {
+        let catalog = Server::start(
+            "/",
+            vec![reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                body,
+            )],
+        )?;
+        command.env(variable, &catalog.url);
+        catalogs.push(catalog);
+    }
+    let Some((code, screen)) = typed(&sandbox.work(), &command, "q")? else {
+        return Ok(());
+    };
+    assert!(screen.contains("which one?"), "{screen}");
+    assert_ne!(code, Some(0), "{screen}");
+    assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{screen}");
     Ok(())
 }

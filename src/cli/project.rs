@@ -60,7 +60,7 @@ impl Report {
 struct AddProject {
     project: Project,
     /// none for a dry run, which changes nothing and so needs no hold.
-    _held: Option<Held>,
+    held: Option<Held>,
     /// data.toml as read, or none when there was none.
     text: Option<String>,
     manifest: Manifest,
@@ -92,6 +92,36 @@ impl AddProject {
                     Err(err) => found.is_none() && err.kind() == std::io::ErrorKind::NotFound,
                 },
             )
+    }
+
+    /// ends an add that set out to start the project and added nothing, leaving its folder as
+    /// `fresh` found it.
+    fn unstart(&mut self, fresh: Fresh) {
+        if let Some(held) = self.held.take() {
+            let data = fresh
+                .data
+                .then(|| self.project.root.join(manifest::DATA_DIR));
+            self.project.unstart(held, data.as_deref(), fresh.own);
+        }
+    }
+}
+
+/// what a first add found in its folder, so that one which adds nothing leaves it as it was.
+#[derive(Clone, Copy)]
+struct Fresh {
+    /// `.fetchloom` was not there.
+    own: bool,
+    /// the data folder was not there.
+    data: bool,
+}
+
+impl Fresh {
+    fn look(project: &Project) -> Fresh {
+        let absent = |path: PathBuf| std::fs::symlink_metadata(path).is_err();
+        Fresh {
+            own: absent(project.own_folder()),
+            data: absent(project.root.join(manifest::DATA_DIR)),
+        }
     }
 }
 
@@ -157,11 +187,17 @@ impl Drop for BeforeAdd<'_> {
     }
 }
 
-pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
+pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let project = Project::find(&here).unwrap_or(Project { root: here });
+    let found = Project::find(&here);
+    let starting = found.is_none();
+    let project = found.unwrap_or_else(|| Project { root: here.clone() });
+    before_holding(context, &mut args)
+        .await
+        .map_err(|error| stopped(context, error, true))?;
+    let fresh = starting.then(|| Fresh::look(&project));
     let held = if dry_run {
         None
     } else {
@@ -173,7 +209,7 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
     };
     let mut adding = AddProject {
         project,
-        _held: held,
+        held,
         text: None,
         manifest: Manifest::parse("")?,
         old: None,
@@ -183,7 +219,22 @@ pub(super) async fn add(context: &Context, args: Add) -> Result<Report, Error> {
         Ok(()) => add_held(context, &mut adding, args).await,
         Err(error) => Err(error),
     };
-    added.map_err(|error| stopped(context, error, adding.unchanged()))
+    added.map_err(|error| {
+        let unchanged = adding.unchanged();
+        if unchanged && let Some(fresh) = fresh {
+            adding.unstart(fresh);
+        }
+        stopped(context, error, unchanged)
+    })
+}
+
+/// what an add settles before it holds the project: which dataset search words name. q at the
+/// list or ctrl-c then leaves nothing behind.
+async fn before_holding(context: &Context, args: &mut Add) -> Result<(), Error> {
+    if crate::source::search::is_search(&args.link) {
+        args.link = super::search::pick(context, &context.net(), &args.link, "add").await?;
+    }
+    Ok(())
 }
 
 /// `error`, once it has told a person what state the project is in when a stop ended the add:
@@ -224,7 +275,7 @@ async fn add_held(
     }
     let manifest = &adding.manifest;
     let net = Arc::new(net(context, manifest));
-    let parsed = validate_add(context, manifest, &net, &mut args).await?;
+    let parsed = validate_add(context, manifest, &net, &args)?;
     let cache = if dry_run {
         peek_cache()?
     } else {
@@ -284,15 +335,12 @@ async fn add_held(
     })
 }
 
-async fn validate_add(
+fn validate_add(
     context: &Context,
     manifest: &Manifest,
     net: &Net,
-    args: &mut Add,
+    args: &Add,
 ) -> Result<Parsed, Error> {
-    if crate::source::search::is_search(&args.link) {
-        args.link = super::search::pick(context, net, &args.link, "add").await?;
-    }
     let parsed = Reference::parse(&args.link)?;
     engine::tell_raw(&context.output, &args.link, &parsed.reference);
     parsed.reference.check_shareable()?;
