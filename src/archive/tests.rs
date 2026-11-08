@@ -238,6 +238,41 @@ fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
     assert_eq!(scratch.cache.unpacked_tree(&archive.digest), Some(pinned));
 }
 
+/// an archive whose unpacking cannot get a folder in the cache, or cannot save the list of files
+/// it holds there, names the cache folder rather than fetchloom's own steps.
+#[test]
+fn unpacking_that_cannot_write_to_the_cache_names_the_cache_folder() {
+    for (folder, expected) in [
+        (
+            "tmp",
+            "could not make a folder to unpack the archive into, in ",
+        ),
+        ("unpacked", "could not save the archive's list of files in "),
+    ] {
+        let scratch = Scratch::new();
+        let archive = crate::cache::tests::store(&scratch.cache, &tar_of(FILES));
+        let blocked = scratch.cache.root().join(folder);
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::write(&blocked, b"a file where a folder belongs").unwrap();
+        let err = super::unpack_cached(
+            &scratch.cache,
+            &archive.digest,
+            archive.size,
+            None,
+            &|_| false,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, Kind::LocalIo, "{folder}");
+        assert!(
+            err.message
+                .starts_with(&format!("{expected}{}", blocked.display())),
+            "{folder}: {}",
+            err.message
+        );
+    }
+}
+
 /// `zstd --long=28` and above write frames asking for more than libzstd's 128 MiB window. such a
 /// tar must be refused by unpacking, never left packed as if it were no archive.
 #[test]

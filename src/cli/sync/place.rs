@@ -1027,12 +1027,12 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
     let object = doubt.object.display();
     if doubt.changed {
         Error::io(
-            format_args!("could not mark {object}, a cached file whose bytes changed"),
+            format_args!("could not note that {object}, a file in the cache, changed"),
             &doubt.error,
         )
     } else {
         Error::io(
-            format_args!("could not check and seal {object} for placement"),
+            format_args!("could not check {object}, a file in the cache, before placing it"),
             &doubt.error,
         )
     }
@@ -1043,6 +1043,33 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style};
     use crate::project::state::State;
+
+
+    /// a cached file that cannot be checked or noted as changed is named as a file in the cache,
+    /// without the words fetchloom uses inside for those steps.
+    #[test]
+    fn a_cached_file_that_cannot_be_checked_is_named_plainly() {
+        let object = Path::new("cache").join("objects").join("ab").join("cdef");
+        let doubt = |changed| Doubt {
+            object: object.clone(),
+            changed,
+            error: std::io::Error::other("the disk is full"),
+        };
+        assert_eq!(
+            doubtful(&doubt(true)).message,
+            format!(
+                "could not note that {}, a file in the cache, changed: the disk is full",
+                object.display()
+            )
+        );
+        assert_eq!(
+            doubtful(&doubt(false)).message,
+            format!(
+                "could not check {}, a file in the cache, before placing it: the disk is full",
+                object.display()
+            )
+        );
+    }
 
     fn surveyed(project: &Project) -> Survey {
         Survey::read(project, "data", crate::threads::Threads::default())

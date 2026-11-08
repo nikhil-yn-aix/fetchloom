@@ -159,6 +159,20 @@ impl Drop for Held {
     }
 }
 
+/// a project fetchloom could not lock, named as the project. a file that tells who holds it but
+/// that fetchloom cannot read as its own is named, so a person can delete it once no other
+/// fetchloom works there.
+fn not_locked(owner: &Path, err: &io::Error) -> Error {
+    let error = Error::io("could not lock the project", err);
+    if err.kind() == io::ErrorKind::InvalidData {
+        return error.help(format!(
+            "if no other fetchloom is working in this project, delete {}, then run the command again",
+            owner.display()
+        ));
+    }
+    error
+}
+
 fn remove_stale_owner(path: &Path, bytes: &[u8], modified: SystemTime) -> io::Result<()> {
     let (current, written) = match read_owner(path) {
         Ok(read) => read,
@@ -185,7 +199,7 @@ fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "{} holds more than {}, too much for an owner record",
+                "{} is larger than {}, more than fetchloom ever writes there",
                 path.display(),
                 crate::units::size(OWNER_CAP)
             ),
@@ -365,8 +379,16 @@ impl Project {
     pub(crate) fn write_state(&self, state: &State) -> Result<(), Error> {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
-        write_atomically(&folder.join("state"), &state.render())
-            .map_err(|err| Error::io("could not record what was placed", &err))
+        let path = folder.join("state");
+        write_atomically(&path, &state.render()).map_err(|err| {
+            Error::io(
+                format_args!(
+                    "could not save the list of placed files in {}",
+                    path.display()
+                ),
+                &err,
+            )
+        })
     }
 
     /// takes the project lock and owner record for `command`, unless another fetchloom holds it.
@@ -388,7 +410,7 @@ impl Project {
         named: impl Fn(&Path, &File) -> io::Result<bool>,
     ) -> Result<Hold, Error> {
         const TRIES: usize = 8;
-        let opening = |err: io::Error| Error::io("could not open the project lock", &err);
+        let opening = |err: io::Error| Error::io("could not lock the project", &err);
         for _ in 0..TRIES {
             let folder = self.inner()?;
             let path = folder.join("lock");
@@ -423,14 +445,15 @@ impl Project {
                     None
                 }
             };
+            let owner = folder.join("owner");
             return Held { lock, owner: None }
-                .claim(&folder.join("owner"), command, now)
-                .map_err(|err| Error::io("could not claim the project owner", &err));
+                .claim(&owner, command, now)
+                .map_err(|err| not_locked(&owner, &err));
         }
         Err(Error::new(
             Kind::LocalIo,
             format!(
-                "could not take the project lock in {}: its lock file kept being removed or replaced",
+                "could not lock the project in {}: its lock file kept being removed or replaced",
                 self.own_folder().display()
             ),
         )
@@ -1161,7 +1184,7 @@ mod tests {
             .expect("holding a lock that never kept its name never returned")
             .expect("a lock that never kept its name was held");
         assert_eq!(kind, Kind::LocalIo);
-        assert!(message.contains("project lock"), "{message}");
+        assert!(message.contains("could not lock the project"), "{message}");
     }
 
     #[test]

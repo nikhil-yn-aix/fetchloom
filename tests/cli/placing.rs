@@ -655,7 +655,7 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     let foreign = clone.join("data").join("iris");
     fs::create_dir_all(&foreign)?;
     fs::write(foreign.join("iris.csv"), V2)?;
-    let kept = "data/iris/iris.csv is not recorded by fetchloom and has different contents";
+    let kept = "data/iris/iris.csv is not a file fetchloom placed, and it differs from data.lock, so it stays";
 
     for _ in 0..2 {
         let synced = sandbox.command_in(&clone, &["sync"]).output()?;

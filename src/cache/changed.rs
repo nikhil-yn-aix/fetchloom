@@ -272,7 +272,7 @@ impl Mark {
         if !is_plain(metadata) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "a change mark must be a plain file",
+                "it is not a plain file",
             ));
         }
         let text = fs::read_to_string(path)?;
@@ -367,7 +367,10 @@ fn file_index(path: &Path) -> io::Result<(u64, u64)> {
 
 fn unreadable_mark(path: &Path, err: &io::Error) -> Error {
     Error::io(
-        format_args!("could not read cache change marks at {}", path.display()),
+        format_args!(
+            "could not read the cache's list of changed files at {}",
+            path.display()
+        ),
         err,
     )
     .help("check the cache storage and permissions, then run `fetchloom cache verify` and retry")
@@ -477,6 +480,25 @@ mod tests {
         cache.forget_changed(&HashSet::from([kept]));
         assert_eq!(cache.changed().into_keys().collect::<Vec<_>>(), [kept]);
     }
+
+    /// a note of a changed file that cannot be read names the cache's list of changed files and
+    /// what is wrong with it, with no internal name for the note.
+    #[test]
+    fn an_unreadable_note_of_a_change_is_named_plainly() {
+        let (_dir, cache) = cache();
+        let stored = store(&cache, b"good");
+        let path = cache.changed_folder().join(stored.digest.hex());
+        fs::create_dir_all(&path).unwrap();
+        let error = cache.doubts().unwrap_err();
+        assert_eq!(
+            error.message,
+            format!(
+                "could not read the cache's list of changed files at {}: it is not a plain file",
+                path.display()
+            )
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_marks_never_make_an_object_trusted() {

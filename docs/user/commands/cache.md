@@ -85,7 +85,7 @@ fetchloom cache gc --now --dry-run
 ## verify
 
 1. read each cached object's metadata and rehash its bytes.
-2. mark changed objects for replacement on a later download.
+2. note each changed file, so the next download that needs it replaces it.
 3. report examined counts, changed hashes and unreadable paths.
 
 unreadable objects stay unmarked with warnings. failures to write change marks are also reported. JSON retains counts and findings in `result` beside the error. unreadable directories can hide objects from the totals; counts cover only objects whose metadata could be read.

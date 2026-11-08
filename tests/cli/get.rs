@@ -606,6 +606,20 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
     Ok(())
 }
 
+/// `-v` counts the files a run added to the cache as that, not by the name the cache gives them
+/// inside.
+#[test]
+fn verbose_counters_name_new_files_in_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["-v", "get", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" · 1 new file in the cache · "), "{stderr}");
+    assert!(!stderr.contains("new object"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn get_reports_zero_byte_copies_in_a_synced_folder() -> Result {
     let sandbox = Sandbox::new()?;

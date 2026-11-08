@@ -188,7 +188,15 @@ pub(crate) fn unpack_cached(
     if tree.is_none_or(|tree| *tree == unpacked.tree) {
         cache
             .record_unpacked(archive, &unpacked.members)
-            .map_err(|err| Error::io("could not record what an archive unpacked to", &err))?;
+            .map_err(|err| {
+                Error::io(
+                    format_args!(
+                        "could not save the archive's list of files in {}",
+                        cache.root().join("unpacked").display()
+                    ),
+                    &err,
+                )
+            })?;
     }
     Ok(Some(unpacked))
 }

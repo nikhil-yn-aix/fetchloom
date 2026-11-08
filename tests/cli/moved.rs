@@ -50,7 +50,7 @@ fn a_dead_link_is_looked_up_again_through_the_source() -> Result {
         IRIS
     );
     assert!(
-        stderr.contains("iris/iris.csv is gone from its recorded link"),
+        stderr.contains("iris/iris.csv is gone from its link in data.lock"),
         "{stderr}"
     );
     let requests = server.requests();

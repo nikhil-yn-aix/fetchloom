@@ -375,7 +375,7 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
     for digest in &checked.changed {
         if !checked.stuck.contains(digest) {
             output.warn(&format!(
-                "{} changed and was marked for replacement",
+                "{} has changed, so fetchloom downloads it again the next time it is needed",
                 cache.object_path(digest).display()
             ));
         }
@@ -400,7 +400,7 @@ fn report_checked(context: &Context, cache: &Cache, checked: &Checked) -> Result
         }));
     }
     error = error.detail(format!(
-        "{} could not be marked for repair:",
+        "fetchloom could not note that {} had changed:",
         units::count(checked.stuck.len() as u64, "of them", "of them")
     ));
     for digest in checked.stuck.iter().take(5) {

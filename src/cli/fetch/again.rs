@@ -102,12 +102,12 @@ pub(super) async fn recover(
             return err;
         }
         err.detail(format!(
-            "its recorded link is gone, so this came from where {} lists it now",
+            "its link in data.lock is gone, so this came from where {} lists it now",
             again.resolved
         ))
     })?;
     output.warn(&format!(
-        "{} is gone from its recorded link. {} still lists it, so it came from {}",
+        "{} is gone from its link in data.lock. {} still lists it, so it came from {}",
         job.label,
         again.resolved,
         net::host(&remote.url)

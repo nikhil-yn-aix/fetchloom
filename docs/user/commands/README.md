@@ -15,7 +15,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`get`](get.md) | fetch once without project files, one link or a list | inspect a source before adding it, or download a list of links |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
-| [`cache verify`](cache.md#verify) | rehash cache objects and mark changed bytes | investigate suspected cache damage |
+| [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
 | `help concepts` | explain the shopping list, receipt and pantry | learn the [project model](../concepts.md) |

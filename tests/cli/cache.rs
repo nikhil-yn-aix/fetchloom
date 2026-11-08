@@ -139,9 +139,12 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
             assert!(stderr.contains("\x1b[1m\x1b[33mwarning:"), "{stderr}");
         }
         assert!(
-            stderr.contains("changed and was marked for replacement"),
+            stderr.contains(
+                "has changed, so fetchloom downloads it again the next time it is needed"
+            ),
             "{stderr}"
         );
+        assert!(!stderr.contains("marked"), "{stderr}");
         assert_eq!(stderr.contains("\x1b["), colored, "{stderr}");
     }
     Ok(())
@@ -642,6 +645,15 @@ fn check_unreadable_change_marks(mode: Option<u32>) -> Result {
             .contains(&unreadable.display().to_string()),
         "{report}"
     );
+    let message = report["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "could not read the cache's list of changed files at {}",
+            unreadable.display()
+        )),
+        "{report}"
+    );
+    assert!(!message.contains("mark"), "{report}");
     assert!(
         !copier.join("data/sample/good.bin").exists(),
         "unknown cache bytes were placed"

@@ -77,9 +77,15 @@ pub(super) fn store_all(
     cap: Option<usize>,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
-    let staging = cache
-        .staging()
-        .map_err(|err| Error::io("could not stage the archive's files", &err))?;
+    let staging = cache.staging().map_err(|err| {
+        Error::io(
+            format_args!(
+                "could not make a folder to unpack the archive into, in {}",
+                cache.root().join("tmp").display()
+            ),
+            &err,
+        )
+    })?;
     let threads = thread::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);

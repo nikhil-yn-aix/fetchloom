@@ -150,7 +150,7 @@ fn warn_kept(output: &Output, placement: &Placement) {
                 kept.path
             ),
             Reason::Foreign => format!(
-                "{} is not recorded by fetchloom and has different contents, so it stays. `fetchloom sync --force` replaces it",
+                "{} is not a file fetchloom placed, and it differs from data.lock, so it stays. `fetchloom sync --force` replaces it",
                 kept.path
             ),
             Reason::Unneeded => format!(

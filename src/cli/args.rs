@@ -71,7 +71,7 @@ on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchl
   fetchloom cache gc --now
   fetchloom cache verify
 
-on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache verify` marks changed files for replacement. neither changes data/";
+on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache verify` notes changed ones, which are downloaded again when needed. neither changes data/";
 
     pub(super) const GC: &str = "examples:
   fetchloom cache gc
@@ -85,7 +85,7 @@ on disk: deletes cached files no project needs once they are a day old, or at on
   fetchloom cache verify
   fetchloom cache verify --json
 
-on disk: marks changed cached files for replacement on the next download. data/ stays as it is";
+on disk: notes changed cached files, which are downloaded again when next needed. data/ stays as it is";
 
     pub(super) const GET: &str = "examples:
   fetchloom get iris
@@ -532,7 +532,7 @@ pub(crate) enum CacheAction {
     #[command(override_usage = "fetchloom cache gc [options]", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::GC)]
     Gc(Gc),
 
-    /// check cached files and mark changed files for replacement
+    /// check cached files, so a changed one is downloaded again
     #[command(override_usage = "fetchloom cache verify [options]", help_template = TEMPLATE, after_help = examples::VERIFY)]
     Verify,
 }
@@ -869,22 +869,33 @@ mod tests {
         Ok(())
     }
 
+    /// cache help says what verify means for a changed file, without the note it leaves inside
+    /// the cache to get there.
     #[test]
-    fn cache_help_describes_marking_changed_files_for_replacement() {
+    fn cache_help_says_a_changed_file_is_downloaded_again() {
         let help = every_help();
         let verify = help
             .iter()
             .find(|(name, _)| name == "cache verify")
             .unwrap();
-        assert!(verify.1.contains("mark changed files for replacement"));
+        assert!(
+            verify
+                .1
+                .contains("check cached files, so a changed one is downloaded again"),
+            "{}",
+            verify.1
+        );
         assert!(!verify.1.contains("deletes cached files"));
         let cache = help.iter().find(|(name, _)| name == "cache").unwrap();
         // help wraps to the terminal's width, so a phrase may cross a line
         let flat = cache.1.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            flat.contains("`cache verify` marks changed files for replacement"),
+            flat.contains("`cache verify` notes changed ones, which are downloaded again"),
             "{flat}"
         );
+        for (name, text) in [verify, cache] {
+            assert!(!text.contains("mark"), "{name}: {text}");
+        }
     }
 
     /// the words a shell makes of `line`, where double quotes keep a pattern such as "*.csv"

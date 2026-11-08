@@ -864,7 +864,10 @@ fn a_changed_object_fails_verify_and_waits_for_replacement() -> Result {
     assert_eq!(verify.status.code(), Some(30));
     let stderr = text(&verify.stderr)?;
     assert!(
-        stderr.contains("changed and was marked for replacement"),
+        stderr.contains(&format!(
+            "warning: {} has changed, so fetchloom downloads it again the next time it is needed",
+            object.display()
+        )),
         "{stderr}"
     );
     assert_eq!(fs::read(&object)?, b"damaged on disk");
@@ -1706,6 +1709,70 @@ fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
         assert_ne!(kind, "usage", "{suggested} is refused too");
     }
     assert!(!sandbox.work().join("data.toml").exists());
+    Ok(())
+}
+
+/// a project fetchloom cannot lock is named as the project, not by the files fetchloom keeps
+/// inside `.fetchloom` to lock it, and the help names the one file to delete when nothing else
+/// holds it. a file far larger than any fetchloom writes there stands in for a damaged one.
+#[test]
+fn a_project_that_cannot_be_locked_is_named_plainly() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let owner = sandbox.work().join(".fetchloom").join("owner");
+    fs::write(&owner, vec![b' '; 1 << 20])?;
+    delete(&sandbox.work().join("data/iris/iris.csv"))?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.starts_with("error: could not lock the project: "),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "help: if no other fetchloom is working in this project, delete {}, then run `fetchloom sync` again",
+            owner.display()
+        )),
+        "{stderr}"
+    );
+    for internal in ["claim", "owner record"] {
+        assert!(!stderr.contains(internal), "{internal}: {stderr}");
+    }
+    Ok(())
+}
+
+/// a sync that cannot save its list of placed files names that file and what it holds, with no
+/// internal name for it. a folder this test cannot write stands in for a full disk.
+#[cfg(unix)]
+#[test]
+fn a_sync_that_cannot_save_what_it_placed_names_the_file() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    delete(&sandbox.work().join("data/iris/iris.csv"))?;
+    let own = sandbox.work().join(".fetchloom");
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o555))?;
+    // a user who may write anywhere, such as root, cannot show this
+    if fs::write(own.join("probe"), b"").is_ok() {
+        fs::remove_file(own.join("probe"))?;
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
+        return Ok(());
+    }
+    let output = sandbox.run(&["sync"]);
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
+    let output = output?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: could not save the list of placed files in {}: permission was denied",
+            own.join("state").display()
+        )),
+        "{stderr}"
+    );
     Ok(())
 }
 

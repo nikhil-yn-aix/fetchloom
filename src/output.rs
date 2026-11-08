@@ -575,7 +575,11 @@ impl Output {
             (counts.requests, "request", "requests"),
             (counts.retries, "retry", "retries"),
             (counts.resumes, "resume", "resumes"),
-            (counts.objects_written, "new object", "new objects"),
+            (
+                counts.objects_written,
+                "new file in the cache",
+                "new files in the cache",
+            ),
             (
                 counts.downloads_skipped,
                 "download skipped",
