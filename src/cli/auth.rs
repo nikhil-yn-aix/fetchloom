@@ -180,11 +180,7 @@ async fn sign_in(
         check(context, account, &found).await
     };
     if valid == Some(false) {
-        return Err(Error::new(
-            Kind::AuthRequired,
-            format!("{} did not accept this key", title(account)),
-        )
-        .help("check that you copied all of it and that it has not expired, then sign in again"));
+        return Err(refused(account));
     }
     if valid == Some(true) {
         let who = user
@@ -228,6 +224,25 @@ async fn sign_in(
         user,
         saved_to,
     })
+}
+
+/// the error for a key, or a login's username and password, the source refused.
+fn refused(account: &Account) -> Error {
+    let (secret, help) = match account.secret() {
+        Secret::Password => (
+            "username and password",
+            "check the username and the password, then sign in again",
+        ),
+        Secret::Token => (
+            "key",
+            "check that you copied all of it and that it has not expired, then sign in again",
+        ),
+    };
+    Error::new(
+        Kind::AuthRequired,
+        format!("{} did not accept this {secret}", title(account)),
+    )
+    .help(help)
 }
 
 /// the steps to get a key, with each page as a link a person can click.
@@ -709,6 +724,27 @@ mod tests {
         assert!(
             heard.recv_timeout(Duration::from_secs(5)).is_ok(),
             "the key was never checked on the host the person typed"
+        );
+    }
+
+    /// a login is a username and a password a person types, so its refusal names those rather
+    /// than a key copied from a page.
+    #[test]
+    fn a_refused_login_names_the_username_and_password_not_a_key() {
+        let login = refused(&Account::parse("earthdata", None).unwrap());
+        assert_eq!(
+            login.message,
+            "nasa earthdata did not accept this username and password"
+        );
+        assert_eq!(
+            login.help.as_deref(),
+            Some("check the username and the password, then sign in again")
+        );
+        let key = refused(&Account::HuggingFace);
+        assert_eq!(key.message, "hugging face did not accept this key");
+        assert_eq!(
+            key.help.as_deref(),
+            Some("check that you copied all of it and that it has not expired, then sign in again")
         );
     }
 }

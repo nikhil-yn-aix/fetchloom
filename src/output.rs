@@ -1213,7 +1213,10 @@ fn masked(secret: &str) -> String {
     } else {
         "*".repeat(count.min(12))
     };
-    format!("{shown} \u{b7} {count} characters")
+    format!(
+        "{shown} \u{b7} {}",
+        units::count(count as u64, "character", "characters")
+    )
 }
 
 /// `text` with control characters written out as escapes, so text from a server cannot move the
@@ -1413,6 +1416,11 @@ mod tests {
         );
         assert_eq!(masked("hunter2"), "******* \u{b7} 7 characters");
         assert_eq!(masked(&"p".repeat(20)), "************ \u{b7} 20 characters");
+    }
+
+    #[test]
+    fn a_pasted_secret_of_one_character_is_counted_as_one_character() {
+        assert_eq!(masked("q"), "* \u{b7} 1 character");
     }
 
     #[test]
