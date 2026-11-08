@@ -51,7 +51,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `help` | `options`: the options fetchloom itself takes, which are those every command takes and `--version`; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: failure records for contents, metadata or directory entries that could not be read |
 
-project `datasets` names what was added or removed, or existing datasets whose resolved reference or files changed during `lock`. ordinary `sync` and duplicate `add` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement. successful `lock --check` also has empty datasets and `lock_changed = false`.
+project `datasets` names the dataset added by `add` or removed by `remove`. for `sync` and `lock`, and for their dry runs, it names the datasets whose pins changed, or would change: pinned for the first time, pinned to another version or other files, or no longer in `data.lock`. an entry whose `data.toml` settings changed without changing what it pins is not named. a duplicate `add`, a `sync` that changes no pin and a successful `lock --check` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement, and a successful `lock --check` has `lock_changed = false`.
 
 placement has integer counts `placed`, `replaced`, `removed` and `unchanged`; `kept`, an array of `{path, reason}`; and `restored`, an array of replaced files no edit of the project's explained: hardlinks that were the cache's copy of their bytes, or the copy the cache found changed, after an edit through a link, here or in another project, changed it, and files hashing every placed file found changed under an unchanged size and time. paths are project-relative. `kept` reasons are `changed` for edited managed files, `shared` for visibly changed hardlinks shared with other projects whose shared copy the cache no longer knows, `foreign` for other bytes at a target, `unneeded` for edited managed files no longer wanted, and `blocked` for targets another entry stands in the way of, whose path that entry's record adds as `blocked_by`. adopted identical files count as unchanged. unrelated extra files are not included in `kept`.
 
@@ -87,7 +87,7 @@ successful sync still exits 0 if its cache registration cannot be written. human
 
 ## dry runs
 
-`add`, `remove`, `sync` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
+`add`, `remove`, `sync`, `lock` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
 
 for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
 
@@ -104,6 +104,8 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 ```json
 {"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
+
+for `lock`, `lock_changed` and `datasets` say whether `data.lock` would change and which pins, as far as is known without downloading; `placement` is null. `changes.download` lists the files locking would download first, to learn a hash or, with `--upgrade`, to check a file no checksum pins, which the dry run counts as unchanged until then. `changes.unpack` lists the archives it would unpack to learn what they hold. `place`, `replace` and `remove` are empty.
 
 for `cache gc`, `removed_objects`, `removed_bytes`, `kept_objects`, `kept_bytes`, `removed_leftovers` and `removed_leftover_bytes` count what gc would remove and keep, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 
