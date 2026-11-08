@@ -100,7 +100,7 @@ class RecordTests(unittest.TestCase):
                  mock.patch.object(live, "catalog", return_value=self.dataset()), \
                  mock.patch.object(live, "reference", return_value={"input.bin": "digest"}), \
                  mock.patch.object(run, "measure", side_effect=measured), \
-                 mock.patch.object(run, "free_bytes", return_value=100), mock.patch.object(live.os, "sync"), \
+                 mock.patch.object(run, "free_bytes", return_value=100), mock.patch.object(live.lab, "flush"), \
                  mock.patch.object(live, "fingerprint", return_value={"input.bin": "digest"}), \
                  contextlib.redirect_stdout(io.StringIO()), self.assertRaises(KeyboardInterrupt):
                 live.main()
@@ -122,7 +122,7 @@ class RecordTests(unittest.TestCase):
             meta = dict(commands={})
             with mock.patch.object(lab, "drop_caches"), \
                  mock.patch.object(run, "measure", return_value=dict(wall_seconds=1, exit_code=0, timeout=False)), \
-                 mock.patch.object(run, "free_bytes", return_value=100), mock.patch.object(live.os, "sync"), \
+                 mock.patch.object(run, "free_bytes", return_value=100), mock.patch.object(live.lab, "flush"), \
                  mock.patch.object(live, "fingerprint", side_effect=OSError("checker read failed")):
                 row = live.one_run("fetchloom", self.dataset(), work, root, 1, Path("/unused"), meta, 30)
             self.assertEqual(row["status"], "failed")

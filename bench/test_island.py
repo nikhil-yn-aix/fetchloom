@@ -115,7 +115,7 @@ class ManyVariantTests(unittest.TestCase):
                      mock.patch.object(run, "measure", side_effect=measured), \
                      mock.patch.object(run, "settled_free_bytes", return_value=100), \
                      mock.patch.object(run, "free_bytes", return_value=97), \
-                     mock.patch.object(run.os, "sync"), mock.patch.object(run.time, "sleep"), \
+                     mock.patch.object(run.lab, "flush"), mock.patch.object(run.time, "sleep"), \
                      contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(run.main(), 0)
                 meta = json.loads((out / "meta.json").read_text())

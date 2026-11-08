@@ -6,7 +6,7 @@ to compare two fetchloom builds on windows, macos or any other filesystem withou
 
 ## requirements
 
-use linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. the client and nginx share a kernel but use separate network namespaces. all measured files, caches and logs live under `FL_BENCH_ROOT` (default `/srv/fl-bench`), not a windows mount. leave at least 30 GiB free. do not run other benchmarks at the same time: dropping page caches affects the whole machine.
+use linux x86_64, python 3.12, root, network namespaces, loop devices, ext4 and xfs. the client and nginx share a kernel but use separate network namespaces. all measured files, caches and logs live under `FL_BENCH_ROOT` (default `/srv/fl-bench`), not a windows mount. leave at least 30 GiB free. do not run other benchmarks at the same time: dropping page caches affects the whole machine. before a drop and around each run, the lab writes out only its own filesystems (`syncfs` on `FL_BENCH_ROOT` and the two test mounts), so a hung mount elsewhere on the machine cannot stall a run the way a global `sync` would.
 
 on Ubuntu 24.04, these are the native package pins used by the smoke test:
 

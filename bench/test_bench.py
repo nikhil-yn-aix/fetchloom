@@ -255,7 +255,7 @@ class MeasurementTests(unittest.TestCase):
         import run
         readings = iter([100, 150, 180, 180, 999])
         with mock.patch.object(run, "free_bytes", lambda _: next(readings)), \
-             mock.patch.object(run.os, "sync", lambda: None), \
+             mock.patch.object(run.lab, "flush"), \
              mock.patch.object(run.time, "sleep", lambda _: None):
             self.assertEqual(run.settled_free_bytes("/"), 180)
 

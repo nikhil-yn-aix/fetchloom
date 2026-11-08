@@ -202,7 +202,7 @@ def free_bytes(path):
 
 def settled_free_bytes(path, attempts=50):
     """free space once the filesystem has finished freeing what the last run removed."""
-    os.sync()
+    lab.flush(path)
     last = free_bytes(path)
     for _ in range(attempts):
         time.sleep(0.05)
@@ -362,7 +362,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             row["sys_seconds"] += first["sys_seconds"]
             peaks = (row["maxrss_bytes"], first["maxrss_bytes"])
             row["maxrss_bytes"] = None if None in peaks else max(peaks)
-        os.sync()
+        lab.flush(workdir)
         row["free_after_bytes"] = free_bytes(workdir)
         row["disk_bytes"] = before - row["free_after_bytes"]
         time.sleep(0.05)

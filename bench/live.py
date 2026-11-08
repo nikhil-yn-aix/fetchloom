@@ -238,7 +238,7 @@ def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=
         lab.drop_caches([])
         before = run.free_bytes(work)
         row.update(run.measure(argv, work, env, logfile, timeout, cpus=cpus))
-        os.sync()
+        lab.flush(work)
         row["free_before_bytes"] = before
         row["free_after_bytes"] = run.free_bytes(work)
         row["disk_bytes"] = before - row["free_after_bytes"]

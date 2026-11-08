@@ -55,3 +55,28 @@ class EnvironmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FlushTests(unittest.TestCase):
+    def test_each_filesystem_is_flushed_once_and_no_other(self):
+        devices = {"/lab": 1, "/lab/www": 1, "/lab/fs/ext4": 2, "/lab/fs/xfs": 3}
+        flushed = []
+        with mock.patch.object(lab.os, "stat", side_effect=lambda path: mock.Mock(st_dev=devices[str(path)])), \
+             mock.patch.object(lab.os, "open", side_effect=lambda path, flags: devices[str(path)] * 10), \
+             mock.patch.object(lab.os, "close"), \
+             mock.patch.object(lab, "_syncfs", side_effect=flushed.append), \
+             mock.patch.object(lab.os, "sync", side_effect=AssertionError("a global sync waits on every mount")):
+            lab.flush("/lab", "/lab/www", "/lab/fs/ext4", "/lab/fs/xfs", "/lab/fs/ext4")
+        self.assertEqual(flushed, [10, 20, 30])
+
+    def test_dropping_caches_flushes_only_the_lab(self):
+        with tempfile.TemporaryDirectory() as root:
+            drop = Path(root) / "drop_caches"
+            with mock.patch.object(lab, "ROOT", Path(root)), \
+                 mock.patch.object(lab, "DROP", drop), \
+                 mock.patch.object(lab, "require_root"), \
+                 mock.patch.object(lab, "flush") as flush, \
+                 mock.patch.object(lab.os, "sync", side_effect=AssertionError("a global sync waits on every mount")):
+                lab.drop_caches([])
+            flush.assert_called_once_with(Path(root))
+            self.assertEqual(drop.read_text(), "3\n")

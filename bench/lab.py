@@ -192,10 +192,43 @@ def profile(name):
             raise RuntimeError(f"{dev} did not take the {name} profile: {shown.strip()}")
 
 
+DROP = Path("/proc/sys/vm/drop_caches")
+
+
+def _syncfs(fd):
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.syncfs(fd) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def flush(*paths):
+    """writes out what the filesystems holding these paths have in memory, each once. a global
+    sync would also wait on every other filesystem of the machine, such as a hung network mount."""
+    done = set()
+    for path in paths:
+        device = os.stat(path).st_dev
+        if device in done:
+            continue
+        done.add(device)
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            _syncfs(fd)
+        finally:
+            os.close(fd)
+
+
+def filesystems():
+    """the lab's root and the test filesystems mounted under it."""
+    mounted = [ROOT / "fs" / fs for fs in ("ext4", "xfs")]
+    return [ROOT, *(target for target in mounted if os.path.ismount(target))]
+
+
 def drop_caches(files):
     require_root()
-    os.sync()
-    Path("/proc/sys/vm/drop_caches").write_text("3\n")
+    flush(*filesystems())
+    DROP.write_text("3\n")
     for path in files:
         with Path(path).open("rb") as f:
             while f.read(1024 * 1024):
