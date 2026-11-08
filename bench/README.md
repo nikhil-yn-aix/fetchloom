@@ -111,18 +111,18 @@ client processes do not inherit service credentials, native client configuration
 
 on linux, set `FL_BENCH_CPUS=0-7` or pass `--cpus 0-7` to `run.py` or `live.py`. the runner validates the list against its available CPUs, pins nginx's master and worker threads to it, and gives every measured command the mask before it can execute. children inherit it. `lab.py setup --cpus 0-7` also starts nginx on that mask. every run records the effective command and nginx masks. an unset or empty setting uses the runner's available CPUs, including when resetting a server left pinned by an earlier run.
 
-CPU affinity does not isolate shared cache, memory bandwidth, filesystem flushes or disk traffic. keep ordinary builds under the lab's busy/measurement-lock protocol until a controlled check establishes acceptable noise. do not claim a quieter island from unit tests alone.
+CPU affinity does not isolate shared cache, memory bandwidth, filesystem flushes or disk traffic. run benchmarks alone on the machine until a controlled check shows that builds on other cores leave the noise where it was. do not claim a quieter island from unit tests alone.
 
 `island.py check` is an operator-only measurement. it runs full-size A/A campaigns first with a quiet island, then with a repeated release build on disjoint cores. `--case filesystem/profile/scenario` is repeatable and selects exactly those cases; the default is ext4/lan s2, s3 and s5. use the unchanged executable from the quiet noise campaign. it compares both paired noise distributions with `noise.json` and reports the loaded/quiet-island wall shift. default acceptance requires 20 complete pairs per case, A/A 95% intervals within 0.97 to 1.03, robust log spread no more than twice the old spread (with a 0.01 log-scale floor), and a central loaded/quiet-island shift within 3%. the loaded interval width must stay within twice the larger quiet/historical width (with a 1-percentage-point floor), and the A/A median bias may shift by at most 1 percentage point. the width and bias floors are one third of `--effect`. these are explicit operational checks, not a proof of independence or an 80% power guarantee.
 
-hold the exclusive measurement lock around the entire check. the compiler is deliberate load inside that experiment; do not put it through `busy` inside `timed`, which would deadlock. unrelated builds remain excluded. choose a new target directory used by no other process: the worker repeatedly cleans only fetchloom in that target before rebuilding. load failure aborts the measurement, and the worker group is stopped on exit. source is read without modification. for the deep-phase operator, after sourcing the Rust toolchain environment:
+run the check with nothing else on the machine: it creates its own compiler load on the build CPUs. give it a new target directory used by no other process, because the load worker repeatedly cleans fetchloom in that target before rebuilding. load failure aborts the measurement, and the worker group is stopped on exit. source is read without modification. `--noise` names the paired noise file of an earlier quiet A/A campaign on the same machine and lab. as root, after sourcing the Rust toolchain environment:
 
 ```sh
-/datadisk/fl-work/bin/timed sudo env PATH="$PATH" \
+sudo env PATH="$PATH" \
   FL_BENCH_ROOT="$FL_BENCH_ROOT" FL_BENCH_VENV="$FL_BENCH_VENV" \
   python3 -B bench/island.py check --fetchloom "$benchmark_binary" \
-  --cpus 0-7 --build-cpus 8-23 --noise /datadisk/fl-work/phase2/noise.json \
-  --worktree "$PWD" --target /dev/shm/fl-target/island-load-new \
+  --cpus 0-7 --build-cpus 8-23 --noise "$FL_BENCH_ROOT/results/noise.json" \
+  --worktree "$PWD" --target "$FL_BENCH_ROOT/island-target" \
   --out "$FL_BENCH_ROOT/results/island-new"
 ```
 
