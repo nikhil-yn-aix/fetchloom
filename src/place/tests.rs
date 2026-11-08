@@ -1524,29 +1524,25 @@ fn a_chosen_root_may_contain_parent_components() {
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_copy_batches_finish_flushing_before_they_return() {
-    for value in ["0", "1"] {
-        let (folder, object) = cache(true);
-        let root = folder.path().join("data");
-        let mut placer = Placer::starting_at(root.clone(), Method::Copy, None)
-            .with_experiments(Experiments::default().with("PLACE_MAC_BATCH", value));
-        assert_eq!(placer.batches_copies(), value == "1");
-        let results = placer.place_all(
-            3,
-            |index| Order {
-                object: object.clone(),
-                destination: root.join(format!("{index}")),
-                writable: false,
-            },
-            Metadata::len,
-        );
-        assert!(
-            results
-                .into_iter()
-                .all(|result| result.unwrap() == (Method::Copy, CONTENTS.len() as u64))
-        );
-        assert!(placer.copy_flush.lock().unwrap().is_none());
-        assert_eq!(placed_names(&root), ["0", "1", "2"]);
-    }
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
+    let results = placer.place_all(
+        3,
+        |index| Order {
+            object: object.clone(),
+            destination: root.join(format!("{index}")),
+            writable: false,
+        },
+        Metadata::len,
+    );
+    assert!(
+        results
+            .into_iter()
+            .all(|result| result.unwrap() == (Method::Copy, CONTENTS.len() as u64))
+    );
+    assert!(placer.copy_flush.lock().unwrap().is_none());
+    assert_eq!(placed_names(&root), ["0", "1", "2"]);
 }
 
 #[test]

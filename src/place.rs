@@ -471,8 +471,12 @@ impl Placer {
     }
 
     #[cfg(target_os = "macos")]
+    #[expect(
+        clippy::unused_self,
+        reason = "macos batches copies before publication"
+    )]
     fn batches_copies(&self) -> bool {
-        self.experiments().on("PLACE_MAC_BATCH")
+        true
     }
 
     #[cfg(windows)]
