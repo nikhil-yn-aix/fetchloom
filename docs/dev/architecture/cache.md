@@ -83,8 +83,6 @@ an early publication for another download of the same URL uses the original batc
 
 a known-size download of at most 1 MiB, started at offset 0 without kept ranges, skips its closing checkpoint once every byte has arrived. interrupted or slow small downloads still checkpoint their incomplete prefixes. exclusive creation and shared finishing metadata remove redundant filesystem calls; sealing and the durability flush are unchanged.
 
-on linux ext4 and xfs, the default-off `CACHE_LOCAL_FSYNC` experiment flushes downloads of at most 1 MiB through their original writing handle after sealing and before publication. these downloads never enter the deferred group. larger downloads, other filesystems and archive batching keep their existing flush policy. a failed file flush publishes no name; journal and device queues are still shared, so this is not I/O isolation.
-
 `HashPipe` shares the writer's original file handle through `Arc<File>` instead of duplicating an OS handle per download. positioned reads and writes leave the shared file cursor unused. it drains before the handle is flushed or its claim is released; a new download has one write-open and one final close. see the [download pipeline](network.md#download-pipeline) for prefix barriers and final flush ordering.
 
 ### retention and cleanup
