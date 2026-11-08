@@ -149,4 +149,4 @@ both helpers run the installed executable with `--json` and forward warnings as 
 
 neither helper exposes `--force` or `--locked`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
 
-a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. a missing executable raises `FileNotFoundError`.
+a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. printed, or in a traceback, the error reads like the command line's: the message, then each detail and the help on a line of its own. a missing executable raises `FileNotFoundError`.

@@ -1,7 +1,9 @@
 """the python helper's command arguments and returned paths."""
 
 import json
+import pickle
 import subprocess
+import traceback
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -54,6 +56,54 @@ class HelperOptions(unittest.TestCase):
                     fetchloom.sync("p", strict=True)
         self.assertEqual(raised.exception.kind, "conflict.kept")
         self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])
+
+
+class Errors(unittest.TestCase):
+    def test_a_traceback_shows_the_details_and_the_help(self):
+        answer = {
+            "status": "error",
+            "errors": [{
+                "kind": "usage",
+                "message": "iris has no file or folder called iris.csv",
+                "details": ["iris holds Iris.csv and README.md"],
+                "help": "did you mean `fetchloom path iris/Iris.csv`?",
+            }],
+            "warnings": [],
+        }
+        response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.path("iris/iris.csv")
+        self.assertEqual(
+            traceback.format_exception_only(type(raised.exception), raised.exception)[-1],
+            "fetchloom.Error: usage: iris has no file or folder called iris.csv\n"
+            "  iris holds Iris.csv and README.md\n"
+            "  help: did you mean `fetchloom path iris/Iris.csv`?\n",
+        )
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_an_error_without_details_or_help_is_one_line(self):
+        self.assertEqual(str(fetchloom.Error("usage", "no data.toml here")), "usage: no data.toml here")
+        self.assertEqual(
+            str(fetchloom.Error(None, "fetchloom exited with code 9 without a JSON answer. it said: nothing", code=9)),
+            "fetchloom exited with code 9 without a JSON answer. it said: nothing",
+        )
+
+    def test_an_error_survives_pickling(self):
+        error = fetchloom.Error("usage", "no data.toml here", ["looked in /p"], "run `fetchloom add`", 2)
+        copy = pickle.loads(pickle.dumps(error))
+        self.assertEqual((copy.kind, copy.message, copy.details, copy.help, copy.code),
+                         ("usage", "no data.toml here", ["looked in /p"], "run `fetchloom add`", 2))
+        self.assertEqual(str(copy), str(error))
+
+
+class PublicNames(unittest.TestCase):
+    def test_dir_lists_only_the_helpers(self):
+        self.assertEqual(dir(fetchloom), ["Error", "path", "sync"])
+
+    def test_the_path_example_names_a_real_file(self):
+        self.assertIn("``iris/Iris.csv``", fetchloom.path.__doc__)
 
 
 class ProgramDiscovery(unittest.TestCase):

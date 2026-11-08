@@ -20,13 +20,19 @@ from typing import Any
 __all__ = ["Error", "path", "sync"]
 
 
+def __dir__() -> list[str]:
+    # tab completion and dir() show the helpers, not the modules they use
+    return list(__all__)
+
+
 class Error(Exception):
     """a fetchloom run that failed.
 
     ``kind`` is the JSON error's kind, such as ``usage`` or ``network.unreachable``, and
     ``message`` its summary. ``details`` lists supporting lines, ``help`` names the command
     or flag that fixes the error or is None, and ``code`` is the exit code. ``kind`` is None
-    when fetchloom stopped without a JSON answer.
+    when fetchloom stopped without a JSON answer. ``str(error)`` reads like the command
+    line's error: the message, then each detail and the help on a line of its own.
     """
 
     def __init__(
@@ -46,7 +52,11 @@ class Error(Exception):
         self.code = code
 
     def __str__(self) -> str:
-        return self.message if self.kind is None else f"{self.kind}: {self.message}"
+        lines = [self.message if self.kind is None else f"{self.kind}: {self.message}"]
+        lines.extend(f"  {detail}" for detail in self.details)
+        if self.help:
+            lines.append(f"  help: {self.help}")
+        return "\n".join(lines)
 
 
 def path(
@@ -59,7 +69,7 @@ def path(
     """return the absolute path of a dataset, or of a file or folder inside one.
 
     ``name`` is a dataset name such as ``iris``, or a path inside a dataset such as
-    ``iris/iris.csv``. ``project`` is the project folder or any folder inside it. when the
+    ``iris/Iris.csv``. ``project`` is the project folder or any folder inside it. when the
     dataset is not in place yet, fetchloom syncs the project first and may download data.
     ``yes=True`` approves large downloads; ``offline=True`` prevents network requests.
     """
