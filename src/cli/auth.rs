@@ -381,11 +381,8 @@ fn save(
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
     match account.home(var, secret) {
         Home::File(path) => {
-            let readers = account.shared_with().unwrap_or("its own tools");
-            if !agrees(
-                format!("save it to {}, where {readers} read it?", path.display()),
-                true,
-            )? {
+            let (question, default) = save_question(account, &path);
+            if !agrees(question, default)? {
                 return Ok(None);
             }
             let text = if path.file_name().is_some_and(|name| name == "kaggle.json") {
@@ -398,13 +395,8 @@ fn save(
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
-            if !agrees(
-                format!(
-                    "save it to {}, where curl and wget read it too?",
-                    path.display()
-                ),
-                true,
-            )? {
+            let (question, default) = save_question(account, &path);
+            if !agrees(question, default)? {
                 return Ok(None);
             }
             let Account::Login(host) = account else {
@@ -431,23 +423,43 @@ fn save(
                     "this machine has no credential store, so the key is saved in {}, readable only by you",
                     file.display()
                 ));
-            } else if !agrees(
-                format!(
-                    "this machine has no credential store. save it in {}, readable only by you?",
-                    file.display()
-                ),
-                false,
-            )? {
-                output.hint(&format!(
-                    "to keep it out of files, set {} in your environment instead",
-                    variable(account)
-                ));
-                return Ok(None);
+            } else {
+                let (question, default) = save_question(account, &file);
+                if !agrees(question, default)? {
+                    output.hint(&format!(
+                        "to keep it out of files, set {} in your environment instead",
+                        variable(account)
+                    ));
+                    return Ok(None);
+                }
             }
             store::save(var, &id, secret, store::Place::File).map_err(failed)?;
             Ok(Some(file.display().to_string()))
         }
     }
+}
+
+/// the question before saving `account`'s key to the file `path`, and the answer enter gives:
+/// yes for a file the source's own tools read, no for the file a machine with no credential store
+/// keeps keys in. the tools are named once the key is saved, so the question fits a terminal.
+fn save_question(account: &Account, path: &std::path::Path) -> (String, bool) {
+    let save = format!("save it to {}?", path.display());
+    if account.shared_with().is_some() {
+        (save, true)
+    } else {
+        (
+            format!("no credential store here, so it would go in a file only you can read\n{save}"),
+            false,
+        )
+    }
+}
+
+/// the question before removing a key from `path`, a file `tools` read too.
+fn remove_question(tools: &str, path: &std::path::Path) -> String {
+    format!(
+        "{tools} use this key too\nremove it from {}?",
+        path.display()
+    )
 }
 
 /// on windows a saved file takes its folder's permissions. the profile keeps other users out, but
@@ -520,7 +532,7 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
         Origin::File(path) => {
             let shared = account.shared_with();
             if let Some(tools) = shared {
-                let question = format!("{tools} read {} too. remove it?", path.display());
+                let question = remove_question(tools, path);
                 let removing = format!("removing the {} key, so nothing changed", title(&account));
                 match output
                     .ask_yes_no(&question, false)
@@ -746,5 +758,37 @@ mod tests {
             key.help.as_deref(),
             Some("check that you copied all of it and that it has not expired, then sign in again")
         );
+    }
+
+    /// each line of a question about saving or removing a key fits an 80-column terminal at the
+    /// paths a home folder usually gives, so its `[y/N]` never splits.
+    #[test]
+    fn the_questions_about_a_saved_key_fit_an_80_column_terminal() {
+        let earthdata = Account::parse("earthdata", None).unwrap();
+        let mut questions = Vec::new();
+        for (account, path) in [
+            (&Account::HuggingFace, "/home/ada/.cache/huggingface/token"),
+            (&Account::Kaggle, "/home/ada/.kaggle/access_token"),
+            (&earthdata, "/home/ada/.netrc"),
+            (
+                &Account::Zenodo,
+                "/home/ada/.config/fetchloom/credentials.json",
+            ),
+        ] {
+            let path = std::path::Path::new(path);
+            questions.push(save_question(account, path).0);
+            if let Some(tools) = account.shared_with() {
+                questions.push(remove_question(tools, path));
+            }
+        }
+        for question in questions {
+            for line in format!("{question} [y/N] ").lines() {
+                assert!(
+                    line.chars().count() < 80,
+                    "{} columns: {line}",
+                    line.chars().count()
+                );
+            }
+        }
     }
 }

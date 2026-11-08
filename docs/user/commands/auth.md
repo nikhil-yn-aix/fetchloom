@@ -34,8 +34,9 @@ an account name must be a source name or a plain host name, not a URL, query or 
          4. a gated dataset also needs its terms accepted on its own page, with the same account
         key hf_A...x9Qz · 37 characters
     Checked the key works for ada
-save it to /home/ada/.cache/huggingface/token, where the hf command and the hugging face python libraries read it? [Y/n] yes
+save it to /home/ada/.cache/huggingface/token? [Y/n] yes
   Signed in to hugging face as ada · saved to /home/ada/.cache/huggingface/token
+  hint: the hf command and the hugging face python libraries use this key too
 ```
 
 answering no keeps the key for that command only. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
