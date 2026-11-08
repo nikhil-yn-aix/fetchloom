@@ -407,43 +407,32 @@ fn scan(
     root: &Path,
     data_dir: &str,
     threads: Threads,
-    exp: &Experiments,
+    _exp: &Experiments,
 ) -> (HashMap<String, Look>, Vec<String>) {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut found = HashMap::new();
     let mut temporaries = Vec::new();
-    if exp.on("PROJECT_PARALLEL_SCAN") {
-        let mut pending = Vec::new();
-        let mut last_parent = None;
-        let mut parents = 0;
-        visit_files(root, data_dir, |entry, path, temporary, parent| {
-            if last_parent != Some(parent) {
-                // DirEntry retains its parent handle on unix; bound distinct parents too.
-                if parents == 8 {
-                    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
-                    parents = 0;
-                }
-                parents += 1;
-                last_parent = Some(parent);
-            }
-            pending.push((entry, path, temporary));
-            if pending.len() == 4096 {
+    let mut pending = Vec::new();
+    let mut last_parent = None;
+    let mut parents = 0;
+    visit_files(root, data_dir, |entry, path, temporary, parent| {
+        if last_parent != Some(parent) {
+            // DirEntry retains its parent handle on unix; bound distinct parents too.
+            if parents == 8 {
                 scan_pending(&mut pending, threads, &mut found, &mut temporaries);
                 parents = 0;
-                last_parent = None;
             }
-        });
-        scan_pending(&mut pending, threads, &mut found, &mut temporaries);
-    } else {
-        visit_files(root, data_dir, |entry, path, temporary, _| {
-            if let Ok(metadata) = entry.metadata() {
-                if temporary {
-                    temporaries.push(path.clone());
-                }
-                found.insert(path, Look::of(&metadata));
-            }
-        });
-    }
+            parents += 1;
+            last_parent = Some(parent);
+        }
+        pending.push((entry, path, temporary));
+        if pending.len() == 4096 {
+            scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+            parents = 0;
+            last_parent = None;
+        }
+    });
+    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
     span.record("files", found.len());
     (found, temporaries)
 }
@@ -560,17 +549,17 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        for exp in [
-            Experiments::default(),
-            Experiments::default().with("PROJECT_PARALLEL_SCAN", "1"),
-        ] {
-            let (found, _) = scan(dir.path(), "data", Threads::default(), &exp);
-            assert_eq!(found.len(), 512);
-        }
+        let (found, _) = scan(
+            dir.path(),
+            "data",
+            Threads::default(),
+            &Experiments::default(),
+        );
+        assert_eq!(found.len(), 512);
     }
 
     #[test]
-    fn parallel_scans_keep_the_serial_files_and_staging_names() {
+    fn scan_thread_limits_preserve_files_and_staging_names() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         for index in 0..512 {
@@ -591,22 +580,18 @@ mod tests {
             std::os::unix::fs::symlink(root.join("outside/foreign"), root.join("data/linked-file"))
                 .unwrap();
         }
-        let expected = scan(root, "data", Threads::default(), &Experiments::default());
+        let serial = Threads::read(&|_| Some("1".into())).unwrap();
+        let expected = scan(root, "data", serial, &Experiments::default());
         assert_eq!(expected.0.len(), 513);
         assert_eq!(expected.1, ["data/.fetchloom-0123456789abcdef.copy"]);
         for count in ["1", "8"] {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
-            for exp in [
-                Experiments::default(),
-                Experiments::default().with("PROJECT_PARALLEL_SCAN", "1"),
-            ] {
-                let actual = scan(root, "data", threads, &exp);
-                assert_eq!(actual, expected);
-                assert_eq!(
-                    scan(root, "absent", threads, &exp),
-                    (HashMap::new(), Vec::new())
-                );
-            }
+            let actual = scan(root, "data", threads, &Experiments::default());
+            assert_eq!(actual, expected);
+            assert_eq!(
+                scan(root, "absent", threads, &Experiments::default()),
+                (HashMap::new(), Vec::new())
+            );
         }
     }
 

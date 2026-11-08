@@ -55,9 +55,9 @@ flowchart TD
 
 settling writes newer state so later runs need not hash the same intact files. `smudge_edited` stores an impossible size for hidden edits, preventing that newer state from accidentally vouching for them. a racy read failure is treated conservatively as an edit; a failed explicit doubtful-hardlink check stops the command.
 
-### parallel metadata scan experiment
+### metadata scanning
 
-`FETCHLOOM_EXP_PROJECT_PARALLEL_SCAN=1` keeps directory traversal and no-follow file-type checks serial, then reads file metadata with the placement worker helper. each batch holds at most 4,096 directory entries from at most eight parents and preserves discovery order. retaining those bounded parent handles avoids resolving every full path again without exhausting a small descriptor limit. batches below 512 files stay serial to avoid launching workers for sparse folders. worker groups obey available parallelism and `FETCHLOOM_THREADS`; the default keeps the original serial scan. state parsing, racy hashing, aliases and hardlink audits use the same rules in both modes.
+directory traversal and no-follow file-type checks stay serial; file metadata is read with the placement worker helper. each batch holds at most 4,096 directory entries from at most eight parents and preserves discovery order. retaining those bounded parent handles avoids resolving every full path again without exhausting a small descriptor limit. batches below 512 files stay serial to avoid launching workers for sparse folders. worker groups obey available parallelism and `FETCHLOOM_THREADS`. state parsing, racy hashing, aliases and hardlink audits follow the same observation rules regardless of the worker count.
 
 ### settled-sync shortcut
 
