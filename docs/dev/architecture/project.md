@@ -40,7 +40,7 @@ waiting commands poll every 200 ms, report the holder once and remain cancellabl
 
 ### publication
 
-metadata writes stage in `.fetchloom` when it exists, otherwise beside their destination. they flush the new file and rename it into place. on unix, they then flush the destination directory and, when different, the staging directory. first creation of `.fetchloom` also flushes the project root. a directory-flush error after rename reports that the new file is already visible but its publication could not be confirmed durable. the manifest and lock remain separate replacements, not one transaction. the owner record has separate claim-and-publication rules because two OS environments must not both acquire it.
+metadata writes stage in `.fetchloom` when it exists, otherwise beside their destination. state is encoded into a complete JSON buffer before the staged file is written. they flush the new file and rename it into place. on unix, they then flush the destination directory and, when different, the staging directory. first creation of `.fetchloom` also flushes the project root. a directory-flush error after rename reports that the new file is already visible but its publication could not be confirmed durable. the manifest and lock remain separate replacements, not one transaction. the owner record has separate claim-and-publication rules because two OS environments must not both acquire it.
 
 before a new add changes metadata, it saves exact recovery copies with exclusive names. the copies must be flushed before the first metadata replacement. a failed restoration retains them and reports their paths; their contents never enter diagnostics. a guard removes them on success or complete rollback.
 
@@ -49,10 +49,6 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 ## lock reading
 
 already canonical locks use the narrow reader first. the next pass skips blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser.
-
-## streaming state experiment
-
-`FETCHLOOM_EXP_PROJECT_STREAM_STATE=1` serializes state through a 256 KiB buffer into the existing staged metadata file. the buffer and file are flushed before rename; a write failure keeps the previous state and removes the staging file. off retains the complete in-memory JSON buffer. both modes write identical bytes and preserve the metadata publication rules.
 
 ## ready path waiters
 

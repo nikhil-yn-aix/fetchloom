@@ -65,23 +65,12 @@ impl State {
     }
 
     pub(crate) fn render(&self) -> Vec<u8> {
-        serde_json::to_vec(&self.stored()).unwrap_or_default()
-    }
-
-    /// writes the current state without retaining its complete JSON representation.
-    ///
-    /// # Errors
-    /// returns serialization or destination write failures without hiding a partial write.
-    pub(crate) fn write(&self, out: impl std::io::Write) -> Result<(), serde_json::Error> {
-        serde_json::to_writer(out, &self.stored())
-    }
-
-    fn stored(&self) -> Written<'_> {
-        Written {
+        let state = Written {
             version: VERSION,
             files: &self.files,
             synced: self.synced,
-        }
+        };
+        serde_json::to_vec(&state).unwrap_or_default()
     }
 }
 

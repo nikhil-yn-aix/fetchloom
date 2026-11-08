@@ -6,7 +6,7 @@ pub(crate) mod manifest;
 pub(crate) mod state;
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, BufWriter, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -305,21 +305,11 @@ impl Project {
         Ok(path)
     }
 
-    pub(crate) fn write_state(&self, state: &State, exp: &Experiments) -> Result<(), Error> {
+    pub(crate) fn write_state(&self, state: &State, _exp: &Experiments) -> Result<(), Error> {
         let _span = tracing::debug_span!("write_state", files = state.files.len()).entered();
         let folder = self.inner()?;
-        let path = folder.join("state");
-        let written = if exp.on("PROJECT_STREAM_STATE") {
-            write_atomically_with(&path, |file| {
-                let mut out = BufWriter::with_capacity(256 << 10, file);
-                state.write(&mut out).map_err(io::Error::other)?;
-                out.flush()?;
-                out.get_ref().sync_all()
-            })
-        } else {
-            write_atomically(&path, &state.render())
-        };
-        written.map_err(|err| Error::io("could not record what was placed", &err))
+        write_atomically(&folder.join("state"), &state.render())
+            .map_err(|err| Error::io("could not record what was placed", &err))
     }
 
     /// takes the project lock and owner record for `command`, unless another fetchloom holds it.
@@ -619,61 +609,6 @@ mod tests {
             root: dir.path().to_path_buf(),
         };
         (dir, project)
-    }
-
-    #[test]
-    fn state_writers_publish_the_same_complete_bytes() {
-        let (_dir, project) = project(&[]);
-        let mut state = State::default();
-        for index in 0..2048 {
-            state.files.insert(
-                format!("data/é/{index:05}"),
-                state::Placed {
-                    dataset: "é".to_owned(),
-                    sha256: crate::digest::sha256(b"data"),
-                    method: crate::place::Method::Copy,
-                    look: Look {
-                        size: 4,
-                        modified: 42,
-                    },
-                    writable: true,
-                    checked: 43,
-                },
-            );
-        }
-        let expected = state.render();
-        assert!(expected.len() > 256 << 10);
-        for exp in [
-            Experiments::default(),
-            Experiments::default().with("PROJECT_STREAM_STATE", "1"),
-        ] {
-            project.write_state(&state, &exp).unwrap();
-            assert_eq!(
-                fs::read(project.own_folder().join("state")).unwrap(),
-                expected
-            );
-            let read = project.state().0;
-            assert_eq!(read.files, state.files);
-            assert_eq!(read.synced, state.synced);
-        }
-    }
-
-    #[test]
-    fn a_streaming_metadata_failure_keeps_the_previous_file() {
-        let (_dir, project) = project(&[("data.lock", "previous")]);
-        let path = project.root.join("data.lock");
-        let failure = write_atomically_with(&path, |mut file| {
-            file.write_all(b"partial")?;
-            Err(io::Error::other("injected write failure"))
-        });
-        assert!(failure.is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"previous");
-        let files = fs::read_dir(&project.root)
-            .unwrap()
-            .collect::<io::Result<Vec<_>>>()
-            .unwrap();
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].file_name(), "data.lock");
     }
 
     #[test]
