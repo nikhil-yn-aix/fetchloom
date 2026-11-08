@@ -1776,3 +1776,39 @@ fn a_refused_name_says_why_and_suggests_one_that_works() -> Result {
     assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
 }
+
+/// the owner record only tells a waiting command who holds the project, so a sync that cannot
+/// write it, as on a full disk, still runs under the project lock. a folder this test cannot
+/// write stands in for the full disk.
+#[cfg(unix)]
+#[test]
+fn a_sync_that_cannot_write_the_owner_record_still_works() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let own = sandbox.work().join(".fetchloom");
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o555))?;
+    // a user who may write anywhere, such as root, cannot show this
+    if fs::write(own.join("probe"), b"").is_ok() {
+        fs::remove_file(own.join("probe"))?;
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
+        return Ok(());
+    }
+    let output = sandbox.run(&["sync"]);
+    let blocked = sandbox.run(&["--json", "sync"]);
+    fs::set_permissions(&own, fs::Permissions::from_mode(0o755))?;
+    let (output, blocked) = (output?, blocked?);
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("nothing to do"), "{stderr}");
+    assert_eq!(blocked.status.code(), Some(0), "{}", text(&blocked.stdout)?);
+    let left: Vec<String> = fs::read_dir(&own)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(
+        !left.iter().any(|name| name.starts_with("owner")),
+        "{left:?}"
+    );
+    Ok(())
+}

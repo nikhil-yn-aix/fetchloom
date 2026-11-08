@@ -67,6 +67,9 @@ impl Held {
             }
         };
         let published = (|| {
+            // flushed before it gets its name, so a power cut leaves a whole record, which the
+            // next command reads and takes over, never an empty one, which only a person can
+            // tell from another OS's paused writer
             fill(file, record)?;
             // windows and WSL do not share OS locks, so an empty reservation could be
             // reclaimed while its writer is still publishing.
@@ -77,14 +80,17 @@ impl Held {
                     let file = OpenOptions::new().write(true).create_new(true).open(path)?;
                     self.owner = Some(path.to_path_buf());
                     drop(file);
-                    write_atomically(path, record)?;
+                    fs::rename(&temporary, path)?;
                 }
             }
             #[cfg(test)]
             tests::owner_published(path);
             Ok(())
         })();
-        let removed = fs::remove_file(&temporary);
+        let removed = match fs::remove_file(&temporary) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+            removed => removed,
+        };
         published.and(removed)
     }
 
@@ -100,6 +106,13 @@ impl Held {
             match self.publish_owner(path, &record) {
                 Ok(()) => return Ok(Hold::Held(self)),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                // the OS lock keeps out every command of this OS, and the record only tells them
+                // who holds it, so a full disk need not stop a command. without OS locks the
+                // record is the lock itself
+                Err(err) if self.lock.is_some() => {
+                    tracing::debug!(%err, "could not write the project owner record");
+                    return Ok(Hold::Held(self));
+                }
                 Err(err) => return Err(err),
             }
             let (bytes, modified) = match read_owner(path) {
@@ -576,6 +589,8 @@ pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
 
 /// writes `bytes` into a new file and flushes them to disk.
 fn fill(mut file: File, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(test)]
+    tests::flushing_file();
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -590,12 +605,44 @@ mod tests {
         static OWNER_PUBLISHED: std::cell::Cell<Option<fn(&Path)>> = const {
             std::cell::Cell::new(None)
         };
+        static FILE_FLUSHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
     pub(super) fn owner_published(path: &Path) {
         if let Some(observe) = OWNER_PUBLISHED.take() {
             observe(path);
         }
+    }
+
+    pub(super) fn flushing_file() {
+        FILE_FLUSHES.set(FILE_FLUSHES.get() + 1);
+    }
+
+    /// a power cut must leave the owner record whole, so the next command can read it and take
+    /// it over: its bytes are flushed once, before it gets its name, and its folder is not.
+    #[test]
+    fn the_owner_record_is_flushed_once_before_it_is_named() {
+        let (_dir, project) = project(&[]);
+        project.inner().unwrap();
+        FILE_FLUSHES.set(0);
+        #[cfg(unix)]
+        DIRECTORY_SYNCS.with_borrow_mut(Vec::clear);
+        OWNER_PUBLISHED.set(Some(|_| {
+            assert_eq!(FILE_FLUSHES.get(), 1, "the record got its name unflushed");
+        }));
+        let held = project.hold("sync");
+        OWNER_PUBLISHED.set(None);
+        let Hold::Held(held) = held.unwrap() else {
+            panic!("free")
+        };
+        assert!(project.own_folder().join("owner").is_file());
+        assert_eq!(FILE_FLUSHES.get(), 1);
+        #[cfg(unix)]
+        assert_eq!(
+            DIRECTORY_SYNCS.with_borrow_mut(std::mem::take),
+            Vec::<PathBuf>::new()
+        );
+        drop(held);
     }
 
     fn project(files: &[(&str, &str)]) -> (tempfile::TempDir, Project) {
