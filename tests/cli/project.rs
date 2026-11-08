@@ -1706,3 +1706,22 @@ fn path_and_status_refuse_case_collisions_before_reporting_locations() -> Result
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+/// a data folder that links elsewhere is refused. `data_dir` cannot lead out of the project, so
+/// the help says what works: a real folder there, or the whole project on the other disk.
+#[cfg(unix)]
+#[test]
+fn a_linked_data_folder_is_refused_with_advice_that_works() -> Result {
+    let sandbox = Sandbox::new()?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    std::os::unix::fs::symlink(&elsewhere, sandbox.work().join("data"))?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["--json", "add", &server.url])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(!help.contains("set data_dir"), "{help}");
+    assert!(help.contains("move the whole project folder"), "{help}");
+    assert_eq!(fs::read_dir(&elsewhere)?.count(), 0);
+    Ok(())
+}

@@ -355,8 +355,9 @@ impl Project {
             folder.push(part);
             match fs::symlink_metadata(&folder) {
                 Ok(metadata) if metadata.file_type().is_symlink() => {
+                    // data_dir must stay inside the project, so it cannot take the data elsewhere
                     return Err(Error::new(Kind::ProjectInvalid, format!("{} is a link, and fetchloom only places files in real folders", folder.display()))
-                        .help("replace the link with a folder, or set data_dir in data.toml to another folder"));
+                        .help("replace the link with a real folder; to keep the data on another disk, move the whole project folder to that disk"));
                 }
                 Ok(metadata) if !metadata.is_dir() => {
                     return Err(Error::new(
@@ -366,7 +367,7 @@ impl Project {
                             folder.display()
                         ),
                     )
-                    .help("move that file to keep it, or set data_dir in [project] in data.toml to another folder"));
+                    .help("move that file to keep it, or set data_dir in [project] in data.toml to another folder inside the project"));
                 }
                 Ok(_) => {}
                 Err(err) if err.kind() == io::ErrorKind::NotFound && !create => {
