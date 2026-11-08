@@ -36,6 +36,11 @@ pub(crate) struct Survey {
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
+    /// copies and reflinks that still look as placed but hold other bytes, which only hashing
+    /// every placed file finds, as `--verify` asks: a change that kept the size and time, as a
+    /// failing disk or a tool that restores times makes. sync puts them back with or without
+    /// --force.
+    pub(crate) damaged: HashSet<String>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
@@ -88,6 +93,7 @@ impl Survey {
             elsewhere: HashSet::new(),
             vouched: HashSet::new(),
             edited: HashSet::new(),
+            damaged: HashSet::new(),
             needs_writing: false,
             temporaries,
             entries,
@@ -217,7 +223,12 @@ impl Survey {
             if let Some(record) = record {
                 self.state.files.remove(&previous);
                 self.state.files.insert(path.clone(), record);
-                for paths in [&mut self.edited, &mut self.elsewhere, &mut self.vouched] {
+                for paths in [
+                    &mut self.edited,
+                    &mut self.elsewhere,
+                    &mut self.vouched,
+                    &mut self.damaged,
+                ] {
                     if paths.remove(&previous) {
                         paths.insert(path.clone());
                     }
@@ -379,6 +390,53 @@ impl Survey {
                         &err,
                     ));
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// hashes every placed file that still looks as placed and that nothing here hashed or put
+    /// in doubt already, so changed bytes that kept their size and time show too, as `--verify`
+    /// asks. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
+    /// file joins `damaged`. a file that cannot be read stops the check.
+    pub(crate) fn verify(&mut self, root: &Path) -> Result<(), Error> {
+        let files: Vec<(&String, &crate::project::state::Placed)> = self
+            .state
+            .files
+            .iter()
+            .filter(|(path, placed)| {
+                self.disk.get(*path) == Some(&placed.look)
+                    && !self.edited.contains(*path)
+                    && !self.elsewhere.contains(*path)
+                    && !self.vouched.contains(*path)
+            })
+            .collect();
+        if files.is_empty() {
+            return Ok(());
+        }
+        let _span = tracing::debug_span!("verify", files = files.len()).entered();
+        let intact = place::run_all(&files, self.threads, |(path, placed)| {
+            Sha256::of_file(&root.join(path.as_str())).map(|digest| digest == placed.sha256)
+        });
+        let mut changed = Vec::new();
+        for ((path, placed), intact) in files.into_iter().zip(intact) {
+            match intact {
+                Ok(true) => {}
+                Ok(false) => changed.push((path.clone(), placed.method == Method::Hardlink)),
+                Err(err) => {
+                    return Err(Error::io(
+                        format_args!("could not read {path} to check it"),
+                        &err,
+                    ));
+                }
+            }
+        }
+        for (path, linked) in changed {
+            tracing::debug!(%path, "hashing found bytes changed under an unchanged look");
+            if linked {
+                self.elsewhere.insert(path);
+            } else {
+                self.damaged.insert(path);
             }
         }
         Ok(())
@@ -595,19 +653,31 @@ fn visit_files(
 
 /// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
 /// through a hardlink also changes the cached object, which is then dropped and fetched again,
-/// so it never spreads to other projects.
+/// so it never spreads to other projects. a link hashing found changed that is still the object
+/// itself marks the object at once, since its bytes are the object's.
 pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result<(), Error> {
     let _span = tracing::debug_span!("audit").entered();
     for (path, placed) in &survey.state.files {
-        if placed.method == Method::Hardlink
-            && (survey.edited.contains(path)
-                || survey
-                    .disk
-                    .get(path)
-                    .is_some_and(|seen| *seen != placed.look))
+        if placed.method != Method::Hardlink {
+            continue;
+        }
+        let file = project.root.join(path);
+        if survey.elsewhere.contains(path) {
+            if same_file::is_same_file(&file, cache.object_path(&placed.sha256)).unwrap_or(false) {
+                cache
+                    .mark_changed(&placed.sha256)
+                    .map_err(|err| local(&file, &err))?;
+            }
+            continue;
+        }
+        if (survey.edited.contains(path)
+            || survey
+                .disk
+                .get(path)
+                .is_some_and(|seen| *seen != placed.look))
             && !cache
                 .verify(&placed.sha256)
-                .map_err(|err| local(&project.root.join(path), &err))?
+                .map_err(|err| local(&file, &err))?
         {
             tracing::debug!(%path, "an edit through a hardlink changed its cached object");
         }
@@ -773,6 +843,60 @@ mod tests {
         assert_eq!(survey.state.files["data/changed"].look.size, u64::MAX);
         assert_eq!(survey.state.files["data/intact"].look.size, 8);
         assert_eq!(fs::read(path).unwrap(), b"modified");
+    }
+
+    /// a change that keeps a file's size and time shows in no listing; only hashing every placed
+    /// file finds it. a hardlink found so is the cache's copy, any other file is damaged, and
+    /// files hashing already settled are not hashed again.
+    #[test]
+    fn verifying_finds_changes_that_kept_their_size_and_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let placed = [
+            ("copy", Method::Copy),
+            ("link", Method::Hardlink),
+            ("intact", Method::Copy),
+            ("edited", Method::Copy),
+        ];
+        for (name, _) in placed {
+            fs::write(project.root.join("data").join(name), b"original").unwrap();
+        }
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        for (name, method) in placed {
+            let path = format!("data/{name}");
+            let record = record(&project.root, &path, b"original", method);
+            survey.state.files.insert(path, record);
+        }
+        for name in ["copy", "link", "edited"] {
+            let path = project.root.join("data").join(name);
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            fs::write(&path, b"Original").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+        }
+        survey.edited.insert("data/edited".to_owned());
+
+        survey.verify(&project.root).unwrap();
+
+        assert_eq!(survey.damaged, HashSet::from(["data/copy".to_owned()]));
+        assert_eq!(survey.elsewhere, HashSet::from(["data/link".to_owned()]));
+        assert_eq!(survey.edited, HashSet::from(["data/edited".to_owned()]));
+        fs::remove_file(project.root.join("data/intact")).unwrap();
+        survey.disk.insert(
+            "data/intact".to_owned(),
+            survey.state.files["data/intact"].look,
+        );
+        assert!(
+            survey.verify(&project.root).is_err(),
+            "an unreadable file stops it"
+        );
     }
 
     #[test]

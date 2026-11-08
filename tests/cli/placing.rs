@@ -850,7 +850,7 @@ fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
         let status = sandbox.command_in(&project, &["status"]).output()?;
         assert_eq!(
             text(&status.stderr)?,
-            "         Ok everything matches data.lock\n"
+            "         Ok everything matches data.lock by size and time\n"
         );
     }
     Ok(())
@@ -1082,7 +1082,7 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     let after = sandbox.command_in(&other, &["status"]).output()?;
     assert_eq!(
         text(&after.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     // a ready dataset answers without taking the project lock
     let lock = other.join(".fetchloom").join("lock");
@@ -1240,7 +1240,7 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     let after = sandbox.run(&["status"])?;
     assert_eq!(
         text(&after.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     Ok(())
 }
@@ -1593,7 +1593,7 @@ fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
     let status = sandbox.command_in(&other, &["status"]).output()?;
     assert_eq!(
         text(&status.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     Ok(())
 }
@@ -1741,7 +1741,7 @@ fn force_replaces_a_link_at_a_pinned_path_without_following_it() -> Result {
     let status = sandbox.run(&["status"])?;
     assert_eq!(
         text(&status.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     Ok(())
 }
@@ -1867,5 +1867,37 @@ fn the_counters_tell_files_placed_from_the_cache() -> Result {
             );
         }
     }
+    Ok(())
+}
+
+/// status compares sizes and times, and hashes only files those cannot vouch for, so its last line
+/// says what it compared rather than claiming the bytes match: an edit that kept a copy's size
+/// and time passes unseen.
+#[test]
+fn status_says_it_compared_sizes_and_times() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    fs::write(&state, fs::read(&state)?)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    let modified = fs::metadata(&placed)?.modified()?;
+    edit(&placed, &edited)?;
+    set_time(&placed, modified)?;
+
+    let status = sandbox.run(&["status"])?;
+
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
     Ok(())
 }

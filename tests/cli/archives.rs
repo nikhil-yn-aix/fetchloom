@@ -87,7 +87,7 @@ fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     let status = sandbox.run(&["status"])?;
     assert_eq!(
         text(&status.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     Ok(())
 }

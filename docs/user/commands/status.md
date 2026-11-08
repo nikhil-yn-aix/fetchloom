@@ -21,7 +21,7 @@ there are no command-specific options. [global options](README.md#global-options
 2. compare file sizes and modification times, hashing where those records need checking.
 3. report changed manifest entries, missing or different files, extra paths and unavailable archive trees.
 
-status changes no project files. it is not a full integrity scan. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
+status changes no project files. it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
 
 stderr when `iris.csv` is missing and `notes.txt` is extra:
 
@@ -42,6 +42,7 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |
 | `outdated` | an unchanged managed file needs a new pin or writable placement |
+| `damaged` | a placed copy or reflink holds other bytes though its size and modification time are unchanged, which only hashing every placed file finds |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
 | `edited_elsewhere` | a hardlink to the cache's copy holds other bytes, because an edit through a link, here or in another project, changed that shared copy |
 | `extra` | a scanned path is outside known targets |
@@ -69,7 +70,7 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 
 ## exit codes
 
-0 means status completed, even when it found differences. scripts must inspect all ten arrays. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
+0 means status completed, even when it found differences. scripts must inspect all eleven arrays. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
 
 ## common mistakes
 

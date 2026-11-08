@@ -60,9 +60,15 @@ pub(super) fn tell(
     }
     warn_kept(output, placement);
     for path in &placement.restored {
-        output.warn(&format!(
-            "{path} was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml"
-        ));
+        if placement.repaired.contains(path) {
+            output.warn(&format!(
+                "{path} was put back as pinned: its bytes had changed though its size and time had not"
+            ));
+        } else {
+            output.warn(&format!(
+                "{path} was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml"
+            ));
+        }
     }
 }
 
@@ -109,9 +115,15 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     }
     warn_kept(output, placement);
     for path in &placement.restored {
-        output.warn(&format!(
-            "{path} would be put back as pinned: it is linked to the cache's copy, which was changed"
-        ));
+        if placement.repaired.contains(path) {
+            output.warn(&format!(
+                "{path} would be put back as pinned: its bytes changed though its size and time did not"
+            ));
+        } else {
+            output.warn(&format!(
+                "{path} would be put back as pinned: it is linked to the cache's copy, which was changed"
+            ));
+        }
     }
 }
 

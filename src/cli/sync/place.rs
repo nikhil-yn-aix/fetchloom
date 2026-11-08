@@ -38,9 +38,13 @@ pub(crate) struct Placement {
     pub(crate) unchanged: u64,
     /// files left alone: changed by hand, or never placed by fetchloom.
     pub(crate) kept: Vec<Kept>,
-    /// files replaced because they were linked to the cache's copy, which an edit through a
-    /// link changed, here or in another project.
+    /// files replaced though no edit of this project's showed: hardlinks to the cache's copy,
+    /// which an edit through a link changed, here or in another project, and files `--verify`
+    /// found changed under an unchanged size and time.
     pub(crate) restored: Vec<String>,
+    /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
+    #[serde(skip)]
+    pub(crate) repaired: HashSet<String>,
     /// entries `--force` removed from the way of placed files, by path.
     #[serde(skip)]
     pub(crate) cleared: Vec<(String, Entry)>,
@@ -331,16 +335,14 @@ impl<'a> Placing<'a> {
             match action {
                 Action::Keep | Action::Adopt(_) | Action::Vouch(_) => placement.unchanged += 1,
                 Action::Leave(reason) => {
-                    placement.kept.push(Kept::new(target.path.clone(), *reason))
+                    placement.kept.push(Kept::new(target.path.clone(), *reason));
                 }
                 Action::Blocked(blocker) => placement.kept.push(Kept {
                     blocker: Some(blocker.clone()),
                     ..Kept::new(target.path.clone(), Reason::Blocked)
                 }),
                 Action::Replace | Action::Unblock(_) => {
-                    if self.survey.elsewhere.contains(&target.path) {
-                        placement.restored.push(target.path.clone());
-                    }
+                    restore(&self.survey, &target.path, placement);
                     placement.replaced += 1;
                     preview.changes.replace.push(target.path.clone());
                     preview
@@ -560,6 +562,7 @@ pub(crate) fn untouched(
         || survey.needs_writing
         || !survey.edited.is_empty()
         || !survey.elsewhere.is_empty()
+        || !survey.damaged.is_empty()
         || !survey.vouched.is_empty()
         || survey.leftovers().next().is_some()
         || state
@@ -723,9 +726,7 @@ fn settle<'t, 'a>(
                     }
                     None => {}
                 }
-                if survey.elsewhere.contains(&target.path) {
-                    placement.restored.push(target.path.clone());
-                }
+                restore(survey, &target.path, placement);
                 placement.replaced += 1;
                 todo.push(target);
             }
@@ -736,6 +737,16 @@ fn settle<'t, 'a>(
         }
     }
     Ok((todo, adopted))
+}
+
+/// counts a replaced file as restored when no edit of this project's put it in the survey.
+fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
+    if survey.elsewhere.contains(path) {
+        placement.restored.push(path.to_owned());
+    } else if survey.damaged.contains(path) {
+        placement.restored.push(path.to_owned());
+        placement.repaired.insert(path.to_owned());
+    }
 }
 
 /// removes the entry in the way of placing, without following it, once it still is what the
@@ -805,7 +816,9 @@ fn decide(
         });
     };
     match survey.state.files.get(path) {
-        Some(_) if survey.elsewhere.contains(path) => Ok(Action::Replace),
+        Some(_) if survey.elsewhere.contains(path) || survey.damaged.contains(path) => {
+            Ok(Action::Replace)
+        }
         Some(placed) if survey.vouched.contains(path) => {
             let fits = !target.copy || placed.writable;
             Ok(if placed.sha256 == target.sha256 && fits {

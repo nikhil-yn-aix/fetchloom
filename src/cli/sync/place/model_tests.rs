@@ -241,6 +241,44 @@ fn placement_decision_observations() {
     }
 }
 
+/// a file `--verify` found changed under its placed size and time is put back without force,
+/// whatever it was placed as, since no edit of the project's shows.
+#[test]
+fn a_damaged_file_is_replaced_without_force() {
+    let run = tempfile::tempdir().unwrap();
+    let project = Project {
+        root: run.path().join("project"),
+    };
+    let destination = project.root.join(PATH);
+    write_file(&destination, 0, true, 1_000_000_000);
+    let file = locked(0);
+    for copy in [false, true] {
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        survey.state.files.insert(
+            PATH.to_owned(),
+            Placed {
+                dataset: "set".to_owned(),
+                sha256: file.sha256,
+                method: Method::Copy,
+                look: survey.disk[PATH],
+                writable: true,
+                checked: 1,
+            },
+        );
+        survey.damaged.insert(PATH.to_owned());
+        let target = Target {
+            dataset: "set",
+            path: PATH.to_owned(),
+            sha256: file.sha256,
+            size: 16,
+            copy,
+            locked: &file,
+        };
+        let actual = decide(&target, &survey, false, &destination).unwrap();
+        assert_eq!(choice(&actual), Choice::Replace, "copy {copy}");
+    }
+}
+
 #[test]
 fn unwanted_observations() {
     let run = tempfile::tempdir().unwrap();
