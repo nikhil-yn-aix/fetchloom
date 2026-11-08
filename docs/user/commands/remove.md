@@ -55,4 +55,4 @@ edited files that a real removal would keep are named in warnings, as they are w
 | some dataset files remain | they were edited or were unrelated extras | inspect and move or delete them yourself |
 | cached bytes remain | other projects may use them, and gc has an age rule | run `cache gc` when cleanup is needed |
 | metadata changed but a file could not be deleted | permissions or an open handle blocked deletion | fix that error, then sync |
-| a previously existing identical file was removed | matching adopted files are managed | keep independent work outside managed inputs |
+| an identical file that was already there was removed | matching adopted files are managed | keep independent work outside managed inputs |

@@ -1,6 +1,6 @@
 # auth
 
-`auth` signs you in to sources for private, restricted and gated data. public data needs no account.
+`auth` signs you in to sources that require an account, including restricted data and kaggle competitions.
 
 ```sh
 fetchloom auth
@@ -8,7 +8,7 @@ fetchloom auth login hf
 fetchloom auth logout zenodo
 ```
 
-one key works everywhere. if you already signed in with a source's own tools, fetchloom uses that key and asks for nothing. if you sign in through fetchloom, the key is saved where those tools read it, so it works in them too.
+fetchloom reuses supported credentials saved by a source's tools. signing in with fetchloom shares credential files for hugging face, kaggle and `.netrc` logins. other source keys use fetchloom's credential store, as the table below shows.
 
 ## usage
 

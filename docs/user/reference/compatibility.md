@@ -24,7 +24,7 @@ some speedups depend on the system and fall back without failing:
 | one flush for a batch of downloads and copies | linux 5.8 or later | each file is flushed on its own |
 | one drive flush for a batch of unpacked files | macos | each file gets a full flush |
 | reflinks, which share bytes until a file changes | btrfs, xfs, apfs, refs and dev drive | hardlinks |
-| hardlinks | ntfs, ext4, hfs+ and most local disks | copies, as on fat, exfat, network shares and synced folders |
+| hardlinks | ntfs, ext4, hfs+ and other filesystems that support them | copies when links are unavailable or disabled, including fat, exfat and recognized synced folders |
 
 ## terminals
 
@@ -53,7 +53,7 @@ rust 1.99 or later, the version in `rust-version`, and a C compiler: visual stud
 
 ## sources
 
-fetchloom talks to each source's public web API. when a source changes its API, a patch release follows; [live tests](../../dev/engineering/ci.md#live-source-checks) run against every source each monday to catch it early.
+fetchloom talks to each source's public web API. when a source changes its API, a patch release follows; [live tests](../../dev/engineering/ci.md#live-source-checks) exercise the configured public services each monday. not every adapter has a live check.
 
 | source | API | tested against |
 |---|---|---|

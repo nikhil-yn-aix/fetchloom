@@ -50,7 +50,7 @@ files modified too close to the state write are hashed because a coarse filesyst
 
 a visibly changed hardlink appears as edited, with the path followed by `· changed through a hardlink other projects may share`. sync preserves it with reason `shared`; [local changes](sync.md#local-changes) covers restoration and the narrower `edited_elsewhere` repair case.
 
-human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files previously placed from it can also appear as extra.
+human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files placed from it can also appear as extra.
 
 ## exit codes
 

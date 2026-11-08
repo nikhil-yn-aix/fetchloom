@@ -42,7 +42,7 @@ successful project sync registers its root for garbage collection. `get` and sta
 | hardlink | share the cache object's file | no |
 | copy | write independent bytes | yes when `copy = true` |
 
-placement tries reflink, hardlink, then copy where supported. it does not create symlinks. recognized synced folders skip hardlinks but may use reflinks.
+placement tries reflink, hardlink, then copy where supported. read-only placement on windows tries hardlinks before reflinks to reuse an already scanned file. it does not create symlinks. recognized synced folders skip hardlinks but may use reflinks.
 
 files are read-only by default. for an analysis that writes into its inputs:
 
