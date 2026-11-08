@@ -20,6 +20,8 @@ struct Identity {
 
 impl Identity {
     fn of(file: &File) -> io::Result<Self> {
+        #[cfg(test)]
+        tests::reading_identity();
         let metadata = file.metadata()?;
         Ok(Self {
             device: metadata.dev(),
@@ -82,18 +84,18 @@ impl Parents {
             .file_name()
             .ok_or_else(|| invalid("a placement has no filename"))?;
         let root = if let Some(root) = self.root.get() {
-            root.clone()
+            root
         } else {
-            let file = Arc::new(open_root(root, make, real_root)?);
-            let opened = Parent::new(file);
-            let _ = self.root.set(opened.clone());
-            self.root.get().cloned().unwrap_or(opened)
+            let opened = Parent::new(Arc::new(open_root(root, make, real_root)?));
+            self.root.get_or_init(|| opened)
         };
+        // asked of the kept root, not a clone of it, so its device is read once for all placements
+        let root_device = root.identity()?.device;
         let file = Arc::new(open_relative(&root.file, relative, make, false)?);
         let parent = Parent::new(file);
         Ok(Location {
-            root_device: root.identity()?.device,
-            root: root.file,
+            root_device,
+            root: Arc::clone(&root.file),
             relative: relative.to_path_buf(),
             parent,
             name: name.to_owned(),
@@ -480,6 +482,33 @@ mod tests {
     use std::fs;
     use std::io::Write;
     use std::os::unix::fs::symlink;
+
+    thread_local! {
+        static IDENTITY_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn reading_identity() {
+        IDENTITY_READS.set(IDENTITY_READS.get() + 1);
+    }
+
+    /// the root's device is read once and kept, so placing many files does not ask the
+    /// filesystem about the root again for each.
+    #[test]
+    fn locating_reads_the_root_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let parents = Parents::default();
+        IDENTITY_READS.set(0);
+        for name in ["a", "b"] {
+            let location = parents
+                .locate(dir.path(), &dir.path().join(name), true, false)
+                .unwrap();
+            assert_eq!(
+                location.root_device,
+                fs::metadata(dir.path()).unwrap().dev()
+            );
+        }
+        assert_eq!(IDENTITY_READS.get(), 1);
+    }
 
     #[test]
     fn relative_resolution_rejects_links_and_escapes_in_both_paths() {
