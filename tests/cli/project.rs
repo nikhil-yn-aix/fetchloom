@@ -1935,3 +1935,53 @@ fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
     assert_eq!(cows.requests().len(), 0);
     Ok(())
 }
+
+/// an add into a project folder that is read-only names that folder, claims no rollback for files
+/// it never changed, and leaves no recovery copies behind.
+#[cfg(unix)]
+#[test]
+fn an_add_into_a_read_only_project_folder_names_it_and_leaves_no_copies() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let before = (
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    );
+    let other = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    fs::set_permissions(&work, fs::Permissions::from_mode(0o555))?;
+    // a user who may write anywhere, such as root, cannot show this
+    if fs::write(work.join("probe"), b"").is_ok() {
+        fs::remove_file(work.join("probe"))?;
+        fs::set_permissions(&work, fs::Permissions::from_mode(0o755))?;
+        return Ok(());
+    }
+    let output = sandbox.run(&["add", &other.url]);
+    fs::set_permissions(&work, fs::Permissions::from_mode(0o755))?;
+    let output = output?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{} is read-only", work.display())),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("restore"), "{stderr}");
+    assert!(!stderr.contains("rolling back"), "{stderr}");
+    let copies: Vec<String> = fs::read_dir(work.join(".fetchloom"))?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(
+        !copies.iter().any(|name| name.contains(".recovery.")),
+        "{copies:?}"
+    );
+    assert_eq!(
+        (
+            fs::read(work.join("data.toml"))?,
+            fs::read(work.join("data.lock"))?
+        ),
+        before
+    );
+    Ok(())
+}

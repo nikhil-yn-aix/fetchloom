@@ -123,6 +123,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let dry_run = args.dry.dry_run;
     let adding = discover_add(context, dry_run).await?;
     let project = &adding.project;
+    if !dry_run {
+        project.check_writable()?;
+    }
     let manifest = &adding.manifest;
     let net = Arc::new(net(context, manifest));
     let parsed = validate_add(context, manifest, &net, &mut args).await?;
@@ -382,10 +385,22 @@ fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
     Ok(())
 }
 
-/// restores both project files after a failed add, including their original absence.
+/// restores both project files after a failed add, including their original absence. a file the
+/// add never changed needs nothing restored, so a failure to write it again is no failure.
 fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure: Error) -> Error {
     let mut complete = true;
+    let mut changed = false;
     for (file, before) in &saved.files {
+        let now = std::fs::read(project.root.join(file));
+        let unchanged = match (before, &now) {
+            (BeforeFile::Saved { text, .. }, Ok(bytes)) => bytes == text.as_bytes(),
+            (BeforeFile::Absent, Err(err)) => err.kind() == std::io::ErrorKind::NotFound,
+            _ => false,
+        };
+        if unchanged {
+            continue;
+        }
+        changed = true;
         let restored = match before {
             BeforeFile::Saved { text, .. } => project.write(file, text.as_bytes()),
             BeforeFile::Absent => match std::fs::remove_file(project.root.join(file)) {
@@ -410,6 +425,9 @@ fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure
         }
     }
     saved.keep = !complete;
+    if !changed {
+        return failure;
+    }
     failure.detail(if complete {
         "restored data.toml and data.lock to their state before add"
     } else {
@@ -1615,6 +1633,43 @@ mod tests {
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
         (dir, project, context)
+    }
+
+    /// a rollback puts back only what the add changed. one that failed before changing anything
+    /// claims no rollback at all, and no recovery copy is kept.
+    #[test]
+    fn a_rollback_restores_only_what_the_add_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let manifest_path = project.root.join(manifest::FILE);
+        std::fs::write(&manifest_path, "[datasets]\n").unwrap();
+        let failure = || Error::new(Kind::LocalIo, "could not write data.toml");
+        let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
+        let untouched = restore(&project, &mut saved, "iris", failure());
+        assert!(untouched.details.is_empty(), "{:?}", untouched.details);
+        assert!(!saved.keep);
+        drop(saved);
+        std::fs::write(&manifest_path, "[datasets.iris]\nref = 'x'\n").unwrap();
+        std::fs::write(project.root.join(lock::FILE), "version = 1\n").unwrap();
+        let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
+        let restored = restore(&project, &mut saved, "iris", failure());
+        assert_eq!(
+            restored.details,
+            ["restored data.toml and data.lock to their state before add"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&manifest_path).unwrap(),
+            "[datasets]\n"
+        );
+        assert!(!project.root.join(lock::FILE).exists());
+        drop(saved);
+        let left: Vec<_> = std::fs::read_dir(project.own_folder())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from(".gitignore")]);
     }
 
     #[test]

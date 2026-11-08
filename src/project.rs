@@ -276,7 +276,52 @@ impl Project {
     /// replaces a file at the project's root in one step.
     pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         write_atomically(&self.root.join(name), bytes)
-            .map_err(|err| Error::io(format_args!("could not write {name}"), &err))
+            .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
+    }
+
+    /// fails, naming the folder, when the project folder is read-only for this user, so a
+    /// command finds out before it does work it could not record. elsewhere than unix the first
+    /// write finds out instead.
+    #[cfg_attr(
+        not(unix),
+        expect(
+            clippy::unnecessary_wraps,
+            clippy::unused_self,
+            reason = "unix asks the folder; other platforms learn it from the first write"
+        )
+    )]
+    pub(crate) fn check_writable(&self) -> Result<(), Error> {
+        #[cfg(unix)]
+        if let Err(err) = rustix::fs::access(&self.root, rustix::fs::Access::WRITE_OK) {
+            let err = io::Error::from(err);
+            if read_only(&self.root, &err) {
+                return Err(Error::new(
+                    Kind::LocalIo,
+                    format!(
+                        "the project folder {} is read-only, so nothing in it can change",
+                        self.root.display()
+                    ),
+                )
+                .help("make that folder writable for you, then run the command again"));
+            }
+        }
+        Ok(())
+    }
+
+    /// the error for `doing`, which failed with `err`: one naming the project folder when that
+    /// folder is read-only for this user, as that is what to fix.
+    fn refused(&self, doing: impl std::fmt::Display, err: &io::Error) -> Error {
+        if read_only(&self.root, err) {
+            return Error::new(
+                Kind::LocalIo,
+                format!(
+                    "{doing}: the project folder {} is read-only",
+                    self.root.display()
+                ),
+            )
+            .help("make that folder writable for you, then run the command again");
+        }
+        Error::io(doing, err)
     }
 
     /// saves exact metadata before a command changes it, without exposing recovery text in logs.
@@ -465,10 +510,9 @@ impl Project {
             Ok(()) => true,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
             Err(err) => {
-                return Err(Error::io(
-                    format_args!("could not create {}", folder.display()),
-                    &err,
-                ));
+                return Err(
+                    self.refused(format_args!("could not create {}", folder.display()), &err)
+                );
             }
         };
         let found = fs::symlink_metadata(&folder)
@@ -505,6 +549,23 @@ impl Project {
             format_args!("could not read {}", self.root.join(name).display()),
             err,
         )
+    }
+}
+
+/// whether `err` means `folder` takes no new entries from this user: the folder, or the disk it
+/// is on, is read-only. a refused rename into a folder says nothing about which side refused, so
+/// the folder is asked. elsewhere than unix only a read-only disk is known for sure.
+fn read_only(folder: &Path, err: &io::Error) -> bool {
+    match err.kind() {
+        io::ErrorKind::ReadOnlyFilesystem => true,
+        #[cfg(unix)]
+        io::ErrorKind::PermissionDenied => {
+            rustix::fs::access(folder, rustix::fs::Access::WRITE_OK).is_err()
+        }
+        _ => {
+            let _ = folder;
+            false
+        }
     }
 }
 
@@ -1117,6 +1178,33 @@ mod tests {
         project.write_state(&State::default()).unwrap();
         assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"second");
         assert!(project.root.join(FOLDER).join("state").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_project_folder_is_named_when_a_write_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        for own in [false, true] {
+            let (_dir, project) = project(&[("data.lock", "before")]);
+            if own {
+                project.inner().unwrap();
+            }
+            fs::set_permissions(&project.root, fs::Permissions::from_mode(0o555)).unwrap();
+            // a user who may write anywhere, such as root, cannot show this
+            let writable = fs::write(project.root.join("probe"), b"").is_ok();
+            let written = project.write("data.lock", b"after");
+            let checked = project.check_writable();
+            fs::set_permissions(&project.root, fs::Permissions::from_mode(0o755)).unwrap();
+            if writable {
+                return;
+            }
+            let shown = format!("{} is read-only", project.root.display());
+            for error in [written.unwrap_err(), checked.unwrap_err()] {
+                assert!(error.message.contains(&shown), "{}", error.message);
+                assert!(error.help.unwrap().contains("writable"));
+            }
+            assert_eq!(fs::read(project.root.join("data.lock")).unwrap(), b"before");
+        }
     }
 
     #[test]
