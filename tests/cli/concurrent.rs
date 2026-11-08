@@ -149,23 +149,11 @@ fn sha256(bytes: &[u8]) -> String {
     text
 }
 
-fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
-    for switches in [&[][..], &["CACHE_RENAME_NOREPLACE"][..]] {
-        check_shared_cache_syncs(processes, overlapping, warm, switches)?;
-    }
-    Ok(())
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "one fixture owns the gated servers, children, and byte checks"
 )]
-fn check_shared_cache_syncs(
-    processes: usize,
-    overlapping: bool,
-    warm: bool,
-    switches: &[&str],
-) -> Result {
+fn shared_cache_syncs(processes: usize, overlapping: bool, warm: bool) -> Result {
     use std::fmt::Write as _;
 
     let sandbox = Sandbox::new()?;
@@ -255,9 +243,6 @@ fn check_shared_cache_syncs(
             .env("FETCHLOOM_JOBS", "1")
             .env("FETCHLOOM_THREADS", "1")
             .env("FETCHLOOM_CACHE", &cache);
-        for switch in switches {
-            command.env(format!("FETCHLOOM_EXP_{switch}"), "1");
-        }
         syncing.push(Syncing::start(&mut command)?);
         projects.push((project, order));
     }
@@ -284,9 +269,7 @@ fn check_shared_cache_syncs(
             .iter()
             .any(|(_, requests)| requests.len() != usize::from(!warm))
     {
-        let mut story = format!(
-            "switches={switches:?}, warm={warm}, overlapping={overlapping}\nrequests={requests:#?}\n"
-        );
+        let mut story = format!("warm={warm}, overlapping={overlapping}\nrequests={requests:#?}\n");
         for (index, (pid, output)) in children.iter().enumerate() {
             writeln!(
                 story,

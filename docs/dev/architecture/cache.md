@@ -59,17 +59,11 @@ safety-critical record writes flush the file, rename it, then flush the destinat
 
 repairs flush both changed directories after replacement and before writing the replacement time into the change mark. if that flush fails, the empty mark keeps the object in doubt. repairs use atomic rename on hardlink-capable volumes. when windows refuses a read-only destination, the cache clears its flag through an unfollowed handle, replaces the name and restores the old file's flag through that handle, including placed hardlinks. on volumes without hardlinks, refused replacement may remove the old object before renaming, so that fallback is not atomic.
 
+on macos, each archive member gets plain `fsync` while its original writer is open; after every member validates, the archive batch issues one `F_FULLFSYNC` before publishing any member. standalone new objects and downloads use `File::sync_all` on their original writer, which requests a full flush on macos. filesystems that refuse `F_FULLFSYNC` retain the plain-fsync limit described by the batch implementation.
+
 ### url identities
 
 URL records and partial checkpoints serialize the original URL as `sha256:<digest>`, while their live structs keep the URL needed for requests and deferred publication. lookup requires the matching fingerprint, rejects records copied from another URL, and restores the original string only in memory. reads do not alter validators, prefix hashes or range hashes. see the [cache-folder reference](../../user/reference/cache-folder.md#url-and-partial-records).
-
-### publication experiment
-
-`CACHE_RENAME_NOREPLACE` is off by default. on linux, it replaces a new object's hardlink and unlink with `renameat_with(RENAME_NOREPLACE)`. an existing destination still follows the same hash-and-repair policy. `EINVAL`, `ENOSYS` and `EOPNOTSUPP` fall back to the existing publication path and disable native attempts for that cache handle and its clones for the rest of the run. other errors remain errors; a removed destination folder is recreated as before. dry runs never attempt the native move.
-
-both settings keep payload flushes, damage marks, repair directory flushes and download claims in their existing order. the experiment promises no stronger persistence for a fresh digest name. fixed-input tests cover both settings, intact and damaged destinations, unsupported calls and operational failures. its wall-time gain is left to the declared a/b cases; a smaller syscall count alone does not establish one.
-
-on macos, each archive member gets plain `fsync` while its original writer is open; after every member validates, the archive batch issues one `F_FULLFSYNC` before publishing any member. standalone new objects and downloads use `File::sync_all` on their original writer, which requests a full flush on macos. filesystems that refuse `F_FULLFSYNC` retain the plain-fsync limit described by the batch implementation.
 
 ### partial ownership and checkpoints
 
