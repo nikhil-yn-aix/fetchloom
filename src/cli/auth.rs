@@ -51,7 +51,7 @@ pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Er
         None | Some(AuthAction::Status) => status(context).await,
         Some(AuthAction::Login(login)) => {
             let account = Account::parse(&login.account, login.host.as_deref())?;
-            sign_in(context, &account, &login)
+            sign_in(context, &account, &login, false)
                 .await
                 .map(Report::Login)
                 .map_err(|error| {
@@ -129,11 +129,13 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
 }
 
 /// signs in to `account`: shows where to get a key, takes it, checks it with the source, and
-/// saves it where the source's own tools read it, once the person agrees.
+/// saves it where the source's own tools read it, once the person agrees. `rerun` says the
+/// command runs again after signing in, which a key kept out of files still serves.
 async fn sign_in(
     context: &Arc<Context>,
     account: &Account,
     login: &Login,
+    rerun: bool,
 ) -> Result<Outcome, Error> {
     let output = &context.output;
     let (secret, user_name) = if login.with_token {
@@ -159,6 +161,7 @@ async fn sign_in(
                 &format!("a {} key in {}", title(account), found.origin),
             );
             if output.ask_yes_no("replace it?", false)? != Some(true) {
+                after_no(rerun)?;
                 return Ok(Outcome {
                     account: account.id(),
                     user: None,
@@ -195,8 +198,9 @@ async fn sign_in(
         user_name.as_deref(),
         login.with_token,
     )?;
-    // a key kept out of files still serves this command, as when it runs again after signing in
     if saved_to.is_none() {
+        after_no(rerun)?;
+        // a key kept out of files still serves this command, as when it runs again after signing in
         context
             .unsaved
             .lock()
@@ -224,6 +228,22 @@ async fn sign_in(
         user,
         saved_to,
     })
+}
+
+/// what a no while signing in, to replacing a key or to saving it, leaves: a command that runs
+/// again after signing in, `rerun`, goes on with the key it has. nothing runs after `auth login`
+/// to use a key, so there the no is a cancel that changed nothing.
+fn after_no(rerun: bool) -> Result<(), Error> {
+    if rerun {
+        return Ok(());
+    }
+    Err(answered_no())
+}
+
+/// a no to a question about a key, as a cancel of what its caller names. like ctrl-c at the same
+/// question, it changed nothing.
+fn answered_no() -> Error {
+    Error::new(Kind::Unconfirmed, "answered no").cancelled("the question")
 }
 
 /// the error for a key, or a login's username and password, the source refused.
@@ -536,16 +556,11 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
                 let removing = format!("removing the {} key, so nothing changed", title(&account));
                 match output
                     .ask_yes_no(&question, false)
-                    .map_err(|error| error.cancelling(removing))?
+                    .map_err(|error| error.cancelling(&removing))?
                 {
                     Some(true) => {}
                     None if context.yes => {}
-                    Some(false) => {
-                        return Ok(Report::Logout {
-                            account: account.id(),
-                            removed_from: None,
-                        });
-                    }
+                    Some(false) => return Err(answered_no().cancelling(removing)),
                     // nobody can be asked, so a file other tools need stays unless --yes says so
                     None => {
                         return Err(Error::new(
@@ -642,7 +657,7 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
         host: None,
         with_token: false,
     };
-    sign_in(context, account, &login)
+    sign_in(context, account, &login, true)
         .await
         .map_err(|error| error.cancelling(signing))?;
     Ok(true)
@@ -757,6 +772,22 @@ mod tests {
         assert_eq!(
             key.help.as_deref(),
             Some("check that you copied all of it and that it has not expired, then sign in again")
+        );
+    }
+
+    /// a no while signing in, to replacing a key or to saving it, ends `auth login` as a cancel
+    /// that changed nothing, with exit 1 as any no does, since nothing runs after it to use the
+    /// key. a command that runs again after signing in goes on with the key it has.
+    #[test]
+    fn a_no_ends_auth_login_as_a_cancel_but_lets_a_rerun_go_on() {
+        assert!(after_no(true).is_ok());
+        let cancel = after_no(false)
+            .unwrap_err()
+            .cancelling("signing in to hugging face, so nothing changed");
+        assert_eq!(cancel.kind.exit_code(), 1);
+        assert_eq!(
+            cancel.cancelled.as_deref(),
+            Some("signing in to hugging face, so nothing changed")
         );
     }
 

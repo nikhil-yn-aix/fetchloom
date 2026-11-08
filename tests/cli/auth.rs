@@ -296,3 +296,50 @@ fn q_at_the_question_to_save_a_key_asks_again_and_saves_nothing() -> Result {
     );
     Ok(())
 }
+
+/// a no while signing in, to saving the key or to replacing one, and while signing out, to
+/// removing a key other tools read, changes nothing and ends as a cancel: one line says what was
+/// cancelled, and the exit code is 1, as for any no.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let token = home(&sandbox).join(".cache/huggingface/token");
+    let login = sandbox.command(&["auth", "login", "hf", "--offline"]);
+    let signing = "  Cancelled signing in to hugging face, so nothing changed\n";
+    let Some((code, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &login,
+        "",
+        "        key ",
+        "hf_test1234567890\rn\r",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(screen.contains(signing), "{screen}");
+    assert!(!token.exists(), "{screen}");
+    std::fs::create_dir_all(token.parent().ok_or("no folder")?)?;
+    std::fs::write(&token, "hf_old\n")?;
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &login, "", "replace it?", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(screen.contains(signing), "{screen}");
+    let logout = sandbox.command(&["auth", "logout", "hf"]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &logout, "", "remove it from", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(
+        screen.contains("  Cancelled removing the hugging face key, so nothing changed\n"),
+        "{screen}"
+    );
+    assert_eq!(std::fs::read_to_string(&token)?, "hf_old\n");
+    Ok(())
+}
