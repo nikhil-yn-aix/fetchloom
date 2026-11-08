@@ -123,16 +123,18 @@ impl Cache {
     /// cannot be read holds none.
     pub(crate) fn unfinished(&self) -> Unfinished {
         let mut unfinished = Unfinished::default();
-        let Ok(entries) = fs::read_dir(self.root.join("partial")) else {
-            return unfinished;
-        };
-        for entry in entries.flatten() {
-            if entry.file_name().to_string_lossy().ends_with(".part")
-                && let Ok(metadata) = entry.metadata()
-                && metadata.is_file()
-            {
-                unfinished.downloads += 1;
-                unfinished.bytes += metadata.len();
+        for folder in self.partial_folders() {
+            let Ok(entries) = fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().ends_with(".part")
+                    && let Ok(metadata) = entry.metadata()
+                    && metadata.is_file()
+                {
+                    unfinished.downloads += 1;
+                    unfinished.bytes += metadata.len();
+                }
             }
         }
         unfinished
@@ -359,8 +361,20 @@ impl Cache {
         stop: &Stop,
         freed: &mut Freed,
     ) -> Result<(), Error> {
-        let folder = self.root.join("partial");
-        for entry in scan_entries(&folder, &mut freed.not_removed, stop)? {
+        for folder in self.partial_folders() {
+            self.sweep_partial_folder(&folder, abandoned, stop, freed)?;
+        }
+        Ok(())
+    }
+
+    fn sweep_partial_folder(
+        &self,
+        folder: &Path,
+        abandoned: &dyn Fn(SystemTime) -> bool,
+        stop: &Stop,
+        freed: &mut Freed,
+    ) -> Result<(), Error> {
+        for entry in scan_entries(folder, &mut freed.not_removed, stop)? {
             stop.check()?;
             let name = entry.file_name().to_string_lossy().into_owned();
             let Some(key) = name.strip_suffix(".lock") else {
@@ -930,14 +944,52 @@ mod tests {
         let running = cache.claim("https://example.org/running").unwrap();
         let lock = |url: &str| {
             let key = digest::sha256(url.as_bytes()).hex();
-            cache.root.join("partial").join(format!("{key}.lock"))
+            cache.partial_folder(&key).join(format!("{key}.lock"))
         };
-        fs::write(lock("https://example.org/finished"), b"").unwrap();
+        let finished = lock("https://example.org/finished");
+        fs::create_dir_all(finished.parent().unwrap()).unwrap();
+        fs::write(&finished, b"").unwrap();
         let freed = cache.sweep(&Needed::default(), SystemTime::now());
         assert_eq!(freed.removed_leftovers, 0, "a lock file frees nothing");
         assert!(lock("https://example.org/running").exists());
         assert!(!lock("https://example.org/finished").exists());
         drop(running);
+    }
+
+    #[test]
+    fn unfinished_downloads_in_shards_are_counted_and_swept() {
+        let (_dir, cache) = cache();
+        let url = "https://example.org/sharded";
+        let crate::cache::Claim::Owned(partial) = cache.claim(url).unwrap() else {
+            panic!("nothing else holds the download")
+        };
+        let key = digest::sha256(url.as_bytes()).hex();
+        let shard = cache.root.join("partial").join(&key[..1]);
+        assert!(shard.join(format!("{key}.lock")).is_file());
+        let mut writer = partial
+            .writer(
+                0,
+                Some(6),
+                crate::cache::Validators::default(),
+                false,
+                false,
+            )
+            .unwrap();
+        writer.write_all(b"abc").unwrap();
+        writer.save().unwrap();
+        drop(writer);
+        assert!(shard.join(format!("{key}.part")).is_file());
+        let unfinished = cache.unfinished();
+        assert_eq!((unfinished.downloads, unfinished.bytes), (1, 3));
+        drop(partial);
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        assert_eq!(
+            cache.sweep(&Needed::default(), later).removed_leftovers,
+            2,
+            "the bytes and the record that lets them resume"
+        );
+        assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);
+        assert_eq!(cache.unfinished().downloads, 0);
     }
 
     #[test]
@@ -992,7 +1044,8 @@ mod tests {
         let (_dir, cache) = cache();
         let url = "https://example.org/raced";
         let key = digest::sha256(url.as_bytes()).hex();
-        let lock = cache.root.join("partial").join(format!("{key}.lock"));
+        let lock = cache.partial_folder(&key).join(format!("{key}.lock"));
+        fs::create_dir_all(cache.partial_folder(&key)).unwrap();
         // a run waiting for the download opens the lock, gc sweeps, then the run takes the lock
         let opened = super::super::partial::open_unfollowed(&lock, true).unwrap();
         cache.sweep(

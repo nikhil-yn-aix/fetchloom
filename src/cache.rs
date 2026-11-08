@@ -196,6 +196,39 @@ impl Cache {
         })
     }
 
+    /// the folder an unfinished download of a link whose key is `key` sits in: one of 16 under
+    /// `partial/`, by the key's first character, so downloads running at once do not all wait
+    /// on one folder.
+    pub(super) fn partial_folder(&self, key: &str) -> PathBuf {
+        self.root
+            .join("partial")
+            .join(key.get(..1).unwrap_or_default())
+    }
+
+    /// the folders unfinished downloads sit in: the shards under `partial/`, and `partial/`
+    /// itself, so gc frees whatever lies there too. a link in place of any of them is never
+    /// entered, so nothing outside the cache is counted or swept.
+    pub(super) fn partial_folders(&self) -> Vec<PathBuf> {
+        let folder = self.root.join("partial");
+        if !fs::symlink_metadata(&folder).is_ok_and(|found| found.is_dir()) {
+            return Vec::new();
+        }
+        let mut folders = vec![folder.clone()];
+        if let Ok(entries) = fs::read_dir(&folder) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let shard = name.len() == 1
+                    && name
+                        .to_str()
+                        .is_some_and(|name| name.chars().all(|c| c.is_ascii_hexdigit()));
+                if shard && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    folders.push(entry.path());
+                }
+            }
+        }
+        folders
+    }
+
     /// this cache, with every removal recorded instead of made, so gc can say what it would free.
     pub(crate) fn pretending(&self) -> Cache {
         Cache {

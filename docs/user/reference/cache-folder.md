@@ -24,9 +24,9 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   gc.lock
   reminded
   objects/<first 2 sha256 digits>/<remaining 62 digits>
-  partial/<sha256 of URL>.part
-  partial/<sha256 of URL>.json
-  partial/<sha256 of URL>.lock
+  partial/<first sha256 digit>/<sha256 of URL>.part
+  partial/<first sha256 digit>/<sha256 of URL>.json
+  partial/<first sha256 digit>/<sha256 of URL>.lock
   urls/<sha256 of URL>.json
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>-<sha256 of URL>
   unpacked/<archive sha256>

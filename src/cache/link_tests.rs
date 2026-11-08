@@ -98,8 +98,7 @@ fn sealing_never_reaches_a_file_swapped_in_for_the_download() {
     writer.write_all(b"abc").unwrap();
     writer.flush().unwrap();
     let part = cache
-        .root
-        .join("partial")
+        .partial_folder(&key(url))
         .join(format!("{}.part", key(url)));
     fs::rename(&part, dir.path().join("moved")).unwrap();
     fs::hard_link(&outside, &part).unwrap();
@@ -120,8 +119,7 @@ fn a_writable_partial_with_a_second_name_is_never_written_into() {
     fs::write(&outside, b"keep these bytes").unwrap();
     let download = owned(&cache, url);
     let part = cache
-        .root
-        .join("partial")
+        .partial_folder(&key(url))
         .join(format!("{}.part", key(url)));
     fs::hard_link(&outside, &part).unwrap();
     let mut writer = download
@@ -139,7 +137,7 @@ fn a_partial_and_its_lock_never_open_a_link() {
     let url = "https://example.org/data";
     let outside = dir.path().join("outside");
     fs::write(&outside, b"keep these bytes").unwrap();
-    let folder = cache.root.join("partial");
+    let folder = cache.partial_folder(&key(url));
     let part = folder.join(format!("{}.part", key(url)));
     let download = owned(&cache, url);
     let mut writer = download

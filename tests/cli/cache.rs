@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, file, text};
+use crate::support::{Result, Sandbox, Server, file, partial_files, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -26,10 +26,7 @@ fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
     }
     let first = sandbox.run(&["--json", "get", &server.url])?;
     assert_eq!(first.status.code(), Some(50), "{}", text(&first.stdout)?);
-    let left: Vec<_> = fs::read_dir(sandbox.cache().join("partial"))?
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
+    let left = partial_files(&sandbox.cache());
     let named = |extension: &str| {
         left.iter()
             .find(|path| path.extension().is_some_and(|found| found == extension))

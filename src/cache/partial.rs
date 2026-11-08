@@ -78,8 +78,14 @@ impl Cache {
     /// claims the unfinished download of `url` for this process, unless another process has it.
     pub(crate) fn claim(&self, url: &str) -> io::Result<Claim> {
         let key = digest::sha256(url.as_bytes()).hex();
-        let partial = self.root.join("partial");
-        real_folder(&partial, FolderUse::Cache).map_err(|err| self.explained(&self.root, err))?;
+        let partial = self.partial_folder(&key);
+        // the shard is checked as a real folder, and so is the folder it is made in, so a link
+        // in place of either never takes a download out of the cache
+        for folder in [self.root.join("partial"), partial.clone()] {
+            // a folder that cannot be made is refused by the one it would be made in
+            let within = folder.parent().unwrap_or(&self.root);
+            real_folder(&folder, FolderUse::Cache).map_err(|err| self.explained(within, err))?;
+        }
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
         let path = partial.join(format!("{key}.lock"));

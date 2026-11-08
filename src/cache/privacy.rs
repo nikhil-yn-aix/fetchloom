@@ -37,10 +37,10 @@ fn checkpoint(cache: &Cache) -> partial::Partial {
 }
 
 fn checkpoint_path(cache: &Cache, url: &str, extension: &str) -> PathBuf {
-    cache.root.join("partial").join(format!(
-        "{}.{extension}",
-        digest::sha256(url.as_bytes()).hex()
-    ))
+    let key = digest::sha256(url.as_bytes()).hex();
+    cache
+        .partial_folder(&key)
+        .join(format!("{key}.{extension}"))
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use std::fs;
 use std::process::Stdio;
 
-use crate::support::{Ranged, Result, Sandbox, json, text, wait_until};
+use crate::support::{Ranged, Result, Sandbox, json, partial_files, text, wait_until};
 
 /// the smallest file that may split, 64 MiB.
 const LARGE: u64 = 64 * 1024 * 1024;
@@ -132,11 +132,8 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
 
 /// the on-disk receipt must prove there is work beyond the prefix for the next run to reuse.
 fn saved_ranges(sandbox: &Sandbox) -> bool {
-    fs::read_dir(sandbox.cache().join("partial"))
+    partial_files(&sandbox.cache())
         .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == "json")

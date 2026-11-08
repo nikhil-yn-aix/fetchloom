@@ -4,7 +4,9 @@ use std::fs;
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, file, json, link_folder, reply, text};
+use crate::support::{
+    Part, Result, Sandbox, Server, file, json, link_folder, partial_files, reply, text,
+};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -236,11 +238,8 @@ fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {
         std::thread::sleep(Duration::from_millis(20));
         // the size a folder listing shows lags behind a file another process still writes on
         // windows, so each file is asked directly
-        on_disk = fs::read_dir(sandbox.cache().join("partial"))
+        on_disk = partial_files(&sandbox.cache())
             .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
             .filter(|path| {
                 path.extension()
                     .is_some_and(|extension| extension == "part")

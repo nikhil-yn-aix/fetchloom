@@ -2063,14 +2063,15 @@ impl Background {
 /// the sizes of the partial downloads in `cache`.
 #[cfg(unix)]
 fn partial_bytes(cache: &std::path::Path) -> u64 {
-    fs::read_dir(cache.join("partial")).map_or(0, |entries| {
-        entries
-            .flatten()
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".part"))
-            .filter_map(|entry| entry.metadata().ok())
-            .map(|metadata| metadata.len())
-            .sum()
-    })
+    crate::support::partial_files(cache)
+        .iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "part")
+        })
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .sum()
 }
 
 /// an add cut off while it downloads, as by a second ctrl-c, a closed terminal or a killed job,
