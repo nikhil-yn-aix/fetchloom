@@ -361,7 +361,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
 
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     let links = sandbox.links()?;
-    if links.hardlink && !links.reflink {
+    if links.hardlinks_read_only() {
         // a hardlink is the cache's own copy, so the edit changed what every project reads, and
         // the sync path runs downloads the file again to put it back
         assert!(status.contains("Damaged data/iris/iris.csv"), "{status}");
@@ -630,7 +630,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     let (said, third) = sync("third.json")?;
     // a hardlink is the cache's own copy, which the edit changed, so it is put back
     let links = sandbox.links()?;
-    let told = if links.hardlink && !links.reflink {
+    let told = if links.hardlinks_read_only() {
         "data/iris/iris.csv was put back as pinned"
     } else {
         "data/iris/iris.csv has changed"

@@ -74,9 +74,9 @@ fn json_describes_the_run_and_nothing_else() -> Result {
     // what differs between machines is checked here, so the snapshot holds what never does
     let folder = std::mem::replace(&mut document["result"]["folder"], "[folder]".into());
     assert_eq!(folder, sandbox.work().join("iris").display().to_string());
-    // the best the sandbox's drive makes: a reflink, a hardlink, or else a copy
+    // what the sandbox's drive makes for a read-only file: a reflink, a hardlink, or else a copy
     let links = sandbox.links()?;
-    let (expected, counter) = if links.reflink {
+    let (expected, counter) = if links.reflinks_read_only() {
         ("reflink", "reflinks")
     } else if links.hardlink {
         ("hardlink", "hardlinks")

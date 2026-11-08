@@ -37,6 +37,19 @@ pub(crate) struct Links {
     pub(crate) hardlink: bool,
 }
 
+impl Links {
+    /// whether fetchloom places a read-only file as a reflink here: where the drive clones,
+    /// except on windows, which tries a hardlink first, since it reuses a file already scanned.
+    pub(crate) fn reflinks_read_only(self) -> bool {
+        self.reflink && !(cfg!(windows) && self.hardlink)
+    }
+
+    /// whether fetchloom places a read-only file as a hardlink here.
+    pub(crate) fn hardlinks_read_only(self) -> bool {
+        self.hardlink && !self.reflinks_read_only()
+    }
+}
+
 impl Sandbox {
     pub(crate) fn new() -> Result<Sandbox> {
         let folder = tempfile::tempdir()?;

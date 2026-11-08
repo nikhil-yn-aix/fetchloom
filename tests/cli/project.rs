@@ -368,7 +368,7 @@ fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     // only a hardlink is the cached object itself, so only an edit through one damages the
     // object, which the next sync then downloads again
     let links = sandbox.links()?;
-    let hardlinked = links.hardlink && !links.reflink;
+    let hardlinked = links.hardlinks_read_only();
     assert_eq!(server.requests().len(), if hardlinked { 2 } else { 1 });
     let other = clone(&sandbox, "other")?;
     sandbox.command_in(&other, &["sync"]).output()?;
