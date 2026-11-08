@@ -223,10 +223,7 @@ fn every_setting_is_documented_and_every_documented_one_is_read() -> Result {
         for name in settings(&text) {
             // test hooks and build-time stamps are not user settings
             let build_time = text.contains(&format!("option_env!(\"{name}\")"));
-            if !name.starts_with("FETCHLOOM_TEST_")
-                && !name.starts_with("FETCHLOOM_EXP_")
-                && !build_time
-            {
+            if !name.starts_with("FETCHLOOM_TEST_") && !build_time {
                 read.insert(name);
             }
         }
