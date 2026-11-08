@@ -160,6 +160,9 @@ class Curl(Tool):
     scenarios = Tool.scenarios - {"s5"}
 
     def command(self, scenario, workdir):
+        return script(workdir / "command.sh", self.steps(scenario, workdir))
+
+    def steps(self, scenario, workdir):
         argv = ["curl", "-q", "--parallel", "--parallel-max", "4"]
         for i, item in enumerate(scenario["files"]):
             if i:
@@ -169,8 +172,24 @@ class Curl(Tool):
             if scenario["id"] == "s7":
                 argv.extend(["-C", "-"])
             argv.extend(["--output", "data/" + item["name"], item["url"]])
-        return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), shell(argv),
-                                               self.checks(scenario, workdir), *self.unpack(scenario)])
+        return [shell(["cd", workdir / "project"]), shell(argv), self.checks(scenario, workdir),
+                *self.unpack(scenario)]
+
+
+class DurableCurl(Curl):
+    """curl as above, then a flush of the filesystem it wrote, as fetchloom flushes the files it
+    places, so the cost of making bytes survive a power cut is on both sides."""
+    name = "curl+sync"
+
+    def version(self):
+        return Curl("unused").version()
+
+    @property
+    def prepared_as(self):
+        return Curl.name
+
+    def steps(self, scenario, workdir):
+        return [*super().steps(scenario, workdir), shell(["sync", "-f", "data"])]
 
 
 class Wget(Tool):
@@ -271,7 +290,7 @@ class Datalad(Tool):
         return script(workdir / "command.sh", lines)
 
 
-CLASSES = (Fetchloom, Curl, Aria2c, Wget, Pooch, Dvc, Datalad)
+CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Wget, Pooch, Dvc, Datalad)
 
 
 def available(fetchloom, variants=(), only=None):

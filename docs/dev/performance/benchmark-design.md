@@ -47,6 +47,7 @@ the lab runs on linux against nginx serving HTTPS with HTTP/2 from a separate ne
 |---|---|---|
 | fetchloom | `fetchloom sync` in a project with `data.toml` and `data.lock` | all |
 | curl | `curl --parallel --parallel-max 4`, then `sha256sum -c`; `-C -` in s7 | s1 to s4, s6, s7 |
+| curl+sync | curl as above, then `sync -f data`, which flushes the filesystem it wrote, as fetchloom flushes what it places; the difference from curl is the cost of surviving a power cut | s1 to s4, s6, s7 |
 | aria2c | `aria2c -j 4 -x 4` with `--checksum` per file | s1 to s4, s6, s7 |
 | wget | `wget -i list`, then `sha256sum -c`; `-c` in s7 | s1 to s4, s6, s7 |
 | pooch | `pooch.retrieve` with `known_hash`, `Unzip` for s4 | all |

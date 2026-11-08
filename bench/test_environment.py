@@ -53,9 +53,6 @@ class EnvironmentTests(unittest.TestCase):
             self.assertIn("wget --no-config", (root / "command.sh").read_text())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class FlushTests(unittest.TestCase):
     def test_each_filesystem_is_flushed_once_and_no_other(self):
@@ -80,3 +77,31 @@ class FlushTests(unittest.TestCase):
                 lab.drop_caches([])
             flush.assert_called_once_with(Path(root))
             self.assertEqual(drop.read_text(), "3\n")
+
+
+class DurableCurlTests(unittest.TestCase):
+    def test_durable_curl_flushes_what_it_wrote_after_checking_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.bin"
+            source.write_bytes(b"abc")
+            case = dict(id="s1", members=[], files=[dict(name="input.bin", url=source.as_uri(),
+                        sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")])
+            tool = tools.DurableCurl("unused")
+            self.assertEqual(tool.name, "curl+sync")
+            self.assertEqual(tool.prepared_as, "curl")
+            work = root / "work"
+            tool.prepare(case, work)
+            subprocess.run(tool.command(case, work), cwd=work, env=tool.env(work), check=True)
+            lines = (work / "command.sh").read_text().splitlines()
+            self.assertEqual(lines[-1], "sync -f data")
+            self.assertTrue(lines[-2].startswith("sha256sum -c"), lines)
+            self.assertEqual((work / "project" / "data" / "input.bin").read_bytes(), b"abc")
+            self.assertTrue(tool.version().startswith("curl "), tool.version())
+
+    def test_durable_curl_is_one_of_the_compared_tools(self):
+        self.assertIn("curl+sync", [cls.name for cls in tools.CLASSES])
+
+
+if __name__ == "__main__":
+    unittest.main()
