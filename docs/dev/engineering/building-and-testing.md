@@ -46,7 +46,7 @@ cargo test --locked --lib threads::tests::archives_share_the_cap_between_readers
 cargo test --locked --test cli basics::the_options_scope_names_are_the_ones_add_and_get_take -- --exact
 ```
 
-the second test checks a documentation option sentence against `add` and `get` help. other markdown transcripts are not executed. use `-- --list` with a filter when checking the test's exact name; a zero-test run is not coverage.
+the second test checks a documentation option sentence against `add` and `get` help. `tests/cli/docs.rs` checks the rest of the user documentation against `help --json`: every option of every command is on its command page, every `fetchloom` line in a fenced shell example names a real command and real options, and every `FETCHLOOM_` setting the code reads is in the environment reference, while every setting the user docs name is read by fetchloom or its installers. a renamed or new option therefore fails the suite until its page changes too. markdown transcripts are not executed. use `-- --list` with a filter when checking the test's exact name; a zero-test run is not coverage.
 
 ### update snapshots
 

@@ -8,6 +8,7 @@ mod cache;
 mod caps;
 mod completions;
 mod concurrent;
+mod docs;
 mod dry_run;
 mod get;
 mod hints;
