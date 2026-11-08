@@ -27,7 +27,7 @@ fetchloom add [options] <link>
 
 ## what happens
 
-1. find the nearest project manifest, or create one in the current folder.
+1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
 2. resolve the reference, filter its listed files and choose a dataset name.
 3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
 4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache.
@@ -35,10 +35,11 @@ fetchloom add [options] <link>
 
 there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
 
-stderr for a single-file addition, matching a test snapshot. `[time]` replaces the measured duration:
+stderr for a single-file addition in a new project, matching a test snapshot. `[time]` replaces the measured duration and `[sandbox]` the test's folder:
 
 ```text
  Downloaded iris.csv · 32 B in [time]
+    Started a project in [sandbox]/work
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
@@ -76,7 +77,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 
 ## exit codes
 
-0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means download approval was missing; 2 means invalid usage. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
+0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means a question went unanswered or was answered no: approval of a large download, or of a project in the home folder or at a disk's root. 2 means invalid usage. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

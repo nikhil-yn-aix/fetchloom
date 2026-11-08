@@ -2225,6 +2225,44 @@ fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
     Ok(())
 }
 
+/// the first add says it started a project, and where. in the home folder, where a project would
+/// take in every folder below, it asks first, and with nobody to ask it refuses unless --yes.
+#[test]
+fn a_first_add_says_where_it_started_a_project_and_asks_in_the_home_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "    Started a project in {}\n",
+            sandbox.work().display()
+        )),
+        "{stderr}"
+    );
+    let again = sandbox.run(&["add", &server.url])?;
+    assert!(!text(&again.stderr)?.contains("Started"));
+    let home = sandbox.folder("home")?;
+    let refused = sandbox.command_in(&home, &["add", &server.url]).output()?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("your home folder"), "{stderr}");
+    assert!(stderr.contains("mkdir"), "{stderr}");
+    assert_eq!(listed(&home)?, Vec::<String>::new());
+    let approved = sandbox
+        .command_in(&home, &["--yes", "add", &server.url])
+        .output()?;
+    assert_eq!(
+        approved.status.code(),
+        Some(0),
+        "{}",
+        text(&approved.stderr)?
+    );
+    assert!(home.join("data.toml").is_file());
+    Ok(())
+}
+
 /// what a person at a terminal sees from `command` after typing `keys`, through a pseudo
 /// terminal `script` opens, with its exit code. none when `script` is not installed.
 #[cfg(target_os = "linux")]
@@ -2267,8 +2305,8 @@ fn typed(
     Ok(Some((output.status.code(), screen)))
 }
 
-/// at a terminal, q at the list of search results cancels a first add and leaves the folder as
-/// it was.
+/// at a terminal, q at the list of search results, or no to starting a project in the home
+/// folder, cancels the add and leaves the folder as it was.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
 fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
@@ -2293,5 +2331,15 @@ fn a_first_add_cancelled_at_a_terminal_leaves_nothing() -> Result {
     assert!(screen.contains("which one?"), "{screen}");
     assert_ne!(code, Some(0), "{screen}");
     assert_eq!(listed(&sandbox.work())?, Vec::<String>::new(), "{screen}");
+    let home = sandbox.folder("home")?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let asked = sandbox.command(&["add", &server.url]);
+    let Some((code, screen)) = typed(&home, &asked, "n")? else {
+        return Ok(());
+    };
+    assert!(screen.contains("your home folder"), "{screen}");
+    assert_eq!(code, Some(1), "{screen}");
+    assert_eq!(listed(&home)?, Vec::<String>::new(), "{screen}");
+    assert_eq!(server.requests().len(), 0, "{screen}");
     Ok(())
 }

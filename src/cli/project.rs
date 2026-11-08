@@ -2,7 +2,7 @@
 //! takes its lock when it changes something, and leaves the order of work to the sync loop.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -194,7 +194,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let found = Project::find(&here);
     let starting = found.is_none();
     let project = found.unwrap_or_else(|| Project { root: here.clone() });
-    before_holding(context, &mut args)
+    before_holding(context, &mut args, &project.root, starting && !dry_run)
         .await
         .map_err(|error| stopped(context, error, true))?;
     let fresh = starting.then(|| Fresh::look(&project));
@@ -216,7 +216,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         lock_text: None,
     };
     let added = match adding.read() {
-        Ok(()) => add_held(context, &mut adding, args).await,
+        Ok(()) => add_held(context, &mut adding, args, starting).await,
         Err(error) => Err(error),
     };
     added.map_err(|error| {
@@ -228,13 +228,60 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     })
 }
 
-/// what an add settles before it holds the project: which dataset search words name. q at the
-/// list or ctrl-c then leaves nothing behind.
-async fn before_holding(context: &Context, args: &mut Add) -> Result<(), Error> {
+/// what an add settles before it holds the project: whether to start a project in `root`, and
+/// which dataset search words name. a question answered no, q at the list or ctrl-c then leaves
+/// nothing behind.
+async fn before_holding(
+    context: &Context,
+    args: &mut Add,
+    root: &Path,
+    starting: bool,
+) -> Result<(), Error> {
+    if starting {
+        start_here(context, root, std::env::home_dir().as_deref())?;
+    }
     if crate::source::search::is_search(&args.link) {
         args.link = super::search::pick(context, &context.net(), &args.link, "add").await?;
     }
     Ok(())
+}
+
+/// asks before starting a project in `root` when a project there takes in far more than one
+/// project's folders: `root` is the home folder or the root of a disk. with nobody to ask it
+/// refuses, unless `--yes` said yes.
+fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(), Error> {
+    let what = if root.parent().is_none() {
+        "the root of a disk"
+    } else if home.is_some_and(|home| same_file::is_same_file(home, root).unwrap_or(false)) {
+        "your home folder"
+    } else {
+        return Ok(());
+    };
+    if context.yes {
+        return Ok(());
+    }
+    let why = format!(
+        "{} is {what}, and a project there takes in every folder below it",
+        root.display()
+    );
+    let elsewhere = "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then run the command again";
+    match context
+        .output
+        .ask_yes_no(&format!("{why}. start the project there anyway?"), false)?
+    {
+        Some(true) => Ok(()),
+        Some(false) => Err(Error::new(
+            Kind::Unconfirmed,
+            format!(
+                "did not start a project in {}, so nothing changed",
+                root.display()
+            ),
+        )
+        .help(elsewhere)),
+        None => Err(Error::new(Kind::Unconfirmed, why).help(format!(
+            "{elsewhere}, or add --yes to start the project there anyway"
+        ))),
+    }
 }
 
 /// `error`, once it has told a person what state the project is in when a stop ended the add:
@@ -265,6 +312,7 @@ async fn add_held(
     context: &Context,
     adding: &mut AddProject,
     mut args: Add,
+    starting: bool,
 ) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let old = adding.old.take();
@@ -325,7 +373,7 @@ async fn add_held(
         (&name, Some(addition.listing)),
     )
     .await?;
-    render_add(&work, &new_manifest, &name)?;
+    render_add(&work, &new_manifest, &name, starting)?;
     Ok(Report {
         project: project.root.clone(),
         datasets: vec![name],
@@ -504,7 +552,18 @@ async fn sync_add(
     }
 }
 
-fn render_add(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<(), Error> {
+fn render_add(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    name: &str,
+    starting: bool,
+) -> Result<(), Error> {
+    if starting {
+        work.context.output.step(
+            "Started",
+            &format!("a project in {}", work.project.root.display()),
+        );
+    }
     ignore_data(work, manifest)?;
     tell_added(work, manifest, name)
 }
@@ -1810,6 +1869,32 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, [std::ffi::OsString::from(".gitignore")]);
+    }
+
+    /// a project in the home folder or at a disk's root takes in every folder below it, so
+    /// starting one there asks first, and with nobody to ask it needs --yes.
+    #[test]
+    fn starting_a_project_at_a_disk_root_or_in_home_asks_first() {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
+        let root = std::path::Path::new(std::path::MAIN_SEPARATOR_STR);
+        let refused = start_here(&context, root, None).unwrap_err();
+        assert_eq!(refused.kind, Kind::Unconfirmed);
+        assert!(refused.message.contains("the root of a disk"), "{refused}");
+        assert!(refused.help.unwrap().contains("--yes"));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(start_here(&context, dir.path(), None).is_ok());
+        let home = start_here(&context, dir.path(), Some(dir.path())).unwrap_err();
+        assert!(home.message.contains("your home folder"), "{home}");
+        context.yes = true;
+        assert!(start_here(&context, root, None).is_ok());
+        assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
     }
 
     #[test]

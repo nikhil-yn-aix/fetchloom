@@ -1,8 +1,9 @@
 ---
 source: tests/cli/project.rs
-assertion_line: 131
+assertion_line: 133
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
+    Started a project in [sandbox]/work
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
