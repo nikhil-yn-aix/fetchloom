@@ -13,13 +13,6 @@ use crate::project::Project;
 use crate::project::state::{Look, State};
 use crate::work::Work;
 
-/// where placing counts its work: each method, and the files placed from objects in `present`,
-/// which the cache held before the run downloaded anything.
-pub(super) struct Counted<'w> {
-    pub(super) work: &'w Work,
-    pub(super) present: Option<&'w std::collections::HashSet<crate::digest::Sha256>>,
-}
-
 /// what one dataset's placing cost, for its summary line.
 #[derive(Default)]
 pub(super) struct Tally {
@@ -30,7 +23,8 @@ pub(super) struct Tally {
     pub(super) unlinked: u64,
 }
 
-/// places every file in `todo` several at once and records each one placed in `state`. a failure
+/// places every file in `todo` several at once and records each one placed in `state`, counting
+/// in `work` each method and the files placed from objects the run did not write. a failure
 /// leaves the others placed and recorded, and the first one is returned.
 pub(super) fn put_all<'t>(
     project: &Project,
@@ -39,7 +33,7 @@ pub(super) fn put_all<'t>(
     todo: &[&'t Target],
     state: &mut State,
     checked: u64,
-    counted: &Counted,
+    work: &Work,
 ) -> (BTreeMap<&'t str, Tally>, Option<Error>) {
     let order = |index: usize| {
         let target = todo[index];
@@ -71,12 +65,9 @@ pub(super) fn put_all<'t>(
             target.path.clone(),
             placed(target, method, look, writable, checked),
         );
-        count(counted.work, method);
-        if counted
-            .present
-            .is_some_and(|present| present.contains(&target.sha256))
-        {
-            Work::add(&counted.work.placed_from_cache, 1);
+        count(work, method);
+        if work.cached_before(&target.sha256) {
+            Work::add(&work.placed_from_cache, 1);
         }
         let tally = tallies.entry(target.dataset).or_default();
         tally.files += 1;
@@ -186,6 +177,65 @@ mod tests {
         assert_eq!(other.details, Vec::<String>::new());
     }
 
+    /// a file counts as placed from the cache when the run did not write its object, whatever
+    /// the object's time says: a filesystem that keeps whole seconds, or a file server with its
+    /// own clock, can date an object the run wrote long before the run began.
+    #[test]
+    fn placed_from_cache_counts_objects_the_run_did_not_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let held = crate::cache::tests::store(&cache, b"held before the run\n");
+        let written = crate::cache::tests::store(&cache, b"written by the run\n");
+        let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
+        for digest in [held.digest, written.digest] {
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            // windows sets a read-only file's times through a handle that may write attributes
+            #[cfg(windows)]
+            std::os::windows::fs::OpenOptionsExt::access_mode(&mut options, 0x100);
+            options
+                .open(cache.object_path(&digest))
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(long_ago))
+                .unwrap();
+        }
+        let work = Work::default();
+        work.wrote(&written.digest);
+        let files: Vec<LockedFile> = [(&held, "held.csv"), (&written, "written.csv")]
+            .into_iter()
+            .map(|(stored, name)| LockedFile {
+                path: name.to_owned(),
+                size: stored.size,
+                sha256: stored.digest,
+                md5: None,
+                url: format!("https://example.org/{name}"),
+                unpacks_to: None,
+            })
+            .collect();
+        let targets: Vec<Target> = files
+            .iter()
+            .map(|locked| Target {
+                dataset: "both",
+                path: format!("data/both/{}", locked.path),
+                sha256: locked.sha256,
+                size: locked.size,
+                copy: false,
+                locked,
+            })
+            .collect();
+        let todo: Vec<&Target> = targets.iter().collect();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let mut placer = Placer::new(&project.root.join("data"));
+        let mut state = State::default();
+        let (_, failure) = put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work);
+        assert!(failure.is_none());
+        let counts = work.counts();
+        assert_eq!(counts.objects_written, 1);
+        assert_eq!(counts.placed_from_cache, 1);
+    }
+
     #[test]
     fn an_edit_made_while_later_files_are_placed_is_not_recorded_as_placed() {
         let dir = tempfile::tempdir().unwrap();
@@ -232,19 +282,8 @@ mod tests {
         std::thread::scope(|scope| {
             let placing = scope.spawn(|| {
                 let mut placer = placer;
-                let counted = Counted {
-                    work: &work,
-                    present: None,
-                };
-                put_all(
-                    &project,
-                    &mut placer,
-                    &cache,
-                    &todo,
-                    &mut state,
-                    0,
-                    &counted,
-                )
+
+                put_all(&project, &mut placer, &cache, &todo, &mut state, 0, &work)
             });
             let observed = ready.recv();
             let changed = if observed.is_ok() {

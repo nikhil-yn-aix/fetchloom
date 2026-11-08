@@ -21,7 +21,6 @@ use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::lock::{Lock, LockedFile};
 use crate::units;
-use crate::work::Work;
 
 /// an archive the cache holds, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
@@ -100,7 +99,9 @@ pub(in crate::cli) async fn unpack_all(
         })?;
         match unpacked {
             Ok(Some(unpacked)) => {
-                Work::add(&context.work.objects_written, unpacked.written);
+                for digest in &unpacked.added {
+                    context.work.wrote(digest);
+                }
                 tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
                 results[index] = Some(unpacked);
             }

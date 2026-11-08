@@ -920,7 +920,7 @@ impl Net {
         moved: u64,
     ) -> Fetched {
         if stored.new {
-            Work::add(&self.work.objects_written, 1);
+            self.work.wrote(&stored.digest);
         }
         // these records only spare later downloads, so failing to write one costs nothing more.
         // only an MD5 these bytes were hashed to may stand for them, and only for this link

@@ -139,7 +139,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `objects_written` | new objects counted after successful downloads and archive unpacking |
 | `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
-| `placed_from_cache` | placements by `add`, `sync` and `path` from objects the cache held before the run began, by the object's modification time; the other placements took bytes the run downloaded or unpacked |
+| `placed_from_cache` | placements by `add`, `sync`, `path` and `get` from objects the run did not write to the cache itself; the other placements took bytes the run downloaded or unpacked. file times do not decide it, so it holds on filesystems that keep times in whole seconds and on file servers with their own clocks |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 
 `-v` ends with the same counters in words, and, when a run placed files from the cache, how many came from it and how many it downloaded, as in `8 from the cache, 0 downloaded`. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.

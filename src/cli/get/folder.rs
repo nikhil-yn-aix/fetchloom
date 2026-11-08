@@ -143,7 +143,7 @@ pub(super) fn put_all(
         |_| (),
     );
     let mut failure = None;
-    for ((index, object, destination, before), result) in orders.iter().zip(results) {
+    for ((index, _, destination, before), result) in orders.iter().zip(results) {
         let (method, ()) = match result {
             Ok(done) => done,
             Err(err) => {
@@ -157,11 +157,7 @@ pub(super) fn put_all(
             Method::Copy => &context.work.copies,
         };
         Work::add(counter, 1);
-        // an object written before the run began was in the cache already
-        let earlier = fs::symlink_metadata(object)
-            .and_then(|metadata| metadata.modified())
-            .is_ok_and(|written| crate::project::state::nanos(written) < context.work.began);
-        if earlier {
+        if context.work.cached_before(&targets[*index].sha256) {
             Work::add(&context.work.placed_from_cache, 1);
         }
         outcomes[*index] = if before.is_some() {

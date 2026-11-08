@@ -1,10 +1,14 @@
 //! counts of the work a run did. tests assert them, `-v` prints them and `--json` carries them.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, PoisonError};
 
 use serde::Serialize;
 
+use crate::digest::Sha256;
+
+#[derive(Default)]
 pub(crate) struct Work {
     pub(crate) requests: AtomicU64,
     pub(crate) bytes_down: AtomicU64,
@@ -17,33 +21,14 @@ pub(crate) struct Work {
     pub(crate) reflinks: AtomicU64,
     pub(crate) hardlinks: AtomicU64,
     pub(crate) copies: AtomicU64,
-    /// files placed from bytes the cache held before the run began.
+    /// files placed from objects the run did not write itself.
     pub(crate) placed_from_cache: AtomicU64,
-    /// when the run began, in nanoseconds since 1970, so placing can tell an object the cache
-    /// already held from one the run downloaded or unpacked.
-    pub(crate) began: u64,
-}
-
-impl Default for Work {
-    fn default() -> Work {
-        Work {
-            requests: AtomicU64::default(),
-            bytes_down: AtomicU64::default(),
-            retries: AtomicU64::default(),
-            resumes: AtomicU64::default(),
-            objects_written: AtomicU64::default(),
-            downloads_skipped: AtomicU64::default(),
-            reflinks: AtomicU64::default(),
-            hardlinks: AtomicU64::default(),
-            copies: AtomicU64::default(),
-            placed_from_cache: AtomicU64::default(),
-            began: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |since| {
-                    u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-                }),
-        }
-    }
+    /// the objects the run wrote to the cache, by the first 8 bytes of each digest, so placing
+    /// tells them from objects the cache held already. no clock can: a filesystem that keeps
+    /// whole seconds, or a file server with its own clock, dates an object the run wrote before
+    /// the run began. 8 bytes keep a million objects apart but for a chance near one in 37
+    /// million, and a clash only miscounts `placed_from_cache`.
+    wrote: Mutex<HashSet<u64>>,
 }
 
 /// the counters at one moment, as `--json` prints them.
@@ -66,6 +51,28 @@ impl Work {
         counter.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// counts an object the run wrote to the cache, by download or unpacking, and notes it.
+    pub(crate) fn wrote(&self, digest: &Sha256) {
+        let new = self
+            .wrote
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key(digest));
+        if new {
+            Work::add(&self.objects_written, 1);
+        }
+    }
+
+    /// whether the cache held the object for `digest` before the run, which did not write it, so
+    /// placing it takes no bytes the run downloaded or unpacked.
+    pub(crate) fn cached_before(&self, digest: &Sha256) -> bool {
+        !self
+            .wrote
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&key(digest))
+    }
+
     pub(crate) fn counts(&self) -> Counts {
         let read = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         Counts {
@@ -81,4 +88,11 @@ impl Work {
             placed_from_cache: read(&self.placed_from_cache),
         }
     }
+}
+
+/// the first 8 bytes of `digest`, which tell objects apart well enough to count them.
+fn key(digest: &Sha256) -> u64 {
+    let mut first = [0; 8];
+    first.copy_from_slice(&digest.bytes()[..8]);
+    u64::from_le_bytes(first)
 }

@@ -8,7 +8,7 @@ mod model_tests;
 mod put;
 mod tell;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -133,10 +133,6 @@ impl Preview {
     }
 }
 
-/// the locked files placing lacks, each with its dataset, and when each object the cache holds
-/// was written.
-type Lacking<'a> = (Vec<(String, &'a LockedFile)>, HashMap<Sha256, u64>);
-
 /// what becomes of a file fetchloom placed that no dataset needs now.
 enum Unwanted {
     /// it still looks as placed, so it goes.
@@ -193,10 +189,6 @@ pub(crate) struct Placing<'a> {
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     survey: Survey,
-    /// the objects placing needs that the cache held when [`Placing::missing`] looked, with when
-    /// each was written, so the files placed from those written before the run began count as
-    /// placed from the cache.
-    present: Option<HashMap<Sha256, u64>>,
 }
 
 impl<'a> Placing<'a> {
@@ -256,7 +248,6 @@ impl<'a> Placing<'a> {
             unknown: plan.unknown,
             actions,
             survey,
-            present: None,
         })
     }
 
@@ -277,19 +268,14 @@ impl<'a> Placing<'a> {
     /// dataset each belongs to. an archive is listed when a file it unpacks to is missing. an
     /// object a mark puts in doubt is hashed first, and changed bytes are listed for replacement.
     /// a failed read, seal or change mark stops the run.
-    pub(crate) fn missing(
-        &mut self,
-        cache: &Cache,
-    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+    pub(crate) fn missing(&self, cache: &Cache) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let marks = cache.doubts()?;
-        let (missing, held) = self.lacking(|digest, size| {
+        self.lacking(|digest, size| {
             cache
-                .trusted_written(digest, Some(size), &marks)
-                .map(|found| found.map(|(_, written)| written))
+                .trusted(digest, Some(size), &marks)
+                .map(|found| found.is_some())
                 .map_err(|doubt| doubtful(&doubt))
-        })?;
-        self.present = Some(held);
-        Ok(missing)
+        })
     }
 
     /// what [`Placing::missing`] lists, found without sealing or marking any cached object, for
@@ -300,18 +286,15 @@ impl<'a> Placing<'a> {
         damaged: &HashSet<Sha256>,
     ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         self.lacking(|digest, size| {
-            let found = !damaged.contains(digest) && cache.find(digest, Some(size)).is_some();
-            Ok(found.then_some(0))
+            Ok(!damaged.contains(digest) && cache.find(digest, Some(size)).is_some())
         })
-        .map(|(missing, _)| missing)
     }
 
-    /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it,
-    /// and when each object it holds was written, which `holds` gives.
+    /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
     fn lacking(
         &self,
-        holds: impl Fn(&Sha256, u64) -> Result<Option<u64>, Error> + Sync,
-    ) -> Result<Lacking<'a>, Error> {
+        holds: impl Fn(&Sha256, u64) -> Result<bool, Error> + Sync,
+    ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -334,20 +317,19 @@ impl<'a> Placing<'a> {
         let found = place::run_all(&objects, self.survey.threads, |(digest, size)| {
             holds(digest, *size)
         });
-        let mut present = HashMap::new();
+        let mut present = HashSet::new();
         for ((digest, _), found) in objects.iter().zip(found) {
-            if let Some(written) = found? {
-                present.insert(*digest, written);
+            if found? {
+                present.insert(*digest);
             }
         }
         let mut seen = HashSet::new();
-        let missing = needed
+        Ok(needed
             .into_iter()
-            .filter(|target| !present.contains_key(&target.sha256))
+            .filter(|target| !present.contains(&target.sha256))
             .filter(|target| seen.insert(target.locked.sha256))
             .map(|target| (target.dataset.to_owned(), target.locked))
-            .collect();
-        Ok((missing, present))
+            .collect())
     }
 
     /// what [`Placing::apply`] would do, decided as it decides and with nothing written. a file
@@ -443,7 +425,6 @@ impl<'a> Placing<'a> {
             actions,
             mut survey,
             unknown,
-            present,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
@@ -476,18 +457,7 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let threads = survey.threads;
         let state = &mut survey.state;
-        let earlier: Option<HashSet<Sha256>> = present.map(|held| {
-            held.into_iter()
-                .filter(|(_, written)| *written < work.began)
-                .map(|(digest, _)| digest)
-                .collect()
-        });
-        let counted = put::Counted {
-            work,
-            present: earlier.as_ref(),
-        };
-        let (tallies, failure) =
-            put_all(project, &mut placer, cache, &todo, state, checked, &counted);
+        let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
         // one look at the stop decides flushing, taking back an add's files and the result, so
         // a stop asked between them cannot leave an add's files placed and the add rolled back
         let stopped = stop.is_asked();
@@ -1140,7 +1110,6 @@ mod tests {
             unknown: Vec::new(),
             actions,
             survey,
-            present: None,
         };
         placing
             .apply(
@@ -1206,7 +1175,6 @@ mod tests {
             unknown: Vec::new(),
             actions: Vec::new(),
             survey,
-            present: None,
         };
 
         placing

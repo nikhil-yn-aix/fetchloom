@@ -35,18 +35,6 @@ impl Cache {
         size: Option<u64>,
         marks: &HashMap<Sha256, u64>,
     ) -> Result<Option<PathBuf>, Doubt> {
-        Ok(self
-            .trusted_written(digest, size, marks)?
-            .map(|(path, _)| path))
-    }
-
-    /// as [`Cache::trusted`], with when the object was last written, in nanoseconds since 1970.
-    pub(crate) fn trusted_written(
-        &self,
-        digest: &Sha256,
-        size: Option<u64>,
-        marks: &HashMap<Sha256, u64>,
-    ) -> Result<Option<(PathBuf, u64)>, Doubt> {
         let path = self.object_path(digest);
         let Ok(metadata) = fs::symlink_metadata(&path) else {
             return Ok(None);
@@ -54,11 +42,10 @@ impl Cache {
         if !is_plain(&metadata) || size.is_some_and(|size| metadata.len() != size) {
             return Ok(None);
         }
-        let written = metadata.modified().map_or(0, nanos);
         let mut permissions = metadata.permissions();
         let writable = !permissions.readonly();
         if !doubted(&metadata, marks.get(digest).copied()) {
-            return Ok(Some((path, written)));
+            return Ok(Some(path));
         }
         // a writable object is hashed and sealed through one handle, so a link swapped in for
         // its name between the two is never sealed in its place
@@ -78,7 +65,7 @@ impl Cache {
                         error,
                     })?;
                 }
-                Ok(Some((path, written)))
+                Ok(Some(path))
             }
             Ok(_) => {
                 self.mark_changed(digest).map_err(|error| Doubt {

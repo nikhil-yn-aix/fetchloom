@@ -6,7 +6,7 @@
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -14,6 +14,7 @@ use std::thread;
 use super::guard::Guard;
 use super::not_written;
 use crate::cache::{Cache, Member, NewObject, Sealed, Staging};
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
 /// members up to this size reach a writer as bytes in memory. a larger one is written by the
@@ -75,7 +76,7 @@ pub(super) fn store_all(
     cache: &Cache,
     cap: Option<usize>,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
-) -> Result<(Vec<Member>, u64), Error> {
+) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let staging = cache
         .staging()
         .map_err(|err| Error::io("could not stage the archive's files", &err))?;
@@ -148,17 +149,18 @@ pub(super) fn store_all(
     publish_all(cache, sealed, threads)
 }
 
-/// puts every sealed member in place on `threads` threads. what is left after a failure is
-/// removed, and what was put in place stays for others to use or for gc to free.
+/// puts every sealed member in place on `threads` threads, and returns the members with the
+/// digests of those new to the cache. what is left after a failure is removed, and what was put
+/// in place stays for others to use or for gc to free.
 fn publish_all(
     cache: &Cache,
     sealed: Vec<(String, Sealed)>,
     threads: usize,
-) -> Result<(Vec<Member>, u64), Error> {
+) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
     let count = sealed.len();
     let queue = Mutex::new(sealed.into_iter());
     let members = Mutex::new(Vec::with_capacity(count));
-    let new = AtomicU64::new(0);
+    let added = Mutex::new(Vec::new());
     let trouble = Mutex::new(None);
     let publish = || {
         loop {
@@ -168,7 +170,7 @@ fn publish_all(
             match sealed.publish(cache) {
                 Ok(stored) => {
                     if stored.new {
-                        new.fetch_add(1, Ordering::Relaxed);
+                        locked(&added).push(stored.digest);
                     }
                     locked(&members).push(Member {
                         path,
@@ -199,7 +201,7 @@ fn publish_all(
         Some(err) => Err(err),
         None => Ok((
             members.into_inner().unwrap_or_else(PoisonError::into_inner),
-            new.into_inner(),
+            added.into_inner().unwrap_or_else(PoisonError::into_inner),
         )),
     }
 }
@@ -292,7 +294,7 @@ mod tests {
         let never = |_: u64| false;
         let mut guard = Guard::new(&limits, &never, &meter);
         let bytes = vec![7; SMALL + 1];
-        let (mut members, written) = store_all(&scratch.cache, Some(0), |writers| {
+        let (mut members, added) = store_all(&scratch.cache, Some(0), |writers| {
             assert!(writers.jobs.is_none());
             for (name, mut bytes) in [("large", bytes.as_slice()), ("small", b"1,2\n".as_slice())] {
                 writers.keep(&mut guard, name.to_owned(), &mut bytes, &mut [0; 1024])?;
@@ -300,7 +302,7 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(written, 2);
+        assert_eq!(added.len(), 2);
         members.sort_by(|a, b| a.path.cmp(&b.path));
         scratch.assert_stored(&members[0], &bytes);
         scratch.assert_stored(&members[1], b"1,2\n");
