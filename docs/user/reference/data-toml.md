@@ -39,7 +39,7 @@ without `--as`, `add` chooses a name from the listing before applying command-li
 | available information | generated name |
 |---|---|
 | one listed file or a file selected by its source link | its filename stem, limited to 40 characters |
-| a title | up to four words and 32 characters, dropping trailing words such as `and`, `of` and `the`; if no first word fits, the 40-character free-text rule applies |
+| a title, except for hugging face, whose datasets are known by their id | up to four words and 32 characters, dropping trailing words such as `and`, `of` and `the`; if no first word fits, the 40-character free-text rule applies |
 | a reference | its last part if that contains a letter, otherwise the reference without its version; `hf:datasets/scikit-learn/iris` gives `iris`, and `zenodo:123` gives `zenodo-123` |
 
 if the generated name is taken, fetchloom tries `-2` through `-99`, then fails if all are taken. it warns which name it chose:

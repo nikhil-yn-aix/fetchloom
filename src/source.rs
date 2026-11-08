@@ -100,6 +100,15 @@ pub(crate) struct Listing {
 }
 
 impl Listing {
+    /// the title a generated name may come from. a hugging face repository is known by its id,
+    /// such as `multi_nli`, more than by its card's title, so its name comes from the id.
+    pub(crate) fn naming_title(&self) -> Option<&str> {
+        match self.resolved {
+            Reference::HuggingFace(_) => None,
+            _ => self.title.as_deref(),
+        }
+    }
+
     /// the paths select and exclude can match, including entries without downloadable bytes.
     pub(crate) fn paths(&self) -> impl Iterator<Item = &str> {
         self.files
@@ -906,6 +915,21 @@ mod tests {
             );
             assert!(!error.message.contains("abc"), "{}", error.message);
         }
+    }
+
+    #[test]
+    fn a_hugging_face_dataset_is_named_after_its_id_not_its_title() {
+        let titled = |text: &str| {
+            let mut listing = single(&Url::parse("https://example.org/data.csv").unwrap());
+            listing.resolved = parse(text).reference;
+            listing.title = Some("Multi-Genre Natural Language Inference".to_owned());
+            listing
+        };
+        assert_eq!(titled("hf:datasets/nyu-mll/multi_nli").naming_title(), None);
+        assert_eq!(
+            titled("zenodo:3608990").naming_title(),
+            Some("Multi-Genre Natural Language Inference")
+        );
     }
 
     #[test]

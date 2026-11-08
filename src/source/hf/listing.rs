@@ -38,7 +38,7 @@ impl Repo {
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::HuggingFace(pinned),
-            title: None,
+            title: info.title(),
             license: info.license(),
             doi: info.doi(),
             files,
@@ -99,7 +99,8 @@ mod tests {
 
     const IMDB: &str = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
     const FLEURS: &str = "70bb2e84b976b7e960aa89f1c648e09c59f894dd";
-    const EXPAND: &str = "expand=sha&expand=gated&expand=tags";
+    const EXPAND: &str = "expand=sha&expand=gated&expand=tags&expand=cardData";
+    const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=tags";
 
     fn repo(text: &str) -> Repo {
         Repo::parse(text).unwrap()
@@ -132,7 +133,7 @@ mod tests {
             listing.resolved.to_string(),
             format!("hf:datasets/stanfordnlp/imdb@{IMDB}")
         );
-        assert_eq!(listing.title, None);
+        assert_eq!(listing.title.as_deref(), Some("IMDB"));
         assert_eq!(listing.license.as_deref(), Some("other"));
         assert_eq!(listing.doi, None);
         let file = |path: &str, size, lfs: Option<&str>| Remote {
@@ -331,7 +332,7 @@ mod tests {
         let recorded = Recorded::default()
             .fixture(
                 &api(&format!(
-                    "models/meta-llama/Llama-2-7b/revision/main?{EXPAND}"
+                    "models/meta-llama/Llama-2-7b/revision/main?{MODEL_EXPAND}"
                 )),
                 "hf/llama-revision.json",
             )

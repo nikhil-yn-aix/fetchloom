@@ -1380,7 +1380,7 @@ fn choose_name(
     };
     let name = single
         .and_then(|file| name::dataset_name(&name::folder_for(&file)))
-        .or_else(|| listing.title.as_deref().and_then(name::title_name))
+        .or_else(|| listing.naming_title().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
     // data.toml travels to windows machines, where a folder named con or aux cannot exist

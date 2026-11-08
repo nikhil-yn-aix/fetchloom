@@ -16,7 +16,20 @@ pub(super) struct Info {
     gated: serde_json::Value,
     #[serde(default)]
     tags: Vec<String>,
+    /// the front matter of the repository's card, asked for datasets only.
+    #[serde(default, rename = "cardData")]
+    card: Option<Card>,
 }
+
+/// the one part of a card fetchloom reads: the dataset's name for people.
+#[derive(Deserialize)]
+struct Card {
+    #[serde(default)]
+    pretty_name: serde_json::Value,
+}
+
+/// a card's name longer than this is a description, not a title.
+const LONGEST_TITLE: usize = 100;
 
 #[derive(Deserialize)]
 struct Refusal {
@@ -36,6 +49,10 @@ impl Repo {
                 query.append_pair("expand", "gated");
             }
             query.append_pair("expand", "tags");
+            // a model's card has no dataset name, and can be large
+            if self.kind == RepoKind::Dataset {
+                query.append_pair("expand", "cardData");
+            }
         }
         let response = api.get(&url).await?;
         let info: Info = crate::source::json(self, &response).map_err(|mut err| {
@@ -127,6 +144,15 @@ impl Info {
         (!licenses.is_empty()).then(|| licenses.join(", "))
     }
 
+    /// the name the dataset's card gives it, such as `Wine Quality`, when it is one short line.
+    pub(super) fn title(&self) -> Option<String> {
+        let name = self.card.as_ref()?.pretty_name.as_str()?.trim();
+        let fits = !name.is_empty()
+            && !name.contains(char::is_control)
+            && name.chars().count() <= LONGEST_TITLE;
+        fits.then(|| name.to_owned())
+    }
+
     /// the DOI the hub minted for the repository, when its owner asked for one.
     pub(super) fn doi(&self) -> Option<String> {
         self.tags
@@ -152,5 +178,34 @@ mod tests {
             serde_json::from_slice(&fixture_bytes("hf/fineweb-edu-revision.json")).unwrap();
         assert_eq!(info.doi().as_deref(), Some("10.57967/hf/2497"));
         assert_eq!(info.license().as_deref(), Some("odc-by"));
+    }
+
+    #[test]
+    fn the_title_is_the_name_the_card_gives() {
+        let title = |card: &str| {
+            let text = format!(
+                r#"{{"id":"o/d","sha":"{}","cardData":{card}}}"#,
+                "0".repeat(40)
+            );
+            serde_json::from_str::<Info>(&text).unwrap().title()
+        };
+        assert_eq!(
+            title(r#"{"pretty_name":" Wine Quality ","license":"cc-by-4.0"}"#).as_deref(),
+            Some("Wine Quality")
+        );
+        assert_eq!(title(r#"{"license":"cc0-1.0"}"#), None);
+        assert_eq!(title("null"), None);
+        assert_eq!(title(r#"{"pretty_name":["a","b"]}"#), None, "only a name");
+        assert_eq!(title(r#"{"pretty_name":""}"#), None);
+        assert_eq!(
+            title(r#"{"pretty_name":"two\nlines"}"#),
+            None,
+            "a title is one line"
+        );
+        let paragraph = format!(r#"{{"pretty_name":"{}"}}"#, "word ".repeat(30));
+        assert_eq!(title(&paragraph), None, "a description is no title");
+        let info: Info =
+            serde_json::from_slice(&fixture_bytes("hf/fineweb-edu-revision.json")).unwrap();
+        assert_eq!(info.title(), None, "an answer without a card has no title");
     }
 }

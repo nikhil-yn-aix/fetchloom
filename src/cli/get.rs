@@ -1082,8 +1082,7 @@ fn folder_for(
     let name = match paths {
         [only] => name::folder_for(only.rsplit('/').next().unwrap_or(only)),
         _ => listing
-            .title
-            .as_deref()
+            .naming_title()
             .and_then(name::title_name)
             .or_else(|| name::reference_name(&parsed.reference.to_string()))
             .unwrap_or_else(|| "download".to_owned()),
