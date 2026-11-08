@@ -432,7 +432,11 @@ fn pipelined_write_errors_preserve_the_last_checkpoint() {
             .and_then(|()| writer.save())
             .unwrap_err();
         assert_eq!(error.kind(), refused.kind());
-        assert_eq!(error.raw_os_error(), refused.raw_os_error());
+        // windows refuses with access denied, which the cache explains around the system's cause
+        assert_eq!(
+            crate::error::io_cause(&error).and_then(io::Error::raw_os_error),
+            refused.raw_os_error()
+        );
         let record = partial.recorded().unwrap();
         assert_eq!(record.received, 3);
         assert_eq!(record.sha256, digest::sha256(b"abc"));

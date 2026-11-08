@@ -251,21 +251,19 @@ impl Cache {
         if err.raw_os_error().is_none() {
             return err;
         }
-        match err.kind() {
-            io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => io::Error::new(
-                err.kind(),
-                format!("{} in {}", crate::error::said(&err), folder.display()),
-            ),
+        let words = match err.kind() {
+            io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
+                format!("{} in {}", crate::error::said(&err), folder.display())
+            }
             io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
                 match self.unfinished_held() {
-                    Some(held) => {
-                        io::Error::new(err.kind(), format!("{}; {held}", crate::error::said(&err)))
-                    }
-                    None => err,
+                    Some(held) => format!("{}; {held}", crate::error::said(&err)),
+                    None => return err,
                 }
             }
-            _ => err,
-        }
+            _ => return err,
+        };
+        io::Error::new(err.kind(), Explained { words, cause: err })
     }
 
     /// what unfinished downloads hold of the cache's disk and how to free it, when they hold
@@ -607,6 +605,26 @@ fn sync_publication(
     Ok(())
 }
 
+/// an io error in words that say what to fix, which keeps the error it explains as its source,
+/// so the system's own code stays within reach of [`crate::error::io_cause`].
+#[derive(Debug)]
+struct Explained {
+    words: String,
+    cause: io::Error,
+}
+
+impl std::fmt::Display for Explained {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.words)
+    }
+}
+
+impl std::error::Error for Explained {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -707,11 +725,15 @@ pub(crate) mod tests {
             error.help.as_deref(),
             Some("free some space on that disk, then run the command again")
         );
-        let denied = io::Error::from_raw_os_error(if cfg!(windows) { 5 } else { 13 });
-        let error = crate::error::Error::io(
-            "could not write to the cache",
-            &cache.explained(&partial, denied),
+        let code = if cfg!(windows) { 5 } else { 13 };
+        let denied = cache.explained(&partial, io::Error::from_raw_os_error(code));
+        assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+        // the system's own cause stays within reach
+        assert_eq!(
+            crate::error::io_cause(&denied).and_then(io::Error::raw_os_error),
+            Some(code)
         );
+        let error = crate::error::Error::io("could not write to the cache", &denied);
         assert_eq!(
             error.message,
             format!(
