@@ -375,25 +375,47 @@ impl Project {
     }
 
     fn hold_at(&self, command: &str, now: SystemTime) -> Result<Hold, Error> {
+        self.hold_with(command, now, names)
+    }
+
+    /// [`Project::hold_at`], with `named` telling whether `.fetchloom/lock` still names the file
+    /// locked. a lock that loses its name is opened again, a few times at most, since only a
+    /// command that set out to start the project and did not removes it, and only once.
+    fn hold_with(
+        &self,
+        command: &str,
+        now: SystemTime,
+        named: impl Fn(&Path, &File) -> io::Result<bool>,
+    ) -> Result<Hold, Error> {
+        const TRIES: usize = 8;
         let opening = |err: io::Error| Error::io("could not open the project lock", &err);
-        loop {
+        for _ in 0..TRIES {
             let folder = self.inner()?;
             let path = folder.join("lock");
-            let file = match OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(&path)
-            {
+            let file = match crate::cache::open_unfollowed(&path, true) {
                 Ok(file) => file,
                 // a command that set out to start this project, and did not, removed the folder
                 Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                // fetchloom never makes a link there, and a lock on what one names keeps nobody out
+                Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+                    return Err(Error::new(
+                        Kind::ProjectInvalid,
+                        format!(
+                            "{} is a link or a special file, and the project lock must be a plain file",
+                            path.display()
+                        ),
+                    )
+                    .help(format!(
+                        "remove {}, which fetchloom did not make; the next command makes a plain one",
+                        path.display()
+                    )));
+                }
                 Err(err) => return Err(opening(err)),
             };
             let lock = match file.try_lock() {
                 // such a command also removes the lock, and a lock on a file with no name keeps
                 // nobody out
-                Ok(()) if !names(&path, &file).map_err(opening)? => continue,
+                Ok(()) if !named(&path, &file).map_err(opening)? => continue,
                 Ok(()) => Some(file),
                 Err(TryLockError::WouldBlock) => return Ok(Hold::Busy),
                 Err(TryLockError::Error(err)) => {
@@ -405,6 +427,14 @@ impl Project {
                 .claim(&folder.join("owner"), command, now)
                 .map_err(|err| Error::io("could not claim the project owner", &err));
         }
+        Err(Error::new(
+            Kind::LocalIo,
+            format!(
+                "could not take the project lock in {}: its lock file kept being removed or replaced",
+                self.own_folder().display()
+            ),
+        )
+        .help("check that nothing but fetchloom changes the .fetchloom folder, then run the command again"))
     }
 
     /// ends `held`, the hold of a command that set out to start this project and did not, so its
@@ -1071,6 +1101,67 @@ mod tests {
         assert_eq!(err, Some(io::ErrorKind::InvalidInput));
         assert!(project.hold("sync").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"{}");
+    }
+
+    /// a link at `.fetchloom/lock`, which fetchloom never makes, is refused rather than followed,
+    /// whether it names a file or nothing: no lock on what it names would keep anyone out.
+    #[test]
+    fn a_linked_project_lock_is_refused_and_never_followed() {
+        let (_dir, project) = project(&[(".fetchloom/elsewhere", "")]);
+        let folder = project.own_folder();
+        let path = folder.join("lock");
+        for target in [folder.join("elsewhere"), folder.join("nothing")] {
+            let _ = fs::remove_file(&path);
+            #[cfg(unix)]
+            let made = std::os::unix::fs::symlink(&target, &path).is_ok();
+            // making a symlink on windows needs developer mode or admin
+            #[cfg(windows)]
+            let made = std::os::windows::fs::symlink_file(&target, &path).is_ok();
+            if !made {
+                return;
+            }
+            let (answer, answered) = std::sync::mpsc::channel();
+            let holder = Project {
+                root: project.root.clone(),
+            };
+            std::thread::spawn(move || {
+                let refused = holder
+                    .hold("sync")
+                    .err()
+                    .map(|error| (error.kind, error.message, error.help));
+                let _ = answer.send(refused);
+            });
+            let (kind, message, help) = answered
+                .recv_timeout(Duration::from_secs(60))
+                .expect("holding a linked lock never returned")
+                .expect("a linked lock was held");
+            assert_eq!(kind, Kind::ProjectInvalid);
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert!(help.is_some());
+        }
+        assert!(!folder.join("nothing").exists());
+        assert!(!folder.join("owner").exists());
+    }
+
+    /// a lock whose name never seems to hold it, as on a filesystem whose names and open files
+    /// disagree, ends the hold with an error rather than trying forever.
+    #[test]
+    fn a_lock_that_never_keeps_its_name_is_given_up() {
+        let (_dir, project) = project(&[]);
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let given_up = project
+                .hold_with("sync", SystemTime::now(), |_, _| Ok(false))
+                .err()
+                .map(|error| (error.kind, error.message));
+            let _ = answer.send(given_up);
+        });
+        let (kind, message) = answered
+            .recv_timeout(Duration::from_secs(60))
+            .expect("holding a lock that never kept its name never returned")
+            .expect("a lock that never kept its name was held");
+        assert_eq!(kind, Kind::LocalIo);
+        assert!(message.contains("project lock"), "{message}");
     }
 
     #[test]
