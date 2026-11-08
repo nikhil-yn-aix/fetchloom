@@ -205,15 +205,14 @@ impl Cache {
             .join(key.get(..1).unwrap_or_default())
     }
 
-    /// the folders unfinished downloads sit in: the shards under `partial/`, and `partial/`
-    /// itself, so gc frees whatever lies there too. a link in place of any of them is never
-    /// entered, so nothing outside the cache is counted or swept.
+    /// the folders unfinished downloads sit in: the shards under `partial/`. a link in place of
+    /// `partial/` or of a shard is never entered, so nothing outside the cache is counted or swept.
     pub(super) fn partial_folders(&self) -> Vec<PathBuf> {
         let folder = self.root.join("partial");
         if !fs::symlink_metadata(&folder).is_ok_and(|found| found.is_dir()) {
             return Vec::new();
         }
-        let mut folders = vec![folder.clone()];
+        let mut folders = Vec::new();
         if let Ok(entries) = fs::read_dir(&folder) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -742,7 +741,10 @@ pub(crate) mod tests {
             error.message,
             "could not write to the cache: the disk is full"
         );
-        fs::write(partial.join(format!("{}.part", "ab".repeat(32))), [0; 2048]).unwrap();
+        let key = "ab".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        fs::write(shard.join(format!("{key}.part")), [0; 2048]).unwrap();
         let error = crate::error::Error::io(
             "could not write to the cache",
             &cache.explained(&partial, full()),

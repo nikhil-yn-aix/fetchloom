@@ -878,13 +878,17 @@ fn gc_names_each_project_it_forgets() -> Result {
 fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     let sandbox = Sandbox::new()?;
     assert!(sandbox.run(&["cache"])?.status.success());
+    // each download sits in one of the folders under partial/, named by its key's first digit
     let partial = sandbox.cache().join("partial");
+    let at =
+        |key: &str, extension: &str| partial.join(&key[..1]).join(format!("{key}.{extension}"));
     let left = "ab".repeat(32);
     let running = "cd".repeat(32);
     for (key, size) in [(&left, 3000), (&running, 1000)] {
-        fs::write(partial.join(format!("{key}.part")), vec![7_u8; size])?;
-        fs::write(partial.join(format!("{key}.json")), b"{}")?;
-        fs::write(partial.join(format!("{key}.lock")), b"")?;
+        fs::create_dir_all(partial.join(&key[..1]))?;
+        fs::write(at(key, "part"), vec![7_u8; size])?;
+        fs::write(at(key, "json"), b"{}")?;
+        fs::write(at(key, "lock"), b"")?;
     }
     let info = sandbox.run(&["--json", "cache"])?;
     let report: serde_json::Value = serde_json::from_slice(&info.stdout)?;
@@ -894,21 +898,16 @@ fn unfinished_downloads_are_shown_and_freed_by_gc_now() -> Result {
     assert!(told.contains("Unfinished 2 downloads · 3.9 KiB"), "{told}");
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(young.status.code(), Some(0), "{}", text(&young.stderr)?);
-    assert!(
-        partial.join(format!("{left}.part")).exists(),
-        "a day's grace without --now"
-    );
-    let held = fs::File::options()
-        .write(true)
-        .open(partial.join(format!("{running}.lock")))?;
+    assert!(at(&left, "part").exists(), "a day's grace without --now");
+    let held = fs::File::options().write(true).open(at(&running, "lock"))?;
     held.lock()?;
     let now = sandbox.run(&["--json", "cache", "gc", "--now"])?;
     drop(held);
     let report: serde_json::Value = serde_json::from_slice(&now.stdout)?;
     assert_eq!(now.status.code(), Some(0), "{report}");
-    assert!(!partial.join(format!("{left}.part")).exists(), "{report}");
-    assert!(!partial.join(format!("{left}.json")).exists(), "{report}");
-    assert!(partial.join(format!("{running}.part")).exists(), "{report}");
+    assert!(!at(&left, "part").exists(), "{report}");
+    assert!(!at(&left, "json").exists(), "{report}");
+    assert!(at(&running, "part").exists(), "{report}");
     assert_eq!(report["result"]["removed_leftover_bytes"], 3002, "{report}");
     Ok(())
 }

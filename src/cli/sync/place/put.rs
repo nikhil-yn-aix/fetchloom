@@ -156,14 +156,10 @@ mod tests {
             full_with_unfinished(error(), &full(), &project, &cache).details,
             Vec::<String>::new()
         );
-        fs::write(
-            cache
-                .root()
-                .join("partial")
-                .join(format!("{}.part", "ab".repeat(32))),
-            [0; 2048],
-        )
-        .unwrap();
+        let key = "ab".repeat(32);
+        let shard = cache.partial_folder(&key);
+        fs::create_dir_all(&shard).unwrap();
+        fs::write(shard.join(format!("{key}.part")), [0; 2048]).unwrap();
         let told = full_with_unfinished(error(), &full(), &project, &cache);
         assert_eq!(
             told.details,

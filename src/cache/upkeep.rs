@@ -915,11 +915,13 @@ mod tests {
         for (_dir, cache) in [cache(), fat()] {
             // a download sealed by a run that died while publishing it, and a member sealed by
             // one that died while unpacking
-            let partial = cache.root.join("partial");
-            fs::write(partial.join("left.lock"), b"").unwrap();
-            fs::write(partial.join("left.json"), b"{}").unwrap();
+            let key = "ab".repeat(32);
+            let partial = cache.partial_folder(&key);
+            fs::create_dir_all(&partial).unwrap();
+            fs::write(partial.join(format!("{key}.lock")), b"").unwrap();
+            fs::write(partial.join(format!("{key}.json")), b"{}").unwrap();
             let sealed = [
-                partial.join("left.part"),
+                partial.join(format!("{key}.part")),
                 cache.root.join("tmp").join("0123456789abcdef.new"),
             ];
             for path in &sealed {
@@ -990,6 +992,41 @@ mod tests {
         );
         assert_eq!(fs::read_dir(&shard).unwrap().count(), 0);
         assert_eq!(cache.unfinished().downloads, 0);
+    }
+
+    /// unfinished downloads sit only in the 16 folders under `partial/`, so what lies at its top,
+    /// in a folder there that is no shard, or behind a link in place of a shard, is not counted
+    /// and not freed.
+    #[test]
+    fn only_the_shards_under_partial_hold_unfinished_downloads() {
+        let (_dir, cache) = cache();
+        let partial = cache.root.join("partial");
+        let key = "ab".repeat(32);
+        let mut kept = Vec::new();
+        for folder in [partial.clone(), partial.join("ab")] {
+            fs::create_dir_all(&folder).unwrap();
+            for extension in ["part", "json", "lock"] {
+                let path = folder.join(format!("{key}.{extension}"));
+                fs::write(&path, b"abc").unwrap();
+                kept.push(path);
+            }
+        }
+        #[cfg(unix)]
+        {
+            let outside = cache.root.with_file_name("outside");
+            fs::create_dir(&outside).unwrap();
+            for extension in ["part", "json", "lock"] {
+                let path = outside.join(format!("{key}.{extension}"));
+                fs::write(&path, b"abc").unwrap();
+                kept.push(path);
+            }
+            std::os::unix::fs::symlink(&outside, partial.join("a")).unwrap();
+        }
+        assert_eq!(cache.partial_folders(), Vec::<PathBuf>::new());
+        assert_eq!(cache.unfinished(), Unfinished::default());
+        let later = SystemTime::now() + GRACE + Duration::from_secs(60);
+        assert_eq!(cache.sweep(&Needed::default(), later).removed_leftovers, 0);
+        assert!(kept.iter().all(|path| path.exists()));
     }
 
     #[test]

@@ -327,28 +327,29 @@ pub(crate) fn edit(path: &Path, bytes: &[u8]) -> Result {
     Ok(())
 }
 
-/// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
-/// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
-/// alone, since a placed hardlink shares it with the cached object.
-/// the files of the unfinished downloads in `cache`: those in `partial/` and in the folders
-/// inside it, which spread the downloads.
+/// the files of the unfinished downloads in `cache`, in the folders inside `partial/` that spread
+/// the downloads.
 pub(crate) fn partial_files(cache: &Path) -> Vec<PathBuf> {
-    let partial = cache.join("partial");
-    let mut files = Vec::new();
-    let mut folders = vec![partial];
-    while let Some(folder) = folders.pop() {
-        for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                folders.push(entry.path());
-            } else {
-                files.push(entry.path());
-            }
-        }
-    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(cache.join("partial"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|shard| shard.file_type().is_ok_and(|kind| kind.is_dir()))
+        .flat_map(|shard| {
+            std::fs::read_dir(shard.path())
+                .into_iter()
+                .flatten()
+                .flatten()
+        })
+        .map(|entry| entry.path())
+        .collect();
     files.sort();
     files
 }
 
+/// deletes the file at `path` as a person can: where the filesystem refuses to remove a read-only
+/// file, as FAT32 and exFAT do on windows, the flag is cleared first. elsewhere the flag is left
+/// alone, since a placed hardlink shares it with the cached object.
 pub(crate) fn delete(path: &Path) -> Result {
     match std::fs::remove_file(path) {
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
