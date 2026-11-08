@@ -300,9 +300,69 @@ fn tell_placed(
         "Fetched",
         &format!("{what} into {} · {how}", folder.display()),
     );
+    if targets.len() > 1 {
+        let files = targets
+            .iter()
+            .map(|target| (target.path.as_str(), target.size));
+        for line in top_level(files) {
+            output.item(&line);
+        }
+    }
     if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive)) = why {
         output.hint(&why.copied_because(folder.display(), things));
     }
+}
+
+/// the top level of a filled folder, largest first, as a person looking for the main file
+/// wants it: up to ten names with their sizes, a folder with how many files it holds.
+fn top_level<'a>(files: impl IntoIterator<Item = (&'a str, u64)>) -> Vec<String> {
+    const SHOWN: usize = 10;
+    // a name's files, bytes, and whether it is a folder
+    let mut entries: std::collections::BTreeMap<&str, (u64, u64, bool)> =
+        std::collections::BTreeMap::new();
+    for (path, size) in files {
+        let (name, folder) = path
+            .split_once('/')
+            .map_or((path, false), |(head, _)| (head, true));
+        let entry = entries.entry(name).or_insert((0, 0, folder));
+        entry.0 += 1;
+        entry.1 = entry.1.saturating_add(size);
+        entry.2 |= folder;
+    }
+    let mut entries: Vec<(&str, (u64, u64, bool))> = entries.into_iter().collect();
+    entries
+        .sort_by(|(a, (_, a_bytes, _)), (b, (_, b_bytes, _))| b_bytes.cmp(a_bytes).then(a.cmp(b)));
+    let shown: Vec<(String, String)> = entries
+        .iter()
+        .take(SHOWN)
+        .map(|(name, (files, bytes, folder))| {
+            if *folder {
+                (
+                    format!("{name}/"),
+                    format!(
+                        "{} · {}",
+                        units::count(*files, "file", "files"),
+                        units::size(*bytes)
+                    ),
+                )
+            } else {
+                ((*name).to_owned(), units::size(*bytes))
+            }
+        })
+        .collect();
+    let width = shown
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut lines: Vec<String> = shown
+        .into_iter()
+        .map(|(name, size)| format!("{name:<width$}  {size}"))
+        .collect();
+    if entries.len() > SHOWN {
+        lines.push(format!("and {} more", entries.len() - SHOWN));
+    }
+    lines
 }
 
 fn placement_summary(files: impl Iterator<Item = (Outcome, u64)>) -> (u64, u64, String) {
@@ -342,6 +402,45 @@ fn within(folder: &Path, path: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_filled_folder_lists_its_top_level_largest_first() {
+        let files = [
+            (".gitattributes", 2307),
+            ("README.md", 913),
+            ("data/red-00000-of-00001.parquet", 30886),
+            ("data/white-00000-of-00001.parquet", 73265),
+            ("winequality-red.csv", 84200),
+            ("winequality-white.csv", 264_427),
+            ("winequality.names", 3234),
+        ];
+        assert_eq!(
+            top_level(files),
+            [
+                "winequality-white.csv  258.2 KiB",
+                "data/                  2 files · 101.7 KiB",
+                "winequality-red.csv    82.2 KiB",
+                "winequality.names      3.2 KiB",
+                ".gitattributes         2.3 KiB",
+                "README.md              913 B",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_top_level_shows_ten_and_counts_the_rest() {
+        let names: Vec<String> = (0..13).map(|n| format!("f{n:02}.csv")).collect();
+        let lines = top_level(
+            names
+                .iter()
+                .zip(100..)
+                .map(|(name, size)| (name.as_str(), size)),
+        );
+        assert_eq!(lines.len(), 11, "{lines:?}");
+        assert_eq!(lines[0], "f12.csv  112 B");
+        assert_eq!(lines[9], "f03.csv  103 B");
+        assert_eq!(lines[10], "and 3 more");
+    }
 
     #[test]
     fn mixed_placements_count_links_and_copies() {

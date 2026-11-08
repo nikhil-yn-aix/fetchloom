@@ -46,6 +46,20 @@ stderr excerpt from a snapshot for a single-file download on a filesystem that s
     Fetched iris.csv into iris · linked from the cache
 ```
 
+when a dataset has several files, the `Fetched` line is followed by the folder's top level, largest first, so the main file is easy to find. a folder shows how many files it holds. at most ten names are listed, then how many more there are:
+
+```text
+    Fetched 7 files into wine-quality · linked from the cache
+            winequality-white.csv  258.2 KiB
+            data/                  2 files · 101.7 KiB
+            winequality-red.csv    82.2 KiB
+            winequality.names      3.2 KiB
+            .gitattributes         2.3 KiB
+            README.md              913 B
+```
+
+a download that went on from bytes an earlier run kept says how much came from that run, and its speed counts only the bytes moved this time, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`.
+
 an unchanged direct URL can return a 304 response, avoiding its file-body download. without validators, bytes may download again. source listings can still need requests even when payloads are cached. a later `get` accepts changed upstream bytes; use [add](add.md) for pinned inputs.
 
 ## several links

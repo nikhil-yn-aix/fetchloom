@@ -171,6 +171,13 @@ impl Output {
         }
     }
 
+    /// one of the things a step brought, listed dim under it, such as a file `get` fetched.
+    pub(crate) fn item(&self, text: &str) {
+        if self.tells(Level::Normal) {
+            self.dim_line(text);
+        }
+    }
+
     /// a dim line under the steps that needs nothing done, such as an account nobody signed in to.
     fn dim_line(&self, text: &str) {
         let dim = paint(self.style.color, Paint::new().dimmed());

@@ -161,6 +161,14 @@ fn get_unpacks_a_zip_into_its_folder_and_a_second_run_moves_nothing() -> Result 
     ok(&first)?;
     let folder = sandbox.work().join("dataset");
     assert_eq!(text(&first.stdout)?, format!("{}\n", folder.display()));
+    let told = text(&first.stderr)?;
+    for line in [
+        "README.md  17 B",
+        "data/      3 files · 16 B",
+        "long/      1 file · 10 B",
+    ] {
+        assert!(told.contains(line), "the top level is listed: {told}");
+    }
     holds_the_archive(&folder)?;
     assert!(!zip_object(&sandbox.cache()).exists());
     let second = sandbox.run(&["--json", "get", &server.url])?;
