@@ -383,7 +383,7 @@ impl Net {
             && self.rate.is_none()
     }
 
-    fn eager_split(&self, validators: &crate::cache::Validators) -> bool {
+    fn probe_split(&self, validators: &crate::cache::Validators) -> bool {
         self.link_ranges() && headers::if_range(validators).is_some()
     }
 

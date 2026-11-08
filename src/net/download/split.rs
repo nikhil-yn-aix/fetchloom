@@ -37,6 +37,8 @@ pub(crate) const WINDOW: Duration = Duration::from_secs(2);
 pub(crate) const SLOW: u64 = 1_000_000;
 /// how much faster the whole download must get with each added stream before another is added.
 const GAIN: f64 = 1.15;
+/// the shorter measurement window for probing uncapped links.
+pub(super) const PROBE_WINDOW: Duration = Duration::from_millis(250);
 /// failed streams after which a download asks for no more ranges.
 const FAILURES: u32 = 3;
 
@@ -51,8 +53,8 @@ pub(super) struct Job<'a> {
     pub(super) pinned: bool,
     pub(super) total: u64,
     pub(super) on: Listener<'a>,
-    /// the rate of the one stream that proved slow before it handed over, in bytes a second.
-    pub(super) slow: Option<f64>,
+    /// the stream's measured rate before handover, in bytes a second.
+    pub(super) measured: Option<f64>,
 }
 
 pub(super) enum Streamed {
@@ -232,8 +234,6 @@ enum Ended {
 /// whether to add a stream, by the rate the download had before and after the last one.
 #[derive(Clone, Copy)]
 enum Probe {
-    /// the initial ranges must all start before their combined rate is measured.
-    Initial,
     /// one stream was measured at this rate before the download split, so a stream is added at
     /// once.
     Measured { rate: f64 },
@@ -269,13 +269,6 @@ impl Probe {
             bytes / seconds.max(f64::EPSILON)
         };
         match *self {
-            Probe::Initial if started => {
-                *self = Probe::Measure {
-                    since: now,
-                    delivered,
-                };
-                None
-            }
             Probe::Measured { rate } => Some(rate),
             Probe::Measure {
                 since,
@@ -316,22 +309,22 @@ impl Probe {
 
 #[derive(Clone, Copy)]
 struct Policy {
-    initial: usize,
+    adaptive: bool,
     maximum: usize,
     window: Duration,
 }
 
 impl Policy {
     fn for_run(net: &Net, validators: &Validators) -> Self {
-        if net.eager_split(validators) {
+        if net.probe_split(validators) {
             Self {
-                initial: 4,
+                adaptive: true,
                 maximum: crate::net::LINK_STREAMS,
-                window: Duration::from_millis(250),
+                window: PROBE_WINDOW,
             }
         } else {
             Self {
-                initial: 1,
+                adaptive: false,
                 maximum: crate::net::PER_HOST,
                 window: net.split.window,
             }
@@ -339,7 +332,7 @@ impl Policy {
     }
 
     fn stop_after_failure(self, failures: u32, failure: &Failure) -> bool {
-        self.initial > 1 || failures >= FAILURES || matches!(failure, Failure::Final(_))
+        self.adaptive || failures >= FAILURES || matches!(failure, Failure::Final(_))
     }
 }
 
@@ -394,7 +387,7 @@ impl Net {
         allowed: &mut bool,
     ) -> Result<Streamed, Failure> {
         let (from, total) = (job.from, job.total);
-        let probe = match job.slow {
+        let probe = match job.measured {
             Some(rate) => Probe::Measured { rate },
             None => Probe::Measure {
                 since: Instant::now(),
@@ -453,16 +446,6 @@ impl Net {
             (0, self.split_stream(shared, 0, Some(response)).await)
         })];
         let policy = Policy::for_run(self, shared.job.validators);
-        let initial = self.initial_ranges(shared, policy);
-        if !initial.is_empty() {
-            probe = Probe::Initial;
-        }
-        for (id, permits) in initial {
-            running.push(Box::pin(async move {
-                let _permits = permits;
-                (id, self.split_stream(shared, id, None).await)
-            }));
-        }
         let mut tick = tokio::time::interval(policy.window / 8);
         let (mut failures, mut outcome) = (0, None);
         let (mut interrupted, mut start_over) = (false, false);
@@ -496,14 +479,14 @@ impl Net {
                             }
                             tracing::debug!(id, "a stream of a split download failed");
                             keep_failure(&mut outcome, failure);
-                            if policy.initial > 1 {
+                            if policy.adaptive {
                                 break;
                             }
                         }
                     }
                 }
                 _ = tick.tick() => {
-                    if let Some((id, permits)) = self.consider(shared, &mut probe, policy) {
+                    if let Some((id, permits)) = self.consider(shared, &mut probe, policy, Instant::now()) {
                         running.push(Box::pin(async move {
                             let _permits = permits;
                             (id, self.split_stream(shared, id, None).await)
@@ -686,8 +669,8 @@ impl Net {
         shared: &Streams<'_>,
         probe: &mut Probe,
         policy: Policy,
+        now: Instant,
     ) -> Option<(usize, (OwnedSemaphorePermit, OwnedSemaphorePermit))> {
-        let now = Instant::now();
         let (delivered, started, gone) = {
             let board = shared.board();
             let id = match *probe {
@@ -696,16 +679,16 @@ impl Net {
             };
             (
                 board.delivered,
-                if matches!(probe, Probe::Initial) {
-                    board.shares.iter().flatten().all(|share| share.started)
-                } else {
-                    board.share(id).is_some_and(|share| share.started)
-                },
+                board.share(id).is_some_and(|share| share.started),
                 board.share(id).is_none(),
             )
         };
+        if policy.adaptive && gone && matches!(probe, Probe::Wait { .. }) {
+            *probe = Probe::Settled;
+            return None;
+        }
         let before = probe.step(now, delivered, started, gone, policy.window)?;
-        if policy.initial > 1 && before <= 0.0 {
+        if policy.adaptive && before <= 0.0 {
             *probe = Probe::Measure {
                 since: now,
                 delivered,
@@ -721,16 +704,6 @@ impl Net {
             },
         };
         added
-    }
-
-    fn initial_ranges(
-        &self,
-        shared: &Streams<'_>,
-        policy: Policy,
-    ) -> Vec<(usize, (OwnedSemaphorePermit, OwnedSemaphorePermit))> {
-        (1..policy.initial)
-            .map_while(|_| self.add_stream(shared, policy.maximum))
-            .collect()
     }
 
     /// a new stream, bounded by the policy, available permits and the smallest useful range.

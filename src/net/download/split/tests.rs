@@ -806,7 +806,7 @@ fn terminal_stream_failures_win_in_either_arrival_order() {
 }
 
 #[test]
-fn initial_ranges_reserve_disjoint_work_and_obey_the_cap() {
+fn range_shares_remain_disjoint_and_bounded() {
     for enabled in [false, true] {
         let url = Url::parse("https://example.org/file").unwrap();
         let mut net = net(&url, 16);
@@ -827,14 +827,16 @@ fn initial_ranges_reserve_disjoint_work_and_obey_the_cap() {
                 pinned: false,
                 total: 128 * MIB,
                 on: &|_| Ok(()),
-                slow: None,
+                measured: None,
             },
             board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
             sender,
         };
         let _first = net.try_permit(&url).unwrap();
-        let mut held = net.initial_ranges(&streams, policy);
-        assert_eq!(held.len(), if enabled { 3 } else { 0 });
+        let mut held = Vec::new();
+        while let Some(stream) = net.add_stream(&streams, policy.maximum) {
+            held.push(stream);
+        }
         let mut shares: Vec<_> = streams
             .board()
             .shares
@@ -846,30 +848,9 @@ fn initial_ranges_reserve_disjoint_work_and_obey_the_cap() {
         assert_eq!(shares.first().unwrap().0, 0);
         assert_eq!(shares.last().unwrap().1, 128 * MIB);
         assert!(shares.windows(2).all(|pair| pair[0].1 == pair[1].0));
-        while let Some(stream) = net.add_stream(&streams, policy.maximum) {
-            held.push(stream);
-        }
         assert_eq!(held.len() + 1, if enabled { 8 } else { 4 });
         assert!(net.add_stream(&streams, policy.maximum).is_none());
     }
-}
-
-#[test]
-fn an_initial_batch_is_measured_only_after_its_streams_start() {
-    let start = Instant::now();
-    let window = Duration::from_millis(250);
-    let mut probe = Probe::Initial;
-    assert_eq!(probe.step(start, MIB, false, false, window), None);
-    assert!(matches!(probe, Probe::Initial));
-    assert_eq!(probe.step(start, MIB, true, false, window), None);
-    assert_eq!(
-        probe.step(start + window / 2, 2 * MIB, true, false, window),
-        None
-    );
-    assert_eq!(
-        probe.step(start + window, 2 * MIB, true, false, window),
-        Some(4_194_304.0)
-    );
 }
 
 #[test]
@@ -898,7 +879,7 @@ fn adaptive_ranges_back_off_on_the_first_error_or_quota_refusal() {
 }
 
 #[test]
-fn early_range_downloads_preserve_bytes_with_either_setting() {
+fn probe_downloads_preserve_bytes_with_either_setting() {
     for enabled in [false, true] {
         let bytes = body(2 * MIB);
         let server = serve(
@@ -921,7 +902,6 @@ fn early_range_downloads_preserve_bytes_with_either_setting() {
             fs::read(cache.object_path(&fetched.digest)).unwrap(),
             *bytes
         );
-        assert_eq!(!parts(&server).is_empty(), enabled);
     }
 }
 
@@ -947,15 +927,168 @@ fn adaptive_ranges_wait_through_empty_rate_windows() {
                 pinned: false,
                 total: 128 * MIB,
                 on: &|_| Ok(()),
-                slow: None,
+                measured: None,
             },
             board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
             sender,
         };
         let _first = net.try_permit(&url).unwrap();
         let mut probe = Probe::Measured { rate: 0.0 };
-        let added = net.consider(&streams, &mut probe, policy);
+        let added = net.consider(&streams, &mut probe, policy, Instant::now());
         assert_eq!(added.is_none(), enabled);
         assert_eq!(streams.board().shares.len(), if enabled { 1 } else { 2 });
+    }
+}
+
+#[test]
+fn split_scheduler_starts_with_only_the_answer_in_hand() {
+    for enabled in [false, true] {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let mut net = net(&url, 16);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            ..Validators::default()
+        };
+        let (sender, mut received) = tokio::sync::mpsc::channel(16);
+        let streams = Streams {
+            job: Job {
+                from: &url,
+                key: &url,
+                validators: &validators,
+                pinned: false,
+                total: 128 * MIB,
+                on: &|_| Ok(()),
+                measured: None,
+            },
+            board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
+            sender,
+        };
+        let _first = net.try_permit(&url).unwrap();
+        let response = reqwest::Response::from(http::Response::new(Bytes::from_static(b"x")));
+        let completed = block_on(net.run_split(&streams, response, Probe::Settled));
+        assert!(matches!(completed.failure, Some(Failure::Transient { .. })));
+        assert_eq!(streams.board().shares.len(), 1);
+        assert_eq!(received.try_recv().unwrap(), (0, Bytes::from_static(b"x")));
+        assert_eq!(net.work.counts().requests, 0);
+    }
+}
+
+fn scheduling<'a>(url: &'a Url, validators: &'a Validators) -> Streams<'a> {
+    let (sender, _receiver) = tokio::sync::mpsc::channel(16);
+    Streams {
+        job: Job {
+            from: url,
+            key: url,
+            validators,
+            pinned: false,
+            total: 128 * MIB,
+            on: &|_| Ok(()),
+            measured: None,
+        },
+        board: Mutex::new(Board::new(vec![(0, 128 * MIB)])),
+        sender,
+    }
+}
+
+#[test]
+fn range_probes_wait_for_a_window_and_require_fifteen_percent_growth() {
+    for enabled in [false, true] {
+        for later_bytes in [1150, 1322] {
+            let url = Url::parse("https://example.org/file").unwrap();
+            let mut net = net(&url, 16);
+            if enabled {
+                net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+            }
+            let validators = Validators {
+                etag: Some("\"v1\"".to_owned()),
+                ..Validators::default()
+            };
+            let policy = Policy::for_run(&net, &validators);
+            let streams = scheduling(&url, &validators);
+            let _first = net.try_permit(&url).unwrap();
+            let start = Instant::now();
+            let mut probe = Probe::Measure {
+                since: start,
+                delivered: 0,
+            };
+            streams.board().deliver(0, 1000);
+            assert!(net.consider(&streams, &mut probe, policy, start).is_none());
+            assert_eq!(streams.board().shares.len(), 1);
+            let first_window = start + policy.window;
+            let (second, _second_permit) = net
+                .consider(&streams, &mut probe, policy, first_window)
+                .unwrap();
+            assert_eq!(streams.board().shares.len(), 2);
+            assert!(
+                net.consider(&streams, &mut probe, policy, first_window)
+                    .is_none()
+            );
+            streams.board().deliver(second, 1);
+            assert!(
+                net.consider(&streams, &mut probe, policy, first_window)
+                    .is_none()
+            );
+            streams.board().deliver(0, 1150);
+            let second_window = first_window + policy.window;
+            assert!(
+                net.consider(
+                    &streams,
+                    &mut probe,
+                    policy,
+                    second_window.checked_sub(Duration::from_nanos(1)).unwrap()
+                )
+                .is_none()
+            );
+            let (third, _third_permit) = net
+                .consider(&streams, &mut probe, policy, second_window)
+                .unwrap();
+            assert_eq!(streams.board().shares.len(), 3);
+            streams.board().deliver(third, 1);
+            assert!(
+                net.consider(&streams, &mut probe, policy, second_window)
+                    .is_none()
+            );
+            streams.board().deliver(0, later_bytes);
+            assert!(
+                net.consider(&streams, &mut probe, policy, second_window + policy.window)
+                    .is_none()
+            );
+            assert!(matches!(probe, Probe::Settled));
+            streams.board().deliver(0, MIB);
+            assert!(
+                net.consider(&streams, &mut probe, policy, start + policy.window * 100)
+                    .is_none()
+            );
+            assert_eq!(streams.board().shares.len(), 3);
+        }
+    }
+}
+
+#[test]
+fn a_link_probe_that_ends_before_measurement_cannot_restart_growth() {
+    for enabled in [false, true] {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let mut net = net(&url, 16);
+        if enabled {
+            net.exp = crate::exp::Experiments::default().with("NET_SPLIT_LINK_RATE", "1");
+        }
+        let validators = Validators {
+            etag: Some("\"v1\"".to_owned()),
+            ..Validators::default()
+        };
+        let policy = Policy::for_run(&net, &validators);
+        let streams = scheduling(&url, &validators);
+        let _first = net.try_permit(&url).unwrap();
+        let (id, _second) = net.add_stream(&streams, policy.maximum).unwrap();
+        let mut probe = Probe::Wait { id, before: 1000.0 };
+        streams.board().give_back(id);
+        assert!(
+            net.consider(&streams, &mut probe, policy, Instant::now())
+                .is_none()
+        );
+        assert_eq!(matches!(probe, Probe::Settled), enabled);
     }
 }

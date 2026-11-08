@@ -112,7 +112,9 @@ experiment settings come from the run's `Experiments` value and are off by defau
 
 | switch | behavior |
 |---|---|
-| `FETCHLOOM_EXP_NET_SPLIT_LINK_RATE=1` | an eligible uncapped body with a strong range validator starts four ranges immediately. after all start, 250 ms aggregate-rate windows add streams only while each addition improves throughput by 15%, capped at eight. an empty rate window waits for progress instead of adding requests. this raises the initial-host request cap to eight, still bounded by jobs. the first error, including 429, stops the other streams and retries as one stream with its original retry delay. missing validators, small bodies, explicit split disable and rate caps retain the ordinary policy. |
+| `FETCHLOOM_EXP_NET_SPLIT_LINK_RATE=1` | an eligible uncapped body with a strong range validator starts with one ordinary batched stream. after a positive 250 ms rate window, it retains that response and probes one extra range. later additions require at least 15% aggregate-rate growth over a full probe window after the added stream starts. a probe with insufficient growth, or one that ends before it can be measured, permanently stops additions for that download. an empty initial window waits for progress. the initial-host cap is eight only with this switch, still bounded by jobs. the first error, including 429, stops the other streams and retries as one stream with its original retry delay. missing validators, small bodies, explicit split disable and rate caps retain the ordinary policy. |
+
+explicit forced splitting and saved ranged checkpoints still enter the range scheduler directly, with one response initially.
 
 ## invariants and traps
 
