@@ -45,14 +45,14 @@ pub(super) struct Report {
 
 impl Report {
     /// what a dry run found: whether data.lock would change and what placing would do.
-    fn dry(project: PathBuf, datasets: Vec<String>, lock_changed: bool, preview: Preview) -> Self {
+    fn dry(project: PathBuf, datasets: Vec<String>, outcome: Outcome<Preview>) -> Self {
         Report {
             project,
             datasets,
-            lock_changed,
-            placement: Some(preview.placement),
+            lock_changed: outcome.lock_changed,
+            placement: Some(outcome.placed.placement),
             dry_run: true,
-            changes: Some(preview.changes),
+            changes: Some(outcome.placed.changes),
         }
     }
 }
@@ -188,7 +188,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         manifest: digest::sha256(updated.as_bytes()),
         lock: lock_seen,
     };
-    let (lock_changed, placement) = sync_add(
+    let outcome = sync_add(
         &work,
         &new_manifest,
         old,
@@ -202,8 +202,8 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     Ok(Report {
         project: adding.project.root,
         datasets: vec![name],
-        lock_changed,
-        placement: Some(placement),
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
         ..Report::default()
     })
 }
@@ -315,7 +315,7 @@ async fn preview_add(
     listing: Listing,
 ) -> Result<Report, Error> {
     let given = Some((name.clone(), listing));
-    let (lock_changed, preview) = preview_all(work, manifest, old, false, given, None).await?;
+    let outcome = preview_all(work, manifest, old, false, given, None).await?;
     let output = &work.context.output;
     preview_ignore(work, manifest)?;
     output.step(
@@ -326,12 +326,7 @@ async fn preview_add(
         ),
     );
     dry_run_done(output, None);
-    Ok(Report::dry(
-        work.project.root.clone(),
-        vec![name],
-        lock_changed,
-        preview,
-    ))
+    Ok(Report::dry(work.project.root.clone(), vec![name], outcome))
 }
 
 async fn sync_add(
@@ -342,7 +337,7 @@ async fn sync_add(
     seen: &Seen,
     name: &str,
     listing: Listing,
-) -> Result<(bool, Placement), Error> {
+) -> Result<Outcome<Placement>, Error> {
     sync_all(
         work,
         manifest,
@@ -489,20 +484,15 @@ async fn again(
         )));
     }
     if dry_run {
-        let (lock_changed, preview) = preview_all(work, manifest, old, false, None, None).await?;
+        let outcome = preview_all(work, manifest, old, false, None, None).await?;
         preview_ignore(work, manifest)?;
         dry_run_done(
             &work.context.output,
             Some(&format!("{name} is already in data.toml")),
         );
-        return Ok(Report::dry(
-            work.project.root.clone(),
-            Vec::new(),
-            lock_changed,
-            preview,
-        ));
+        return Ok(Report::dry(work.project.root.clone(), Vec::new(), outcome));
     }
-    let (lock_changed, placement) = sync_all(
+    let outcome = sync_all(
         work,
         manifest,
         old,
@@ -525,8 +515,8 @@ async fn again(
     Ok(Report {
         project: work.project.root.clone(),
         datasets: Vec::new(),
-        lock_changed,
-        placement: Some(placement),
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
         ..Report::default()
     })
 }
@@ -589,7 +579,12 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         );
         place::tell_preview(&context.output, &new_manifest, &preview);
         dry_run_done(&context.output, None);
-        return Ok(Report::dry(project.root, vec![args.name], true, preview));
+        let outcome = Outcome {
+            lock_changed: true,
+            pins: Vec::new(),
+            placed: preview,
+        };
+        return Ok(Report::dry(project.root, vec![args.name], outcome));
     }
     project.write(manifest::FILE, updated.as_bytes())?;
     project.write(lock::FILE, lock.render().as_bytes())?;
@@ -645,7 +640,11 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Arc::new(net(context, &manifest)),
         open_cache()?,
     );
-    let (lock_changed, placement) = sync_all(
+    let Outcome {
+        lock_changed,
+        pins,
+        placed: placement,
+    } = sync_all(
         &work,
         &manifest,
         old,
@@ -696,6 +695,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     }
     Ok(Report {
         project: project.root,
+        datasets: pins,
         lock_changed,
         placement: Some(placement),
         ..Report::default()
@@ -719,19 +719,14 @@ async fn preview_sync(
         Arc::new(net(context, manifest)),
         peek_cache()?,
     );
-    let (lock_changed, preview) =
-        preview_all(&work, manifest, old, force, None, Some(seen)).await?;
-    let nothing = !lock_changed && preview.changes_nothing();
+    let outcome = preview_all(&work, manifest, old, force, None, Some(seen)).await?;
+    let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     dry_run_done(
         &context.output,
         nothing.then_some("all pinned files are in place"),
     );
-    Ok(Report::dry(
-        project.root.clone(),
-        Vec::new(),
-        lock_changed,
-        preview,
-    ))
+    let pins = outcome.pins.clone();
+    Ok(Report::dry(project.root.clone(), pins, outcome))
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
@@ -767,7 +762,8 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
-    let moved = engine::tell_upgrades(&context.output, &before, &lock);
+    engine::tell_upgrades(&context.output, &before, &lock);
+    let pins = engine::repinned(&before, &lock);
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
@@ -781,7 +777,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     }
     Ok(Report {
         project: project.root,
-        datasets: moved,
+        datasets: pins,
         lock_changed: changed,
         placement: None,
         ..Report::default()
@@ -1030,6 +1026,17 @@ enum Read<'a> {
     Planned(&'a Seen),
 }
 
+/// what a run did, or with `--dry-run` would do, to data.lock and the data folder.
+#[derive(Debug)]
+struct Outcome<T> {
+    lock_changed: bool,
+    /// the datasets whose pins changed: pinned for the first time, pinned to other data or files,
+    /// or no longer pinned.
+    pins: Vec<String>,
+    /// what placing did, or would do.
+    placed: T,
+}
+
 /// the lock, the cache and the data folder brought in line, in that order, and the state left
 /// recording data.toml and data.lock as `read` and as this run leaves them.
 async fn sync_all(
@@ -1040,7 +1047,7 @@ async fn sync_all(
     force: bool,
     given: Option<(String, Listing)>,
     read: Read<'_>,
-) -> Result<(bool, Placement), Error> {
+) -> Result<Outcome<Placement>, Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     disk::audit(work.project, &survey, &work.cache)?;
@@ -1049,7 +1056,11 @@ async fn sync_all(
             if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
             {
                 register(work);
-                return Ok((false, placement));
+                return Ok(Outcome {
+                    lock_changed: false,
+                    pins: Vec::new(),
+                    placed: placement,
+                });
             }
             seen
         }
@@ -1064,6 +1075,7 @@ async fn sync_all(
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
+    let pins = engine::repinned(&before, &lock);
     let written = match &written {
         Some(text) => Some(digest::sha256(text.as_bytes())),
         None => seen.lock,
@@ -1078,7 +1090,11 @@ async fn sync_all(
         .await?;
     work.drop_unpacked(&lock);
     register(work);
-    Ok((changed, placement))
+    Ok(Outcome {
+        lock_changed: changed,
+        pins,
+        placed: placement,
+    })
 }
 
 /// what [`sync_all`] would do, told as it is found: the lock it would write when that changes,
@@ -1093,20 +1109,21 @@ async fn preview_all(
     force: bool,
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
-) -> Result<(bool, Preview), Error> {
+) -> Result<Outcome<Preview>, Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
     {
-        return Ok((
-            false,
-            Preview {
+        return Ok(Outcome {
+            lock_changed: false,
+            pins: Vec::new(),
+            placed: Preview {
                 placement,
                 ..Preview::default()
             },
-        ));
+        });
     }
     let (lock, before, jobs) = work
         .relock_dry(manifest, old, &Upgrade::Nothing, given)
@@ -1137,7 +1154,11 @@ async fn preview_all(
         output.hint("an archive's files are known once it is unpacked, so they are not counted");
     }
     place::tell_preview(output, manifest, &preview);
-    Ok((changed, preview))
+    Ok(Outcome {
+        lock_changed: changed,
+        pins: engine::repinned(&before, &lock),
+        placed: preview,
+    })
 }
 
 /// the last line of every dry run, with what it found when there is nothing to do.

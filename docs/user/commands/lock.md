@@ -31,6 +31,8 @@ fetchloom lock [options]
 
 each dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title when the source gives one, its file count and its size, so a typo in an id that pins an unrelated record stands out. up to 20 first pins get a line each; the rest, and changed pins of datasets locked before, are counted in one `Locked` line.
 
+with `--json`, `result.datasets` names the datasets whose pins changed, as `sync` does: pinned for the first time, pinned to other data, or no longer in `data.lock`.
+
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
 `lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.

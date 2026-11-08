@@ -1847,3 +1847,45 @@ fn a_first_pin_by_lock_or_sync_gets_a_line_of_its_own() -> Result {
     }
     Ok(())
 }
+
+/// `sync`, `sync --dry-run` and `lock` name in JSON the datasets whose pins changed: pinned for
+/// the first time, pinned to other data, or no longer pinned.
+#[test]
+fn json_names_the_datasets_whose_pins_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let first = fs::read_to_string(&manifest)?;
+    let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    let hens = Server::start("/files/hens.csv", vec![file(b"hen\n", "\"h\"")])?;
+    let both = format!(
+        "{first}\n[datasets.cows]\nref = \"{}\"\n\n[datasets.hens]\nref = \"{}\"\n",
+        cows.url, hens.url
+    );
+    fs::write(&manifest, &both)?;
+    let previewed = json(&sandbox.run(&["--json", "sync", "--dry-run"])?)?;
+    assert_eq!(
+        previewed["result"]["datasets"],
+        serde_json::json!(["cows", "hens"])
+    );
+    let synced = json(&sandbox.run(&["--json", "sync"])?)?;
+    assert_eq!(synced["result"]["lock_changed"], true, "{synced}");
+    assert_eq!(
+        synced["result"]["datasets"],
+        serde_json::json!(["cows", "hens"])
+    );
+    fs::write(
+        &manifest,
+        both.replace("[datasets.iris]", "[datasets.iris-renamed]"),
+    )?;
+    let locked = json(&sandbox.run(&["--json", "lock"])?)?;
+    assert_eq!(
+        locked["result"]["datasets"],
+        serde_json::json!(["iris", "iris-renamed"]),
+        "{locked}"
+    );
+    let unchanged = json(&sandbox.run(&["--json", "sync"])?)?;
+    assert_eq!(unchanged["result"]["datasets"], serde_json::json!([]));
+    Ok(())
+}

@@ -31,6 +31,8 @@ fetchloom sync [options]
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.
 
+with `--json`, `result.datasets` names the datasets whose pins changed: pinned for the first time, pinned to other data, or no longer in `data.lock`. [JSON output](../reference/json-output.md) describes the rest.
+
 placement tries a reflink, then a hardlink, then a copy; read-only placement on windows tries hardlinks first. files are read-only by default. recognized synced folders skip hardlinks. `copy = true` requests writable reflinks or copies. see [placement](../concepts.md#placement).
 
 if a locked 32-byte file is replaced upstream by a 15-byte file, stderr reports:

@@ -690,6 +690,24 @@ impl Verbs {
     };
 }
 
+/// the datasets whose pins `lock` changes beside data.lock as it was `before`: pinned for the
+/// first time, pinned to other data or files, or no longer pinned, by name.
+pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
+    let mut names: Vec<String> = lock
+        .datasets
+        .iter()
+        .filter(|dataset| {
+            before
+                .get(lock, &dataset.name)
+                .is_none_or(|old| old.resolved != dataset.resolved || old.files != dataset.files)
+        })
+        .map(|dataset| dataset.name.clone())
+        .chain(before.dropped(lock).map(|dataset| dataset.name.clone()))
+        .collect();
+    names.sort();
+    names
+}
+
 /// the most datasets pinned for the first time that get a line each; the rest are counted.
 const FIRST_PINS: usize = 20;
 
