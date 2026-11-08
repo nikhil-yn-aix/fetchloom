@@ -25,6 +25,15 @@ def __dir__() -> list[str]:
     return list(__all__)
 
 
+def __getattr__(name: str) -> str:
+    # the installed package's version, read only when asked, so importing stays quick
+    if name == "__version__":
+        from importlib.metadata import version
+
+        return version("fetchloom")
+    raise AttributeError(f"module 'fetchloom' has no attribute {name!r}")
+
+
 class Error(Exception):
     """a fetchloom run that failed.
 
@@ -91,11 +100,13 @@ def sync(
     """make the project's data folder match data.lock and return the project's path.
 
     ``project`` is the project folder or any folder inside it. files edited by hand stay,
-    and each one fetchloom keeps is reported as a python warning; ``strict=True`` raises
-    :class:`Error` with kind ``conflict.kept`` instead, listing them in ``details``, so a
-    notebook never runs on inputs that differ from the lock. a download above 1 GiB raises
-    :class:`Error` with kind ``unconfirmed`` unless ``yes=True`` approves it.
-    ``offline=True`` prevents network requests.
+    and each one fetchloom keeps is reported as a python warning; ``strict=True`` also raises
+    :class:`Error` with kind ``conflict.kept``, listing them in ``details``, so a notebook
+    never runs on inputs that differ from the lock. a file fetchloom put back as pinned, such
+    as one linked to the cache's copy that was edited in place, matches the lock again: its
+    warning says so, and nothing is raised. a download above 1 GiB raises :class:`Error`
+    with kind ``unconfirmed`` unless ``yes=True`` approves it. ``offline=True`` prevents
+    network requests.
     """
     arguments = ["sync"]
     if yes:

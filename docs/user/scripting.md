@@ -128,7 +128,7 @@ iris = fetchloom.path("iris/Iris.csv", project=".", offline=True)
 
 the helper first looks for the executable beside the imported package or in its installation prefix. it then checks the current and base interpreter scripts, the preferred user scripts directory, and PATH. this keeps a `pip --target` or `pip --prefix` package from using an unrelated interpreter-level executable when its own executable is present.
 
-both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. use CLI JSON when you need status arrays.
+both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. a file sync put back as pinned matches the lock again, so it raises nothing; its warning says what was put back. use CLI JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
 
 `yes`, `offline` and sync's `strict` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`.
 

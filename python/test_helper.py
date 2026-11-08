@@ -102,6 +102,16 @@ class PublicNames(unittest.TestCase):
     def test_dir_lists_only_the_helpers(self):
         self.assertEqual(dir(fetchloom), ["Error", "path", "sync"])
 
+    def test_the_version_is_the_installed_packages(self):
+        with patch("importlib.metadata.version", return_value="9.9.9") as version:
+            self.assertEqual(fetchloom.__version__, "9.9.9")
+        version.assert_called_once_with("fetchloom")
+
+    def test_strict_names_what_it_raises_on_and_what_it_does_not(self):
+        documented = " ".join(fetchloom.sync.__doc__.split())
+        self.assertIn("``strict=True`` also raises", documented)
+        self.assertIn("put back as pinned", documented)
+
     def test_the_path_example_names_a_real_file(self):
         self.assertIn("``iris/Iris.csv``", fetchloom.path.__doc__)
 
