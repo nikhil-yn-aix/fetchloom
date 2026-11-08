@@ -34,6 +34,21 @@ configuration and JSON examples must use accepted fields and values; valid file 
 
 [output](architecture/output.md) owns the CLI palette, rendering mechanics and terminal fallbacks. keep meaning readable without color and use its existing renderer for new command output.
 
+help text, messages and the user guide are read by people whose first language is not english, often while something is going wrong. write them in plain words:
+
+- name the thing itself (`data.lock`, the cache folder, the project folder) rather than a comparison. the analogy belongs to `fetchloom help concepts` only.
+- give the meaning of a technical word the first time a help screen or page uses it, for example "pin (record the exact files and their SHA-256)".
+- say what happened, then what to do. keep internal names (owner, claim, record, mark) out of messages.
+- a cancel the user chose is not an error: say what was cancelled and that nothing changed.
+
+| cut | use |
+|---|---|
+| the shopping list, the receipt, the pantry, restocking | data.toml, data.lock, the cache, sync |
+| the story | the usual output |
+| approve confirmations | answer yes to questions |
+| catalog | site, such as hugging face |
+| could not claim the project owner | could not lock the project |
+
 ## code comments and names
 
 a comment explains a reason, outside constraint or trap the code cannot express. if it repeats the operation, improve the name or remove the comment. use lowercase sentences, normally one or two, without banners, decorative labels or commented-out code. track unfinished work in an issue.
