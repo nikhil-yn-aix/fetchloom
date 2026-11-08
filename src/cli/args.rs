@@ -701,6 +701,9 @@ pub(crate) struct Lock {
     /// change nothing, and fail when data.lock is out of date, for CI
     #[arg(long, conflicts_with = "upgrade", help_heading = "options")]
     pub(crate) check: bool,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// list the project's datasets, or the files of one

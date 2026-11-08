@@ -1889,3 +1889,49 @@ fn json_names_the_datasets_whose_pins_changed() -> Result {
     assert_eq!(unchanged["result"]["datasets"], serde_json::json!([]));
     Ok(())
 }
+
+/// `lock --upgrade --dry-run`, or `-n`, tells what would change without writing data.lock or
+/// downloading. a link no checksum pins is listed as a file to fetch, not as a change, since
+/// only its bytes can tell.
+#[test]
+fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    let manifest = sandbox.work().join("data.toml");
+    let updated = format!(
+        "{}\n[datasets.cows]\nref = \"{}\"\n",
+        fs::read_to_string(&manifest)?,
+        cows.url
+    );
+    fs::write(&manifest, updated)?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = sandbox.run(&["lock", "--upgrade", "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("  Would pin cows, new in data.lock:"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Would fetch iris/iris.csv"), "{stderr}");
+    assert!(!stderr.contains("upgrade iris"), "{stderr}");
+    assert!(stderr.contains("dry run, nothing was changed"), "{stderr}");
+    let document = json(&sandbox.run(&["--json", "lock", "--upgrade", "-n"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true, "{document}");
+    assert_eq!(result["lock_changed"], true);
+    assert_eq!(result["datasets"], serde_json::json!(["cows"]));
+    assert_eq!(result["placement"], serde_json::Value::Null);
+    assert_eq!(
+        result["changes"]["download"],
+        serde_json::json!([
+            { "path": "cows/cows.csv", "size": null },
+            { "path": "iris/iris.csv", "size": null },
+        ])
+    );
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert_eq!(server.requests().len(), 1, "only the first add downloads");
+    assert_eq!(cows.requests().len(), 0);
+    Ok(())
+}

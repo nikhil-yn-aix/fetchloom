@@ -37,6 +37,9 @@ struct DraftFile {
     known: Option<(Sha256, u64)>,
     /// for an archive, the tree hash of what it unpacks to, once known.
     unpacks_to: Option<Sha256>,
+    /// the pin data.lock had for a file an upgrade asks about again, since no checksum tells
+    /// whether its bytes changed. only a dry run, which cannot ask, plans with it.
+    was: Option<LockedFile>,
 }
 
 /// an archive a draft needs unpacked to learn what it unpacks to.
@@ -70,7 +73,9 @@ impl Draft {
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
-                let earlier = carried(&by_url, &remote).filter(|_| pinned || !upgrading);
+                let found = carried(&by_url, &remote);
+                let earlier = found.filter(|_| pinned || !upgrading);
+                let was = found.filter(|_| earlier.is_none()).cloned();
                 let known = match (remote.sha256, remote.size) {
                     (Some(sha256), Some(size)) => Some((sha256, size)),
                     _ => earlier
@@ -100,6 +105,7 @@ impl Draft {
                     path,
                     known,
                     unpacks_to,
+                    was,
                 }
             })
             .collect();
@@ -230,21 +236,32 @@ impl Draft {
     /// the entry a dry run plans with: [`Draft::finish`], with a stand-in for each hash only a
     /// download can learn and for what each archive not yet unpacked unpacks to. a stand-in
     /// matches no cached object, so planning treats its file as missing and its archive as never
-    /// unpacked here. it is never written.
-    pub(super) fn stand_in(mut self, now: &str) -> Result<Locked, Error> {
+    /// unpacked here. it is never written. a file an upgrade asks about again keeps the pin it
+    /// had, since only its bytes could tell a change. also returns the files, as
+    /// `<dataset>/<path>`, whose hash is a stand-in.
+    pub(super) fn stand_in(mut self, now: &str) -> Result<(Locked, Vec<String>), Error> {
         let extract = self.extract;
+        let mut guessed = Vec::new();
         for file in &mut self.files {
-            let label = format!("{}/{}", self.name, file.path);
             if file.known.is_none() {
-                let size = file.remote.size.unwrap_or_default();
-                file.known = Some((stand_in(&label), size));
+                if let Some(was) = &file.was {
+                    file.known = Some((was.sha256, was.size));
+                    file.path.clone_from(&was.path);
+                    file.unpacks_to = was.unpacks_to;
+                } else {
+                    let label = format!("{}/{}", self.name, file.path);
+                    let size = file.remote.size.unwrap_or_default();
+                    file.known = Some((stand_in(&label), size));
+                    guessed.push(label);
+                }
             }
+            let label = format!("{}/{}", self.name, file.path);
             let unpacks = extract && archive::by_name(&file.path) == Some(Packed::Archive);
             if unpacks && file.unpacks_to.is_none() {
                 file.unpacks_to = Some(stand_in(&format!("{label} unpacked")));
             }
         }
-        self.finish(now)
+        Ok((self.finish(now)?, guessed))
     }
 
     /// the entry for data.lock. two files pinned on one path would leave a data.lock no run can

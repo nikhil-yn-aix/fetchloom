@@ -11,7 +11,7 @@ use tracing::Instrument as _;
 
 use super::args::{self, Add, Remove};
 use super::sync::disk::{self, Survey};
-use super::sync::place::{self, Changes, Placement, Preview, Seen};
+use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::cache::Cache;
@@ -731,9 +731,9 @@ async fn preview_sync(
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
     let project = find(&context.output)?;
-    // a check changes nothing, so it needs no hold. anything else reads what it changes only
-    // once no other fetchloom can change it
-    let _held = if args.check {
+    // a check or a dry run changes nothing, so it needs no hold. anything else reads what it
+    // changes only once no other fetchloom can change it
+    let _held = if args.check || args.dry.dry_run {
         None
     } else {
         Some(hold(context, &project, "lock").await?)
@@ -753,6 +753,9 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             Upgrade::Only(names.into_iter().collect::<BTreeSet<_>>())
         }
     };
+    if args.dry.dry_run {
+        return preview_lock(context, &project, &manifest, old, &upgrade).await;
+    }
     let work = Loop::new(
         context,
         &project,
@@ -762,7 +765,13 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
-    engine::tell_upgrades(&context.output, &before, &lock);
+    engine::tell_upgrades(
+        &context.output,
+        &before,
+        &lock,
+        "Upgraded",
+        &std::collections::HashSet::new(),
+    );
     let pins = engine::repinned(&before, &lock);
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
@@ -781,6 +790,78 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         lock_changed: changed,
         placement: None,
         ..Report::default()
+    })
+}
+
+/// `lock --dry-run`: what locking would change, found without downloading, unpacking or
+/// writing. a file no checksum pins is planned with the pin it had and listed as a download,
+/// since only its bytes can tell whether it changed.
+async fn preview_lock(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    old: Option<Lock>,
+    upgrade: &Upgrade,
+) -> Result<Report, Error> {
+    let work = Loop::new(
+        context,
+        project,
+        Arc::new(net(context, manifest)),
+        peek_cache()?,
+    );
+    let dry = work.relock_dry(manifest, old, upgrade, None).await?;
+    let output = &context.output;
+    let changed = !dry.before.holds(&dry.lock);
+    if changed {
+        engine::tell_lock(
+            output,
+            &dry.before,
+            &dry.lock,
+            engine::Verbs::WOULD,
+            None,
+            &engine::sizeless(&dry.jobs),
+        );
+    }
+    engine::tell_upgrades(
+        output,
+        &dry.before,
+        &dry.lock,
+        "Would upgrade",
+        &dry.guessed,
+    );
+    let download: Vec<Download> = dry
+        .jobs
+        .iter()
+        .map(|job| Download {
+            path: job.label.clone(),
+            size: job.fetch.expect.size,
+        })
+        .collect();
+    for download in &download {
+        let size = download
+            .size
+            .map_or_else(|| "size unknown".to_owned(), units::size);
+        output.step("Would fetch", &format!("{} · {size}", download.path));
+    }
+    for archive in &dry.unpack {
+        output.step("Would open", archive);
+    }
+    if !matches!(upgrade, Upgrade::Nothing) && dry.jobs.iter().any(|job| job.fetch.revalidate) {
+        output.hint("whether a file no checksum pins has changed shows only once it is downloaded");
+    }
+    let nothing = !changed && download.is_empty() && dry.unpack.is_empty();
+    dry_run_done(output, nothing.then_some("data.lock is already up to date"));
+    Ok(Report {
+        project: project.root.clone(),
+        datasets: engine::repinned(&dry.before, &dry.lock),
+        lock_changed: changed,
+        placement: None,
+        dry_run: true,
+        changes: Some(Changes {
+            download,
+            unpack: dry.unpack,
+            ..Changes::default()
+        }),
     })
 }
 
@@ -1125,7 +1206,9 @@ async fn preview_all(
             },
         });
     }
-    let (lock, before, jobs) = work
+    let engine::DryRelock {
+        lock, before, jobs, ..
+    } = work
         .relock_dry(manifest, old, &Upgrade::Nothing, given)
         .await?;
     let changed = !before.holds(&lock);

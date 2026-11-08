@@ -171,15 +171,15 @@ impl<'a> Loop<'a> {
     }
 
     /// the lock [`Loop::relock`] would make, beside data.lock as it was, found without
-    /// downloading or unpacking, and the downloads it would need. a hash only those can learn has
-    /// a stand-in, so the lock is only for planning.
+    /// downloading or unpacking, and the work it would do first. a hash only that work can learn
+    /// has a stand-in, so the lock is only for planning.
     pub(super) async fn relock_dry(
         &self,
         manifest: &Manifest,
         old: Option<Lock>,
         upgrade: &Upgrade,
         given: Option<(String, Listing)>,
-    ) -> Result<(Lock, Before, Vec<Job>), Error> {
+    ) -> Result<DryRelock, Error> {
         let existed = old.is_some();
         let Drafted {
             kept,
@@ -189,23 +189,38 @@ impl<'a> Loop<'a> {
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
         let mut jobs = Vec::new();
+        let mut unpack = Vec::new();
         for draft in &mut drafts {
             // archives this machine unpacked before are known from their records
-            draft.unknown_archives(&self.cache);
+            unpack.extend(
+                draft
+                    .unknown_archives(&self.cache)
+                    .into_iter()
+                    .map(|archive| archive.label),
+            );
             jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
         }
         let now = lock::timestamp(SystemTime::now());
-        let drafted = drafts
-            .into_iter()
-            .map(|draft| draft.stand_in(&now))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut guessed = HashSet::new();
+        let mut drafted = Vec::with_capacity(drafts.len());
+        for draft in drafts {
+            let (locked, stood_in) = draft.stand_in(&now)?;
+            guessed.extend(stood_in);
+            drafted.push(locked);
+        }
         let (lock, kept) = settled(&others, kept, drafted);
         let before = Before {
             existed,
             others,
             kept,
         };
-        Ok((lock, before, jobs))
+        Ok(DryRelock {
+            lock,
+            before,
+            jobs,
+            unpack,
+            guessed,
+        })
     }
 
     /// datasets whose entry is unchanged, moved from data.lock as it has them, and drafts of the
@@ -584,6 +599,19 @@ fn shown_five(mut error: Error, labels: &[&str]) -> Error {
         error = error.detail(format!("and {} more", labels.len() - 5));
     }
     error
+}
+
+/// what [`Loop::relock_dry`] found relocking would do.
+pub(super) struct DryRelock {
+    /// the lock to plan with, never to write.
+    pub(super) lock: Lock,
+    pub(super) before: Before,
+    /// the downloads relocking would make first.
+    pub(super) jobs: Vec<Job>,
+    /// archives, as `<dataset>/<path>`, it would unpack to learn what they hold.
+    pub(super) unpack: Vec<String>,
+    /// files, as `<dataset>/<path>`, whose hash in `lock` is a stand-in.
+    pub(super) guessed: HashSet<String>,
 }
 
 /// datasets on their way into data.lock.
@@ -1012,9 +1040,16 @@ fn tell_facts(output: &Output, listing: &Listing) {
     }
 }
 
-/// prints each dataset that moved to another version, beside data.lock as it was `before`, and
-/// returns their names.
-pub(super) fn tell_upgrades(output: &Output, before: &Before, new: &Lock) -> Vec<String> {
+/// prints each dataset that moved to another version, beside data.lock as it was `before`, with
+/// `verb`, such as `Upgraded`, and returns their names. files `guessed` by a dry run, as
+/// `<dataset>/<path>`, are not counted as changed, since only their bytes could tell.
+pub(super) fn tell_upgrades(
+    output: &Output,
+    before: &Before,
+    new: &Lock,
+    verb: &str,
+    guessed: &HashSet<String>,
+) -> Vec<String> {
     let mut moved = Vec::new();
     for dataset in &new.datasets {
         let Some(before) = before.get(new, &dataset.name) else {
@@ -1031,12 +1066,21 @@ pub(super) fn tell_upgrades(output: &Output, before: &Before, new: &Lock) -> Vec
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let (was, now) = (paths(before), paths(dataset));
+        let unsure = |path: &str| guessed.contains(&format!("{}/{path}", dataset.name));
         let added = now.keys().filter(|path| !was.contains_key(*path)).count();
         let removed = was.keys().filter(|path| !now.contains_key(*path)).count();
         let changed = now
             .iter()
-            .filter(|(path, sha256)| was.get(*path).is_some_and(|before| before != *sha256))
+            .filter(|(path, sha256)| {
+                !unsure(path) && was.get(*path).is_some_and(|before| before != *sha256)
+            })
             .count();
+        if before.resolved == dataset.resolved
+            && added + removed + changed == 0
+            && now.keys().any(|path| unsure(path))
+        {
+            continue;
+        }
         let mut facts = vec![format!("{} → {}", before.resolved, dataset.resolved)];
         for (n, one, many) in [
             (changed, "file changed", "files changed"),
@@ -1047,10 +1091,7 @@ pub(super) fn tell_upgrades(output: &Output, before: &Before, new: &Lock) -> Vec
                 facts.push(units::count(n as u64, one, many));
             }
         }
-        output.step(
-            "Upgraded",
-            &format!("{} · {}", dataset.name, facts.join(" · ")),
-        );
+        output.step(verb, &format!("{} · {}", dataset.name, facts.join(" · ")));
         moved.push(dataset.name.clone());
     }
     moved
@@ -1359,11 +1400,23 @@ mod tests {
         new.datasets[2].resolved = "zenodo:3".to_owned();
         new.datasets.push(locked("new"));
         assert_eq!(
-            tell_upgrades(&context.output, &Before::whole(Some(old.clone())), &new),
+            tell_upgrades(
+                &context.output,
+                &Before::whole(Some(old.clone())),
+                &new,
+                "Upgraded",
+                &HashSet::new()
+            ),
             ["changed", "revision"]
         );
         assert_eq!(
-            tell_upgrades(&context.output, &Before::whole(Some(old.clone())), &old),
+            tell_upgrades(
+                &context.output,
+                &Before::whole(Some(old.clone())),
+                &old,
+                "Upgraded",
+                &HashSet::new()
+            ),
             Vec::<String>::new()
         );
     }
@@ -1426,6 +1479,30 @@ mod tests {
         assert_eq!(
             lines[20],
             ("Would lock", "5 datasets · 5 files in data.lock".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_dry_upgrade_does_not_count_guessed_files_as_changed() {
+        let context = context();
+        let old = Lock {
+            datasets: vec![locked("guessed"), locked("moved")],
+        };
+        let mut new = old.clone();
+        new.datasets[0].files[0].sha256 = digest::sha256(b"a stand-in");
+        new.datasets[1].resolved = "zenodo:3".to_owned();
+        new.datasets[1].files[0].sha256 = digest::sha256(b"another stand-in");
+        let guessed = HashSet::from(["guessed/data.csv".to_owned(), "moved/data.csv".to_owned()]);
+        assert_eq!(
+            tell_upgrades(
+                &context.output,
+                &Before::whole(Some(old)),
+                &new,
+                "Would upgrade",
+                &guessed
+            ),
+            ["moved"],
+            "only a new version is told when the bytes are a guess"
         );
     }
 

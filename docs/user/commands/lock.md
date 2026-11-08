@@ -7,6 +7,7 @@ fetchloom lock
 fetchloom lock --check
 fetchloom lock --upgrade iris flowers
 fetchloom lock --upgrade
+fetchloom lock --upgrade --dry-run
 ```
 
 ## usage
@@ -19,6 +20,7 @@ fetchloom lock [options]
 |---|---|
 | `--check` | check manifest membership and spec hashes without changing anything |
 | `--upgrade [name ...]` | resolve named datasets again; with no names, consider every dataset |
+| `-n`, `--dry-run` | list what locking would change without writing `data.lock` or downloading |
 
 `--check` conflicts with `--upgrade`. [global options](README.md#global-options) also apply.
 
@@ -44,6 +46,10 @@ already pinned ordinary files need not be cached. a source that supplies SHA-256
 filter or extraction changes resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting an upgrade resolves the manifest reference instead. [spec hashes](../reference/data-lock.md#the-spec-hash) defines these rules.
 
 after an upgrade, run `fetchloom sync` to place the new inputs and commit `data.lock`. unchanged resolved references and file lists retain their previous `locked` timestamp.
+
+## dry run
+
+`lock --dry-run`, or `-n`, lists what `lock` would change without writing `data.lock` or the cache and without downloading files. with `--upgrade`, it shows which datasets have newer versions. it still resolves entries, so a source may be asked what a link holds, and it takes no project hold. its lines are those of a real lock, with `Would pin`, `Would lock`, `Would drop` and `Would upgrade` as verbs. `Would fetch` names each file a real lock would download first to learn its hash; a file no checksum pins is also listed there under `--upgrade`, since only its bytes tell whether it changed, and until then the dry run counts it as unchanged. `Would open` names each archive it would unpack to learn what it holds. `--check` already changes nothing; `--check --dry-run` is a check. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 
