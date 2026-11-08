@@ -83,7 +83,7 @@ every pinned download is validated before approval or transfer. pending pins ret
 
 ## invariants and traps
 
-- `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files can still follow a written lock. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes and placements can remain.
+- `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files can still follow a written lock. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
 - matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
 - use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
 - mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.

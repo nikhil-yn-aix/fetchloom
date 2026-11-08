@@ -1787,3 +1787,49 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     assert_eq!(fs::read(folder.join("iris.csv"))?, V1, "{stderr}");
     Ok(())
 }
+
+/// an add whose placing fails is rolled back, and the files it placed for the dataset go with
+/// data.toml and data.lock, so a failed add leaves nothing of the dataset in the data folder.
+#[cfg(unix)]
+#[test]
+fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [("a.csv", b"first"), ("sub/b.csv", b"other")] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())?;
+        zip.write_all(bytes)?;
+    }
+    let bytes = zip.finish()?.into_inner();
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    // a folder the dataset needs that refuses new files, so its second file cannot be placed
+    let refusing = sandbox.work().join("data").join("rolled").join("sub");
+    fs::create_dir_all(&refusing)?;
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
+
+    let added = sandbox.run(&["add", &server.url, "--as", "rolled"]);
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o755))?;
+    let added = added?;
+
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("restored data.toml and data.lock"),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists(), "{stderr}");
+    assert!(
+        !sandbox.work().join("data/rolled/a.csv").exists(),
+        "{stderr}"
+    );
+    let state = sandbox.work().join(".fetchloom").join("state");
+    if state.exists() {
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(&state)?)?;
+        assert_eq!(state["files"], serde_json::json!({}), "{state}");
+    }
+    Ok(())
+}

@@ -375,7 +375,10 @@ impl<'a> Placing<'a> {
     }
 
     /// removes what no dataset needs, places what is missing or outdated, and records it, with
-    /// `synced` marked complete when every file the lock asks for ended up in place.
+    /// `synced` marked complete when every file the lock asks for ended up in place. `told` is
+    /// the dataset an add adds: its line stays out of what this tells, since the add tells it
+    /// last, and when placing fails or stops, what this placed for it goes again, since the add
+    /// is then rolled back.
     pub(crate) fn apply(
         self,
         output: &Output,
@@ -411,6 +414,7 @@ impl<'a> Placing<'a> {
             &mut placement,
         )?;
         sweep(project, &mut placer, &survey, &wanted);
+        let adding = told.map(|name| added_here(name, &targets, &actions));
         let (todo, adopted) = settle(
             project,
             &mut placer,
@@ -423,14 +427,22 @@ impl<'a> Placing<'a> {
         survey.smudge_edited();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
+        let threads = survey.threads;
         let state = &mut survey.state;
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
         // place_all has flushed published copies; a stop discards its unfinished batch.
-        if !stop.is_asked() {
+        let flushed = if stop.is_asked() {
+            Ok(())
+        } else {
             placer
                 .flush_copies()
-                .map_err(|err| Error::io("could not flush the copied files to disk", &err))?;
-        }
+                .map_err(|err| Error::io("could not flush the copied files to disk", &err))
+        };
+        // an add that fails is rolled back, so what it placed for its dataset goes too
+        let undone = (stop.is_asked() || failure.is_some() || flushed.is_err())
+            && adding
+                .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
+        flushed?;
         let complete = !stop.is_asked()
             && failure.is_none()
             && placement.kept.is_empty()
@@ -438,7 +450,7 @@ impl<'a> Placing<'a> {
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;
         state.synced = synced;
-        if removed || adopted || needs_writing || resynced || !tallies.is_empty() {
+        if removed || adopted || needs_writing || resynced || undone || !tallies.is_empty() {
             project.write_state(state)?;
         }
         stop.check()?;
@@ -536,6 +548,60 @@ pub(crate) fn untouched(
         unchanged: state.files.len() as u64,
         ..Placement::default()
     }))
+}
+
+/// the paths of `dataset`'s files a placing records afresh, each with whether it places the file
+/// where nothing stood, rather than taking a file already there as placed.
+fn added_here(dataset: &str, targets: &[Target], actions: &[Action]) -> Vec<(String, bool)> {
+    targets
+        .iter()
+        .zip(actions)
+        .filter(|(target, _)| target.dataset == dataset)
+        .filter_map(|(target, action)| match action {
+            Action::Place => Some((target.path.clone(), true)),
+            Action::Adopt(_) => Some((target.path.clone(), false)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// takes back what this run recorded for the dataset an add adds, as `adding` names it, since
+/// the add is rolled back when placing fails: a file it placed where nothing stood goes, unless
+/// it changed since, and so does its record, while a file it took as placed stays and only its
+/// record goes. a record of a file that cannot be removed stays, so a later sync removes it. a
+/// stop asked for does not stop this, so the placer it removes with does not listen for one.
+/// says whether the state changed.
+fn undo(
+    project: &Project,
+    data_dir: &Path,
+    threads: crate::threads::Threads,
+    state: &mut crate::project::state::State,
+    adding: &[(String, bool)],
+    checked: u64,
+) -> bool {
+    let mut placer = Placer::new(data_dir).with_threads(threads);
+    let mut changed = false;
+    for (path, placed_here) in adding {
+        let Some(record) = state.files.get(path) else {
+            continue;
+        };
+        if record.checked != checked {
+            continue;
+        }
+        if *placed_here {
+            let file = project.root.join(path);
+            if now(&file) != Some(record.look) {
+                continue;
+            }
+            if let Err(err) = placer.remove(&file, true, Some(record.method)) {
+                tracing::debug!(%path, %err, "could not take back a file a failed add placed");
+                continue;
+            }
+        }
+        state.files.remove(path);
+        changed = true;
+    }
+    changed
 }
 
 /// carries out every decision short of placing files: counts what stays, records files found to
