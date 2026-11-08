@@ -537,7 +537,9 @@ fn placed_names(folder: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(folder)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "object")
+        // an nfs client gives a file removed while its close is still on the wire a `.nfs`
+        // name of its own, and removes it once the close lands
+        .filter(|name| name != "object" && !name.starts_with(".nfs"))
         .collect();
     names.sort();
     names
