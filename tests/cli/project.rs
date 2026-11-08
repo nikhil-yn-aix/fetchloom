@@ -1069,69 +1069,36 @@ fn status_and_sync_explain_untracked_conflicts() -> Result {
     Ok(())
 }
 
+/// data.toml turned into a folder while a first add downloads is a change the add keeps: it
+/// writes neither file, says so to a person and in json, and takes back the `.fetchloom` it made.
 #[test]
-fn failed_add_reports_manifest_and_lock_rollback_and_recovery() -> Result {
-    for before in [None, Some("# keep this comment\n[datasets]\n")] {
-        for machine in [false, true] {
-            let sandbox = Sandbox::new()?;
-            let manifest = sandbox.work().join("data.toml");
-            if let Some(before) = before {
-                fs::write(&manifest, before)?;
-            }
-            // data.toml turns into a folder while the add downloads, so writing it fails, and so
-            // does putting it back
-            let blocked = manifest.clone();
-            let mut response = vec![crate::support::Part::Action(Box::new(move || {
-                let _ = fs::remove_file(&blocked);
-                fs::create_dir(&blocked).unwrap();
-            }))];
-            response.extend(file(IRIS, "\"v1\""));
-            let server = Server::start(PATH, vec![response])?;
-            let mut args = vec!["add", server.url.as_str(), "--as", "iris"];
-            if machine {
-                args.push("--json");
-            }
-            let output = sandbox.run(&args)?;
-            assert!(!output.status.success());
-            let details = if machine {
-                let document = json(&output)?;
-                document["errors"][0]["details"]
-                    .as_array()
-                    .ok_or("missing error details")?
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            } else {
-                text(&output.stderr)?
-            };
-            assert!(details.contains("could not restore data.toml"), "{details}");
-            assert!(details.contains("data.toml and data.lock"), "{details}");
-            assert!(!sandbox.work().join("data.lock").exists());
-            if let Some(before) = before {
-                assert!(
-                    details.contains("restore data.toml from the recovery copy"),
-                    "{details}"
-                );
-                let backups = fs::read_dir(sandbox.work().join(".fetchloom"))?
-                    .collect::<std::io::Result<Vec<_>>>()?;
-                assert!(
-                    backups.iter().any(|entry| {
-                        entry
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with("data.toml.recovery.")
-                            && fs::read_to_string(entry.path()).is_ok_and(|text| text == before)
-                    }),
-                    "{details}"
-                );
-            } else {
-                assert!(
-                    details.contains("remove the iris dataset entry"),
-                    "{details}"
-                );
-            }
+fn a_first_add_whose_data_toml_turns_into_a_folder_writes_nothing() -> Result {
+    for machine in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let manifest = sandbox.work().join("data.toml");
+        let blocked = manifest.clone();
+        let mut response = vec![crate::support::Part::Action(Box::new(move || {
+            fs::create_dir(&blocked).unwrap();
+        }))];
+        response.extend(file(IRIS, "\"v1\""));
+        let server = Server::start(PATH, vec![response])?;
+        let mut args = vec!["add", server.url.as_str(), "--as", "iris"];
+        if machine {
+            args.push("--json");
         }
+        let output = sandbox.run(&args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{stderr}");
+        if machine {
+            assert_eq!(json(&output)?["errors"][0]["kind"], "project.changed");
+        } else {
+            assert!(
+                stderr.contains("data.toml changed while the add was downloading"),
+                "{stderr}"
+            );
+        }
+        assert!(manifest.is_dir(), "{stderr}");
+        assert_eq!(listed(&sandbox.work())?, ["data.toml"], "{stderr}");
     }
     Ok(())
 }
@@ -1365,43 +1332,37 @@ fn failed_add_restores_both_project_files_after_writing_the_lock() -> Result {
     Ok(())
 }
 
+/// data.lock turned into a folder while an add downloads is a change the add keeps: it writes
+/// neither data.toml nor data.lock, so it needs no recovery copy.
 #[test]
-fn failed_add_reports_lock_recovery_even_when_the_manifest_restores() -> Result {
+fn an_add_whose_data_lock_turns_into_a_folder_writes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let initial = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &initial)?;
     let lock = sandbox.work().join("data.lock");
-    let before_lock = fs::read_to_string(&lock)?;
     let before_manifest = fs::read(sandbox.work().join("data.toml"))?;
-    // data.lock turns into a folder while the add downloads, so writing it fails, and so does
-    // putting it back, while data.toml is put back
+    let blocked = lock.clone();
     let mut response = vec![crate::support::Part::Action(Box::new(move || {
-        fs::remove_file(&lock).unwrap();
-        fs::create_dir(&lock).unwrap();
+        fs::remove_file(&blocked).unwrap();
+        fs::create_dir(&blocked).unwrap();
     }))];
     response.extend(file(b"experiment\n", "\"e1\""));
     let server = Server::start("/experiment.csv", vec![response])?;
     let output = sandbox.run(&["add", &server.url, "--as", "experiment"])?;
     let stderr = text(&output.stderr)?;
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("data.lock changed while the add was downloading"),
+        "{stderr}"
+    );
     assert_eq!(fs::read(sandbox.work().join("data.toml"))?, before_manifest);
-    assert!(stderr.contains("could not restore data.lock"), "{stderr}");
-    assert!(
-        stderr.contains("restore data.lock from the recovery copy"),
-        "{stderr}"
-    );
-    let backups =
-        fs::read_dir(sandbox.work().join(".fetchloom"))?.collect::<std::io::Result<Vec<_>>>()?;
-    assert!(
-        backups.iter().any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("data.lock.recovery.")
-                && fs::read_to_string(entry.path()).is_ok_and(|text| text == before_lock)
-        }),
-        "{stderr}"
-    );
+    assert!(lock.is_dir(), "{stderr}");
+    let copies = fs::read_dir(sandbox.work().join(".fetchloom"))?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|entry| entry.file_name().to_string_lossy().contains(".recovery."))
+        .count();
+    assert_eq!(copies, 0, "{stderr}");
     Ok(())
 }
 
@@ -1456,53 +1417,6 @@ fn manifest_citations_do_not_echo_reference_secrets() -> Result {
             let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
             assert!(shown.contains("data.toml:1"), "{shown}");
             assert!(!shown.contains("EM_CANARY"), "{shown}");
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn rollback_recovery_keeps_exact_private_files_without_echoing_secrets() -> Result {
-    for machine in [false, true] {
-        let sandbox = Sandbox::new()?;
-        let before = "# https://example.org/?token=EM_CANARY\n[datasets]\n";
-        let manifest = sandbox.work().join("data.toml");
-        fs::write(&manifest, before)?;
-        let blocked = manifest.clone();
-        let mut response = vec![crate::support::Part::Action(Box::new(move || {
-            fs::remove_file(&blocked).unwrap();
-            fs::create_dir(&blocked).unwrap();
-        }))];
-        response.extend(file(b"a\n", "\"a1\""));
-        let server = Server::start("/a.csv", vec![response])?;
-        let mut args = vec!["add", server.url.as_str(), "--as", "a"];
-        if machine {
-            args.push("--json");
-        }
-        let output = sandbox.run(&args)?;
-        assert!(!output.status.success());
-        let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
-        assert!(shown.contains("could not restore data.toml"), "{shown}");
-        assert!(!shown.contains("EM_CANARY"), "{shown}");
-        let backups = fs::read_dir(sandbox.work().join(".fetchloom"))?
-            .collect::<std::io::Result<Vec<_>>>()?
-            .into_iter()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("data.toml.recovery.")
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(backups.len(), 1, "{shown}");
-        assert_eq!(fs::read_to_string(backups[0].path())?, before);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(backups[0].path())?.permissions().mode() & 0o777,
-                0o600
-            );
         }
     }
     Ok(())
@@ -2113,6 +2027,90 @@ fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
     Ok(())
 }
 
+/// an edit to data.toml made while an add downloads stays: the add writes neither data.toml nor
+/// data.lock, says which file changed, and keeps what it downloaded in the cache.
+#[test]
+fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let lock = fs::read(work.join("data.lock"))?;
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
+    let running = Background::start(sandbox.command(&["-v", "add", &cows.url, "--as", "cows"]))?;
+    wait_until("the download to start", || Ok(!cows.requests().is_empty()))?;
+    let edited = format!(
+        "{}# a note made meanwhile\n",
+        fs::read_to_string(work.join("data.toml"))?
+    );
+    fs::write(work.join("data.toml"), &edited)?;
+    drop(release);
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(50), "{stderr}");
+    assert!(
+        stderr.contains("data.toml changed while the add was downloading")
+            && stderr.contains("kind: project.changed"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
+    assert_eq!(fs::read(work.join("data.lock"))?, lock, "{stderr}");
+    assert!(!work.join("data/cows").exists(), "{stderr}");
+    let digest = sha256_hex(&body);
+    assert!(
+        sandbox
+            .cache()
+            .join("objects")
+            .join(&digest[..2])
+            .join(&digest[2..])
+            .is_file(),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// ctrl-c during an add whose data.toml someone edited meanwhile says that nothing was added,
+/// and keeps the edit: the add never wrote either file, so there is nothing it failed to put back.
+#[cfg(unix)]
+#[test]
+fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let work = sandbox.work();
+    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    let slow = Server::slow_file("/files/cows.csv", body)?;
+    let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
+    wait_until(
+        "bytes to arrive",
+        || Ok(partial_bytes(&sandbox.cache()) > 0),
+    )?;
+    let edited = format!(
+        "{}# a note made meanwhile\n",
+        fs::read_to_string(work.join("data.toml"))?
+    );
+    fs::write(work.join("data.toml"), &edited)?;
+    running.interrupt()?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    assert!(
+        stderr.contains("nothing was added") && !stderr.contains("could not be put back"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, edited);
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
 /// ctrl-c during an add's download ends it with the project as it was, says so, and keeps what
 /// arrived in the cache, so the same add continues from there.
 #[cfg(unix)]
@@ -2137,7 +2135,8 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
     let (code, stderr) = running.finish()?;
     assert_eq!(code, Some(130), "{stderr}");
     assert!(
-        stderr.contains("Stopped") && stderr.contains("data.toml and data.lock are as they were"),
+        stderr.contains("Stopped")
+            && stderr.contains("the add left data.toml and data.lock unchanged"),
         "{stderr}"
     );
     assert_eq!(

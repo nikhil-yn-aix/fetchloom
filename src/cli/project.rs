@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -15,7 +16,7 @@ use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
 use super::sync::{self as engine, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::cache::Cache;
-use crate::digest;
+use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::Net;
@@ -68,6 +69,9 @@ struct AddProject {
     old: Option<Lock>,
     /// the text data.lock was read from.
     lock_text: Option<String>,
+    /// a failed add could not put back what it changed in data.toml or data.lock, so its error
+    /// holds the steps that do.
+    unrestored: AtomicBool,
 }
 
 impl AddProject {
@@ -82,16 +86,18 @@ impl AddProject {
         Ok(())
     }
 
-    /// whether data.toml and data.lock are as the add found them.
-    fn unchanged(&self) -> bool {
+    /// which of data.toml and data.lock are no longer as the add found them.
+    fn changed(&self) -> Vec<&'static str> {
         [(manifest::FILE, &self.text), (lock::FILE, &self.lock_text)]
-            .iter()
-            .all(
+            .into_iter()
+            .filter(
                 |(name, found)| match std::fs::read(self.project.root.join(name)) {
-                    Ok(bytes) => found.as_ref().is_some_and(|text| text.as_bytes() == bytes),
-                    Err(err) => found.is_none() && err.kind() == std::io::ErrorKind::NotFound,
+                    Ok(bytes) => found.as_ref().is_none_or(|text| text.as_bytes() != bytes),
+                    Err(err) => found.is_some() || err.kind() != std::io::ErrorKind::NotFound,
                 },
             )
+            .map(|(name, _)| name)
+            .collect()
     }
 
     /// ends an add that set out to start the project and added nothing, leaving its folder as
@@ -145,29 +151,46 @@ enum BeforeFile<'a> {
     Saved { text: &'a str, backup: PathBuf },
 }
 
+/// one project file as an add found it, and what the add set out to write there.
+struct SavedFile<'a> {
+    name: &'static str,
+    before: BeforeFile<'a>,
+    /// the digest of the bytes the add writes, recorded before it writes them, so a write that
+    /// failed after the bytes were in place still counts as the add's.
+    writing: Option<Sha256>,
+}
+
 struct BeforeAdd<'a> {
-    files: [(&'static str, BeforeFile<'a>); 2],
+    files: [SavedFile<'a>; 2],
     keep: bool,
 }
 
 impl<'a> BeforeAdd<'a> {
     fn save(project: &Project, before: (Option<&'a str>, Option<&'a str>)) -> Result<Self, Error> {
         let mut saved = Self {
-            files: [
-                (manifest::FILE, BeforeFile::Absent),
-                (lock::FILE, BeforeFile::Absent),
-            ],
+            files: [manifest::FILE, lock::FILE].map(|name| SavedFile {
+                name,
+                before: BeforeFile::Absent,
+                writing: None,
+            }),
             keep: false,
         };
-        for ((name, previous), text) in saved.files.iter_mut().zip([before.0, before.1]) {
+        for (file, text) in saved.files.iter_mut().zip([before.0, before.1]) {
             if let Some(text) = text {
-                *previous = BeforeFile::Saved {
+                file.before = BeforeFile::Saved {
                     text,
-                    backup: project.backup(name, text.as_bytes())?,
+                    backup: project.backup(file.name, text.as_bytes())?,
                 };
             }
         }
         Ok(saved)
+    }
+
+    /// notes that the add is about to write `bytes` to the project file `name`.
+    fn writing(&mut self, name: &str, bytes: &[u8]) {
+        if let Some(file) = self.files.iter_mut().find(|file| file.name == name) {
+            file.writing = Some(digest::sha256(bytes));
+        }
     }
 }
 
@@ -176,8 +199,8 @@ impl Drop for BeforeAdd<'_> {
         if self.keep {
             return;
         }
-        for (_, previous) in &self.files {
-            if let BeforeFile::Saved { backup, .. } = previous
+        for file in &self.files {
+            if let BeforeFile::Saved { backup, .. } = &file.before
                 && let Err(err) = std::fs::remove_file(backup)
                 && err.kind() != std::io::ErrorKind::NotFound
             {
@@ -219,17 +242,18 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         manifest: Manifest::parse("")?,
         old: None,
         lock_text: None,
+        unrestored: AtomicBool::new(false),
     };
     let added = match adding.read() {
         Ok(()) => add_held(context, &mut adding, args, &here, starting).await,
         Err(error) => Err(error),
     };
     added.map_err(|error| {
-        let unchanged = adding.unchanged();
-        if unchanged && let Some(fresh) = fresh {
+        let restored = !adding.unrestored.load(Ordering::Relaxed);
+        if restored && let Some(fresh) = fresh {
             adding.unstart(fresh);
         }
-        stopped(context, error, unchanged)
+        stopped(context, error, restored)
     })
 }
 
@@ -290,17 +314,17 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
 }
 
 /// `error`, once it has told a person what state the project is in when a stop ended the add:
-/// the stop's own message does not. `unchanged` says whether data.toml and data.lock are as
-/// they were.
-fn stopped(context: &Context, error: Error, unchanged: bool) -> Error {
+/// the stop's own message does not. `restored` says whether the add left no change of its own
+/// in data.toml and data.lock, having made none or put back what it made.
+fn stopped(context: &Context, error: Error, restored: bool) -> Error {
     // a stop asked once the add was in place changed nothing about it
     if error.kind != Kind::Interrupted && context.stop.check_unfinished().is_ok() {
         return error;
     }
-    if unchanged {
+    if restored {
         context.output.done(
             "Stopped",
-            "nothing was added, and data.toml and data.lock are as they were; anything downloaded so far stays in the cache, so the same add continues from there",
+            "nothing was added, and the add left data.toml and data.lock unchanged; anything downloaded so far stays in the cache, so the same add continues from there",
         );
     } else {
         // the error's details give the steps that put them back
@@ -516,7 +540,13 @@ async fn sync_add(
     // every byte is in the cache now, and a stop asked meanwhile ends the add before anything in
     // the project changed
     work.context.stop.check()?;
-    let mut saved = if updated.is_some() || !before.holds(&lock) {
+    // an edit made meanwhile stays, since writing what the add read would lose it
+    let changed = adding.changed();
+    if !changed.is_empty() {
+        return Err(changed_meanwhile(&changed));
+    }
+    let relocked = (!before.holds(&lock)).then(|| lock.render());
+    let mut saved = if updated.is_some() || relocked.is_some() {
         Some(BeforeAdd::save(
             project,
             (adding.text.as_deref(), adding.lock_text.as_deref()),
@@ -527,9 +557,20 @@ async fn sync_add(
     let manifest_text = updated.or(adding.text.as_deref()).unwrap_or_default();
     let committed = (|| -> Result<Outcome<Placement>, Error> {
         if let Some(updated) = updated {
+            if let Some(saved) = saved.as_mut() {
+                saved.writing(manifest::FILE, updated.as_bytes());
+            }
             project.write(manifest::FILE, updated.as_bytes())?;
         }
-        let written = work.write_lock(&before, &lock)?;
+        let written = match relocked {
+            Some(text) => {
+                if let Some(saved) = saved.as_mut() {
+                    saved.writing(lock::FILE, text.as_bytes());
+                }
+                Some(work.write_rendered(&before, &lock, text)?)
+            }
+            None => None,
+        };
         let lock_text = written.as_deref().or(adding.lock_text.as_deref());
         let synced = lock_text.map(|text| Synced {
             manifest: digest::sha256(manifest_text.as_bytes()),
@@ -554,10 +595,29 @@ async fn sync_add(
             Ok(outcome)
         }
         Err(error) => Err(match saved.as_mut() {
-            Some(saved) => restore(project, saved, name, error),
+            Some(saved) => {
+                let error = restore(project, saved, name, error);
+                if saved.keep {
+                    adding.unrestored.store(true, Ordering::Relaxed);
+                }
+                error
+            }
             None => error,
         }),
     }
+}
+
+/// the error of an add that found data.toml or data.lock, as `changed` names them, changed once
+/// its downloads were done: it writes neither, so the change stays.
+fn changed_meanwhile(changed: &[&str]) -> Error {
+    let files = changed.join(" and ");
+    Error::new(
+        Kind::ProjectChanged,
+        format!(
+            "{files} changed while the add was downloading, so the add stopped and wrote nothing"
+        ),
+    )
+    .help("your change is kept. run the same add again; what it downloaded is in the cache")
 }
 
 fn render_add(
@@ -604,46 +664,64 @@ fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Error> {
 }
 
 /// restores both project files after a failed add, including their original absence. a file the
-/// add never changed needs nothing restored, so a failure to write it again is no failure.
+/// add never wrote needs nothing restored, so a failure to write it again is no failure. a file
+/// someone changed after the add wrote it stays as they left it, with the steps that put it back
+/// by hand, since restoring it would lose their change.
 fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure: Error) -> Error {
     let mut complete = true;
     let mut changed = false;
-    for (file, before) in &saved.files {
-        let now = std::fs::read(project.root.join(file));
-        let unchanged = match (before, &now) {
+    for file in &saved.files {
+        let now = std::fs::read(project.root.join(file.name));
+        let unchanged = match (&file.before, &now) {
             (BeforeFile::Saved { text, .. }, Ok(bytes)) => bytes == text.as_bytes(),
             (BeforeFile::Absent, Err(err)) => err.kind() == std::io::ErrorKind::NotFound,
             _ => false,
         };
-        if unchanged {
+        // a file the add never wrote holds nothing of it, whoever changed it
+        let Some(writing) = file.writing.filter(|_| !unchanged) else {
             continue;
-        }
-        changed = true;
-        let restored = match before {
-            BeforeFile::Saved { text, .. } => project.write(file, text.as_bytes()),
-            BeforeFile::Absent => match std::fs::remove_file(project.root.join(file)) {
-                Ok(()) => Ok(()),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(err) => Err(Error::io(format!("could not remove {file}"), &err)),
-            },
         };
-        if let Err(err) = restored {
-            complete = false;
-            failure = failure.detail(format!("could not restore {file}: {err}"));
+        let theirs = !now
+            .as_ref()
+            .is_ok_and(|bytes| digest::sha256(bytes) == writing);
+        if theirs {
+            failure = failure.detail(format!(
+                "{} changed after the add wrote it, so it was left as it is",
+                file.name
+            ));
+        } else {
+            changed = true;
+            let restored = match file.before {
+                BeforeFile::Saved { text, .. } => project.write(file.name, text.as_bytes()),
+                BeforeFile::Absent => match std::fs::remove_file(project.root.join(file.name)) {
+                    Ok(()) => Ok(()),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(err) => Err(Error::io(format!("could not remove {}", file.name), &err)),
+                },
+            };
+            let Err(err) = restored else {
+                continue;
+            };
+            failure = failure.detail(format!("could not restore {}: {err}", file.name));
             if let Some(help) = err.help {
                 failure = failure.detail(help);
             }
-            failure = match before {
-                BeforeFile::Saved { backup, .. } => failure
-                    .detail(format!("restore {file} from the recovery copy at {}", backup.display())),
-                BeforeFile::Absent => failure.detail(format!(
-                    "remove the {name} dataset entry from {file}, or remove {file} if it holds nothing else"
-                )),
-            };
         }
+        complete = false;
+        failure = match &file.before {
+            BeforeFile::Saved { backup, .. } => failure.detail(format!(
+                "restore {} from the recovery copy at {}",
+                file.name,
+                backup.display()
+            )),
+            BeforeFile::Absent => failure.detail(format!(
+                "remove the {name} dataset entry from {0}, or remove {0} if it holds nothing else",
+                file.name
+            )),
+        };
     }
     saved.keep = !complete;
-    if !changed {
+    if complete && !changed {
         return failure;
     }
     failure.detail(if complete {
@@ -1925,6 +2003,8 @@ mod tests {
         std::fs::write(&manifest_path, "[datasets.iris]\nref = 'x'\n").unwrap();
         std::fs::write(project.root.join(lock::FILE), "version = 1\n").unwrap();
         let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
+        saved.writing(manifest::FILE, b"[datasets.iris]\nref = 'x'\n");
+        saved.writing(lock::FILE, b"version = 1\n");
         let restored = restore(&project, &mut saved, "iris", failure());
         assert_eq!(
             restored.details,
@@ -1941,6 +2021,103 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, [std::ffi::OsString::from(".gitignore")]);
+    }
+
+    /// a file someone changed after the add wrote it stays as they left it, since putting it back
+    /// would lose their change: the rollback says so and keeps the recovery copy, and still puts
+    /// back the other file, which only the add changed.
+    #[test]
+    fn a_rollback_keeps_a_change_made_after_the_add_wrote_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let manifest_path = project.root.join(manifest::FILE);
+        std::fs::write(&manifest_path, "[datasets]\n").unwrap();
+        let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
+        let added = "[datasets.iris]\nref = 'x'\n";
+        saved.writing(manifest::FILE, added.as_bytes());
+        std::fs::write(&manifest_path, added).unwrap();
+        saved.writing(lock::FILE, b"version = 1\n");
+        std::fs::write(project.root.join(lock::FILE), "version = 1\n").unwrap();
+        let theirs = format!("{added}# a note made meanwhile\n");
+        std::fs::write(&manifest_path, &theirs).unwrap();
+        let failure = Error::new(Kind::LocalIo, "could not place a file");
+        let restored = restore(&project, &mut saved, "iris", failure);
+        assert_eq!(std::fs::read_to_string(&manifest_path).unwrap(), theirs);
+        assert!(!project.root.join(lock::FILE).exists());
+        assert!(saved.keep);
+        let details = restored.details.join("\n");
+        assert!(
+            details.contains("data.toml changed after the add wrote it")
+                && details.contains("recovery copy"),
+            "{details}"
+        );
+        drop(saved);
+        let copies = std::fs::read_dir(project.own_folder())
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("data.toml.recovery.")
+            })
+            .count();
+        assert_eq!(copies, 1);
+    }
+
+    /// a rollback that cannot put a file back names the recovery copy, which holds the exact
+    /// bytes, readable by the owner only, and never shows what the file holds, which may be a
+    /// credential.
+    #[cfg(unix)]
+    #[test]
+    fn a_rollback_that_cannot_finish_names_a_private_copy_without_its_text() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let manifest_path = project.root.join(manifest::FILE);
+        let before = "# https://example.org/?token=EM_CANARY\n[datasets]\n";
+        std::fs::write(&manifest_path, before).unwrap();
+        let mut saved = BeforeAdd::save(&project, (Some(before), None)).unwrap();
+        let added = format!("{before}[datasets.a]\nref = 'x'\n");
+        saved.writing(manifest::FILE, added.as_bytes());
+        std::fs::write(&manifest_path, &added).unwrap();
+        // the project folder takes no new file, so data.toml cannot be put back
+        let mode = |mode| std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(&project.root, mode(0o555)).unwrap();
+        let failure = Error::new(Kind::LocalIo, "could not place a file");
+        let restored = restore(&project, &mut saved, "a", failure);
+        std::fs::set_permissions(&project.root, mode(0o755)).unwrap();
+        let shown = format!("{}\n{}", restored.message, restored.details.join("\n"));
+        assert!(
+            shown.contains("could not restore data.toml")
+                && shown.contains("restore data.toml from the recovery copy"),
+            "{shown}"
+        );
+        assert!(!shown.contains("EM_CANARY"), "{shown}");
+        assert!(saved.keep);
+        drop(saved);
+        let copies: Vec<PathBuf> = std::fs::read_dir(project.own_folder())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("data.toml.recovery."))
+            })
+            .collect();
+        assert_eq!(copies.len(), 1);
+        assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), before);
+        assert_eq!(
+            std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     /// a project in the home folder or at a disk's root takes in every folder below it, so

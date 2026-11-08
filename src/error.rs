@@ -24,6 +24,8 @@ pub(crate) enum Kind {
     LocalNotEmpty,
     /// data.toml, data.lock or the project's folders are not in a state fetchloom can work with.
     ProjectInvalid,
+    /// data.toml or data.lock changed while a command that writes them ran, so it wrote neither.
+    ProjectChanged,
     /// a check found data.lock out of date with data.toml.
     Outdated,
     Interrupted,
@@ -49,6 +51,7 @@ impl Kind {
             Kind::LocalIo => "local.io",
             Kind::LocalNotEmpty => "local.not_empty",
             Kind::ProjectInvalid => "project.invalid",
+            Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
             Kind::Interrupted => "interrupted",
         }
@@ -69,7 +72,7 @@ impl Kind {
             | Kind::OfflineMissing => 20,
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
-            Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid => 50,
+            Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
             Kind::Interrupted => 130,
         }
     }
@@ -245,6 +248,84 @@ impl std::error::Error for Error {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// every kind, listed once. a kind missing from the list fails to compile, since the match
+    /// in it must name them all.
+    macro_rules! every_kind {
+        ($($kind:ident),* $(,)?) => {{
+            fn listed(kind: Kind) {
+                match kind {
+                    $(Kind::$kind)|* => {}
+                }
+            }
+            let _ = listed;
+            [$(Kind::$kind),*]
+        }};
+    }
+
+    /// the kinds and codes exit-codes.md gives: each cell of backticked names after the code, in
+    /// the table that starts with `header`.
+    fn documented(header: &str) -> Vec<(Option<u8>, String)> {
+        let docs = include_str!("../docs/user/reference/exit-codes.md");
+        let mut found = Vec::new();
+        for row in docs
+            .lines()
+            .skip_while(|line| !line.starts_with(header))
+            .skip(2)
+            .take_while(|line| line.starts_with("| "))
+        {
+            let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+            let code = cells[1].parse::<u8>().ok();
+            let names = if code.is_some() { cells[2] } else { cells[1] };
+            for name in names.split('`').skip(1).step_by(2) {
+                found.push((code, name.to_owned()));
+            }
+        }
+        found
+    }
+
+    /// the exit codes page names every kind with the code it ends with, and a next step for each,
+    /// and names no kind that does not exist.
+    #[test]
+    fn every_kind_is_documented_with_its_exit_code_and_next_step() {
+        let kinds = every_kind![
+            Usage,
+            Unconfirmed,
+            ReferenceInvalid,
+            ReferenceUnresolved,
+            ReferenceAmbiguous,
+            SourceInvalid,
+            NetworkUnreachable,
+            NetworkStatus,
+            NetworkRateLimited,
+            NetworkRefused,
+            OfflineMissing,
+            IntegrityMismatch,
+            AuthRequired,
+            LocalIo,
+            LocalNotEmpty,
+            ProjectInvalid,
+            ProjectChanged,
+            Outdated,
+            Interrupted,
+        ];
+        let mut coded: Vec<(Option<u8>, String)> = kinds
+            .iter()
+            .map(|kind| (Some(kind.exit_code()), kind.name().to_owned()))
+            .collect();
+        coded.sort();
+        let mut by_code = documented("| exit |");
+        by_code.sort();
+        assert_eq!(by_code, coded);
+        let mut named: Vec<String> = kinds.iter().map(|kind| kind.name().to_owned()).collect();
+        named.sort();
+        let mut steps: Vec<String> = documented("| kind |")
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect();
+        steps.sort();
+        assert_eq!(steps, named);
+    }
 
     #[test]
     fn an_ambiguous_reference_is_a_reference_error() {

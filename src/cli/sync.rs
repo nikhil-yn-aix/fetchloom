@@ -380,8 +380,18 @@ impl<'a> Loop<'a> {
         if before.holds(lock) {
             return Ok(None);
         }
+        self.write_rendered(before, lock, lock.render()).map(Some)
+    }
+
+    /// writes `text`, `lock` as rendered, to data.lock, and says which datasets it pins anew or
+    /// no longer than `before`. returns the text.
+    pub(super) fn write_rendered(
+        &self,
+        before: &Before,
+        lock: &Lock,
+        text: String,
+    ) -> Result<String, Error> {
         let _span = tracing::debug_span!("write_lock").entered();
-        let text = lock.render();
         self.project.write(lock::FILE, text.as_bytes())?;
         tell_lock(
             &self.context.output,
@@ -391,7 +401,7 @@ impl<'a> Loop<'a> {
             self.told.as_deref(),
             &HashSet::new(),
         );
-        Ok(Some(text))
+        Ok(text)
     }
 
     async fn resolve_all(

@@ -83,7 +83,7 @@ const EXIT_CODES: &str = "fetchloom exit codes
    20  network.*, offline.missing: retry later, or go online
    30  integrity.mismatch: the bytes are not the ones data.lock pins
    40  auth.required: sign in, or accept the source's terms
-   50  local.*, project.invalid: disk, permissions, or a broken project file
+   50  local.*, project.*: disk, permissions, a broken or changed project file
   130  interrupted
 
 with --json, errors[0].kind names the exact cause and errors[0].fix, when

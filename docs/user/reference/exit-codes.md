@@ -11,7 +11,7 @@ exit codes group failures, while error kinds identify the cause.
 | 20 | `network.unreachable`, `network.status`, `network.rate_limited`, `network.refused`, `offline.missing` |
 | 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
-| 50 | `local.io`, `local.not_empty`, `project.invalid` |
+| 50 | `local.io`, `local.not_empty`, `project.invalid`, `project.changed` |
 | 130 | `interrupted` |
 
 `--json` returns the kind in `errors[0].kind`; verbose output also shows it. help text is a suggestion for a person to check, not a command for a script to run unchecked.
@@ -33,6 +33,7 @@ exit codes group failures, while error kinds identify the cause.
 | `local.io` | check free space, permissions and files held open |
 | `local.not_empty` | preserve existing files and choose another `get -o` folder |
 | `project.invalid` | correct or restore the manifest, lock or project folders |
+| `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
 a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.
