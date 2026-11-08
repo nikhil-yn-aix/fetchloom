@@ -478,9 +478,103 @@ fn gc_forgets_a_project_only_when_its_manifest_is_missing() -> Result {
     let output = sandbox.run(&["--json", "cache"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(fs::read_dir(&registrations)?.count(), 1);
+    let registration = fs::read_dir(&registrations)?
+        .next()
+        .ok_or("missing registration")??
+        .path();
+    let dry = sandbox.run(&["--json", "cache", "gc", "--dry-run"])?;
+    assert!(dry.status.success(), "{}", text(&dry.stdout)?);
+    let report: serde_json::Value = serde_json::from_slice(&dry.stdout)?;
+    assert!(
+        report["result"]["changes"]["remove"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(registration))
+    );
+    assert!(registration.exists());
     let output = sandbox.run(&["--json", "cache", "gc"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(fs::read_dir(registrations)?.count(), 0);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn gc_reports_failed_registration_removal_with_partial_counts() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    for json in [true, false] {
+        let sandbox = Sandbox::new()?;
+        fs::write(sandbox.work().join("data.toml"), "")?;
+        assert!(sandbox.run(&["sync"])?.status.success());
+        fs::remove_file(sandbox.work().join("data.toml"))?;
+        let projects = sandbox.cache().join("projects");
+        let registration = fs::read_dir(&projects)?
+            .next()
+            .ok_or("missing registration")??
+            .path();
+        let object = sandbox
+            .cache()
+            .join("objects/ba/7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        fs::create_dir_all(object.parent().ok_or("object needs a parent")?)?;
+        fs::write(&object, b"abc")?;
+        let before = fs::metadata(&projects)?.permissions();
+        fs::set_permissions(&projects, fs::Permissions::from_mode(0o555))?;
+        let args: &[&str] = if json {
+            &["--json", "cache", "gc", "--now"]
+        } else {
+            &["cache", "gc", "--now"]
+        };
+        let output = sandbox.run(args);
+        fs::set_permissions(&projects, before)?;
+        let output = output?;
+        assert_eq!(
+            output.status.code(),
+            Some(50),
+            "{}\n{}",
+            text(&output.stdout)?,
+            text(&output.stderr)?
+        );
+        assert!(registration.exists());
+        assert!(!object.exists(), "unneeded objects can still be cleaned up");
+        if json {
+            let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(report["errors"][0]["kind"], "local.io");
+            assert_eq!(report["result"]["objects"], 1);
+            assert_eq!(report["result"]["bytes"], 3);
+            assert_eq!(report["result"]["not_removed"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                report["result"]["not_removed"][0]["path"],
+                serde_json::json!(registration)
+            );
+            assert_eq!(
+                report["result"]["not_removed"][0]["kind"],
+                "PermissionDenied"
+            );
+            assert!(
+                report["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|warning| warning
+                        .as_str()
+                        .unwrap()
+                        .contains(&registration.display().to_string()))
+            );
+        } else {
+            let report = text(&output.stderr)?;
+            assert!(report.contains("warning:"), "{report}");
+            assert!(
+                report.contains(&registration.display().to_string()),
+                "{report}"
+            );
+        }
+        let recovered = sandbox.run(&["--json", "cache", "gc", "--now"])?;
+        assert!(recovered.status.success(), "{}", text(&recovered.stdout)?);
+        assert!(!registration.exists());
+    }
     Ok(())
 }
 

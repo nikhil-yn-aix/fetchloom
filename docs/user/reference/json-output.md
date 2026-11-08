@@ -79,7 +79,7 @@ status lists all differences in JSON. human output limits each file category to 
 
 `cache gc` keeps objects no project needs until they are a day old by modification time, unless `--now` removes that grace period. partial downloads retain their one-day grace period. `kept_objects` and `kept_bytes` count those young objects, not objects retained for registered projects.
 
-`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a path already absent is not a failed removal.
+`cache gc` uses `local.io` and exit 50 when a removal fails, including after other removals succeeded. this existing kind covers a partial cleanup failure. `result` retains the successful removal counts and `not_removed` failure records; each contains `path`, `kind` (the I/O error kind), `os_code` (the OS code or null) and `message` (the original cause). `cache verify` uses the same records in `unreadable`. human output, error details and JSON `warnings` retain those causes. a failed stale-project registration removal is included in `not_removed`, with successful object-cleanup counts retained. a path already absent is not a failed removal.
 
 successful sync still exits 0 if its cache registration cannot be written. human output and JSON `warnings` explain that gc may not keep the project's files and ask you to check cache permissions and run the command again.
 

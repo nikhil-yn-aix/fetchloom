@@ -47,7 +47,7 @@ a dry run shows the same hint. plain `fetchloom cache` ends with a similar hint 
 
 successful project sync registers the project, including sync through `add` or `path`. `get` and standalone `lock` do not register. a registration warning means gc may not keep that project's bytes; check permissions and sync again.
 
-a missing manifest removes a registration. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
+gc queues a registration for removal when its manifest is missing. a failed registration removal warns, appears in `result.not_removed` and returns `local.io` (exit 50), even if object cleanup succeeded. inspection alone does not remove registrations. an unreadable registration, manifest or lock stops inspection or gc with an error naming the path. inaccessible paths do not count as missing.
 
 removing a cache object leaves placed files intact. removed bytes are not necessarily freed disk space because a hardlink can still hold them.
 

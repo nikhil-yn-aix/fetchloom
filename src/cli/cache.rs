@@ -121,15 +121,19 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             },
         )?
     };
-    let Found {
-        needed, projects, ..
-    } = needed_with(&cache, None, &context.stop, true)?;
+    let found = needed_with(&cache, None, &context.stop, true)?;
     let grace = if now {
         std::time::Duration::ZERO
     } else {
         crate::cache::GRACE
     };
-    let freed = cache.sweep_with_stop(&needed, SystemTime::now(), grace, &context.stop)?;
+    let freed = cache.sweep_with_stop(
+        &found.needed,
+        &found.stale_projects,
+        SystemTime::now(),
+        grace,
+        &context.stop,
+    )?;
     if dry_run {
         return Ok(tell_dry_gc(context, freed, cache.pretended()));
     }
@@ -187,7 +191,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         "Cleaned",
         &format!(
             "the cache, keeping files needed by {}",
-            units::count(projects.len() as u64, "project", "projects")
+            units::count(found.projects.len() as u64, "project", "projects")
         ),
     );
     if let Some(kept) = &kept {
@@ -471,21 +475,23 @@ pub(super) fn needed_by_all(
 struct Found {
     needed: Needed,
     projects: Vec<PathBuf>,
+    stale_projects: Vec<PathBuf>,
     complete: bool,
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
 /// the files it unpacked to, and the projects still on disk. unreadable registrations, manifests
-/// and locks stop gc rather than lose protection. with `forget`, a project whose data.toml is
-/// gone is forgotten; otherwise it stays registered, as when its drive is only unplugged.
+/// and locks stop gc rather than lose protection. `collect_stale` queues roots whose data.toml
+/// is gone for the sweep, so inspection does not discard removal errors or delete records early.
 fn needed_with(
     cache: &Cache,
     current: Option<&Lock>,
     stop: &Stop,
-    forget: bool,
+    collect_stale: bool,
 ) -> Result<Found, Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
+    let mut stale_projects = Vec::new();
     let mut complete = true;
     for root in cache.registered_projects(stop)? {
         stop.check()?;
@@ -494,11 +500,10 @@ fn needed_with(
         match fs::read(&manifest) {
             Ok(_) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                if forget {
-                    cache.forget(&project.root);
-                } else {
-                    complete = false;
+                if collect_stale {
+                    stale_projects.push(project.root);
                 }
+                complete = false;
                 continue;
             }
             Err(err) => {
@@ -536,6 +541,7 @@ fn needed_with(
     Ok(Found {
         needed,
         projects,
+        stale_projects,
         complete,
     })
 }

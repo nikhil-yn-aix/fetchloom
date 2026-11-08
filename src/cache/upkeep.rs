@@ -129,10 +129,6 @@ impl Cache {
         Ok(())
     }
 
-    pub(crate) fn forget(&self, root: &Path) {
-        let _ = self.remove_inside(&self.registration(root));
-    }
-
     /// checks an archive member without letting a large writable object delay cancellation.
     pub(crate) fn contains_for_gc(
         &self,
@@ -189,12 +185,13 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes unneeded objects older than `grace` and abandoned downloads older than a day,
-    /// recording each refused removal. downloads keep the full day whatever `grace` is, so a
-    /// download running elsewhere keeps its partial file.
+    /// removes stale registrations, unneeded objects older than `grace` and abandoned downloads
+    /// older than a day, recording each refused removal. downloads keep the full day whatever
+    /// `grace` is, so a download running elsewhere keeps its partial file.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
+        stale_projects: &[PathBuf],
         now: SystemTime,
         grace: Duration,
         stop: &Stop,
@@ -209,6 +206,11 @@ impl Cache {
             return Err(failure.error("cannot inspect; the cache stays unchanged:"));
         }
         let mut freed = Freed::default();
+        for root in stale_projects {
+            stop.check()?;
+            let path = self.registration(root);
+            removed(&path, self.remove_inside(&path), &mut freed.not_removed);
+        }
         for object in scan.objects {
             stop.check()?;
             if needed.objects.contains(&object.digest) {
@@ -501,7 +503,7 @@ mod tests {
         }
 
         pub(crate) fn sweep(&self, needed: &Needed, now: SystemTime) -> Freed {
-            self.sweep_with_stop(needed, now, GRACE, &Stop::default())
+            self.sweep_with_stop(needed, &[], now, GRACE, &Stop::default())
                 .unwrap()
         }
 
@@ -544,6 +546,7 @@ mod tests {
             let freed = cache
                 .sweep_with_stop(
                     &Needed::default(),
+                    &[],
                     SystemTime::now(),
                     Duration::ZERO,
                     &Stop::default(),
@@ -556,6 +559,36 @@ mod tests {
             assert_eq!(report["not_removed"][0]["message"], message, "{report}");
             assert_eq!(fs::read(path).unwrap(), b"good");
         }
+    }
+
+    #[test]
+    fn failed_registration_removals_keep_the_original_cause() {
+        let (directory, mut cache) = cache();
+        let root = directory.path().join("missing-project");
+        cache.register(&root).unwrap();
+        let path = cache.registration(&root);
+        cache.volume = std::sync::Arc::new(
+            crate::volume::Volume::new(cache.root.join("tmp"))
+                .with_removal(|_| Err(io::Error::other("registration storage failure"))),
+        );
+        let freed = cache
+            .sweep_with_stop(
+                &Needed::default(),
+                &[root],
+                SystemTime::now(),
+                GRACE,
+                &Stop::default(),
+            )
+            .unwrap();
+        let report = serde_json::to_value(&freed).unwrap();
+        assert_eq!(report["not_removed"].as_array().unwrap().len(), 1);
+        assert_eq!(report["not_removed"][0]["path"], serde_json::json!(path));
+        assert_eq!(report["not_removed"][0]["kind"], "Other");
+        assert_eq!(
+            report["not_removed"][0]["message"],
+            "registration storage failure"
+        );
+        assert!(path.exists());
     }
 
     #[test]
@@ -575,6 +608,9 @@ mod tests {
     fn stopped_upkeep_does_not_read_or_remove_objects() {
         let (_dir, cache) = cache();
         let stored = store(&cache, b"keep");
+        let root = cache.root.join("missing-project");
+        cache.register(&root).unwrap();
+        let registration = cache.registration(&root);
         let stop = Stop::default();
         stop.ask();
         let checked = cache.verify_with_stop(1, &|_| {}, &stop).unwrap_err();
@@ -582,6 +618,7 @@ mod tests {
         let freed = cache
             .sweep_with_stop(
                 &Needed::default(),
+                &[root],
                 SystemTime::now() + GRACE + Duration::from_secs(60),
                 GRACE,
                 &stop,
@@ -589,6 +626,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(freed.kind, Kind::Interrupted);
         assert!(cache.object_path(&stored.digest).exists());
+        assert!(registration.exists());
         assert!(cache.changed().is_empty());
     }
 
@@ -666,6 +704,7 @@ mod tests {
         let young = cache
             .sweep_with_stop(
                 &Needed::default(),
+                &[],
                 SystemTime::now(),
                 GRACE,
                 &Stop::default(),
@@ -675,6 +714,7 @@ mod tests {
         let now = cache
             .sweep_with_stop(
                 &Needed::default(),
+                &[],
                 SystemTime::now(),
                 Duration::ZERO,
                 &Stop::default(),
@@ -691,8 +731,27 @@ mod tests {
         cache.register(&root).unwrap();
         cache.register(&root).unwrap();
         assert_eq!(cache.projects(), vec![root.clone()]);
-        cache.forget(&root);
+        let freed = cache
+            .sweep_with_stop(
+                &Needed::default(),
+                std::slice::from_ref(&root),
+                SystemTime::now(),
+                GRACE,
+                &Stop::default(),
+            )
+            .unwrap();
+        assert_eq!(freed.not_removed, []);
         assert_eq!(cache.projects(), Vec::<PathBuf>::new());
+        let absent = cache
+            .sweep_with_stop(
+                &Needed::default(),
+                &[root],
+                SystemTime::now(),
+                GRACE,
+                &Stop::default(),
+            )
+            .unwrap();
+        assert_eq!(absent.not_removed, []);
     }
 
     #[test]
