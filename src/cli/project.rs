@@ -535,10 +535,10 @@ async fn sync_add(
             lock: digest::sha256(text.as_bytes()),
             complete: false,
         });
+        // a stop while files are placed fails the placement, which takes back the files it
+        // placed for the new dataset, so the add is undone whole. once every file is in, the
+        // add is complete, and a later stop finds it so
         let placement = work.apply(placing, synced)?;
-        // a stop that came while files were placed undoes the add as well, so every stop ends
-        // the same way
-        work.context.stop.check()?;
         Ok(Outcome {
             lock_changed: written.is_some(),
             pins: engine::repinned(&before, &lock),
