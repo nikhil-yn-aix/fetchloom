@@ -1901,3 +1901,140 @@ fn status_says_it_compared_sizes_and_times() -> Result {
     );
     Ok(())
 }
+
+/// a copy of iris placed in its own project, with its time no longer as new as the state, then
+/// changed in place keeping its size and time, as a failing disk or a tool that restores times
+/// leaves it.
+fn quietly_changed_copy(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    fs::write(&state, fs::read(&state)?)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
+    let modified = fs::metadata(&placed)?.modified()?;
+    edit(&placed, &edited)?;
+    set_time(&placed, modified)?;
+    Ok(placed)
+}
+
+/// a change that keeps a copy's size and time shows in no listing. `status --verify` hashes every
+/// placed file and lists it as damaged, a plain sync still finds nothing to do, and
+/// `sync --verify` puts the pinned file back without --force.
+#[test]
+fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let placed = quietly_changed_copy(&sandbox, &server)?;
+
+    let checked = sandbox.run(&["--json", "status", "--verify"])?;
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout)?;
+    assert_eq!(
+        report["result"]["damaged"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    let told = text(&sandbox.run(&["status", "--verify"])?.stderr)?;
+    assert!(
+        told.contains(
+            "Damaged data/iris/iris.csv · its bytes changed though its size and time did not"
+        ),
+        "{told}"
+    );
+    assert!(told.contains("`fetchloom sync --verify`"), "{told}");
+    let plain = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert_eq!(
+        plain,
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
+    );
+    let repaired = sandbox.run(&["sync", "--verify"])?;
+    let stderr = text(&repaired.stderr)?;
+    assert_eq!(repaired.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    assert!(
+        stderr.contains(
+            "data/iris/iris.csv was put back as pinned: its bytes had changed though its size and time had not"
+        ),
+        "{stderr}"
+    );
+    let after = sandbox.run(&["status", "--verify"])?;
+    assert_eq!(
+        text(&after.stderr)?,
+        "         Ok everything matches data.lock, checked byte for byte\n"
+    );
+    let again = sandbox.run(&["sync", "--verify"])?;
+    assert_eq!(
+        text(&again.stderr)?,
+        "         Ok all pinned files are in place, checked byte for byte; nothing to do\n"
+    );
+    assert_eq!(server.requests().len(), 1, "the cache still held iris");
+    Ok(())
+}
+
+/// `sync --verify` keeps the rule for an edit that shows: a copy whose size or time changed is the
+/// project's own, and it stays with the usual warning until --force.
+#[test]
+fn verify_keeps_an_edit_that_shows() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let placed = quietly_changed_copy(&sandbox, &server)?;
+    let mut grown = V1.to_vec();
+    grown.extend_from_slice(b"6.3,edited\n");
+    edit(&placed, &grown)?;
+
+    let kept = sandbox.run(&["sync", "--verify"])?;
+
+    let stderr = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("data/iris/iris.csv has changed, so it stays"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&placed)?, grown);
+    Ok(())
+}
+
+/// a change through a shared link that keeps the size and time, with the file made read-only
+/// again, changes the cache's own copy unseen, so `sync --verify` marks it, downloads the file
+/// again and puts the link back.
+#[test]
+fn verify_puts_back_a_link_whose_cached_copy_quietly_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(_) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut sealed = fs::metadata(&placed)?.permissions();
+    sealed.set_readonly(true);
+    fs::set_permissions(&placed, sealed)?;
+    let checked = sandbox.run(&["--json", "status", "--verify"])?;
+    let report: serde_json::Value = serde_json::from_slice(&checked.stdout)?;
+    assert_eq!(
+        report["result"]["edited_elsewhere"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+
+    let repaired = sandbox.run(&["sync", "--verify"])?;
+
+    let stderr = text(&repaired.stderr)?;
+    assert_eq!(repaired.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the changed copy is fetched again"
+    );
+    Ok(())
+}

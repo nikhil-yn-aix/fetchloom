@@ -470,7 +470,7 @@ async fn preview_add(
     here: &Path,
 ) -> Result<Report, Error> {
     let given = Some((name.clone(), listing));
-    let outcome = preview_all(work, manifest, old, false, given, None).await?;
+    let outcome = preview_all(work, manifest, old, false, false, given, None).await?;
     let output = &work.context.output;
     preview_ignore(work, manifest)?;
     output.step(
@@ -718,7 +718,7 @@ async fn again(
         )));
     }
     if dry_run {
-        let outcome = preview_all(work, manifest, old, false, None, None).await?;
+        let outcome = preview_all(work, manifest, old, false, false, None, None).await?;
         preview_ignore(work, manifest)?;
         dry_run_done(
             &work.context.output,
@@ -867,7 +867,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     if dry_run {
-        return preview_sync(context, &project, &manifest, read, &seen, args.force).await;
+        return preview_sync(context, &project, &manifest, read, &seen, &args).await;
     }
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(
@@ -886,17 +886,41 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         old,
         &Upgrade::Nothing,
         args.force,
+        args.verify,
         None,
         Read::Settled(&seen),
     )
     .await?;
+    tell_synced(context, &manifest, lock_changed, &placement, args.verify);
+    Ok(Report {
+        project: project.root,
+        datasets: pins,
+        lock_changed,
+        placement: Some(placement),
+        ..Report::default()
+    })
+}
+
+/// the last lines of a sync: nothing to do, or what it synced and what to do next.
+fn tell_synced(
+    context: &Context,
+    manifest: &Manifest,
+    lock_changed: bool,
+    placement: &Placement,
+    verified: bool,
+) {
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
     {
-        context
-            .output
-            .done("Ok", "all pinned files are in place, nothing to do");
+        context.output.done(
+            "Ok",
+            if verified {
+                "all pinned files are in place, checked byte for byte; nothing to do"
+            } else {
+                "all pinned files are in place by size and time, nothing to do"
+            },
+        );
     } else {
         let datasets = crate::units::count(manifest.datasets.len() as u64, "dataset", "datasets");
         if placement.kept.is_empty() {
@@ -929,13 +953,6 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             ));
         }
     }
-    Ok(Report {
-        project: project.root,
-        datasets: pins,
-        lock_changed,
-        placement: Some(placement),
-        ..Report::default()
-    })
 }
 
 /// `sync --dry-run`: what syncing would change, given data.lock as `read` and both files as
@@ -946,7 +963,7 @@ async fn preview_sync(
     manifest: &Manifest,
     read: Option<(Lock, String)>,
     seen: &Seen,
-    force: bool,
+    args: &args::Sync,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(
@@ -955,11 +972,24 @@ async fn preview_sync(
         Arc::new(net(context, manifest)),
         peek_cache()?,
     );
-    let outcome = preview_all(&work, manifest, old, force, None, Some(seen)).await?;
+    let outcome = preview_all(
+        &work,
+        manifest,
+        old,
+        args.force,
+        args.verify,
+        None,
+        Some(seen),
+    )
+    .await?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     dry_run_done(
         &context.output,
-        nothing.then_some("all pinned files are in place"),
+        nothing.then_some(if args.verify {
+            "all pinned files are in place, checked byte for byte"
+        } else {
+            "all pinned files are in place by size and time"
+        }),
     );
     let pins = outcome.pins.clone();
     Ok(Report::dry(project.root.clone(), pins, outcome))
@@ -1195,6 +1225,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                         read.map(|(lock, _)| lock),
                         &Upgrade::Nothing,
                         false,
+                        false,
                         None,
                         Read::Planned(&seen),
                     )
@@ -1356,17 +1387,25 @@ struct Outcome<T> {
 
 /// the lock, the cache and the data folder brought in line, in that order, and the state left
 /// recording data.toml and data.lock as `read` and as this run leaves them.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one independent choice a command makes for the run"
+)]
 async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<Lock>,
     upgrade: &Upgrade,
     force: bool,
+    verify: bool,
     given: Option<(String, Listing)>,
     read: Read<'_>,
 ) -> Result<Outcome<Placement>, Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
+    if verify {
+        survey.verify(&work.project.root)?;
+    }
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
         Read::Settled(seen) => {
@@ -1424,11 +1463,15 @@ async fn preview_all(
     manifest: &Manifest,
     old: Option<Lock>,
     force: bool,
+    verify: bool,
     given: Option<(String, Listing)>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
+    if verify {
+        survey.verify(&work.project.root)?;
+    }
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
@@ -2184,6 +2227,7 @@ mod tests {
             Some(old.clone()),
             &Upgrade::Nothing,
             false,
+            false,
             Some(given),
             Read::Planned(&unread()),
         ))
@@ -2239,6 +2283,7 @@ mod tests {
             &manifest,
             Some(old.clone()),
             &Upgrade::Nothing,
+            false,
             false,
             Some(given),
             Read::Planned(&unread()),

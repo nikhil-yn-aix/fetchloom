@@ -4,6 +4,7 @@
 
 ```sh
 fetchloom status
+fetchloom status --verify
 fetchloom status --json
 ```
 
@@ -13,7 +14,11 @@ fetchloom status --json
 fetchloom status [options]
 ```
 
-there are no command-specific options. [global options](README.md#global-options) apply.
+| option | effect |
+|---|---|
+| `--verify` | hash every placed file, so a change that kept its size and time shows too |
+
+[global options](README.md#global-options) also apply.
 
 ## what happens
 
@@ -21,7 +26,7 @@ there are no command-specific options. [global options](README.md#global-options
 2. compare file sizes and modification times, hashing where those records need checking.
 3. report changed manifest entries, missing or different files, extra paths and unavailable archive trees.
 
-status changes no project files. it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
+status changes no project files. without `--verify` it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. `--verify` hashes every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
 
 stderr when `iris.csv` is missing and `notes.txt` is extra:
 

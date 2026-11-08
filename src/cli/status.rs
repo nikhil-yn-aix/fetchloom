@@ -59,12 +59,8 @@ pub(super) struct Status {
     shared: HashSet<String>,
 }
 
-pub(super) fn run(context: &Context) -> Result<Status, Error> {
-    run_with(context, false)
-}
-
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
-pub(super) fn run_with(context: &Context, verify: bool) -> Result<Status, Error> {
+pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
     let status = check(
         &super::project::find(&context.output)?,
         context.threads,

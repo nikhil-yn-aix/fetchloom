@@ -231,7 +231,7 @@ fn a_second_sync_does_nothing_at_all() -> Result {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         text(&output.stderr)?,
-        "         Ok all pinned files are in place, nothing to do\n"
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
     );
     let quiet = json(&sandbox.run(&["--json", "sync"])?)?;
     assert_eq!(quiet["work"]["requests"], 0);
@@ -313,34 +313,43 @@ fn hand_edits_survive_sync_until_forced() -> Result {
     Ok(())
 }
 
+/// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
+/// made in place through it is damage to that copy: status says so and sync puts the pinned file
+/// back. a reflink or a copy is the project's own, and its edit stays.
 #[test]
-fn an_edit_through_a_shared_link_says_every_project_sees_it() -> Result {
+fn an_edit_in_place_through_a_shared_link_is_put_back() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"changed in place\n")?;
     let status = text(&sandbox.run(&["status"])?.stderr)?;
-    let kept = sandbox.run(&["--json", "sync"])?;
-    let reason = &json(&kept)?["result"]["placement"]["kept"][0]["reason"];
+    let synced = json(&sandbox.run(&["--json", "sync"])?)?;
+    let placement = &synced["result"]["placement"];
     if added["work"]["hardlinks"] == 1 {
         assert!(
-            status.contains("changed through a hardlink other projects may share"),
+            status.contains(
+                "Damaged data/iris/iris.csv · linked to the cache's copy, which was changed"
+            ),
             "{status}"
         );
-        assert_eq!(reason, "shared");
-        let story = text(&sandbox.run(&["sync"])?.stderr)?;
-        assert!(
-            story.contains("it stays; `fetchloom sync --force` puts the original back"),
-            "{story}"
+        assert_eq!(
+            placement["restored"],
+            serde_json::json!(["data/iris/iris.csv"])
+        );
+        assert_eq!(fs::read(&placed)?, IRIS);
+        assert_eq!(
+            server.requests().len(),
+            2,
+            "the changed copy is downloaded again"
         );
     } else {
         assert_eq!(
-            reason, "changed",
+            placement["kept"][0]["reason"], "changed",
             "a reflink or a copy is this project's own"
         );
+        assert_eq!(fs::read(&placed)?, b"changed in place\n");
     }
-    assert_eq!(fs::read(&placed)?, b"changed in place\n");
     Ok(())
 }
 
@@ -719,7 +728,7 @@ fn status_lists_what_differs() -> Result {
     let folder = sandbox.work().join("data").join("iris");
     assert_eq!(
         text(&sandbox.run(&["status"])?.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     delete(&folder.join("iris.csv"))?;
     fs::write(folder.join("notes.txt"), "mine")?;
@@ -756,7 +765,7 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
     assert!(calm.stdout.is_empty(), "{}", text(&calm.stdout)?);
     assert_eq!(
         text(&calm.stderr)?,
-        "         Ok everything matches data.lock\n"
+        "         Ok everything matches data.lock by size and time\n"
     );
     delete(&inner.join("iris.csv"))?;
     let missing = sandbox.run(&[])?;
@@ -826,13 +835,16 @@ fn the_cache_knows_its_projects_and_checks_its_files() -> Result {
     let young = sandbox.run(&["cache", "gc"])?;
     assert_eq!(
         text(&young.stderr)?,
-        "         Ok nothing to free yet\n  hint: 32 B no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now\n"
+        format!(
+            "     Forgot {} · it has no data.toml anymore\n         Ok nothing to free yet\n  hint: 32 B no project needs is kept for a day in case you want it back; `fetchloom cache gc --now` frees it now\n  hint: if a project moved, run `fetchloom sync` in its new folder, so gc keeps its files\n",
+            sandbox.work().display()
+        )
     );
     let document = json(&sandbox.run(&["--json", "cache", "gc"])?)?;
     assert_eq!(document["result"]["kept_objects"], 1);
     assert_eq!(document["result"]["kept_bytes"], IRIS.len());
     let now = json(&sandbox.run(&["--json", "cache", "gc", "--now"])?)?;
-    assert_eq!(now["result"]["objects"], 1);
+    assert_eq!(now["result"]["removed_objects"], 1);
     assert_eq!(now["result"]["kept_objects"], 0);
     Ok(())
 }

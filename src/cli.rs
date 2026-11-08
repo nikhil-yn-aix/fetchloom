@@ -592,8 +592,8 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = block_on(context, project::lock(context, args));
             finish(context, name, outcome, started)
         }
-        args::Command::Status => {
-            let outcome = blocking(context, status::run);
+        args::Command::Status(args) => {
+            let outcome = blocking(context, move |context| status::run(context, args.verify));
             finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {

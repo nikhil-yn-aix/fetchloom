@@ -6,6 +6,7 @@
 fetchloom sync
 fetchloom sync --offline
 fetchloom sync --locked
+fetchloom sync --verify
 fetchloom sync --force --dry-run
 ```
 
@@ -17,8 +18,9 @@ fetchloom sync [options]
 
 | option | effect |
 |---|---|
-| `--force` | replace conflicting files at locked paths, including untracked files |
+| `--force` | replace conflicting files at locked paths, including untracked files, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
+| `--verify` | hash every placed file, and put back those whose bytes changed though their size and time did not |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
 [global options](README.md#global-options) also apply.
@@ -51,15 +53,19 @@ without `--force`, edited files and conflicting untracked files stay in place. J
 
 save your files before using `--force`. it can overwrite edited and untracked files at locked paths. it does not delete unrelated extras or edited files no longer needed.
 
-a hardlink edit can change every project sharing the cache object. when the local file shows that change, sync preserves it with kept reason `shared`; it cannot tell which project edited it. this is the usual behavior on linux. save the edit, then use `fetchloom sync --force` in each affected project to restore its pins.
-
-the kept-shared warning uses this wording, with `<path>` replaced by the affected path:
+a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made in place through any link to it, after making the read-only file writable, changes that shared copy, so it is not kept as an edit: sync marks the cached copy as changed, downloads the file again and puts the pinned file back, without `--force`, in each project whose file is still that copy, the one that made the edit included. to edit a dataset's files, set `copy = true` for it. a file saved anew, as most editors save, is the project's own and stays an edit. the warning reads, with `<path>` replaced by the affected path:
 
 ```text
-<path> was edited, and the file is shared with other projects, so they see the edit too. it stays; `fetchloom sync --force` puts the original back
+<path> was put back as pinned: it is linked to the cache's copy, which was changed. to edit a dataset's files, set copy = true for it in data.toml
 ```
 
-on windows, a folder's listing can keep a hardlink's old size and time after another link changed it, so `status` and `sync` open each file placed as a hardlink to read it as it is. an edit made through another project's link then shows here at once, as on linux, and stays with the `shared` warning until `sync --force`.
+a changed hardlink still shared by other projects whose shared copy the cache no longer holds or records, as after the cache folder was deleted, stays with kept reason `shared` until `fetchloom sync --force`, since nothing tells which project made the change.
+
+on windows, a folder's listing can keep a hardlink's old size and time after another link changed it, so `status` and `sync` open each file placed as a hardlink to read it as it is. an edit made through another project's link then shows here at once, as on linux.
+
+an entry in a locked file's way, such as a link at its path or a file where its folder belongs, stays without `--force`, with kept reason `blocked` and the entry's path as `blocked_by`. with `--force`, sync removes it, a link itself and never what it points to, and places the files; a folder that holds anything stays even then.
+
+sync compares sizes and times, and hashes only files those cannot vouch for, so with nothing to do it says `Ok all pinned files are in place by size and time, nothing to do`. `--verify` hashes every placed file too: one whose bytes changed though its size and time did not is put back without `--force`, while an edit that shows in its size or time keeps the rule above.
 
 if cache registration fails, sync still succeeds with a warning that gc may not keep the project's files. check cache permissions and run sync again.
 

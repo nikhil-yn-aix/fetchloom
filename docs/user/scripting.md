@@ -24,7 +24,7 @@ stop when the lock check fails. after sync, inspect kept conflicts before using 
 
 JSON appears on stdout on success and failure, including usage errors and help: `fetchloom help --json` describes every command and option. explicit debug logging can still write stderr. a killed process may leave no valid JSON; treat missing or invalid JSON as failure.
 
-bare `fetchloom` in a project reports command `status`. [JSON output](reference/json-output.md) defines every result and counter. zero `bytes_down` does not prove there were no requests. a warm project can place cached files with zero `cache_hits`.
+bare `fetchloom` in a project reports command `status`. [JSON output](reference/json-output.md) defines every result and counter. zero `bytes_down` does not prove there were no requests. `placed_from_cache` counts the files a run placed from bytes the cache already held, and `downloads_skipped` only the downloads the cache made unnecessary.
 
 ## checking and syncing
 
@@ -51,9 +51,9 @@ if answer["result"]["placement"]["kept"]:
 
 invalid or missing JSON raises before inputs are used. pass `--yes` only when you approve the download. JSON mode cannot answer a question, so an unapproved large download fails with `unconfirmed` and exit 1.
 
-`kept` lists project-relative paths and reasons: `changed`, `shared`, `foreign` or `unneeded`. `restored` lists repaired shared hardlinks. do not add `--force` automatically; it can overwrite a person's files.
+`kept` lists project-relative paths and reasons: `changed`, `shared`, `foreign`, `unneeded` or `blocked`, which adds the path of the entry in the way as `blocked_by`. `restored` lists files put back that no edit of the project's explained: links to a changed cached copy, and files `sync --verify` found changed. do not add `--force` automatically; it can overwrite a person's files.
 
-kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `extra` and `not_unpacked`. all nine arrays empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan.
+kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `damaged`, `blocked`, `extra` and `not_unpacked`. all eleven arrays empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan, unless `--verify` asks it to hash every placed file.
 
 ## adding and fetching
 

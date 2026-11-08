@@ -44,11 +44,12 @@ expression: pretty
   "warnings": [],
   "work": {
     "bytes_down": 81,
-    "cache_hits": 0,
     "copies": "[varies]",
+    "downloads_skipped": 0,
     "elapsed_ms": "[varies]",
     "hardlinks": "[varies]",
     "objects_written": 1,
+    "placed_from_cache": 0,
     "reflinks": "[varies]",
     "requests": 1,
     "resumes": 0,

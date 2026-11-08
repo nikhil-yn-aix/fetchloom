@@ -40,7 +40,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 `errors[0].kind` names what went wrong. `errors[0].fix`, when present, is a runnable suggestion; check that it fits the user's intended inputs before running it.
 
-`status` differences and sync conflicts still exit 0. inspect all nine status arrays and `result.placement.kept` before using inputs; a successful `path` is not proof that its bytes match the lock.
+`status` differences and sync conflicts still exit 0. inspect all eleven status arrays and `result.placement.kept` before using inputs; a successful `path` is not proof that its bytes match the lock.
 
 | exit | kinds | what to do |
 |---|---|---|

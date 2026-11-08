@@ -265,8 +265,8 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     let document = json(&sandbox.run(&["--json", "cache", "gc", "--now", "-n"])?)?;
     let result = &document["result"];
     assert_eq!(result["dry_run"], true);
-    assert_eq!(result["objects"], 1);
-    assert_eq!(result["bytes"], IRIS.len());
+    assert_eq!(result["removed_objects"], 1);
+    assert_eq!(result["removed_bytes"], IRIS.len());
     let removed: Vec<&str> = result["changes"]["remove"]
         .as_array()
         .ok_or("no paths")?
@@ -284,7 +284,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     assert_eq!(tree(&sandbox.cache())?, cache, "the cache is as it was");
     let real = json(&sandbox.run(&["--json", "cache", "gc", "--now"])?)?;
     assert_eq!(
-        real["result"]["objects"], 1,
+        real["result"]["removed_objects"], 1,
         "gc frees what it said it would"
     );
     assert!(real["result"].get("dry_run").is_none());
@@ -406,7 +406,8 @@ fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
         assert_eq!(
-            stderr, "         Ok all pinned files are in place; dry run, nothing was changed\n",
+            stderr,
+            "         Ok all pinned files are in place by size and time; dry run, nothing was changed\n",
             "{args:?}"
         );
     }
@@ -418,7 +419,7 @@ fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
         .output()?;
     assert_eq!(
         text(&real.stderr)?,
-        "         Ok all pinned files are in place, nothing to do\n"
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
     );
     assert_eq!(server.requests().len(), 1);
     Ok(())

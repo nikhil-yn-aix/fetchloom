@@ -70,7 +70,7 @@ status arrays:
 | `untracked` | existing target paths without state records |
 | `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
 | `edited_elsewhere` | managed hardlinks whose bytes hashing found changed while they are the cache's copy of those bytes: still the cached object, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them. an edit through any link, in this project or another, changes them all; `sync` puts them back |
-| `damaged` | managed copies and reflinks whose bytes hashing every placed file found changed, though their size and modification time match the state; `sync` that hashes every file too puts them back |
+| `damaged` | with `status --verify`, managed copies and reflinks whose bytes changed though their size and modification time match the state; `sync --verify` puts them back |
 | `blocked` | paths of entries in a target's way: a link, special file or folder at the target's path, or a file, link or special file where a folder on its way belongs. `sync --force` replaces them, except a folder that holds anything |
 | `extra` | scanned paths outside the known targets, apart from files listed as blocked |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |

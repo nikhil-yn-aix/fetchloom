@@ -81,7 +81,7 @@ fn a_dataset_that_is_one_zip_lands_unpacked_and_leaves_the_cache() -> Result {
     ok(&again)?;
     assert_eq!(
         text(&again.stderr)?,
-        "         Ok all pinned files are in place, nothing to do\n"
+        "         Ok all pinned files are in place by size and time, nothing to do\n"
     );
     assert_eq!(server.requests().len(), 1);
     let status = sandbox.run(&["status"])?;

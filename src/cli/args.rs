@@ -30,8 +30,8 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
 
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
-  fetchloom sync --offline
   fetchloom sync --locked
+  fetchloom sync --verify
   fetchloom sync --force --dry-run
 
 on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force. --dry-run writes nothing";
@@ -46,6 +46,7 @@ on disk: writes data.lock and may add files to the cache. --check and --dry-run 
 
     pub(super) const STATUS: &str = "examples:
   fetchloom status
+  fetchloom status --verify
   fetchloom status --json
 
 on disk: nothing. it reads data.toml, data.lock and data/";
@@ -449,7 +450,7 @@ pub(crate) enum Command {
 
     /// list files that are missing, changed locally or extra
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
-    Status,
+    Status(Status),
 
     /// list the project's datasets: source, size and folder
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
@@ -491,7 +492,7 @@ impl Command {
             Command::Remove(_) => "remove",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
-            Command::Status => "status",
+            Command::Status(_) => "status",
             Command::List(_) => "list",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
@@ -690,6 +691,19 @@ pub(crate) struct Sync {
 
     #[command(flatten)]
     pub(crate) dry: DryRun,
+
+    /// hash every placed file, and put back those whose bytes changed though their size and
+    /// time did not
+    #[arg(long, help_heading = "options")]
+    pub(crate) verify: bool,
+}
+
+/// list files that are missing, changed locally or extra
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Status {
+    /// hash every placed file, so a change that kept its size and time shows too
+    #[arg(long, help_heading = "options")]
+    pub(crate) verify: bool,
 }
 
 /// bring data.lock in line with data.toml
