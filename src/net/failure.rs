@@ -350,7 +350,9 @@ fn gave_up(url: &Url, tries: u32, reason: &str, has_copy: bool) -> Error {
             "{check}, or add --offline to use the copy downloaded earlier"
         ))
     } else {
-        error.help(format!("{check} and run the same command again"))
+        error.help(format!(
+            "{check} and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for about 2 minutes"
+        ))
     }
 }
 
@@ -542,14 +544,16 @@ mod tests {
     }
 
     #[test]
-    fn exhausting_retries_only_suggests_offline_when_a_copy_exists() {
+    fn exhausting_retries_offers_the_copy_or_more_tries() {
         let url = Url::parse("https://example.org/list").unwrap();
         for has_copy in [false, true] {
             let error = gave_up(&url, RETRIES + 1, "connection broke", has_copy);
             assert_eq!(error.kind, Kind::NetworkUnreachable);
             assert!(error.message.contains("5 tries"));
             assert!(error.message.contains("connection broke"));
-            assert_eq!(error.help.unwrap().contains("--offline"), has_copy);
+            let help = error.help.unwrap();
+            assert_eq!(help.contains("--offline"), has_copy, "{help}");
+            assert_eq!(help.contains("FETCHLOOM_RETRIES"), !has_copy, "{help}");
         }
     }
 
