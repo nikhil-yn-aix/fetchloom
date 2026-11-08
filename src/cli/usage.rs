@@ -123,6 +123,25 @@ fn message(err: &clap::Error) -> String {
     }
 }
 
+/// what a command people bring from pip, git, npm or wget is called here: the nearest
+/// spelling would send `install` to `list` and `update` to `path`.
+fn habit(command: &str) -> Option<&'static str> {
+    Some(match command {
+        "init" => "no init needed: `fetchloom add <link>` starts a project in this folder",
+        "new" => "no setup needed: `fetchloom add <link>` starts a project in this folder",
+        "install" => "`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/",
+        "download" | "fetch" => {
+            "`fetchloom get <name>` downloads once; `fetchloom add <name>` pins it"
+        }
+        "pull" => "`fetchloom sync` puts the files data.lock pins into data/",
+        "update" | "upgrade" => {
+            "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`"
+        }
+        "delete" | "uninstall" => "`fetchloom remove <name>` drops a dataset from the project",
+        _ => return None,
+    })
+}
+
 fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     let named = |kind| context_value(err, kind);
     let message = message(err);
@@ -158,13 +177,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         });
     let help = if let Some(placement) = placement.or(quoted) {
         placement
-    } else if let Some(command) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
+    } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
         .then(|| named(ContextKind::InvalidSubcommand))
         .flatten()
-        .filter(|command| matches!(command.as_str(), "init" | "new"))
+        .and_then(|command| habit(&command))
     {
-        let what = if command == "init" { "init" } else { "setup" };
-        format!("no {what} needed: `fetchloom add <link>` starts a project in this folder")
+        meant.to_owned()
     } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
         match parent {
             Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
@@ -383,6 +401,53 @@ mod tests {
         );
         let new = problem(&["fetchloom", "new"])?;
         assert!(new.help.unwrap().starts_with("no setup needed: "));
+        Ok(())
+    }
+
+    #[test]
+    fn words_from_other_tools_point_to_the_command_meant() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for (word, help) in [
+            (
+                "install",
+                "`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/",
+            ),
+            (
+                "download",
+                "`fetchloom get <name>` downloads once; `fetchloom add <name>` pins it",
+            ),
+            (
+                "fetch",
+                "`fetchloom get <name>` downloads once; `fetchloom add <name>` pins it",
+            ),
+            (
+                "pull",
+                "`fetchloom sync` puts the files data.lock pins into data/",
+            ),
+            (
+                "update",
+                "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`",
+            ),
+            (
+                "upgrade",
+                "`fetchloom lock --upgrade` looks for newer data, then `fetchloom sync`",
+            ),
+            (
+                "delete",
+                "`fetchloom remove <name>` drops a dataset from the project",
+            ),
+            (
+                "uninstall",
+                "`fetchloom remove <name>` drops a dataset from the project",
+            ),
+        ] {
+            let error = problem(&["fetchloom", word])?;
+            assert_eq!(
+                error.message,
+                format!("there is no command called \"{word}\"")
+            );
+            assert_eq!(error.help.as_deref(), Some(help), "{word}");
+        }
         Ok(())
     }
 
