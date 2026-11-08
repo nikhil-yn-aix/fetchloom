@@ -1113,6 +1113,8 @@ mod tests {
         let surveyed = || {
             let mut survey = Survey::read(&project, "data", Threads::default());
             survey.state.files.extend(records.iter().cloned());
+            // as reading a state that records them does, so windows reads the links as they are
+            survey.look_through_links(&project.root);
             survey
         };
 
