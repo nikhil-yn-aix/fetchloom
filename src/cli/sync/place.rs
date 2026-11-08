@@ -586,10 +586,13 @@ pub(crate) fn untouched(
         || !survey.damaged.is_empty()
         || !survey.vouched.is_empty()
         || survey.leftovers().next().is_some()
-        || state
-            .files
-            .iter()
-            .any(|(path, placed)| survey.disk.get(path) != Some(&placed.look))
+        || state.files.iter().any(|(path, placed)| {
+            survey.disk.get(path) != Some(&placed.look)
+                // a link made writable leaves the cache's copy open to edits until sealed again
+                || (placed.method == Method::Hardlink
+                    && !placed.writable
+                    && survey.writable.contains(path))
+        })
     {
         return Ok(None);
     }
@@ -852,7 +855,7 @@ fn decide(
             Ok(Action::Replace)
         }
         Some(placed) if survey.vouched.contains(path) => {
-            let fits = !target.copy || placed.writable;
+            let fits = fits(target, placed, survey);
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Vouch(*look)
             } else {
@@ -860,7 +863,7 @@ fn decide(
             })
         }
         Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
-            let fits = !target.copy || placed.writable;
+            let fits = fits(target, placed, survey);
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
             } else {
@@ -1042,6 +1045,17 @@ pub(crate) fn holds_target(target: &Target, look: &Look, path: &Path) -> bool {
 
 pub(crate) fn now_writable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| !metadata.permissions().readonly())
+}
+
+/// whether a file placed as `placed` has the mode its dataset asks for: writable for `copy =
+/// true`, and otherwise no link to the cache's copy someone made writable, which leaves the copy
+/// every project shares open to an edit.
+pub(crate) fn fits(target: &Target, placed: &Placed, survey: &Survey) -> bool {
+    if target.copy {
+        placed.writable
+    } else {
+        placed.method != Method::Hardlink || !survey.writable.contains(&target.path)
+    }
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {

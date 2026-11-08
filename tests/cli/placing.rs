@@ -1085,6 +1085,72 @@ fn keep_time(project: &Path) -> Result {
     Ok(())
 }
 
+/// a link to the cache's copy that someone made writable, but did not edit, leaves the copy every
+/// project shares open to an edit. status shows it, and a plain sync makes it read-only again,
+/// checking its bytes, with no download.
+#[test]
+fn a_link_made_writable_is_sealed_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlink {
+        return Ok(());
+    }
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    link_iris(&sandbox, &sandbox.work())?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the test opens a placed link to edits as a person can"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&placed, permissions)?;
+
+    let status = sandbox.run(&["--json", "status"])?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        report["result"]["outdated"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(fs::metadata(&placed)?.permissions().readonly());
+    assert_eq!(fs::read(&placed)?, V1);
+    assert_eq!(server.requests().len(), 1, "the cache still holds iris");
+    Ok(())
+}
+
+/// an edit through a shared link that keeps the size and time leaves no mark, so only hashing
+/// finds it, and a plain sync could not: `status --verify` points to `sync --verify` alone.
+#[test]
+fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+
+    let status = sandbox
+        .command_in(&other, &["status", "--verify"])
+        .output()?;
+
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains("Damaged data/iris/iris.csv · linked to the cache's copy"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`fetchloom sync --verify`"), "{stderr}");
+    assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
+    Ok(())
+}
+
 /// an edit through one project's link that keeps the size and time shows in no listing on any
 /// platform, so the cache's mark is all the other project has. status, sync and path agree on
 /// it: sync puts the locked bytes back, and then nothing differs.

@@ -27,8 +27,9 @@ pub(crate) struct Survey {
     pub(crate) disk: HashMap<String, Look>,
     /// the listing's spelling of an alias, within the current data folder, for removals.
     pub(crate) listed: HashMap<String, String>,
-    /// hardlinks a mark put in doubt whose bytes hashing found changed: edited through another
-    /// project's link. sync puts them back with or without --force.
+    /// hardlinks whose bytes hashing found changed while they still share them, with the cache's
+    /// copy or other projects, or are a copy a change mark records: edited through some link to
+    /// that copy. sync puts them back with or without --force.
     pub(crate) elsewhere: HashSet<String>,
     /// hardlinks a mark put in doubt whose bytes hashing found intact, which sync keeps, recording
     /// the scan's start.
@@ -36,11 +37,14 @@ pub(crate) struct Survey {
     /// files that still look as recorded but hold other bytes, which hashing found among those
     /// as new as the state itself.
     pub(crate) edited: HashSet<String>,
-    /// copies and reflinks that still look as placed but hold other bytes, which only hashing
-    /// every placed file finds, as `--verify` asks: a change that kept the size and time, as a
-    /// failing disk or a tool that restores times makes. sync puts them back with or without
-    /// --force.
+    /// copies and reflinks, and links left with no name but their own, that still look as placed
+    /// but hold other bytes: a change that kept the size and time, as a failing disk or a tool
+    /// that restores times makes. hashing every placed file finds them, as `--verify` asks, and a
+    /// change mark puts them in doubt too. sync puts them back with or without --force.
     pub(crate) damaged: HashSet<String>,
+    /// files the disk lets their owner write. a link to the cache's copy among them leaves the
+    /// copy every project shares open to an edit.
+    pub(crate) writable: HashSet<String>,
     /// whether hashing found files as new as the state unchanged, so a state written now settles
     /// them for later runs, or a record moved to another spelling of its path.
     pub(crate) needs_writing: bool,
@@ -83,7 +87,12 @@ impl Survey {
     pub(crate) fn read(project: &Project, data_dir: &str, threads: Threads) -> Survey {
         let started = nanos(SystemTime::now());
         let (state, written) = project.state();
-        let (disk, temporaries, entries) = scan(&project.root, data_dir, threads);
+        let Scanned {
+            found: disk,
+            temporaries,
+            entries,
+            writable,
+        } = scan(&project.root, data_dir, threads);
         let mut survey = Survey {
             threads,
             started,
@@ -94,6 +103,7 @@ impl Survey {
             vouched: HashSet::new(),
             edited: HashSet::new(),
             damaged: HashSet::new(),
+            writable,
             needs_writing: false,
             temporaries,
             entries,
@@ -107,9 +117,10 @@ impl Survey {
         survey
     }
 
-    /// on windows, a folder's listing keeps a hardlinked file's size and time as they were when
-    /// this link last opened it, so an edit made through another project's link does not show.
-    /// opening the file reads them as they are, for the files placed as hardlinks only.
+    /// on windows, a folder's listing keeps a hardlinked file's size, time and read-only flag as
+    /// they were when this link last opened it, so an edit made through another project's link
+    /// does not show. opening the file reads them as they are, for the files placed as hardlinks
+    /// only.
     #[cfg(windows)]
     fn look_through_links(&mut self, root: &Path) {
         for (path, placed) in &self.state.files {
@@ -118,6 +129,11 @@ impl Survey {
                 && let Ok(metadata) = fs::metadata(root.join(path))
             {
                 *seen = Look::of(&metadata);
+                if metadata.permissions().readonly() {
+                    self.writable.remove(path);
+                } else {
+                    self.writable.insert(path.clone());
+                }
             }
         }
     }
@@ -405,13 +421,22 @@ impl Survey {
         let intact = place::run_all(&doubted, self.threads, |path| {
             Sha256::of_file(&root.join(path)).map(|digest| digest == files[path].sha256)
         });
+        let marks = cache.marks()?;
         for (path, intact) in doubted.into_iter().zip(intact) {
             match intact {
                 Ok(true) => {
                     self.vouched.insert(path);
                 }
                 Ok(false) => {
-                    self.elsewhere.insert(path);
+                    let file = root.join(&path);
+                    let marked = marks.get(&files[&path].sha256).is_some_and(|mark| {
+                        cache::Identity::of(&file).is_ok_and(|copy| mark.copies.contains(&copy))
+                    });
+                    if marked || place::has_other_names(&file) {
+                        self.elsewhere.insert(path);
+                    } else {
+                        self.damaged.insert(path);
+                    }
                 }
                 Err(err) => {
                     return Err(Error::io(
@@ -427,8 +452,9 @@ impl Survey {
     /// hashes every placed file that still looks as placed and that nothing here hashed or put
     /// in doubt already, so changed bytes that kept their size and time show too, as `--verify`
     /// asks. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
-    /// file joins `damaged`. a file that cannot be read stops the check.
-    pub(crate) fn verify(&mut self, root: &Path) -> Result<(), Error> {
+    /// file joins `damaged`. a file that cannot be read stops the check. returns the files it
+    /// found changed, which a plain sync cannot see.
+    pub(crate) fn verify(&mut self, root: &Path) -> Result<HashSet<String>, Error> {
         let files: Vec<(&String, &crate::project::state::Placed)> = self
             .state
             .files
@@ -441,7 +467,7 @@ impl Survey {
             })
             .collect();
         if files.is_empty() {
-            return Ok(());
+            return Ok(HashSet::new());
         }
         let _span = tracing::debug_span!("verify", files = files.len()).entered();
         let intact = place::run_all(&files, self.threads, |(path, placed)| {
@@ -460,15 +486,19 @@ impl Survey {
                 }
             }
         }
+        // a link changed while it still shares its bytes changed every name it has; one left
+        // with a name of its own is this project's file alone
+        let mut found = HashSet::new();
         for (path, linked) in changed {
             tracing::debug!(%path, "hashing found bytes changed under an unchanged look");
-            if linked {
+            found.insert(path.clone());
+            if linked && place::has_other_names(&root.join(&path)) {
                 self.elsewhere.insert(path);
             } else {
                 self.damaged.insert(path);
             }
         }
-        Ok(())
+        Ok(found)
     }
 }
 
@@ -579,22 +609,29 @@ pub(crate) fn apart(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// what a scan of the data folder found: every file and how it looks, by its path in the
-/// project, the paths of those under the hidden names placement stages files in, and every other
-/// entry.
-type Scanned = (HashMap<String, Look>, Vec<String>, HashMap<String, Entry>);
+/// what a scan of the data folder found.
+#[derive(Debug, Default, PartialEq)]
+struct Scanned {
+    /// every file and how it looks, by its path in the project.
+    found: HashMap<String, Look>,
+    /// the paths of the files under the hidden names placement stages files in.
+    temporaries: Vec<String>,
+    /// every other entry: folders, links and special files.
+    entries: HashMap<String, Entry>,
+    /// the files the disk lets their owner write.
+    writable: HashSet<String>,
+}
 
-/// every file under the data folder and how it looks, by its path in the project, the paths of
-/// those under the hidden names placement stages files in, and the folders, links and special
-/// files beside them. links are neither followed nor touched.
+/// every file under the data folder, how it looks and whether it is writable, by its path in the
+/// project, the paths of those under the hidden names placement stages files in, and the folders,
+/// links and special files beside them. links are neither followed nor touched.
 fn scan(root: &Path, data_dir: &str, threads: Threads) -> Scanned {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
-    let mut found = HashMap::new();
-    let mut temporaries = Vec::new();
-    let mut entries = HashMap::new();
+    let mut scanned = Scanned::default();
     let mut pending = Vec::new();
     let mut last_parent = None;
     let mut parents = 0;
+    let mut entries = HashMap::new();
     visit_files(
         root,
         data_dir,
@@ -603,7 +640,7 @@ fn scan(root: &Path, data_dir: &str, threads: Threads) -> Scanned {
             if last_parent != Some(parent) {
                 // DirEntry retains its parent handle on unix; bound distinct parents too.
                 if parents == 8 {
-                    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+                    scan_pending(&mut pending, threads, &mut scanned);
                     parents = 0;
                 }
                 parents += 1;
@@ -611,36 +648,43 @@ fn scan(root: &Path, data_dir: &str, threads: Threads) -> Scanned {
             }
             pending.push((entry, path, temporary));
             if pending.len() == 4096 {
-                scan_pending(&mut pending, threads, &mut found, &mut temporaries);
+                scan_pending(&mut pending, threads, &mut scanned);
                 parents = 0;
                 last_parent = None;
             }
         },
     );
-    scan_pending(&mut pending, threads, &mut found, &mut temporaries);
-    span.record("files", found.len());
-    (found, temporaries, entries)
+    scan_pending(&mut pending, threads, &mut scanned);
+    scanned.entries = entries;
+    span.record("files", scanned.found.len());
+    scanned
 }
 
 fn scan_pending(
     pending: &mut Vec<(fs::DirEntry, String, bool)>,
     threads: Threads,
-    found: &mut HashMap<String, Look>,
-    temporaries: &mut Vec<String>,
+    scanned: &mut Scanned,
 ) {
-    let metadata =
-        |(entry, _, _): &(fs::DirEntry, String, bool)| entry.metadata().ok().as_ref().map(Look::of);
+    let metadata = |(entry, _, _): &(fs::DirEntry, String, bool)| {
+        entry
+            .metadata()
+            .ok()
+            .map(|found| (Look::of(&found), !found.permissions().readonly()))
+    };
     let looks = if pending.len() < 512 {
         pending.iter().map(metadata).collect()
     } else {
         place::run_all(pending, threads, metadata)
     };
     for ((_, path, temporary), look) in pending.drain(..).zip(looks) {
-        if let Some(look) = look {
+        if let Some((look, writable)) = look {
             if temporary {
-                temporaries.push(path.clone());
+                scanned.temporaries.push(path.clone());
             }
-            found.insert(path, look);
+            if writable {
+                scanned.writable.insert(path.clone());
+            }
+            scanned.found.insert(path, look);
         }
     }
 }
@@ -683,7 +727,8 @@ fn visit_files(
 /// hashes the objects behind hardlinks someone edited, before anything downloads. an edit
 /// through a hardlink also changes the cached object, which is then dropped and fetched again,
 /// so it never spreads to other projects. a link hashing found changed that is still the object
-/// itself marks the object at once, since its bytes are the object's.
+/// itself marks the object at once, since its bytes are the object's; one the cache no longer
+/// holds is marked as a changed copy, so other projects that link it check it too.
 pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result<(), Error> {
     let _span = tracing::debug_span!("audit").entered();
     for (path, placed) in &survey.state.files {
@@ -692,11 +737,15 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
         }
         let file = project.root.join(path);
         if survey.elsewhere.contains(path) {
-            if same_file::is_same_file(&file, cache.object_path(&placed.sha256)).unwrap_or(false) {
-                cache
-                    .mark_changed(&placed.sha256)
-                    .map_err(|err| local(&file, &err))?;
-            }
+            let marked = if same_file::is_same_file(&file, cache.object_path(&placed.sha256))
+                .unwrap_or(false)
+            {
+                cache.mark_changed(&placed.sha256)
+            } else {
+                cache::Identity::of(&file)
+                    .and_then(|copy| cache.mark_copy_changed(&placed.sha256, copy))
+            };
+            marked.map_err(|err| local(&file, &err))?;
             continue;
         }
         if (survey.edited.contains(path)
@@ -752,7 +801,7 @@ mod tests {
             fs::create_dir_all(&folder).unwrap();
             fs::write(folder.join("x"), b"data").unwrap();
         }
-        let (found, _, _) = scan(dir.path(), "data", Threads::default());
+        let found = scan(dir.path(), "data", Threads::default()).found;
         assert_eq!(found.len(), 512);
     }
 
@@ -780,16 +829,16 @@ mod tests {
         }
         let serial = Threads::read(&|_| Some("1".into())).unwrap();
         let expected = scan(root, "data", serial);
-        assert_eq!(expected.0.len(), 513);
-        assert_eq!(expected.1, ["data/.fetchloom-0123456789abcdef.copy"]);
+        assert_eq!(expected.found.len(), 513);
+        assert_eq!(
+            expected.temporaries,
+            ["data/.fetchloom-0123456789abcdef.copy"]
+        );
         for count in ["1", "8"] {
             let threads = Threads::read(&|_| Some(count.into())).unwrap();
             let actual = scan(root, "data", threads);
             assert_eq!(actual, expected);
-            assert_eq!(
-                scan(root, "absent", threads),
-                (HashMap::new(), Vec::new(), HashMap::new())
-            );
+            assert_eq!(scan(root, "absent", threads), Scanned::default());
         }
     }
 
@@ -887,19 +936,26 @@ mod tests {
         let placed = [
             ("copy", Method::Copy),
             ("link", Method::Hardlink),
+            ("lone", Method::Hardlink),
             ("intact", Method::Copy),
             ("edited", Method::Copy),
         ];
         for (name, _) in placed {
             fs::write(project.root.join("data").join(name), b"original").unwrap();
         }
+        // the cache's own name for the link's bytes; "lone" was a link once but has only its own
+        let linked = fs::hard_link(
+            project.root.join("data").join("link"),
+            project.root.join("object"),
+        )
+        .is_ok();
         let mut survey = Survey::read(&project, "data", Threads::default());
         for (name, method) in placed {
             let path = format!("data/{name}");
             let record = record(&project.root, &path, b"original", method);
             survey.state.files.insert(path, record);
         }
-        for name in ["copy", "link", "edited"] {
+        for name in ["copy", "link", "lone", "edited"] {
             let path = project.root.join("data").join(name);
             let modified = fs::metadata(&path).unwrap().modified().unwrap();
             fs::write(&path, b"Original").unwrap();
@@ -914,8 +970,12 @@ mod tests {
 
         survey.verify(&project.root).unwrap();
 
-        assert_eq!(survey.damaged, HashSet::from(["data/copy".to_owned()]));
-        assert_eq!(survey.elsewhere, HashSet::from(["data/link".to_owned()]));
+        let (shared, alone): (Vec<_>, Vec<_>) = ["data/copy", "data/link", "data/lone"]
+            .into_iter()
+            .map(str::to_owned)
+            .partition(|path| linked && path == "data/link");
+        assert_eq!(survey.damaged, HashSet::from_iter(alone));
+        assert_eq!(survey.elsewhere, HashSet::from_iter(shared));
         assert_eq!(survey.edited, HashSet::from(["data/edited".to_owned()]));
         fs::remove_file(project.root.join("data/intact")).unwrap();
         survey.disk.insert(
@@ -1041,6 +1101,56 @@ mod tests {
             fs::read(project.root.join("data/changed")).unwrap(),
             b"changed through another link"
         );
+    }
+
+    /// a file placed as a hardlink, then replaced by a file of its own that holds other bytes
+    /// under the recorded size and time, shares nothing with the cache: a change mark puts it in
+    /// doubt, and hashing finds it damaged, not changed through a link it no longer is.
+    #[test]
+    fn a_changed_file_that_is_no_longer_a_link_is_damaged_not_changed_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        fs::write(project.root.join("data/file"), b"other").unwrap();
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
+        cache.mark_changed(&placed.sha256).unwrap();
+        survey.state.files.insert("data/file".to_owned(), placed);
+
+        survey.check_doubted(&project.root, &cache).unwrap();
+
+        assert_eq!(survey.damaged, HashSet::from(["data/file".to_owned()]));
+        assert!(survey.elsewhere.is_empty());
+    }
+
+    /// a changed link that other projects share, once the cache no longer holds its bytes, is
+    /// still recorded as a copy found changed, so the other projects' links to it are checked.
+    #[test]
+    fn a_changed_shared_link_the_cache_lost_is_marked_for_the_other_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        fs::create_dir(project.root.join("data")).unwrap();
+        let file = project.root.join("data/file");
+        fs::write(&file, b"other").unwrap();
+        if fs::hard_link(&file, project.root.join("another project's link")).is_err() {
+            return;
+        }
+        let cache = Cache::open(project.root.join("cache")).unwrap();
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        let placed = record(&project.root, "data/file", b"bytes", Method::Hardlink);
+        let digest = placed.sha256;
+        survey.state.files.insert("data/file".to_owned(), placed);
+        survey.elsewhere.insert("data/file".to_owned());
+
+        audit(&project, &survey, &cache).unwrap();
+
+        let copy = crate::cache::Identity::of(&file).unwrap();
+        assert!(cache.marks().unwrap()[&digest].copies.contains(&copy));
     }
 
     #[test]
@@ -1449,7 +1559,12 @@ mod tests {
             dir.path().join("data/file-link"),
         )
         .unwrap();
-        let (files, leftovers, entries) = scan(dir.path(), "data", Threads::default());
+        let Scanned {
+            found: files,
+            temporaries: leftovers,
+            entries,
+            ..
+        } = scan(dir.path(), "data", Threads::default());
         assert_eq!(files.len(), 1);
         assert_eq!(files["data/nested/kept"].size, 6);
         assert_eq!(leftovers, Vec::<String>::new());
@@ -1461,6 +1576,9 @@ mod tests {
                 ("data/file-link".to_owned(), Entry::Link),
             ])
         );
-        assert_eq!(scan(dir.path(), "missing", Threads::default()).0.len(), 0);
+        assert_eq!(
+            scan(dir.path(), "missing", Threads::default()).found.len(),
+            0
+        );
     }
 }

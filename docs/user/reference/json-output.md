@@ -68,9 +68,9 @@ status arrays:
 | `missing` | absent target paths |
 | `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
 | `untracked` | existing target paths without state records |
-| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, or read-only where the dataset asks for `copy = true` |
-| `edited_elsewhere` | managed hardlinks whose bytes hashing found changed while they are the cache's copy of those bytes: still the cached object, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them. an edit through any link, in this project or another, changes them all; `sync` puts them back |
-| `damaged` | with `status --verify`, managed copies and reflinks whose bytes changed though their size and modification time match the state; `sync --verify` puts them back |
+| `outdated` | unchanged managed paths that `sync` replaces: pinned to other hashes now, read-only where the dataset asks for `copy = true`, or links to the cache's copy someone made writable, which sync makes read-only again |
+| `edited_elsewhere` | managed hardlinks whose bytes hashing found changed while they still share them: still the cached object or linked to other projects, the copy a change mark records the cache found changed, or, showing their recorded size and modification time, linked to an object marked changed since fetchloom last knew them. an edit through any link, in this project or another, changes them all; `sync` puts them back |
+| `damaged` | managed files that share their bytes with nothing, copies, reflinks and links left with a name of their own, whose bytes changed though their size and modification time match the state. `status --verify` hashes them all, and a change mark puts them in doubt for a plain status too; `sync` puts back those a mark shows, and `sync --verify` the rest |
 | `blocked` | paths of entries in a target's way: a link, special file or folder at the target's path, or a file, link or special file where a folder on its way belongs. `sync --force` replaces them, except a folder that holds anything |
 | `extra` | scanned paths outside the known targets, apart from files listed as blocked |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |

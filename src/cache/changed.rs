@@ -104,6 +104,25 @@ impl Cache {
         self.write_mark(digest, None, &copies)
     }
 
+    /// remembers that `copy`, a file other projects may link that once was the object for
+    /// `digest` and now is not, was found changed, so their links to it are checked. a copy the
+    /// mark records already changes nothing. the object at the name, if the cache holds one, is
+    /// another file, and its time keeps it out of the doubt.
+    pub(crate) fn mark_copy_changed(&self, digest: &Sha256, copy: Identity) -> io::Result<()> {
+        let mut copies = self.marked_copies(digest);
+        if copies.contains(&copy) {
+            return Ok(());
+        }
+        copies.push(copy);
+        let excess = copies.len().saturating_sub(COPIES);
+        copies.drain(..excess);
+        let object = fs::symlink_metadata(self.object_path(digest))
+            .and_then(|found| found.modified())
+            .ok()
+            .map(nanos);
+        self.write_mark(digest, object, &copies)
+    }
+
     /// refreshes the mark so projects checked after an earlier repair see this corruption too.
     /// the mark's time stays when the change was found, and it holds `written`, when the copy
     /// that replaced the object was written, which stays out of doubt. only a finished

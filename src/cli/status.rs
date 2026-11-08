@@ -13,7 +13,9 @@ use super::sync::place;
 use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
-use crate::project::{Project, lock};
+use crate::project::Project;
+use crate::project::lock::{self, Lock};
+use crate::project::manifest::Manifest;
 use crate::threads::Threads;
 use crate::units;
 
@@ -57,6 +59,12 @@ pub(super) struct Status {
     /// edited files placed as hardlinks, whose change every project sharing the link sees.
     #[serde(skip)]
     shared: HashSet<String>,
+    /// damaged files only hashing every placed file found, which a plain sync cannot see.
+    #[serde(skip)]
+    hashed_only: HashSet<String>,
+    /// outdated files that are links to the cache's copy someone made writable.
+    #[serde(skip)]
+    unsealed: HashSet<String>,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -74,7 +82,7 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
                 "`fetchloom sync` places missing or updated files and reports any conflicts it keeps",
             );
         }
-        if status.verified && (!status.damaged.is_empty() || !status.edited_elsewhere.is_empty()) {
+        if !status.hashed_only.is_empty() {
             output.hint(
                 "`fetchloom sync --verify` checks every file the same way and puts back those whose bytes changed",
             );
@@ -96,30 +104,40 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     Ok(status)
 }
 
-/// compares the data folder with data.lock, reading only what the disk says about each file,
-/// or, with `verify`, hashing every placed file too.
-fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Error> {
-    let (_, manifest) = project.manifest()?;
-    let lock = project.lock()?.unwrap_or_default();
-    let mut status = Status {
-        project: project.root.clone(),
-        verified: verify,
-        ..Status::default()
-    };
-    for (name, entry) in &manifest.datasets {
-        if lock
-            .get(name)
-            .is_none_or(|locked| locked.spec != lock::spec(entry))
-        {
-            status.unlocked.push(name.clone());
-        }
-    }
-    status.removed = lock
+/// the datasets data.lock no longer pins as data.toml asks: those data.toml lists that the lock
+/// lacks or pins for another spec, and those the lock pins that data.toml dropped.
+fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
+    let unlocked = manifest
+        .datasets
+        .iter()
+        .filter(|(name, entry)| {
+            lock.get(name)
+                .is_none_or(|locked| locked.spec != lock::spec(entry))
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    let removed = lock
         .datasets
         .iter()
         .filter(|dataset| !manifest.datasets.contains_key(&dataset.name))
         .map(|dataset| dataset.name.clone())
         .collect();
+    (unlocked, removed)
+}
+
+/// compares the data folder with data.lock, reading only what the disk says about each file,
+/// or, with `verify`, hashing every placed file too.
+fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Error> {
+    let (_, manifest) = project.manifest()?;
+    let lock = project.lock()?.unwrap_or_default();
+    let (unlocked, removed) = out_of_date(&manifest, &lock);
+    let mut status = Status {
+        project: project.root.clone(),
+        verified: verify,
+        unlocked,
+        removed,
+        ..Status::default()
+    };
     let cache = super::peek_cache()?;
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
@@ -132,7 +150,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     survey.retarget(&project.root, &targets);
     survey.check_doubted(&project.root, &cache)?;
     if verify {
-        survey.verify(&project.root)?;
+        status.hashed_only = survey.verify(&project.root)?;
     }
     let mut going = None;
     for target in &targets {
@@ -167,8 +185,13 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
             (Some(seen), Some(record))
                 if record.look == *seen && !survey.edited.contains(&target.path) =>
             {
-                if record.sha256 == target.sha256 && (!target.copy || record.writable) {
-                    continue;
+                if record.sha256 == target.sha256 {
+                    if place::fits(target, record, &survey) {
+                        continue;
+                    }
+                    if !target.copy {
+                        status.unsealed.insert(target.path.clone());
+                    }
                 }
                 &mut status.outdated
             }
@@ -195,6 +218,12 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     // a file in the way is listed as blocking, not also as extra
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
     status.extra = extra(&survey, &wanted);
+    let listed: HashSet<&String> = status
+        .edited_elsewhere
+        .iter()
+        .chain(&status.damaged)
+        .collect();
+    status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
 }
 
@@ -252,7 +281,11 @@ impl Status {
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
-            || !self.edited_elsewhere.is_empty()
+            || self
+                .edited_elsewhere
+                .iter()
+                .chain(&self.damaged)
+                .any(|path| !self.hashed_only.contains(path))
     }
 }
 
@@ -276,6 +309,13 @@ fn list(output: &Output, status: &Status) {
                 output.mark(
                     verb,
                     &format!("{path} · changed through a hardlink other projects may share"),
+                );
+            } else if status.unsealed.contains(path) {
+                output.mark(
+                    verb,
+                    &format!(
+                        "{path} · a link to the cache's copy made writable, so an edit would change it for every project"
+                    ),
                 );
             } else {
                 output.mark(verb, path);
