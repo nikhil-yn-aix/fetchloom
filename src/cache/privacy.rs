@@ -1,9 +1,8 @@
 use super::tests::cache;
 use super::*;
 
-const SECRET: &str = "wave1-record-secret";
-const URL: &str =
-    "https://example.org/data?token=wave1-record-secret#access_token=wave1-record-secret";
+const SECRET: &str = "record-secret";
+const URL: &str = "https://example.org/data?token=record-secret#access_token=record-secret";
 
 fn record() -> UrlRecord {
     UrlRecord {

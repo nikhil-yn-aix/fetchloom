@@ -358,11 +358,11 @@ fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Ve
 }
 
 #[test]
-fn wave1_configured_dataverse_keys_do_not_return_after_an_origin_change() {
+fn configured_dataverse_keys_do_not_return_after_an_origin_change() {
     for (owner, other_port) in [("dv.lab", "dv.lab:8443"), ("dv.lab:8443", "dv.lab")] {
         let configured = format!("https://{owner}");
         let var = |name: &str| match name {
-            "DATAVERSE_API_TOKEN" => Some(OsString::from("wave1-dataverse-sentinel")),
+            "DATAVERSE_API_TOKEN" => Some(OsString::from("dataverse-sentinel")),
             "DATAVERSE_URL" => Some(OsString::from(&configured)),
             _ => None,
         };
@@ -383,8 +383,8 @@ fn wave1_configured_dataverse_keys_do_not_return_after_an_origin_change() {
             assert_eq!(
                 redirect_headers(&net, &start, &hops, "x-dataverse-key"),
                 [
-                    Some("wave1-dataverse-sentinel".to_owned()),
-                    Some("wave1-dataverse-sentinel".to_owned()),
+                    Some("dataverse-sentinel".to_owned()),
+                    Some("dataverse-sentinel".to_owned()),
                     None,
                     None
                 ],
@@ -395,7 +395,7 @@ fn wave1_configured_dataverse_keys_do_not_return_after_an_origin_change() {
 }
 
 #[test]
-fn wave1_netrc_logins_return_only_to_their_own_https_host_and_port() {
+fn netrc_logins_return_only_to_their_own_https_host_and_port() {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("netrc");
     for (owner, other_port) in [
@@ -430,8 +430,8 @@ fn wave1_netrc_logins_return_only_to_their_own_https_host_and_port() {
 }
 
 #[test]
-fn wave1_osf_exceptions_keep_their_own_scheme_host_and_port_boundaries() {
-    let token = "wave1-osf-sentinel";
+fn osf_exceptions_keep_their_own_scheme_host_and_port_boundaries() {
+    let token = "osf-sentinel";
     for start in [
         "https://api.osf.io/start",
         "https://unrelated.example/start",

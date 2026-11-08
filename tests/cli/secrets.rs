@@ -173,14 +173,14 @@ fn an_unknown_help_topic_never_shows_the_token() -> Result {
 }
 
 const DUMMY_KEYS: &[(&str, &str)] = &[
-    ("HF_TOKEN", "hf_wave1_huggingface_dummy_secret"),
-    ("ZENODO_TOKEN", "wave1_zenodo_dummy_secret"),
-    ("FIGSHARE_TOKEN", "wave1_figshare_dummy_secret"),
-    ("OSF_TOKEN", "wave1_osf_dummy_secret"),
-    ("KAGGLE_API_TOKEN", "KGAT_wave1_kaggle_dummy_secret"),
-    ("DATAVERSE_API_TOKEN", "wave1_dataverse_dummy_secret"),
+    ("HF_TOKEN", "hf_huggingface_dummy_secret"),
+    ("ZENODO_TOKEN", "zenodo_dummy_secret"),
+    ("FIGSHARE_TOKEN", "figshare_dummy_secret"),
+    ("OSF_TOKEN", "osf_dummy_secret"),
+    ("KAGGLE_API_TOKEN", "KGAT_kaggle_dummy_secret"),
+    ("DATAVERSE_API_TOKEN", "dataverse_dummy_secret"),
 ];
-const LINK_SECRET: &str = "wave1-link-dummy-secret";
+const LINK_SECRET: &str = "link-dummy-secret";
 const MODES: &[&[&str]] = &[&[], &["--json"], &["-vv"], &["--json", "-vv"]];
 
 fn keyed_command(
@@ -245,7 +245,7 @@ fn url_record_bytes(sandbox: &Sandbox) -> Result<Vec<(String, Vec<u8>)>> {
 }
 
 #[test]
-fn wave1_configured_keys_stay_out_of_outputs_locks_state_and_url_records() -> Result {
+fn configured_keys_stay_out_of_outputs_locks_state_and_url_records() -> Result {
     let secrets: Vec<_> = DUMMY_KEYS.iter().map(|(_, secret)| *secret).collect();
     let mut failures = Vec::new();
     for mode in MODES {
@@ -349,7 +349,7 @@ fn secret_link_surfaces(suffix: &str, mode: &[&str]) -> Result<Vec<(String, Vec<
 }
 
 #[test]
-fn wave1_query_secrets_stay_out_of_each_output_surface() -> Result {
+fn query_secrets_stay_out_of_each_output_surface() -> Result {
     let mut failures = Vec::new();
     for key in [
         "token",
@@ -380,7 +380,7 @@ fn wave1_query_secrets_stay_out_of_each_output_surface() -> Result {
 }
 
 #[test]
-fn wave1_fragment_secrets_stay_out_of_each_output_surface() -> Result {
+fn fragment_secrets_stay_out_of_each_output_surface() -> Result {
     let mut failures = Vec::new();
     for suffix in [
         format!("#access_token={LINK_SECRET}"),
@@ -405,7 +405,7 @@ fn wave1_fragment_secrets_stay_out_of_each_output_surface() -> Result {
 }
 
 #[test]
-fn wave1_signed_urls_leave_no_secret_in_cache_url_records() -> Result {
+fn signed_urls_leave_no_secret_in_cache_url_records() -> Result {
     let mut failures = Vec::new();
     for suffix in [
         format!("?token={LINK_SECRET}"),
@@ -422,7 +422,7 @@ fn wave1_signed_urls_leave_no_secret_in_cache_url_records() -> Result {
 }
 
 #[test]
-fn wave1_project_references_refuse_secret_fragments_without_persisting_them() -> Result {
+fn project_references_refuse_secret_fragments_without_persisting_them() -> Result {
     let mut failures = Vec::new();
     for mode in MODES {
         let sandbox = Sandbox::new()?;
@@ -465,7 +465,7 @@ fn marker_zip() -> Result<Vec<u8>> {
 }
 
 #[test]
-fn wave1_generated_output_roots_refuse_links_outside_the_working_directory() -> Result {
+fn generated_output_roots_refuse_links_outside_the_working_directory() -> Result {
     for archive in [false, true] {
         for multiple in [false, true] {
             let sandbox = Sandbox::new()?;
@@ -516,7 +516,7 @@ fn wave1_generated_output_roots_refuse_links_outside_the_working_directory() -> 
 }
 
 #[test]
-fn wave1_fragment_keys_cannot_be_pinned_into_a_project() -> Result {
+fn fragment_keys_cannot_be_pinned_into_a_project() -> Result {
     let mut failures = Vec::new();
     for mode in MODES {
         let sandbox = Sandbox::new()?;
@@ -565,8 +565,8 @@ fn wave1_fragment_keys_cannot_be_pinned_into_a_project() -> Result {
 }
 
 #[test]
-fn wave1_userinfo_links_are_rejected_without_leaking_or_making_a_request() -> Result {
-    let secrets = ["wave1-userinfo-name", "wave1-userinfo-password"];
+fn userinfo_links_are_rejected_without_leaking_or_making_a_request() -> Result {
+    let secrets = ["userinfo-name", "userinfo-password"];
     for verb in ["get", "add"] {
         for mode in MODES {
             let sandbox = Sandbox::new()?;
