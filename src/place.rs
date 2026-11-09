@@ -645,10 +645,12 @@ impl Placer {
     }
 
     /// `path` as a path below the root, whose folder must be the root or inside it, with no `..`
-    /// below the root. a path already absolute is not built again, as every placement's is.
+    /// below the root.
     fn below_root<'a>(&self, path: &'a Path) -> io::Result<Cow<'a, Path>> {
         let absolute;
-        let (path, below) = if path.is_absolute() {
+        // unix keeps `..` when it makes a path absolute, so a path already absolute compares the
+        // same as given; windows resolves `..` there, as it did in the root
+        let (path, below) = if cfg!(unix) && path.is_absolute() {
             (path, path.strip_prefix(&self.root).map(Cow::Borrowed))
         } else {
             absolute = std::path::absolute(path)?;
