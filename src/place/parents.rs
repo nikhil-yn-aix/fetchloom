@@ -173,6 +173,17 @@ impl Location {
         .map_err(Into::into)
     }
 
+    pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
+        native::linkat(
+            &self.parent.file,
+            &self.name,
+            &target.parent.file,
+            &target.name,
+            AtFlags::empty(),
+        )
+        .map_err(Into::into)
+    }
+
     pub(super) fn remove_file(&self) -> io::Result<()> {
         native::unlinkat(&self.parent.file, &self.name, AtFlags::empty()).map_err(Into::into)
     }

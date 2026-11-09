@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::put::Tally;
-use super::{Blocker, Entry, Placement, Preview, Reason};
+use super::{Blocker, ChangedCopy, Entry, Placement, Preview, Reason};
 use crate::output::Output;
 use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
@@ -79,14 +79,29 @@ pub(super) fn tell(
                 "{path} was put back as pinned: its bytes had changed though its size and time had not"
             ));
         } else {
-            output.warn_with(
-                &format!(
+            let said = match changed_copy(placement, path) {
+                Some(copy) => format!(
+                    "{path} was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as {}",
+                    copy.kept_as
+                ),
+                None => format!(
                     "{path} was put back as pinned: it is linked to the cache's copy, which was changed"
                 ),
+            };
+            output.warn_with(
+                &said,
                 "to edit a dataset's files, set copy = true for it in data.toml",
             );
         }
     }
+}
+
+/// where the cache's changed copy linked at `path` was kept, if sync kept it.
+fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedCopy> {
+    placement
+        .changed_copies
+        .iter()
+        .find(|copy| copy.path == path)
 }
 
 /// why a sync copied files it would rather have linked. a data folder stays inside its project,
@@ -153,9 +168,15 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
                 "{path} would be put back as pinned: its bytes changed though its size and time did not"
             ));
         } else {
-            output.warn(&format!(
-                "{path} would be put back as pinned: it is linked to the cache's copy, which was changed"
-            ));
+            output.warn(&match changed_copy(placement, path) {
+                Some(copy) => format!(
+                    "{path} would be put back as pinned: it is linked to the cache's copy, which was changed. the changed copy would be kept as {}",
+                    copy.kept_as
+                ),
+                None => format!(
+                    "{path} would be put back as pinned: it is linked to the cache's copy, which was changed"
+                ),
+            });
         }
     }
 }

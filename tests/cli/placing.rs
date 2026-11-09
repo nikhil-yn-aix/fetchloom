@@ -801,7 +801,8 @@ fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBu
 /// writable and appends to it through the first project's link, which changes the cache's own
 /// copy. the other project's status calls that damage to the cached copy, not its own edit, and
 /// its plain sync downloads the file again and puts it back. the first project's plain sync then
-/// puts its link back too, since it is still the very copy the cache found changed.
+/// puts its link back too, since it is still the very copy the cache found changed. each keeps
+/// the changed copy beside the pinned file, so the edit is not lost.
 #[test]
 fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -847,11 +848,38 @@ fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     assert_eq!(fs::read(&mine)?, V1, "{stderr}");
     assert_eq!(server.requests().len(), 2, "{stderr}");
     for project in [sandbox.work(), other] {
-        let status = sandbox.command_in(&project, &["status"]).output()?;
         assert_eq!(
-            text(&status.stderr)?,
-            "         Ok everything matches data.lock by size and time\n"
+            fs::read(project.join("data").join("iris").join("iris.csv.changed"))?,
+            grown
         );
+        only_the_kept_copy_differs(&sandbox, &project)?;
+    }
+    Ok(())
+}
+
+/// that status in `project` finds nothing to put back, and only the changed copy sync kept beside
+/// iris as an extra file.
+fn only_the_kept_copy_differs(sandbox: &Sandbox, project: &Path) -> Result {
+    let status = sandbox
+        .command_in(project, &["--json", "status"])
+        .output()?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    let result = &report["result"];
+    assert_eq!(
+        result["extra"],
+        serde_json::json!(["data/iris/iris.csv.changed"]),
+        "{report}"
+    );
+    for found in [
+        "missing",
+        "edited",
+        "untracked",
+        "outdated",
+        "edited_elsewhere",
+        "blocked",
+        "damaged",
+    ] {
+        assert_eq!(result[found], serde_json::json!([]), "{found}: {report}");
     }
     Ok(())
 }
@@ -1153,7 +1181,8 @@ fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
 
 /// an edit through one project's link that keeps the size and time shows in no listing on any
 /// platform, so the cache's mark is all the other project has. status, sync and path agree on
-/// it: sync puts the locked bytes back, and then nothing differs.
+/// it: sync puts the locked bytes back and keeps the changed copy beside them, which is then all
+/// that differs.
 #[test]
 fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1192,11 +1221,13 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
         stderr.contains("data/iris/iris.csv was put back as pinned"),
         "{stderr}"
     );
-    let after = sandbox.command_in(&other, &["status"]).output()?;
+    let mut edited = V1.to_vec();
+    edited[0] = b'S';
     assert_eq!(
-        text(&after.stderr)?,
-        "         Ok everything matches data.lock by size and time\n"
+        fs::read(other.join("data").join("iris").join("iris.csv.changed"))?,
+        edited
     );
+    only_the_kept_copy_differs(&sandbox, &other)?;
     // a ready dataset answers without taking the project lock
     let lock = other.join(".fetchloom").join("lock");
     fs::remove_file(&lock)?;

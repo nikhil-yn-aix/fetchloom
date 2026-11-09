@@ -104,9 +104,9 @@ def sync(
     :class:`Error` with kind ``conflict.kept``, listing them in ``details``, so a notebook
     never runs on inputs that differ from the lock. a file fetchloom put back as pinned, such
     as one linked to the cache's copy that was edited in place, matches the lock again: its
-    warning says so, and nothing is raised. a download above 1 GiB raises :class:`Error`
-    with kind ``unconfirmed`` unless ``yes=True`` approves it. ``offline=True`` prevents
-    network requests.
+    warning says so and names the file that keeps the changed copy, and nothing is raised. a
+    download above 1 GiB raises :class:`Error` with kind ``unconfirmed`` unless ``yes=True``
+    approves it. ``offline=True`` prevents network requests.
     """
     arguments = ["sync"]
     if yes:

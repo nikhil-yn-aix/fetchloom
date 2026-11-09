@@ -54,7 +54,7 @@ copy = true
 
 then run `fetchloom sync`. it replaces unchanged read-only files with writable reflinks or copies, never hardlinks. edited files stay. turning `copy` off leaves existing writable files as they are.
 
-keep results outside managed input paths. do not make a shared hardlink writable to edit it: every project using that link shares the change. sync treats such an edit as damage to the cache's copy: it downloads the file again and puts the pinned file back in each project still linked to the changed copy. set `copy = true` on a dataset whose files you edit. [shared edits](commands/sync.md#local-changes) explains detection and repair, including how windows, whose folder listings can hide such a change, is checked.
+keep results outside managed input paths. do not make a shared hardlink writable to edit it: every project using that link shares the change. sync treats such an edit as damage to the cache's copy: it downloads the file again and puts the pinned file back in each project still linked to the changed copy, keeping the changed copy beside it as `<path>.changed`. set `copy = true` on a dataset whose files you edit. [shared edits](commands/sync.md#local-changes) explains detection and repair, including how windows, whose folder listings can hide such a change, is checked.
 
 sync preserves local conflicts unless forced. status differences and kept conflicts still exit 0. [scripting](scripting.md) shows how to inspect them.
 

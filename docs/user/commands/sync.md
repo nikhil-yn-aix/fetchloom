@@ -54,10 +54,10 @@ without `--force`, edited files and conflicting untracked files stay in place. J
 
 save your files before using `--force`. it can overwrite edited and untracked files at locked paths, and names each one as it does, as in `Replaced data/iris/iris.csv · your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete unrelated extras or edited files no longer needed.
 
-a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made in place through any link to it, after making the read-only file writable, changes that shared copy, so it is not kept as an edit: sync marks the cached copy as changed, downloads the file again and puts the pinned file back, without `--force`, in each project whose file is still that copy, the one that made the edit included. to edit a dataset's files, set `copy = true` for it. a file saved anew, as most editors save, is the project's own and stays an edit. the warning reads, with `<path>` replaced by the affected path:
+a file placed as a hardlink is the cache's own copy, which every project placing that file shares. an edit made in place through any link to it, after making the read-only file writable, changes that shared copy, so sync treats it as damage, not as a project's edit: it marks the cached copy as changed, downloads the file again and puts the pinned file back, without `--force`, in each project whose file is still that copy, the one that made the edit included. each of those projects keeps the changed copy beside the pinned file as `<path>.changed`, or `<path>.changed.2` and on when that name is taken, so the edit is not lost; status lists it as extra until you delete it. to edit a dataset's files, set `copy = true` for it. a file saved anew, as most editors save, is the project's own and stays an edit. the warning reads, with `<path>` replaced by the affected path:
 
 ```text
-warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed
+warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as <path>.changed
   help: to edit a dataset's files, set copy = true for it in data.toml
 ```
 

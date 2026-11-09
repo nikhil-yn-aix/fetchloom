@@ -45,12 +45,21 @@ pub(crate) struct Placement {
     pub(crate) restored: Vec<String>,
     /// files `--force` replaced that sync would otherwise keep, with the reason it would have.
     pub(crate) overwritten: Vec<Kept>,
+    /// the files of `restored` that were links to the cache's changed copy, with the name that
+    /// copy was kept under beside each, so an edit made in place through a link is not lost.
+    pub(crate) changed_copies: Vec<ChangedCopy>,
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
     #[serde(skip)]
     pub(crate) repaired: HashSet<String>,
     /// entries `--force` removed from the way of placed files, by path.
     #[serde(skip)]
     pub(crate) cleared: Vec<(String, Entry)>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ChangedCopy {
+    pub(crate) path: String,
+    pub(crate) kept_as: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -363,6 +372,18 @@ impl<'a> Placing<'a> {
                             .push(Kept::new(target.path.clone(), *reason));
                     }
                     restore(&self.survey, &target.path, placement);
+                    if !matches!(action, Action::Unblock(_))
+                        && self.survey.elsewhere.contains(&target.path)
+                        && let Some(kept_as) =
+                            aside_names(&target.path, &self.targets).find(|name| {
+                                fs::symlink_metadata(self.project.root.join(name)).is_err()
+                            })
+                    {
+                        placement.changed_copies.push(ChangedCopy {
+                            path: target.path.clone(),
+                            kept_as,
+                        });
+                    }
                     placement.replaced += 1;
                     preview.changes.replace.push(target.path.clone());
                     preview
@@ -748,12 +769,7 @@ fn settle<'t, 'a>(
                         placement.kept.push(Kept::new(target.path.clone(), reason));
                         continue;
                     }
-                    Some(_) => {
-                        let recorded = survey.state.files.get(&target.path);
-                        placer
-                            .remove(&destination, false, recorded.map(|placed| placed.method))
-                            .map_err(|err| local(&destination, &err))?;
-                    }
+                    Some(_) => make_way(project, placer, survey, targets, &target.path, placement)?,
                     None => {}
                 }
                 if let Action::Overwrite(reason) = action {
@@ -782,6 +798,79 @@ fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
         placement.restored.push(path.to_owned());
         placement.repaired.insert(path.to_owned());
     }
+}
+
+/// the most names [`keep_aside`] tries beside one file.
+const MOST_KEPT: u32 = 100;
+
+/// takes the file at `path` away for its pinned copy. a link to the cache's changed copy is kept
+/// beside it instead, so an edit made in place through the link is not lost.
+fn make_way(
+    project: &Project,
+    placer: &mut Placer,
+    survey: &Survey,
+    targets: &[Target<'_>],
+    path: &str,
+    placement: &mut Placement,
+) -> Result<(), Error> {
+    let method = survey.state.files.get(path).map(|placed| placed.method);
+    if survey.elsewhere.contains(path) {
+        let kept_as = keep_aside(project, placer, targets, path, method)?;
+        placement.changed_copies.push(ChangedCopy {
+            path: path.to_owned(),
+            kept_as,
+        });
+        return Ok(());
+    }
+    let destination = project.root.join(path);
+    placer
+        .remove(&destination, false, method)
+        .map_err(|err| local(&destination, &err))
+}
+
+/// the names a changed copy of `path` may be kept under, in the order tried: `<path>.changed`,
+/// then `<path>.changed.2` and on, skipping any name another locked file takes.
+fn aside_names<'n>(path: &'n str, targets: &'n [Target<'_>]) -> impl Iterator<Item = String> + 'n {
+    (1..=MOST_KEPT)
+        .map(move |number| {
+            if number == 1 {
+                format!("{path}.changed")
+            } else {
+                format!("{path}.changed.{number}")
+            }
+        })
+        .filter(move |name| targets.iter().all(|target| target.path != *name))
+}
+
+/// keeps the cache's changed copy, linked at `path`, under the first free name of
+/// [`aside_names`], then takes `path` away for the pinned file. the copy gets its new name as a
+/// link first, which a name already there refuses, so no file is replaced. returns that name.
+fn keep_aside(
+    project: &Project,
+    placer: &mut Placer,
+    targets: &[Target<'_>],
+    path: &str,
+    method: Option<Method>,
+) -> Result<String, Error> {
+    let from = project.root.join(path);
+    for name in aside_names(path, targets) {
+        let aside = project.root.join(&name);
+        match placer.link_file(&from, &aside) {
+            Ok(()) => {
+                placer
+                    .remove(&from, false, method)
+                    .map_err(|err| local(&from, &err))?;
+                return Ok(name);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(local(&aside, &err)),
+        }
+    }
+    let full = std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("{MOST_KEPT} changed copies are already kept beside it"),
+    );
+    Err(local(&from, &full))
 }
 
 /// removes the entry in the way of placing, without following it, once it still is what the

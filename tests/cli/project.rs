@@ -344,16 +344,18 @@ fn hand_edits_survive_sync_until_forced() -> Result {
 }
 
 /// a hardlink is the cache's own copy, which every project placing the file shares, so an edit
-/// made in place through it is damage to that copy: status says so and sync puts the pinned file
-/// back. a reflink or a copy is the project's own, and its edit stays.
+/// made in place through it is damage to that copy: status says so, and sync puts the pinned file
+/// back and keeps the changed copy beside it. a reflink or a copy is the project's own, and its
+/// edit stays.
 #[test]
-fn an_edit_in_place_through_a_shared_link_is_put_back() -> Result {
+fn an_edit_in_place_through_a_shared_link_is_put_back_and_kept_beside_it() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"changed in place\n")?;
     let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let preview = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
     let synced = json(&sandbox.run(&["--json", "sync"])?)?;
     let placement = &synced["result"]["placement"];
     if added["work"]["hardlinks"] == 1 {
@@ -363,11 +365,29 @@ fn an_edit_in_place_through_a_shared_link_is_put_back() -> Result {
             ),
             "{status}"
         );
+        assert!(
+            preview.contains(
+                "data/iris/iris.csv would be put back as pinned: it is linked to the cache's copy, \
+                 which was changed. the changed copy would be kept as data/iris/iris.csv.changed"
+            ),
+            "{preview}"
+        );
         assert_eq!(
             placement["restored"],
             serde_json::json!(["data/iris/iris.csv"])
         );
+        assert_eq!(
+            placement["changed_copies"],
+            serde_json::json!([
+                {"path": "data/iris/iris.csv", "kept_as": "data/iris/iris.csv.changed"}
+            ])
+        );
         assert_eq!(fs::read(&placed)?, IRIS);
+        assert_eq!(
+            fs::read(placed.with_file_name("iris.csv.changed"))?,
+            b"changed in place\n",
+            "the edit is kept, not dropped"
+        );
         assert_eq!(
             server.requests().len(),
             2,
@@ -380,6 +400,36 @@ fn an_edit_in_place_through_a_shared_link_is_put_back() -> Result {
         );
         assert_eq!(fs::read(&placed)?, b"changed in place\n");
     }
+    Ok(())
+}
+
+#[test]
+fn a_kept_changed_copy_never_replaces_a_file_already_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
+    if added["work"]["hardlinks"] != 1 {
+        return Ok(());
+    }
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    fs::write(placed.with_file_name("iris.csv.changed"), "my notes\n")?;
+    edit(&placed, b"changed in place\n")?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("the changed copy is kept as data/iris/iris.csv.changed.2"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(placed.with_file_name("iris.csv.changed"))?,
+        "my notes\n"
+    );
+    assert_eq!(
+        fs::read(placed.with_file_name("iris.csv.changed.2"))?,
+        b"changed in place\n"
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
     Ok(())
 }
 

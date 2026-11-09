@@ -51,7 +51,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | symptom | cause | fix |
 |---|---|---|
 | sync succeeds but a file is still edited | conflicts are preserved by default | inspect `status` and JSON `placement.kept`; save edits before choosing `--force` |
-| `warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed` | an edit made in place through a hardlink changed the cache's copy, which every project using the file shares | nothing; sync downloaded the file again. use `copy = true` for files you edit |
+| `warning: <path> was put back as pinned: it is linked to the cache's copy, which was changed. the changed copy is kept as <path>.changed` | an edit made in place through a hardlink changed the cache's copy, which every project using the file shares | nothing; sync downloaded the file again, and the edit is in the `.changed` file. use `copy = true` for files you edit |
 | `warning: <path> was edited, and the file is shared with other projects, so they see the edit too` | a hardlink shared by several projects changed after the cache lost its own copy | save the edit, then run `fetchloom sync --force` in each project; use `copy = true` for files you edit |
 | `warning: <path> is a link where data.lock places a file` | a link, or another entry, stands where a pinned file belongs | move what you need, then run `fetchloom sync --force`; it removes the link itself, never what it points to |
 | `warning: hf:datasets/mozilla-foundation/common_voice_17_0 holds only .gitattributes and README.md, no data files` | the owner moved the data elsewhere and left a readme saying where | read the dataset's README.md; if the data is gone, run `fetchloom remove <name>` |

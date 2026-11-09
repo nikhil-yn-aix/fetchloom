@@ -55,7 +55,7 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 
 files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
 
-files placed as hardlinks are the cache's own copy of their bytes, which every project using that file shares. an edit made in place through any of those links, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back:
+files placed as hardlinks are the cache's own copy of their bytes, which every project using that file shares. an edit made in place through any of those links, after making the read-only file writable, changes that shared copy, so status reports the file as damaged rather than as your edit, and a plain `fetchloom sync` puts the pinned file back, keeping the changed copy beside it as `<path>.changed`:
 
 ```text
     Damaged data/iris/iris.csv · linked to the cache's copy, which was changed

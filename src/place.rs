@@ -605,6 +605,14 @@ impl Placer {
             .rename_to(&self.location(to, false)?)
     }
 
+    /// gives the file at `from` a second name, `to`, between two checked parents below the pinned
+    /// root. a name already taken is refused with `AlreadyExists`, so nothing is replaced.
+    pub(crate) fn link_file(&self, from: &Path, to: &Path) -> io::Result<()> {
+        check_stop(&self.stop)?;
+        self.location(from, false)?
+            .link_to(&self.location(to, false)?)
+    }
+
     /// deletes a temporary file through its parent; it is not a recorded placement.
     pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;

@@ -123,6 +123,10 @@ impl Location {
         fs::rename(&self.path, &target.path)
     }
 
+    pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
+        fs::hard_link(&self.path, &target.path)
+    }
+
     pub(super) fn remove_dir(&self) -> io::Result<()> {
         fs::remove_dir(&self.path)
     }
