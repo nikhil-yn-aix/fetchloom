@@ -56,6 +56,12 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
             "sizes are as each site lists them, and a zipped download is larger once unpacked",
         );
     }
+    if let Some(first) = report.candidates.first() {
+        output.next(&format!(
+            "`fetchloom add {}` puts the first match in a project",
+            super::shell_word(&first.reference.to_string())
+        ));
+    }
     Ok(report)
 }
 

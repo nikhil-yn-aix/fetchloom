@@ -43,6 +43,24 @@ impl Catalogs {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let command = catalogs.command(&sandbox, &["search", "iris"]);
+    let Some(screen) = sandbox.on_a_terminal_running(&command)? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(
+            "next: `fetchloom add hf:datasets/scikit-learn/iris` puts the first match in a project"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}
+
 #[test]
 fn unattended_add_refuses_to_guess_even_with_yes() -> Result {
     let sandbox = Sandbox::new()?;

@@ -57,7 +57,7 @@ the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_P
 fetchloom puts the exact research data a project needs into its data/ folder.
 
   data.toml  the datasets you want
-  pin        record a dataset's exact files and their SHA-256 in data.lock
+  pinning    recording a dataset's exact files and their SHA-256 in data.lock
   data.lock  the list of pinned files, so every machine gets the same bytes
   the cache  one folder that keeps each file once, for all your projects
 

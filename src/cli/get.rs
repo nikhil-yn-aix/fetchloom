@@ -1009,12 +1009,19 @@ fn planned<'a>(cache: &Cache, files: &'a [LockedFile], trees: Trees) -> Result<P
     Ok(planned)
 }
 
-/// the step after a download for a person at a terminal: pinning the same link in a project.
+/// the step after a download for a person at a terminal: pinning the same link in a project,
+/// this one when the download ran inside one.
 fn tell_next(context: &Context, args: &Get, link: &str) {
     if let Some(command) = pin_command(args, link) {
-        context.output.next(&format!(
-            "to pin this dataset in a project, run `{command}` there"
-        ));
+        let inside = std::env::current_dir()
+            .ok()
+            .and_then(|here| crate::project::Project::find(&here))
+            .is_some();
+        context.output.next(&if inside {
+            format!("to pin it in this project instead, run `{command}`")
+        } else {
+            format!("to pin this dataset in a project, run `{command}` there")
+        });
     }
 }
 

@@ -174,7 +174,12 @@ impl Sandbox {
     /// terminal that `script` opens, read back as text. none when `script` is not installed.
     #[cfg(target_os = "linux")]
     pub(crate) fn on_a_terminal(&self, args: &[&str]) -> Result<Option<String>> {
-        let inner = self.command(args);
+        self.on_a_terminal_running(&self.command(args))
+    }
+
+    /// [`Sandbox::on_a_terminal`] for a command built elsewhere, with its arguments and settings.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn on_a_terminal_running(&self, inner: &Command) -> Result<Option<String>> {
         let line: Vec<String> = std::iter::once(inner.get_program())
             .chain(inner.get_args())
             .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))

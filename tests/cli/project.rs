@@ -152,6 +152,36 @@ fn no_hints_keeps_the_story_and_drops_the_hints() -> Result {
 
 /// after a change, a person at a terminal is told the usual next step. a pipe, `-q` and `--json`
 /// never are, so what scripts read stays the same.
+#[cfg(target_os = "linux")]
+#[test]
+fn get_offers_to_pin_a_download_in_the_project_it_ran_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let responses = vec![
+        file(IRIS, "\"v1\""),
+        file(IRIS, "\"v1\""),
+        file(IRIS, "\"v1\""),
+    ];
+    let server = Server::start(PATH, responses)?;
+    let Some(outside) = sandbox.on_a_terminal(&["get", &server.url])? else {
+        return Ok(());
+    };
+    assert!(
+        outside.contains("next: to pin this dataset in a project, run `fetchloom add "),
+        "{outside}"
+    );
+    assert!(sandbox.run(&["add", &server.url])?.status.success());
+
+    let inside = sandbox
+        .on_a_terminal(&["get", &server.url, "-o", "again"])?
+        .unwrap_or_default();
+
+    assert!(
+        inside.contains("next: to pin it in this project instead, run `fetchloom add "),
+        "{inside}"
+    );
+    Ok(())
+}
+
 #[test]
 fn the_next_step_is_told_only_at_a_terminal() -> Result {
     let sandbox = Sandbox::new()?;

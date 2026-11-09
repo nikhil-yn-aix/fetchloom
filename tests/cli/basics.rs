@@ -304,7 +304,7 @@ pub(crate) const ANALOGY: [&str; 4] = [
 /// and `pin` explained where it first appears.
 const NAMED: [&str; 4] = [
     "data.toml  the datasets you want",
-    "pin        record a dataset's exact files and their SHA-256 in data.lock",
+    "pinning    recording a dataset's exact files and their SHA-256 in data.lock",
     "data.lock  the list of pinned files, so every machine gets the same bytes",
     "the cache  one folder that keeps each file once, for all your projects",
 ];
