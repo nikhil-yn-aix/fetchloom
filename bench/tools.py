@@ -286,7 +286,7 @@ class Datalad(Tool):
 
     def command(self, scenario, workdir):
         lines = [shell(["cd", workdir / "project"]),
-                 "git config annex.security.allowed-ip-addresses 10.77.0.2", "datalad get -J 4 data"]
+                 f"git config annex.security.allowed-ip-addresses {lab.SERVER_ADDRESS}", "datalad get -J 4 data"]
         return script(workdir / "command.sh", lines)
 
 

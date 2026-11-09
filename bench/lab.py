@@ -19,7 +19,8 @@ CLIENT = "flb-client"
 SERVER = "flb-server"
 BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
-HOST_LINE = "10.77.0.2 lab.flb # fl-bench\n"
+SERVER_ADDRESS = "10.77.0.2"
+HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
 INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
                        r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|WGETRC|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
@@ -153,7 +154,7 @@ def environment():
                GIT_AUTHOR_NAME="benchmark", GIT_AUTHOR_EMAIL="bench@localhost",
                GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost")
     env["PATH"] = str(VENV / "bin") + os.pathsep + env["PATH"]
-    env["NO_PROXY"] = env["no_proxy"] = "lab.flb,10.77.0.2,localhost,127.0.0.1"
+    env["NO_PROXY"] = env["no_proxy"] = f"lab.flb,{SERVER_ADDRESS},localhost,127.0.0.1"
     return env
 
 
@@ -190,6 +191,17 @@ def profile(name):
         shown = subprocess.check_output([*prefix, "tc", "qdisc", "show", "dev", dev, "root"], text=True)
         if ("rate" in shown.split()) != ("rate" in spec):
             raise RuntimeError(f"{dev} did not take the {name} profile: {shown.strip()}")
+
+
+def forget_connections():
+    """drops what each side's kernel kept from earlier connections between them, such as how far
+    packets were reordered, which the next connection's loss recovery would start from. every run
+    then meets the server as a first download would, whatever ran before it."""
+    call(["ip", "-n", NS, "tcp_metrics", "flush", "all"])
+    # the host keeps entries for its other peers too, which are not the lab's to reset
+    shown = subprocess.check_output(["ip", "tcp_metrics", "show"], text=True)
+    if any(line.split()[:1] == [SERVER_ADDRESS] for line in shown.splitlines()):
+        call(["ip", "tcp_metrics", "flush", SERVER_ADDRESS])
 
 
 DROP = Path("/proc/sys/vm/drop_caches")
@@ -275,7 +287,7 @@ def setup(image_gib=12, cpus=None):
         call(["ip", "link", "set", SERVER, "netns", NS])
         call(["ip", "addr", "add", "10.77.0.1/24", "dev", CLIENT])
         call(["ip", "link", "set", CLIENT, "up"])
-        for args in (["addr", "add", "10.77.0.2/24", "dev", SERVER],
+        for args in (["addr", "add", f"{SERVER_ADDRESS}/24", "dev", SERVER],
                      ["link", "set", SERVER, "up"], ["link", "set", "lo", "up"]):
             call(["ip", "-n", NS, *args])
         config = f'''pid {ROOT}/nginx.pid;
@@ -285,7 +297,7 @@ http {{
     log_format bench escape=json '{{"request":"$request","status":$status,"bytes":$body_bytes_sent}}';
     access_log {ROOT}/access.jsonl bench;
     server {{
-        listen 10.77.0.2:443 ssl http2;
+        listen {SERVER_ADDRESS}:443 ssl http2;
         server_name lab.flb;
         ssl_certificate {cert}/server.crt;
         ssl_certificate_key {cert}/server.key;

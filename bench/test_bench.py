@@ -77,6 +77,17 @@ class FixtureTests(unittest.TestCase):
         self.assertNotIn("rate", client)
         self.assertEqual(server[-2:], ["rate", "100mbit"])
 
+    def test_forgetting_connections_resets_only_the_lab(self):
+        from unittest import mock
+        server_flush = ["ip", "-n", lab.NS, "tcp_metrics", "flush", "all"]
+        for shown, wanted in (("10.0.0.5 age 3sec rtt 90us\n10.77.0.2 age 1sec rtt 300us\n",
+                               [server_flush, ["ip", "tcp_metrics", "flush", lab.SERVER_ADDRESS]]),
+                              ("10.0.0.5 age 3sec rtt 90us\n", [server_flush])):
+            with mock.patch.object(lab, "call") as call, \
+                 mock.patch.object(lab.subprocess, "check_output", return_value=shown):
+                lab.forget_connections()
+            self.assertEqual([c.args[0] for c in call.call_args_list], wanted)
+
 
 
 class MeasurementTests(unittest.TestCase):

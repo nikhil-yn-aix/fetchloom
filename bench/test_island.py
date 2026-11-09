@@ -107,7 +107,8 @@ class ManyVariantTests(unittest.TestCase):
                 with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
                      mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
                      mock.patch.object(lab, "pin_server", create=True, return_value={}), \
-                     mock.patch.object(lab, "drop_caches"), mock.patch.object(run, "metadata", side_effect=metadata), \
+                     mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
+                     mock.patch.object(run, "metadata", side_effect=metadata), \
                      mock.patch.object(run.os.path, "ismount", return_value=True), \
                      mock.patch.object(run.fixtures, "case_specs", return_value=[case]), \
                      mock.patch.object(run.fixtures, "build", return_value=case), \

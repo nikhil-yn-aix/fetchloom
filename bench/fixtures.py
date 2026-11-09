@@ -158,7 +158,7 @@ def prepare_native(case, fetchloom, names):
             elif tool == "datalad":
                 run(["datalad", "create", "-f", "."])
                 run(["git", "config", "annex.backend", "SHA256E"])
-                run(["git", "config", "annex.security.allowed-ip-addresses", "10.77.0.2"])
+                run(["git", "config", "annex.security.allowed-ip-addresses", lab.SERVER_ADDRESS])
                 (target / "data").mkdir(exist_ok=True)
                 batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in case["files"])
                 run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)

@@ -346,6 +346,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))
             lab.drop_caches(path for path in server_files if path.is_file())
+        lab.forget_connections()
         access = lab.ROOT / "access.jsonl"
         access.write_text("")
         before = settled_free_bytes(workdir)
