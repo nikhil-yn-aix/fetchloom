@@ -321,7 +321,10 @@ impl Placer {
             });
         let grouped = folders.finish(serial);
         let threads = grouped.threads(this.threads);
-        let batch = this.batches_copies();
+        // on linux a few copies flush one by one, since one flush of the filesystem also waits
+        // for everything other programs wrote there
+        let batch = (cfg!(not(target_os = "linux")) || count > crate::cache::MOST_FLUSHED_ALONE)
+            && this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
             let _permit = grouped.enter(*index);
@@ -367,7 +370,8 @@ impl Placer {
     }
 
     /// tries each method the filesystem may allow, best first. with `batch`, a copy is left
-    /// under its hidden name until [`Placer::flush_copies`] has flushed it.
+    /// under its hidden name until [`Placer::flush_copies`] has flushed it; without, it flushes
+    /// on its own.
     fn put(
         &self,
         object: &Path,
@@ -407,12 +411,11 @@ impl Placer {
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
         }
-        // a nested mount is not covered by the root filesystem's batch flush.
-        let flush = !self.batches_copies();
+        // outside a batch a copy flushes on its own, as on a nested mount, which the root
+        // filesystem's batch flush does not cover.
+        let flush = !batch;
         #[cfg(unix)]
         let flush = flush || location.other_device();
-        #[cfg(target_os = "macos")]
-        let flush = flush || !batch;
         let put = if batch && !flush {
             let (staged, file) =
                 stage_copy_at(object, &location, writable, self.threads, &self.stop)?;

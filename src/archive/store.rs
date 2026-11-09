@@ -4,6 +4,7 @@
 //! object is put in place until the whole archive passed every check, so a refused archive leaves
 //! nothing in the cache, and an object another process already uses is never taken back.
 
+use std::fs::File;
 use std::io::{self, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,9 @@ use std::thread;
 
 use super::guard::Guard;
 use super::not_written;
-use crate::cache::{Cache, Member, NewObject, Sealed, Staging};
+#[cfg(target_os = "linux")]
+use crate::cache::Batch;
+use crate::cache::{Cache, MOST_FLUSHED_ALONE, Member, NewObject, Sealed, Staging};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
@@ -35,6 +38,7 @@ pub(super) struct Writers<'s> {
     jobs: Option<SyncSender<Job>>,
     sealed: &'s Mutex<Vec<(String, Sealed)>>,
     flush_each: bool,
+    few: Option<&'s Few>,
     failed: &'s AtomicBool,
 }
 
@@ -63,7 +67,7 @@ impl Writers<'_> {
         if let Some(jobs) = &self.jobs {
             jobs.send(job).map_err(|_| stopped())
         } else {
-            locked(self.sealed).push(seal(self.staging, job, self.flush_each)?);
+            locked(self.sealed).push(seal(self.staging, job, self.flush_each, self.few)?);
             Ok(())
         }
     }
@@ -98,6 +102,8 @@ pub(super) fn store_all(
     let flush_each = batch.is_none();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let flush_each = true;
+    let few = Few::new();
+    let keeps = (cfg!(target_os = "linux") && !flush_each).then_some(&few);
     let (jobs, queue) = sync_channel::<Job>(threads * 2);
     let queue = Mutex::new(queue);
     let failed = AtomicBool::new(false);
@@ -110,7 +116,7 @@ pub(super) fn store_all(
             if failed.load(Ordering::Relaxed) {
                 continue;
             }
-            match seal(&staging, job, flush_each) {
+            match seal(&staging, job, flush_each, keeps) {
                 Ok(done) => locked(&sealed).push(done),
                 Err(err) => {
                     failed.store(true, Ordering::Relaxed);
@@ -129,6 +135,7 @@ pub(super) fn store_all(
             jobs: threaded.then_some(jobs),
             sealed: &sealed,
             flush_each,
+            few: keeps,
             failed: &failed,
         };
         // with no live consumer the reader stores inline; joining before closing would hang.
@@ -148,9 +155,11 @@ pub(super) fn store_all(
     // nothing is published until every member is on disk
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(batch) = batch {
-        batch
-            .flush()
-            .map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
+        #[cfg(target_os = "linux")]
+        let flushed = few.flush(&batch, threads);
+        #[cfg(target_os = "macos")]
+        let flushed = batch.flush();
+        flushed.map_err(|err| Error::io("could not flush the unpacked files to disk", &err))?;
     }
     publish_all(cache, sealed, threads)
 }
@@ -212,7 +221,12 @@ fn publish_all(
     }
 }
 
-fn seal(staging: &Arc<Staging>, job: Job, flush: bool) -> Result<(String, Sealed), Error> {
+fn seal(
+    staging: &Arc<Staging>,
+    job: Job,
+    flush: bool,
+    few: Option<&Few>,
+) -> Result<(String, Sealed), Error> {
     let (path, object) = match job {
         Job::Bytes(path, bytes) => {
             let object = staging.new_object().and_then(|mut object| {
@@ -224,9 +238,78 @@ fn seal(staging: &Arc<Staging>, job: Job, flush: bool) -> Result<(String, Sealed
         Job::Written(path, object) => (path, Ok(*object)),
     };
     // in a batch the members are flushed together before any is published
-    match object.and_then(|object| object.seal(flush)) {
+    let sealed = object.and_then(|object| {
+        if let Some(few) = few {
+            few.keep(&object)?;
+        }
+        object.seal(flush)
+    });
+    match sealed {
         Ok(sealed) => Ok((path, sealed)),
         Err(err) => Err(not_written(&path, &err)),
+    }
+}
+
+/// the handles that wrote an archive's first members. on linux an archive of a few members
+/// flushes each through its own handle, since one flush of the filesystem also waits for
+/// everything other programs wrote there. none are kept once the archive has more.
+struct Few(Mutex<Option<Vec<File>>>);
+
+impl Few {
+    fn new() -> Few {
+        Few(Mutex::new(Some(Vec::new())))
+    }
+
+    fn keep(&self, object: &NewObject) -> io::Result<()> {
+        let mut few = locked(&self.0);
+        if let Some(handles) = few
+            .as_mut()
+            .filter(|handles| handles.len() < MOST_FLUSHED_ALONE)
+        {
+            handles.push(object.handle()?);
+        } else {
+            *few = None;
+        }
+        Ok(())
+    }
+
+    /// flushes every member on `threads` threads: through the kept handles while they cover
+    /// every member, else once through `batch` for the whole filesystem.
+    #[cfg(target_os = "linux")]
+    fn flush(self, batch: &Batch, threads: usize) -> io::Result<()> {
+        let Some(handles) = self.0.into_inner().unwrap_or_else(PoisonError::into_inner) else {
+            return batch.flush();
+        };
+        let count = handles.len();
+        let queue = Mutex::new(handles.into_iter());
+        let failed = Mutex::new(None);
+        let flush = || {
+            loop {
+                let Some(file) = locked(&queue).next() else {
+                    return;
+                };
+                if let Err(err) = file.sync_all() {
+                    locked(&failed).get_or_insert(err);
+                    return;
+                }
+            }
+        };
+        if threads == 0 {
+            flush();
+        } else {
+            thread::scope(|scope| {
+                let workers: Vec<_> = (0..threads.min(count))
+                    .map(|_| crate::threads::scoped(scope, &flush))
+                    .collect();
+                for worker in workers {
+                    worker.join();
+                }
+            });
+        }
+        failed
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
+            .map_or(Ok(()), Err)
     }
 }
 
@@ -290,6 +373,38 @@ mod tests {
             Ok(())
         })
         .map(|(members, _)| members)
+    }
+
+    /// an archive of a few members flushes each through its own handle, never its whole
+    /// filesystem; only a larger one flushes the filesystem once.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_an_archive_of_many_members_waits_for_one_flush() {
+        use rustix::fs::{Mode, OFlags};
+
+        let scratch = Scratch::new();
+        let staging = scratch.cache.staging().unwrap();
+        // syncfs rejects an O_PATH handle, so an archive that waits for one flush fails
+        let failing = || {
+            let flags = OFlags::PATH | OFlags::CLOEXEC;
+            let handle = rustix::fs::open(scratch.cache.root(), flags, Mode::empty());
+            Batch::with_file_for_test(File::from(handle.unwrap()))
+        };
+        for members in [MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1] {
+            let few = Few::new();
+            for index in 0..members {
+                let job = Job::Bytes(format!("{index}.csv"), index.to_string().into_bytes());
+                seal(&staging, job, false, Some(&few)).unwrap();
+            }
+
+            let flushed = few.flush(&failing(), 2);
+
+            assert_eq!(
+                flushed.is_ok(),
+                members <= MOST_FLUSHED_ALONE,
+                "{flushed:?}"
+            );
+        }
     }
 
     #[test]

@@ -670,6 +670,46 @@ fn batched_copies_are_named_only_after_the_flush() {
     assert_eq!(placed_names(folder.path()), ["0.csv", "1.csv", "2.csv"]);
 }
 
+/// a placement of a few files flushes each copy on its own, so it never waits on a flush of the
+/// whole filesystem; only a larger one flushes the filesystem once before naming any copy.
+#[cfg(target_os = "linux")]
+#[test]
+fn only_a_placement_of_many_copies_waits_for_one_flush() {
+    use crate::cache::MOST_FLUSHED_ALONE;
+    use rustix::fs::{Mode, OFlags};
+
+    let (folder, object) = cache(true);
+    for files in [MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1] {
+        let root = folder.path().join(format!("data-{files}"));
+        let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
+        // syncfs rejects an O_PATH handle, so a placement that waits for one flush fails
+        let handle = rustix::fs::open(folder.path(), OFlags::PATH | OFlags::CLOEXEC, Mode::empty());
+        placer.batch.set(Some(File::from(handle.unwrap()))).unwrap();
+        let destinations: Vec<PathBuf> = (0..files)
+            .map(|index| root.join(format!("{index}.csv")))
+            .collect();
+
+        let results = placer.place_all(
+            files,
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+            },
+            Metadata::len,
+        );
+
+        let flushed_alone = results.iter().filter(|result| result.is_ok()).count();
+        if files > MOST_FLUSHED_ALONE {
+            assert_eq!(flushed_alone, 0);
+            let failed = results[0].as_ref().unwrap_err();
+            assert!(failed.to_string().contains("could not flush"), "{failed}");
+        } else {
+            assert_eq!(flushed_alone, files, "{results:?}");
+        }
+    }
+}
+
 #[test]
 fn a_failed_flush_names_no_batched_copy() {
     let (folder, object) = cache(true);

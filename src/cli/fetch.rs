@@ -315,8 +315,7 @@ pub(super) async fn all(
     jobs: Vec<Job>,
 ) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
-    // without a batch each download flushes on its own, which is only slower
-    let batched = cache.defer_downloads().unwrap_or(false);
+    let batched = defer(cache, jobs.len());
     let results = each(context, net, cache, jobs, false).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
@@ -332,7 +331,7 @@ pub(super) async fn prepared(
     make: impl Fn(usize, Url) -> Job,
 ) -> Result<Vec<Fetched>, Error> {
     let count = descriptions.len();
-    let batched = cache.defer_downloads().unwrap_or(false);
+    let batched = defer(cache, count);
     let overall = Arc::new(Overall::described(context, &descriptions));
     let queue = Queue::grouped(urls, |index, _| {
         std::mem::take(&mut descriptions[index].host)
@@ -377,12 +376,19 @@ pub(super) async fn apart(
     cache: &Cache,
     jobs: Vec<Job>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
-    let batched = cache.defer_downloads().unwrap_or(false);
+    let batched = defer(cache, jobs.len());
     let results = each(context, net, cache, jobs, true).await;
     let published = publish(cache, batched);
     let results = results?;
     published?;
     Ok(results)
+}
+
+/// whether `downloads` wait for the cache's batch flushes. a few, or any without a batch, flush
+/// one by one, since one flush of the filesystem also waits for everything other programs wrote
+/// there.
+fn defer(cache: &Cache, downloads: usize) -> bool {
+    downloads > crate::cache::MOST_FLUSHED_ALONE && cache.defer_downloads().unwrap_or(false)
 }
 
 fn publish(cache: &Cache, batched: bool) -> Result<(), Error> {
@@ -723,6 +729,19 @@ mod tests {
 
     use super::*;
     use crate::output::{Level, Style};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn only_a_run_of_many_downloads_waits_for_one_flush() {
+        use crate::cache::MOST_FLUSHED_ALONE;
+
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+
+        assert!(!defer(&cache, MOST_FLUSHED_ALONE));
+        assert!(defer(&cache, MOST_FLUSHED_ALONE + 1));
+        cache.publish_downloads().unwrap();
+    }
 
     #[test]
     fn host_interleaving_keeps_job_identity_and_per_host_order() {

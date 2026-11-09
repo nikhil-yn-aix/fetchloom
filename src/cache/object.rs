@@ -116,6 +116,12 @@ impl Cache {
     }
 }
 
+/// the most files a run flushes one by one rather than with one flush of their filesystem, which
+/// also waits for everything other programs wrote there. on a busy disk that flush took 0.4 to
+/// 15 s, where 64 small files flushed one by one took 0.2 s. on an idle disk 64 small files cost
+/// 3 to 9 ms more one by one, and one large file the same either way.
+pub(crate) const MOST_FLUSHED_ALONE: usize = 64;
+
 /// new objects written since the batch began, flushed together.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
@@ -135,7 +141,7 @@ impl Batch {
     }
 
     #[cfg(test)]
-    pub(super) fn with_file_for_test(file: File) -> Batch {
+    pub(crate) fn with_file_for_test(file: File) -> Batch {
         use std::os::unix::fs::MetadataExt as _;
 
         let device = file.metadata().unwrap().dev();
@@ -205,6 +211,12 @@ fn create_sealed(path: &Path) -> io::Result<File> {
 }
 
 impl NewObject {
+    /// another handle on the object's open file. a flush through it reports what a flush through
+    /// the writing handle would, since both share one open file.
+    pub(crate) fn handle(&self) -> io::Result<File> {
+        self.file.try_clone()
+    }
+
     /// closes the object. with `flush` its bytes reach the disk first, so a power cut cannot
     /// leave it empty; without, the caller flushes a whole batch at once before publishing any.
     pub(crate) fn seal(self, flush: bool) -> io::Result<Sealed> {

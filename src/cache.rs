@@ -26,8 +26,10 @@ pub(crate) use changed::{Doubt, Identity, may_follow};
 pub(crate) use failure::Failure;
 pub(crate) use held::Access;
 #[cfg(target_os = "linux")]
+pub(crate) use object::Batch;
+#[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
-pub(crate) use object::{NewObject, Sealed};
+pub(crate) use object::{MOST_FLUSHED_ALONE, NewObject, Sealed};
 pub(crate) use partial::{Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
