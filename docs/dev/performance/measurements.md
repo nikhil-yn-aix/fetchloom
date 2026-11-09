@@ -114,6 +114,20 @@ a sync of four small files from a local server, each build once a round in a shu
 | the first 64 files of every batch flushed on their own | none kept | ext4 s1 1.078 [1.064, 1.303] in seven rounds; peak memory ext4 s2 1.151 [1.028, 1.266] and s3 1.078 [1.002, 1.146]: those 64 flushes held threads in every large batch | dropped |
 | a run of up to 64 downloads, copies or archive members flushed one by one, larger runs as before | 4639987 | ext4 s1 0.985 [0.894, 1.041] and xfs s1 1.004 [0.988, 1.025] in 15 rounds; ext4 s4 1.003 [0.909, 1.199], peak memory 1.033 [0.984, 1.110]; s2, s3, s5 and s6 run the same code as before | kept |
 
+## live sites against their own tools, 2026-11-09
+
+each service's public dataset from the [benchmark design](benchmark-design.md#tools), fetched on the shared machine of the final benchmark by fetchloom and by the service's own tool: five rounds, both tools in a new random order each round, every run with empty caches. `bench/live.py` ran them. fetchloom is the static musl build of f49f38e; the others are zenodo_get 3.1.0, `hf download` from huggingface_hub 0.35.3 with hf_xet 1.8.0 followed by `sha256sum -c`, kagglehub 0.3.13 and datahugger 0.13. a run counts only when every file it fetched matches the service's published SHA-256. a live site's speed changes from minute to minute, so, as the design says, each tool gets its median and range rather than a ratio.
+
+| service | dataset | files · size | fetchloom, median and range | own tool | its median and range | CPU s, fetchloom and own tool |
+|---|---|---|---|---|---|---|
+| zenodo | 8164711 | 1 · 102.0 MiB | 42.3 s, 38.0 to 43.9 | zenodo_get | 56.0 s, 34.4 to 101.7 | 0.84, 1.20 |
+| hugging face | stanfordnlp/imdb, plain_text parquet | 3 · 79.6 MiB | 5.3 s, 4.1 to 6.7 | `hf download` | 18.6 s, 15.5 to 19.7 | 0.35, 0.97 |
+| kaggle | zynicide/wine-reviews, version 4 | 1 · 50.5 MiB | 1.95 s, 1.81 to 2.63 | kagglehub | 7.2 s, 3.3 to 13.2 | 0.22, 0.65 |
+| figshare | 10.6084/m9.figshare.5616403 | 3 · 7.1 MiB | 1.51 s, 1.50 to 1.53 | datahugger | 7.2 s, 6.0 to 9.0 | 0.07, 0.71 |
+| dataverse | doi:10.7910/DVN/TJCLKP | 3 · 295 KiB | 1.03 s, 0.99 to 1.34 | datahugger | failed in 5 of 5 | 0.03, none |
+
+on hugging face, kaggle and figshare, fetchloom's slowest run was faster than the other tool's fastest. zenodo sends one file at its own pace, and its spread covers the difference: zenodo_get's fastest run beat fetchloom's fastest, and its slowest took more than twice as long. datahugger fetched dataverse's ingested `.tab` copy of a table instead of the published `.tsv`, which its own check reported as a checksum mismatch, so none of its runs counted; fetchloom fetched the published files. peak memory was 27 to 55 MiB for fetchloom and 36 to 127 MiB for the others.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
