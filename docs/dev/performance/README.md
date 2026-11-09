@@ -11,6 +11,7 @@ fetchloom avoids repeated requests and byte copies while preserving checked iden
 | small-file durability | [copy flushing](../architecture/placing.md#copy-durability) and [archive publication](../architecture/archives.md#validate-before-publication) | [storage observations](measurements.md#storage-and-memory) |
 | repeated placement and no-op work | [placement](../architecture/placing.md) and [settled sync](../architecture/sync-loop.md#settled-sync-shortcut) | [placement observations](measurements.md#placement-and-settled-sync) |
 | windows scanning | [archive staging](../architecture/archives.md) | [defender observations](windows-defender.md) |
+| whole commands against main and other tools | [benchmark design](benchmark-design.md) | [final benchmark](measurements.md#final-benchmark-on-the-linux-lab-2026-11-09) |
 
 historical timings have [evidence limits](measurements.md#evidence-limits). the [benchmark suite](benchmark-design.md) records new comparisons with their commands and checker results.
 
@@ -29,7 +30,7 @@ elapsed time is not a CI assertion. work counters catch extra requests, download
 | page | use it for |
 |---|---|
 | [budgets](budgets.md) | whole-command targets and the recorded baseline |
-| [measurements](measurements.md) | commits, conditions, counts, medians, ranges and rejected experiments |
+| [measurements](measurements.md) | the final lab benchmark, the a/b passes, and historical observations with their commits, conditions, counts and ranges |
 | [windows defender](windows-defender.md) | why random small-file writes can be expensive on windows |
 | [benchmark design](benchmark-design.md) | implemented scenarios, fairness rules and checking boundaries |
 | [native comparison](native.md) | two builds on windows, macos or any filesystem, without the lab |

@@ -1,62 +1,57 @@
 # measurements
 
-historical workload observations explain retained and rejected performance changes.
+what the linux lab measured for this release, the a/b passes behind its performance decisions, and the historical observations before them.
 
-## evidence limits
+## final benchmark on the linux lab, 2026-11-09
 
-these are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
+the [lab](benchmark-design.md) on an azure Standard_NC24ads_A100_v4 (EPYC 7V13, 24 vCPU, nvme, loop-mounted ext4 and xfs), which another user's training job shared. "final" is the static musl build of d2bc3e7, as linux ships it; "main" is the static musl build of d168842, from before these passes. a lan case ran a warmup round and then seven measured ones, every tool once a round in a new random order; on 2026-11-08 the home cases ran three and the lossy s2 cases five, and lossy s1 ran fifteen. a time is the median of the measured rounds, and final/main the median of the paired ratios with its 95% bootstrap interval. the commands, round orders and every run's record stay with the lab's results, outside the repository.
 
-use the [benchmark workflow](../engineering/benchmarks.md) for new comparisons with retained commands, run records and independent checking.
+curl, wget and aria2c, each within 17% of fetchloom on some lan case, ran in the same rounds. dvc, datalad and pooch had not changed and were at least 1.25 times slower than fetchloom on every lan case on 2026-11-08, so those runs stand, marked nov 8; main ran in both sessions, and its medians moved by 5.3% at most. the rows marked nov 8 in the first column are from that session too, with e8cff51: what changed since touches the cache, placement and process start, milliseconds against seconds of network time. that build kept transparent huge pages off, so their memory is left out. lossy s1 ran again, every run starting without tcp state from the one before ([scenarios](benchmark-design.md#scenarios)); its final/best interval resamples both tools' runs.
 
-## conditions
+| case | main s | final s | final/main [95%] | best other tool | its s | final/best | peak MiB final, main |
+|---|---:|---:|---|---|---:|---|---|
+| ext4 lan s1, 1 GiB | 2.444 | 2.304 | 0.939 [0.906, 0.952] | curl | 2.791 | 0.826 | 71, 27 |
+| ext4 lan s2, 1,000 files | 0.444 | 0.415 | 0.923 [0.898, 0.962] | curl | 0.484 | 0.858 | 75, 63 |
+| ext4 lan s3, 10,000 files | 2.427 | 1.584 | 0.658 [0.639, 0.669] | curl | 1.743 | 0.909 | 138, 117 |
+| ext4 lan s4, zip of 10,000 | 0.937 | 0.758 | 0.814 [0.803, 0.821] | curl and unzip | 0.835 | 0.908 | 119, 103 |
+| ext4 lan s5, second project | 0.076 | 0.077 | 1.017 [1.011, 1.047] | pooch (nov 8) | 0.280 | 0.275 | 39, 33 |
+| ext4 lan s6, no-op | 0.029 | 0.028 | 0.955 [0.944, 0.972] | wget | 0.116 | 0.239 | 23, 23 |
+| xfs lan s1, 1 GiB | 2.423 | 2.339 | 0.951 [0.946, 0.965] | curl | 2.641 | 0.886 | 75, 27 |
+| xfs lan s2, 1,000 files | 0.532 | 0.415 | 0.781 [0.759, 0.789] | curl | 0.495 | 0.839 | 77, 61 |
+| xfs lan s3, 10,000 files | 3.002 | 1.787 | 0.601 [0.593, 0.609] | curl | 1.800 | 0.993 | 152, 115 |
+| xfs lan s4, zip of 10,000 | 1.760 | 1.478 | 0.843 [0.831, 0.852] | curl and unzip | 0.849 | 1.741 | 123, 94 |
+| xfs lan s5, second project | 0.095 | 0.073 | 0.772 [0.759, 0.798] | pooch (nov 8) | 0.271 | 0.270 | 37, 31 |
+| xfs lan s6, no-op | 0.025 | 0.024 | 0.950 [0.931, 1.166] | wget | 0.116 | 0.204 | 23, 23 |
+| ext4 home s1, 256 MiB (nov 8) | 23.014 | 23.020 | 0.998 [0.997, 1.000] | wget | 22.928 | 1.004 |  |
+| ext4 home s2, 1,000 files (nov 8) | 8.949 | 8.957 | 1.001 [0.995, 1.001] | aria2c | 8.880 | 1.009 |  |
+| ext4 home s7, resume (nov 8) | 13.238 | 13.367 | 1.010 [1.010, 1.011] | curl | 13.390 | 0.998 |  |
+| ext4 far s1, 4 MiB |  | 17.795 |  | curl | 13.180 | 1.350 [0.694, 2.292] | 28 |
+| ext4 far s2, 50 files (nov 8) |  | 5.779 |  | aria2c | 5.648 | 1.023 |  |
+| ext4 poor s1, 1 MiB |  | 14.932 |  | wget | 16.994 | 0.879 [0.525, 1.212] | 21 |
+| ext4 poor s2, 20 files (nov 8) |  | 8.100 |  | aria2c | 7.437 | 1.089 |  |
 
-W means windows 11 with defender real-time protection on. L means ubuntu 24.04 in WSL 2 on ext4. both use the same 11th gen intel i7-1185G7 laptop with 4 cores, 8 threads, 32 GB and nvme. unless a row says otherwise, these are release builds measured on 2026-10-30 or 2026-10-31.
+fetchloom verifies every downloaded byte, fills a reusable content-addressed cache and places from it; curl writes straight to its target and checks with `sha256sum` afterwards. fetchloom is ahead of curl on every ext4 lan case and level with it on xfs s3. it is behind on xfs s4, a zip of 10,000 members, where xfs's reflink bookkeeping and the lock on each folder's namespace dominate unpacking (see [placing](../architecture/placing.md)). on lossy single files no tool is reliably faster: every tool's 15 runs spread from about 3 to 30 s, by where losses fall in the transfer, and fetchloom's median is the slowest of the four on far s1 and the fastest on poor s1, both well inside their intervals. against main, only ext4 s5 is slower, by 1 ms, within the 2% the a/b rule allows.
 
-baseline f9bbda5 used at least ten runs after three warm-ups on an otherwise idle machine; its command measurements are in [budgets](budgets.md). later rows preserve their own counts. "not recorded" means no commit, count, median or range was retained for that field; a range's midpoint is not a measured median.
+peak memory is higher than main's on downloads. file bodies now come over their own HTTP/1.1 connections, up to four a host, which cut far s2 to 0.288 of its time. without HTTP/2's flow control, a lan download arrives faster than SHA-256 hashes it, and the hash queue, bounded at 16 MiB, fills. sent a 256 MiB file over HTTP/1.1 at full speed, main peaks as high: in two runs each, 48 and 60 MiB with transparent huge pages off and 68 and 85 MiB with them on, against 42 and 47, and 70 and 72, for final. huge pages stay on, since turning them off slowed placement and short commands ([placement and startup passes](#ab-passes-on-placement-and-startup-2026-11)).
 
-## storage and memory
+### scale
 
-small-download runs used 1,000 URLs of 100 KiB, one dataset per URL, an empty cache and a local linux server. the older path paid three flushes per file, about 3.3 ms each. the retained change removes checkpoint and index flushes, not object, change-mark, unpack-record or registration flushes.
+one dataset of 100,000 or 1,000,000 files of 2,560 bytes, 1,000 to a folder, from the lab server on the lan profile. rounds alternate final and main: three at 100,000 files and two at 1,000,000. cold fills an empty cache; warm places from a full cache into a new project; settled is a sync with nothing to do; status, path and path-member read the project, path printing the dataset's folder and path-member one file's.
 
-the memory fixture was a 100,000-member zip of 1 MiB. RSS is resident set size, the process's physical-memory footprint. `/usr/bin/time` measured peak RSS without the profiler; heaptrack identified allocations separately. the recent hash-thread and copy-flush records name linux but do not record a machine model, exact median or full per-configuration range beyond the values below.
-
-## placement and settled sync
-
-warm-placement runs copied `data.toml` and `data.lock` into an empty project using a fully populated cache. fixtures were 10,000 files of 4 KiB in 100 folders and 8,000 files of 2 KiB in one folder. on 2026-10-30, other builds kept the laptop at full load. fd64035 and 2ecb70a alternated ten runs per side. `FETCHLOOM_TRACE` separated command work from process startup, which alone took 1 to 3 s under that load.
-
-placement was 2 to 3 times slower than in the earlier quiet window. the no-readback experiment won 3 of 10 pairs for 10,000 files and 6 of 10 for 8,000; individual pairs differed by up to 2 times either way. those medians did not establish a repeatable gain, so the experiment was reverted.
-
-## network
-
-network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
-
-## final pass on the linux lab, 2026-11-08
-
-the [lab](benchmark-design.md) on an azure Standard_NC24ads_A100_v4 (EPYC 7V13, 24 vCPU, nvme, loop-mounted ext4 and xfs), median wall seconds of five measured rounds per arm. "final" is the static musl build of this release; "main" is the static musl build of d168842. the best other tool comes from the earlier baseline campaign on the same machine and lab, except s2 and s3, where curl, aria2c and wget were measured again in the same session because main's own times had drifted by more than 5%. far and poor are indicative: their wall time varies by about 45% between runs.
-
-| case | main s | final s | final/main | best other tool | its s | final/best |
-|---|---:|---:|---:|---|---:|---:|
-| ext4 lan s1, 1 GiB | 2.507 | 2.627 | 1.048 | curl | 2.704 | 0.972 |
-| ext4 lan s2, 1,000 files | 0.464 | 0.428 | 0.922 | curl | 0.502 | 0.852 |
-| ext4 lan s3, 10,000 files | 2.734 | 1.913 | 0.700 | curl | 1.755 | 1.090 |
-| ext4 lan s4, zip of 10,000 | 0.953 | 0.781 | 0.820 | curl and unzip | 0.789 | 0.990 |
-| ext4 lan s5, second project | 0.080 | 0.085 | 1.064 | pooch | 0.286 | 0.296 |
-| ext4 lan s6, no-op | 0.030 | 0.032 | 1.073 | wget | 0.109 | 0.296 |
-| xfs lan s1 | 2.535 | 2.593 | 1.023 | curl | 2.556 | 1.015 |
-| xfs lan s2 | 0.553 | 0.482 | 0.872 | curl | 0.487 | 0.989 |
-| xfs lan s3 | 3.122 | 2.406 | 0.771 | curl | 1.835 | 1.312 |
-| xfs lan s4 | 1.769 | 1.484 | 0.839 | curl and unzip | 0.862 | 1.723 |
-| xfs lan s5 | 0.096 | 0.107 | 1.111 | pooch | 0.308 | 0.348 |
-| xfs lan s6 | 0.026 | 0.028 | 1.087 | wget | 0.110 | 0.252 |
-| ext4 home s1 | 23.007 | 22.936 | 0.997 | wget | 22.910 | 1.001 |
-| ext4 home s2 | 8.966 | 8.954 | 0.999 | aria2c | 8.865 | 1.010 |
-| ext4 home s7, resume | 13.253 | 13.348 | 1.007 | curl | 13.376 | 0.998 |
-| ext4 far s1 | 15.512 | 19.651 | 1.267 | wget | 14.133 | 1.390 |
-| ext4 far s2 | 31.484 | 5.772 | 0.183 | aria2c | 6.130 | 0.942 |
-| ext4 poor s1 | 20.486 | 8.855 | 0.432 | pooch | 4.832 | 1.832 |
-| ext4 poor s2 | 26.831 | 9.308 | 0.347 | aria2c | 7.848 | 1.186 |
-
-fetchloom verifies every downloaded byte, fills a reusable content-addressed cache and places from it; curl writes straight to its target and checks with `sha256sum` afterwards. the remaining gaps are xfs s3 and s4, where the lock on each folder's namespace and xfs's reflink bookkeeping dominate placement (see the architecture notes on [placing](../architecture/placing.md)).
+| case | main s | final s | final/main | peak MiB final, main |
+|---|---:|---:|---:|---|
+| 100,000 files, cold | 18.59 | 9.27 | 0.498 | 208, 223 |
+| 100,000 files, warm | 1.02 | 0.94 | 0.928 | 201, 197 |
+| 100,000 files, settled | 0.54 | 0.40 | 0.738 | 97, 97 |
+| 100,000 files, status | 0.60 | 0.43 | 0.725 | 120, 120 |
+| 100,000 files, path | 0.67 | 0.41 | 0.613 | 120, 97 |
+| 100,000 files, path-member | 0.76 | 0.40 | 0.532 | 118, 119 |
+| 1,000,000 files, cold | 215.77 | 116.47 | 0.540 | 1251, 1254 |
+| 1,000,000 files, warm | 11.85 | 10.66 | 0.900 | 1166, 1081 |
+| 1,000,000 files, settled | 6.41 | 4.55 | 0.710 | 754, 771 |
+| 1,000,000 files, status | 7.29 | 5.45 | 0.747 | 850, 850 |
+| 1,000,000 files, path | 7.35 | 5.78 | 0.786 | 850, 907 |
+| 1,000,000 files, path-member | 8.65 | 4.89 | 0.566 | 854, 909 |
 
 ## a/b passes on the linux lab, 2026-11
 
@@ -98,6 +93,34 @@ the final benchmark found two cases slower than main: a no-op sync and placing f
 | mimalloc for libc's own allocations on musl | d2bc3e7 | no-op 0.833 [0.828, 0.838]; 1,000 datasets 1.007 [0.995, 1.015]; 100,000 files 1.017 [1.002, 1.021] | kept |
 
 with all three, against main: 100,000 files 0.944 [0.934, 0.948], 1,000 datasets 1.003 [0.991, 1.017] and the no-op 0.909 [0.905, 0.917].
+
+## evidence limits
+
+the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.
+
+use the [benchmark workflow](../engineering/benchmarks.md) for new comparisons with retained commands, run records and independent checking.
+
+## conditions
+
+W means windows 11 with defender real-time protection on. L means ubuntu 24.04 in WSL 2 on ext4. both use the same 11th gen intel i7-1185G7 laptop with 4 cores, 8 threads, 32 GB and nvme. unless a row says otherwise, these are release builds measured on 2026-10-30 or 2026-10-31.
+
+baseline f9bbda5 used at least ten runs after three warm-ups on an otherwise idle machine; its command measurements are in [budgets](budgets.md). later rows preserve their own counts. "not recorded" means no commit, count, median or range was retained for that field; a range's midpoint is not a measured median.
+
+## storage and memory
+
+small-download runs used 1,000 URLs of 100 KiB, one dataset per URL, an empty cache and a local linux server. the older path paid three flushes per file, about 3.3 ms each. the retained change removes checkpoint and index flushes, not object, change-mark, unpack-record or registration flushes.
+
+the memory fixture was a 100,000-member zip of 1 MiB. RSS is resident set size, the process's physical-memory footprint. `/usr/bin/time` measured peak RSS without the profiler; heaptrack identified allocations separately. the recent hash-thread and copy-flush records name linux but do not record a machine model, exact median or full per-configuration range beyond the values below.
+
+## placement and settled sync
+
+warm-placement runs copied `data.toml` and `data.lock` into an empty project using a fully populated cache. fixtures were 10,000 files of 4 KiB in 100 folders and 8,000 files of 2 KiB in one folder. on 2026-10-30, other builds kept the laptop at full load. fd64035 and 2ecb70a alternated ten runs per side. `FETCHLOOM_TRACE` separated command work from process startup, which alone took 1 to 3 s under that load.
+
+placement was 2 to 3 times slower than in the earlier quiet window. the no-readback experiment won 3 of 10 pairs for 10,000 files and 6 of 10 for 8,000; individual pairs differed by up to 2 times either way. those medians did not establish a repeatable gain, so the experiment was reverted.
+
+## network
+
+network clients ran on W against a local test server's eth0 address with shaped traffic and an empty cache per run. "lan", "home" and "far" are the recorded profile names; their exact shaping parameters are not retained here. live rows name the service. paired configurations alternated. these results cannot be treated as fixed speeds for those services.
 
 ## observations and rejected experiments
 
