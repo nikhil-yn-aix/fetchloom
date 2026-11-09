@@ -34,7 +34,7 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
   fetchloom sync --verify
   fetchloom sync --force --dry-run
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked. reports files it cannot replace without --force. --dry-run writes nothing";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and adds data/ to a git project's .gitignore. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock

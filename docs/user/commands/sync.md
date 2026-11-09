@@ -32,6 +32,7 @@ fetchloom sync [options]
 3. reuse unchanged local files and cached objects, downloading missing bytes when online.
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.
+6. in a git repository, add the data folder to `.gitignore` if needed, as `add` does, so a repository started after the first `add` stops listing `data/`.
 
 with `--json`, `result.datasets` names the datasets whose pins changed: pinned for the first time, pinned to other data, or no longer in `data.lock`. [JSON output](../reference/json-output.md) describes the rest.
 

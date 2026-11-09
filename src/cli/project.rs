@@ -1031,6 +1031,8 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         Read::Settled(&seen),
     )
     .await?;
+    // a project that became a git repository after its add gets its ignore rule now
+    ignore_data(&work, &manifest)?;
     tell_synced(context, &manifest, lock_changed, &placement, args.verify);
     Ok(Report {
         project: project.root,
@@ -1122,6 +1124,7 @@ async fn preview_sync(
         Some(seen),
     )
     .await?;
+    preview_ignore(&work, manifest)?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     dry_run_done(
         &context.output,

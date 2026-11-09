@@ -17,7 +17,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 
 `data.toml` lists the datasets you want. `data.lock` pins them: it records the exact files with their SHA-256 and size. the cache is one folder that keeps each file once for all your projects, and `fetchloom sync` puts the pinned files in `data/` as links to the cache, or as copies where a link cannot work.
 
-commit `data.toml` and `data.lock`, not `data/`. on another machine, a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
+commit `data.toml` and `data.lock`, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. on another machine, a clone runs `fetchloom sync` and gets the same bytes, checked against the lock.
 
 ## install
 

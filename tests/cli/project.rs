@@ -706,6 +706,31 @@ fn adding_again_after_git_init_ignores_the_data_folder() -> Result {
 }
 
 #[test]
+fn syncing_after_git_init_ignores_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    assert!(sandbox.run(&["add", &server.url])?.status.success());
+    fs::create_dir(sandbox.work().join(".git"))?;
+
+    let previewed = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
+    assert!(
+        previewed.contains("Would add data/ to .gitignore"),
+        "{previewed}"
+    );
+    assert!(!sandbox.work().join(".gitignore").exists());
+    let output = sandbox.run(&["sync"])?;
+
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(stderr.contains("Ignored data/ in .gitignore"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join(".gitignore"))?,
+        "/data/\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_pattern_that_matches_nothing_explains_why_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
