@@ -74,7 +74,7 @@ each change below ran behind a switch in one build, against the same build with 
 | waiting `path` calls finish once the project is ready | 7393540 | 32 waiters 3.24 s to 0.25 s | kept |
 | download jobs built at admission | cfabec6 | peak memory 228 MB to 205 MB at 100,000 pins | kept |
 | hosts interleaved in the download queue | 53957ca | two-host fixture 0.764 | kept |
-| transparent huge pages off for the process | 24cd618 | peak memory 0.33 to 0.73 on every lan case, as ext4 s2 0.327 [0.311, 0.331]; wall flat | kept |
+| transparent huge pages off for the process | 24cd618 | peak memory 0.33 to 0.73 on every lan case, as ext4 s2 0.327 [0.311, 0.331]; wall flat there, but a later paired run found a no-op sync 2.50 ms slower [2.33, 2.67] and 100,000 files placed from the cache 1.10 | dropped |
 | unfinished downloads spread over 16 folders | faed8f4 | ext4 s3 0.902 [0.809, 0.962], xfs s5 0.712 [0.499, 0.814] | kept |
 | a hardlink's details taken from its object | 79cc47c | xfs s4 0.933 [0.876, 0.954] | kept |
 | one flush per file instead of one `syncfs` a batch | e803ca7 | ext4 s3 1.567, s2 1.183 | dropped |
