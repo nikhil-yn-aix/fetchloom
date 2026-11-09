@@ -77,10 +77,11 @@ rustix = { version = "1.1", features = ["fs", "process"] }
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reflink-copy = { version = "0.1", default-features = false }
 
-# musl's own allocator is slow under many threads, so the static linux builds use mimalloc. other
-# targets keep the system allocator
+# musl's own allocator is slow under many threads, and mapped and unmapped a page group for each
+# folder a scan read, so the static linux builds use mimalloc for every allocation, libc's own too.
+# other targets keep the system allocator
 [target.'cfg(all(target_os = "linux", target_env = "musl"))'.dependencies]
-mimalloc = { version = "0.1.52", default-features = false }
+mimalloc = { version = "0.1.52", default-features = false, features = ["override"] }
 
 # std keeps a windows file's link count unstable, and same-file already depends on this crate.
 # anstyle-query, already under anstream, turns on escape codes for the picker without unsafe.
