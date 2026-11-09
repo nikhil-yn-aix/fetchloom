@@ -176,6 +176,77 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     assert_eq!(result.candidates.len(), 9);
 }
 
+/// once one catalog has answered, the others get a grace period and no more, so one slow site
+/// cannot hold up the matches the rest found. no grace starts before the first answer, however
+/// slow every catalog is.
+#[test]
+fn a_slow_catalog_cannot_hold_up_the_others() {
+    use std::time::Duration;
+
+    /// answers zenodo after `zenodo`, never when none, and the other catalogs after `others`.
+    struct Late {
+        recorded: Recorded,
+        zenodo: Option<Duration>,
+        others: Duration,
+    }
+    impl Api for Late {
+        async fn get(&self, url: &url::Url) -> Result<crate::net::Response, Error> {
+            let wait = if url.host_str() == Some("zenodo.org") {
+                self.zenodo
+            } else {
+                Some(self.others)
+            };
+            match wait {
+                Some(wait) => tokio::time::sleep(wait).await,
+                None => std::future::pending().await,
+            }
+            self.recorded.get(url).await
+        }
+    }
+    let minute = Duration::from_secs(60);
+    let soon = GRACE.checked_sub(Duration::from_secs(1)).unwrap();
+    for (zenodo, others, found, took) in [
+        (None, Duration::ZERO, 6, GRACE),
+        (Some(soon), Duration::ZERO, 9, soon),
+        (Some(minute), minute, 9, minute),
+    ] {
+        let api = Late {
+            recorded: recorded(),
+            zenodo,
+            others,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let (result, elapsed) = runtime.block_on(async {
+            let start = tokio::time::Instant::now();
+            let searched = tokio::time::timeout(minute * 60, search(&api, "iris", &[], LIMIT));
+            let result = searched
+                .await
+                .expect("the search waited for zenodo")
+                .unwrap();
+            (result, start.elapsed())
+        });
+
+        assert_eq!(
+            (result.candidates.len(), elapsed),
+            (found, took),
+            "{zenodo:?}"
+        );
+        if found == 6 {
+            assert_eq!(
+                result.warnings,
+                ["zenodo did not answer within 10 s of the others; \
+                  `fetchloom search \"iris\" --source zenodo` waits for it"]
+            );
+        } else {
+            assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        }
+    }
+}
+
 #[test]
 fn sources_are_asked_concurrently() {
     use std::future::{Future as _, poll_fn};

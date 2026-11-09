@@ -1,6 +1,10 @@
 //! dataset discovery across public catalogs, with no download or automatic selection.
 
+use std::pin::pin;
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize, Serializer};
+use tokio::time::Instant;
 use url::Url;
 
 use super::Reference;
@@ -49,10 +53,24 @@ impl Catalog {
             Catalog::Zenodo => "zenodo",
         }
     }
+
+    /// the catalog's name in `--source` and in references.
+    fn name(self) -> &'static str {
+        match self {
+            Catalog::Hf => "hf",
+            Catalog::Kaggle => "kaggle",
+            Catalog::Zenodo => "zenodo",
+        }
+    }
 }
 
 /// the matches each catalog keeps when nobody asks for another number.
 pub(crate) const LIMIT: usize = 3;
+
+/// how long the other catalogs may take once one has answered, so one slow site cannot hold up
+/// the matches the rest found. a healthy zenodo answered in 0.7 to 7 s; a failing one retried
+/// for 76 s.
+const GRACE: Duration = Duration::from_secs(10);
 
 /// asks the `catalogs` together, keeping rank order while giving each catalog a turn, then moves
 /// matches named exactly as the words to the front, in that same order.
@@ -63,41 +81,60 @@ pub(crate) async fn search(
     limit: usize,
 ) -> Result<Search, Error> {
     let asked = |catalog: Catalog| catalogs.is_empty() || catalogs.contains(&catalog);
-    let (hf, kaggle, zenodo) = tokio::join!(
-        async {
-            if asked(Catalog::Hf) {
-                Some(hugging_face(api, words, limit).await)
-            } else {
-                None
-            }
-        },
-        async {
-            if asked(Catalog::Kaggle) {
-                Some(kaggle(api, words, limit).await)
-            } else {
-                None
-            }
-        },
-        async {
-            if asked(Catalog::Zenodo) {
-                Some(zenodo(api, words, limit).await)
-            } else {
-                None
+    let mut hf = pin!(async {
+        if asked(Catalog::Hf) {
+            Some(hugging_face(api, words, limit).await)
+        } else {
+            None
+        }
+    });
+    let mut kaggle = pin!(async {
+        if asked(Catalog::Kaggle) {
+            Some(kaggle(api, words, limit).await)
+        } else {
+            None
+        }
+    });
+    let mut zenodo = pin!(async {
+        if asked(Catalog::Zenodo) {
+            Some(zenodo(api, words, limit).await)
+        } else {
+            None
+        }
+    });
+    let mut answers = [None, None, None];
+    let mut late = None;
+    while answers.iter().any(Option::is_none) {
+        tokio::select! {
+            answer = &mut hf, if answers[0].is_none() => answers[0] = Some(answer),
+            answer = &mut kaggle, if answers[1].is_none() => answers[1] = Some(answer),
+            answer = &mut zenodo, if answers[2].is_none() => answers[2] = Some(answer),
+            () = tokio::time::sleep_until(late.unwrap_or_else(Instant::now)), if late.is_some() => {
+                break;
             }
         }
-    );
+        if late.is_none() && answers.iter().flatten().any(Option::is_some) {
+            late = Some(Instant::now() + GRACE);
+        }
+    }
     let mut result = Search::default();
     let mut first_error = None;
     let mut lists = Vec::new();
-    for (source, answer) in [
-        (Catalog::Hf.label(), hf),
-        (Catalog::Kaggle.label(), kaggle),
-        (Catalog::Zenodo.label(), zenodo),
-    ] {
+    for (catalog, answer) in [Catalog::Hf, Catalog::Kaggle, Catalog::Zenodo]
+        .into_iter()
+        .zip(answers)
+    {
+        let source = catalog.label();
         match answer {
-            None => {}
-            Some(Ok(candidates)) => lists.push(candidates.into_iter()),
-            Some(Err(error)) => {
+            None => result.warnings.push(format!(
+                "{source} did not answer within {} s of the others; \
+                 `fetchloom search \"{words}\" --source {}` waits for it",
+                GRACE.as_secs(),
+                catalog.name()
+            )),
+            Some(None) => {}
+            Some(Some(Ok(candidates))) => lists.push(candidates.into_iter()),
+            Some(Some(Err(error))) => {
                 result
                     .warnings
                     .push(format!("{source} search failed: {error}"));
