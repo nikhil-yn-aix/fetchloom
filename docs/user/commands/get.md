@@ -28,7 +28,7 @@ fetchloom get [options] <link>...
 
 `-o -` is refused: get writes files to a folder, not their contents to stdout.
 
-[global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote them. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
+[global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
 ## what happens
 
@@ -118,5 +118,5 @@ the output folder explicitly chosen with `-o` for a single link may itself link 
 | offline get cannot resolve a repository | the reference needs network resolution | follow [offline preparation](../concepts.md#offline) |
 | a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
-| `"fashion" is not a link, a DOI or an id` | unquoted search words read as several links | quote the words, as in `fetchloom get "fashion mnist"` |
+| `"fashion" is not a link, a DOI or an id` | unquoted search words read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |

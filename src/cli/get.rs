@@ -184,7 +184,7 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<String>, Error> {
             "fashion mnist".to_owned()
         };
         return Err(error.help(format!(
-            "to search for several words, quote them, as in `fetchloom get \"{example}\"`"
+            "quote the words of one search, as in `fetchloom get \"{example}\"`, or get one dataset at a time"
         )));
     }
     let Some(path) = &args.input_file else {

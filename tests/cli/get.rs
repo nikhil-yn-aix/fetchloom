@@ -1040,7 +1040,7 @@ fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result 
     for (arguments, expected) in [
         (
             &["get", "fashion", "mnist"][..],
-            "to search for several words, quote them, as in `fetchloom get \"fashion mnist\"`",
+            "quote the words of one search, as in `fetchloom get \"fashion mnist\"`, or get one dataset at a time",
         ),
         (
             &["get", "https://example.org/iris.csv", "iris"],

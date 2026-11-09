@@ -172,7 +172,7 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         .flatten()
         .filter(|arg| !arg.starts_with('-'))
         .map(|_| {
-            "to search for several words, quote them, as in `fetchloom add \"fashion mnist\"`"
+            "quote the words of one search, as in `fetchloom add \"fashion mnist\"`, or add one dataset at a time"
                 .to_owned()
         });
     let help = if let Some(placement) = placement.or(quoted) {
@@ -359,11 +359,9 @@ mod tests {
             assert_eq!(problem(arguments)?.message, expected);
         }
         let quoted = problem(&["fetchloom", "add", "fashion", "mnist"])?;
-        assert!(
-            quoted
-                .help
-                .unwrap()
-                .contains("`fetchloom add \"fashion mnist\"`")
+        assert_eq!(
+            &*quoted.help.unwrap(),
+            "quote the words of one search, as in `fetchloom add \"fashion mnist\"`, or add one dataset at a time"
         );
         Ok(())
     }
