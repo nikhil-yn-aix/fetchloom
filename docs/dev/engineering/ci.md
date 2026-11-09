@@ -27,6 +27,7 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 | `cargo clippy --release --locked -- -D warnings` | x86_64 linux | release-only code and items used only by debug builds must satisfy the lints |
 | `cargo check --locked --release --target x86_64-apple-darwin` | macos | the x86_64 macos release target, C dependencies included, which the arm64 runner otherwise never compiles; `MACOSX_DEPLOYMENT_TARGET` is 11.0 as in the release |
 | `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
+| `otool -L target/debug/fetchloom` | macos | the build links only libraries under `/usr/lib` and `/System/Library`, as the release check demands, so a C library a build script found in homebrew fails a pull request instead of a release |
 | `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
 | `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
 | `python3 -m unittest discover -s bench` | x86_64 linux | benchmark harness: fixtures, runs, live comparison and report rendering |
