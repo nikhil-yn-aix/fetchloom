@@ -10,7 +10,8 @@ mod synced;
 
 use parents::{Location, Parents, Staged};
 
-use std::collections::{HashMap, HashSet};
+use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs::{self, File, Metadata, Permissions};
 use std::io::{self, Read, Write};
 use std::num::NonZero;
@@ -279,16 +280,25 @@ impl Placer {
     ) -> Vec<io::Result<(Method, T)>> {
         let mut results = Vec::with_capacity(count);
         let mut folders = schedule::Folders::new(count);
+        // whether each folder passed its check, so the check runs once per folder, not per file
+        let mut checked = Vec::new();
         let ready = spread((0..count).filter_map(|index| {
             if let Err(err) = check_stop(&self.stop) {
                 results.push((index, Err(err)));
                 return None;
             }
             let order = order(index);
+            let (group, first) = folders.record(index, &order.destination);
+            if first {
+                checked.push(false);
+            }
+            if checked[group] {
+                return Some((index, group));
+            }
             match self.check_folders(&order.destination, true) {
                 Ok(()) => {
-                    folders.record(index, &order.destination);
-                    Some((index, order))
+                    checked[group] = true;
+                    Some((index, group))
                 }
                 Err(err) => {
                     results.push((index, Err(err)));
@@ -353,8 +363,7 @@ impl Placer {
             &this.stop,
             &grouped,
         ));
-        results.sort_unstable_by_key(|(index, _)| *index);
-        results.into_iter().map(|(_, result)| result).collect()
+        in_order(count, results)
     }
 
     /// tries each method the filesystem may allow, best first. with `batch`, a copy is left
@@ -614,9 +623,9 @@ impl Placer {
     }
 
     fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
-        let (destination, _) = self.within(destination)?;
+        let below = self.below_root(destination)?;
         self.parents
-            .locate(&self.root, &destination, self.checks_root, make)
+            .locate(&self.root, &below, self.checks_root, make)
     }
 
     fn can_hardlink(&self) -> Option<bool> {
@@ -630,27 +639,41 @@ impl Placer {
 
     /// `path` made absolute, and its folder, which must be the root or inside it.
     fn within(&self, path: &Path) -> io::Result<(PathBuf, PathBuf)> {
-        let path = std::path::absolute(path)?;
-        match path.parent() {
-            Some(parent) if parent.starts_with(&self.root) => {
-                if path.strip_prefix(&self.root).is_ok_and(|relative| {
-                    relative
-                        .components()
-                        .any(|part| matches!(part, std::path::Component::ParentDir))
-                }) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "a placement path cannot contain .. below its root",
-                    ));
-                }
-                let parent = parent.to_path_buf();
-                Ok((path, parent))
-            }
-            _ => Err(io::Error::new(
+        let path = self.root.join(self.below_root(path)?);
+        let parent = path.parent().unwrap_or(self.root.as_path()).to_path_buf();
+        Ok((path, parent))
+    }
+
+    /// `path` as a path below the root, whose folder must be the root or inside it, with no `..`
+    /// below the root. a path already absolute is not built again, as every placement's is.
+    fn below_root<'a>(&self, path: &'a Path) -> io::Result<Cow<'a, Path>> {
+        let absolute;
+        let (path, below) = if path.is_absolute() {
+            (path, path.strip_prefix(&self.root).map(Cow::Borrowed))
+        } else {
+            absolute = std::path::absolute(path)?;
+            let below = absolute
+                .strip_prefix(&self.root)
+                .map(|below| Cow::Owned(below.to_path_buf()));
+            (absolute.as_path(), below)
+        };
+        let below = below.ok().filter(|below| below.parent().is_some());
+        let Some(below) = below else {
+            return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("{} is outside {}", path.display(), self.root.display()),
-            )),
+            ));
+        };
+        if below
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a placement path cannot contain .. below its root",
+            ));
         }
+        Ok(below)
     }
 
     /// learns from `method` failing with `error`: a method the filesystem refuses is not tried
@@ -710,7 +733,7 @@ pub(crate) fn run_all<T: Sync, R: Send>(
         return items.iter().map(job).collect();
     }
     let next = AtomicUsize::new(0);
-    let mut done: Vec<(usize, R)> = std::thread::scope(|scope| {
+    let done: Vec<Vec<(usize, R)>> = std::thread::scope(|scope| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 crate::threads::scoped(scope, || {
@@ -727,11 +750,22 @@ pub(crate) fn run_all<T: Sync, R: Send>(
             .collect();
         workers
             .into_iter()
-            .flat_map(crate::threads::Scoped::join)
+            .map(crate::threads::Scoped::join)
             .collect()
     });
-    done.sort_unstable_by_key(|(index, _)| *index);
-    done.into_iter().map(|(_, result)| result).collect()
+    in_order(items.len(), done.into_iter().flatten())
+}
+
+/// `results`, each tagged with the index of its item among `count`, in the order of the items.
+/// each result moves twice, where sorting 100,000 large results moved each many times.
+fn in_order<R>(count: usize, results: impl IntoIterator<Item = (usize, R)>) -> Vec<R> {
+    let mut slots: Vec<Option<R>> = std::iter::repeat_with(|| None).take(count).collect();
+    for (index, result) in results {
+        if let Some(slot) = slots.get_mut(index) {
+            *slot = Some(result);
+        }
+    }
+    slots.into_iter().flatten().collect()
 }
 
 /// how many threads share `items` items of work.
@@ -777,19 +811,19 @@ fn owned_runs<T>(items: Vec<T>, threads: usize) -> Vec<Vec<T>> {
     .collect()
 }
 
-/// the orders reordered so that neighbours go to different folders. links made into one folder
-/// wait on each other, so threads taking the next order in turn would queue on one folder.
-fn spread(orders: impl IntoIterator<Item = (usize, Order)>) -> Vec<usize> {
-    let mut seen: HashMap<PathBuf, usize> = HashMap::new();
+/// the orders, each with its folder's number, reordered so that neighbours go to different
+/// folders. links made into one folder wait on each other, so threads taking the next order in
+/// turn would queue on one folder.
+fn spread(orders: impl IntoIterator<Item = (usize, usize)>) -> Vec<usize> {
+    let mut seen: Vec<usize> = Vec::new();
     let mut ranked: Vec<(usize, usize)> = orders
         .into_iter()
-        .map(|(index, order)| {
-            let destination = &order.destination;
-            let rank = seen
-                .entry(destination.parent().unwrap_or(destination).to_path_buf())
-                .or_default();
-            *rank += 1;
-            (*rank, index)
+        .map(|(index, group)| {
+            if seen.len() <= group {
+                seen.resize(group + 1, 0);
+            }
+            seen[group] += 1;
+            (seen[group], index)
         })
         .collect();
     ranked.sort_by_key(|(rank, _)| *rank);

@@ -21,11 +21,19 @@ impl Folders {
         }
     }
 
-    pub(super) fn record(&mut self, index: usize, destination: &Path) {
+    /// files the order at `index` under its destination's folder, and returns that folder's
+    /// number and whether this is the folder's first order.
+    pub(super) fn record(&mut self, index: usize, destination: &Path) -> (usize, bool) {
         let parent = destination.parent().unwrap_or(destination);
-        let next = self.names.len();
-        let group = *self.names.entry(parent.to_path_buf()).or_insert(next);
+        let (group, first) = if let Some(group) = self.names.get(parent) {
+            (*group, false)
+        } else {
+            let group = self.names.len();
+            self.names.insert(parent.to_path_buf(), group);
+            (group, true)
+        };
         self.parent[index] = group;
+        (group, first)
     }
 
     pub(super) fn finish(self, serial: bool) -> Work {
@@ -34,7 +42,7 @@ impl Folders {
             parent: self.parent,
             gates: (0..self.names.len())
                 .map(|_| Gate {
-                    live: Mutex::new(0),
+                    live: Mutex::new(Live::default()),
                     changed: Condvar::new(),
                     limit,
                 })
@@ -68,21 +76,31 @@ impl Work {
 }
 
 struct Gate {
-    live: Mutex<usize>,
+    live: Mutex<Live>,
     changed: Condvar,
     limit: usize,
+}
+
+#[derive(Default)]
+struct Live {
+    /// workers holding a permit.
+    running: usize,
+    /// workers waiting for one.
+    waiting: usize,
 }
 
 impl Gate {
     fn enter(&self) -> Permit<'_> {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        while *live >= self.limit {
+        while live.running >= self.limit {
+            live.waiting += 1;
             live = self
                 .changed
                 .wait(live)
                 .unwrap_or_else(PoisonError::into_inner);
+            live.waiting -= 1;
         }
-        *live += 1;
+        live.running += 1;
         Permit(self)
     }
 }
@@ -91,8 +109,12 @@ pub(super) struct Permit<'a>(&'a Gate);
 
 impl Drop for Permit<'_> {
     fn drop(&mut self) {
-        *self.0.live.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
-        self.0.changed.notify_one();
+        let mut live = self.0.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.running -= 1;
+        // a notify is a system call even when no one waits, once for every file placed
+        if live.waiting > 0 {
+            self.0.changed.notify_one();
+        }
     }
 }
 
@@ -170,7 +192,36 @@ mod tests {
         for parent in 0..2 {
             assert!(peak[parent].load(Ordering::SeqCst) <= PER_PARENT);
             assert_eq!(live[parent].load(Ordering::SeqCst), 0);
-            assert_eq!(*work.gates[parent].live.lock().unwrap(), 0);
+            assert_eq!(work.gates[parent].live.lock().unwrap().running, 0);
         }
+    }
+
+    /// workers queued behind a one-at-a-time folder are each woken in turn, so all of them finish.
+    #[test]
+    fn every_worker_waiting_on_a_folder_gets_its_turn() {
+        let count = 64;
+        let mut folders = Folders::new(count);
+        for index in 0..count {
+            folders.record(index, Path::new("one/file"));
+        }
+        let work = folders.finish(true);
+        let live = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for index in 0..count {
+                let (work, live, peak) = (&work, &live, &peak);
+                scope.spawn(move || {
+                    for _ in 0..50 {
+                        let _permit = work.enter(index).unwrap();
+                        peak.fetch_max(live.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                        std::thread::yield_now();
+                        live.fetch_sub(1, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
+        let left = work.gates[0].live.lock().unwrap();
+        assert_eq!((left.running, left.waiting), (0, 0));
     }
 }

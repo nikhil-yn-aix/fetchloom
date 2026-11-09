@@ -24,19 +24,20 @@ pub(super) struct Location {
 }
 
 impl Parents {
+    /// where `below`, a path below `root`, goes: the folders on its way, each held so it cannot
+    /// be replaced while in use. with `make`, missing folders are made.
     pub(super) fn locate(
         &self,
         root: &Path,
-        destination: &Path,
+        below: &Path,
         real_root: bool,
         make: bool,
     ) -> io::Result<Location> {
-        let relative = destination
+        let relative = below
             .parent()
-            .and_then(|path| path.strip_prefix(root).ok())
             .ok_or_else(|| invalid("a placement path is outside its root"))?;
         let parts = parts(relative)?;
-        let name = destination
+        let name = below
             .file_name()
             .ok_or_else(|| invalid("a placement has no filename"))?;
         let root = if let Some(root) = self.root.get() {
@@ -82,10 +83,10 @@ impl Location {
     #[cfg(test)]
     pub(super) fn standalone(destination: &Path) -> io::Result<Self> {
         let destination = std::path::absolute(destination)?;
-        let root = destination
-            .parent()
-            .ok_or_else(|| invalid("a placement has no parent"))?;
-        Parents::default().locate(root, &destination, true, false)
+        let (Some(root), Some(name)) = (destination.parent(), destination.file_name()) else {
+            return Err(invalid("a placement has no parent"));
+        };
+        Parents::default().locate(root, Path::new(name), true, false)
     }
 
     pub(super) fn root_path(&self) -> &Path {

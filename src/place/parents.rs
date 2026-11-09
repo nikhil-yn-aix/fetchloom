@@ -68,19 +68,20 @@ pub(super) struct Location {
 }
 
 impl Parents {
+    /// where `below`, a path below `root`, goes: its folder, opened through the root without
+    /// following a link, and its name. with `make`, missing folders are made.
     pub(super) fn locate(
         &self,
         root: &Path,
-        destination: &Path,
+        below: &Path,
         real_root: bool,
         make: bool,
     ) -> io::Result<Location> {
-        let relative = destination
+        let relative = below
             .parent()
-            .and_then(|parent| parent.strip_prefix(root).ok())
             .ok_or_else(|| invalid("a placement path is outside its root"))?;
-        parts(relative)?;
-        let name = destination
+        parts(relative).try_for_each(|part| part.map(drop))?;
+        let name = below
             .file_name()
             .ok_or_else(|| invalid("a placement has no filename"))?;
         let root = if let Some(root) = self.root.get() {
@@ -107,10 +108,10 @@ impl Location {
     #[cfg(test)]
     pub(super) fn standalone(destination: &Path) -> io::Result<Self> {
         let destination = std::path::absolute(destination)?;
-        let root = destination
-            .parent()
-            .ok_or_else(|| invalid("a placement has no parent"))?;
-        Parents::default().locate(root, &destination, true, false)
+        let (Some(root), Some(name)) = (destination.parent(), destination.file_name()) else {
+            return Err(invalid("a placement has no parent"));
+        };
+        Parents::default().locate(root, Path::new(name), true, false)
     }
 
     #[cfg(target_os = "macos")]
@@ -370,27 +371,33 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
 
-fn parts(path: &Path) -> io::Result<Vec<&OsStr>> {
-    path.components()
-        .filter_map(|part| match part {
-            Component::Normal(name) => Some(Ok(name)),
-            Component::CurDir => None,
-            _ => Some(Err(invalid("a placement parent must stay below its root"))),
-        })
-        .collect()
+/// the folder names along `path`, refusing any part that would leave its root.
+fn parts(path: &Path) -> impl Iterator<Item = io::Result<&OsStr>> {
+    path.components().filter_map(|part| match part {
+        Component::Normal(name) => Some(Ok(name)),
+        Component::CurDir => None,
+        _ => Some(Err(invalid("a placement parent must stay below its root"))),
+    })
 }
 
-fn component(parent: &File, name: &OsStr, make: bool) -> io::Result<File> {
-    let opened = native::openat(parent, name, flags(), Mode::empty());
-    let opened = match opened {
-        Err(Errno::NOENT) if make => {
-            match native::mkdirat(parent, name, Mode::from_bits_truncate(0o777)) {
-                Ok(()) | Err(Errno::EXIST) => {}
-                Err(error) => return Err(error.into()),
+/// opens the folder `name` in `parent` without following a link. with `make`, a missing one is
+/// made; `absent` says it was just found missing, so it is made before it is looked for.
+fn component(parent: &File, name: &OsStr, make: bool, absent: bool) -> io::Result<File> {
+    let create = || match native::mkdirat(parent, name, Mode::from_bits_truncate(0o777)) {
+        Ok(()) | Err(Errno::EXIST) => Ok(()),
+        Err(error) => Err(error),
+    };
+    let opened = if make && absent {
+        create()?;
+        native::openat(parent, name, flags(), Mode::empty())
+    } else {
+        match native::openat(parent, name, flags(), Mode::empty()) {
+            Err(Errno::NOENT) if make => {
+                create()?;
+                native::openat(parent, name, flags(), Mode::empty())
             }
-            native::openat(parent, name, flags(), Mode::empty())
+            found => found,
         }
-        found => found,
     };
     match opened {
         Ok(file) => Ok(File::from(file)),
@@ -437,30 +444,31 @@ pub(super) fn open_root(path: &Path, make: bool, real: bool) -> io::Result<File>
             .map(File::from)
             .map_err(Into::into);
     }
-    component(&folder, name, make)
+    component(&folder, name, make, false)
 }
 
 fn open_relative(root: &File, path: &Path, make: bool, fallback: bool) -> io::Result<File> {
-    let parts = parts(path)?;
-    #[cfg(not(target_os = "linux"))]
-    let _ = fallback;
+    parts(path).try_for_each(|part| part.map(drop))?;
     #[cfg(target_os = "linux")]
-    if !fallback {
-        let path = if parts.is_empty() {
+    let absent = if fallback {
+        false
+    } else {
+        let below = if parts(path).next().is_none() {
             Path::new(".")
         } else {
             path
         };
         match native::openat2(
             root,
-            path,
+            below,
             flags(),
             Mode::empty(),
             ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS,
         ) {
             Ok(file) => return Ok(File::from(file)),
-            Err(Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR) => {}
-            Err(Errno::NOENT) if make => {}
+            Err(Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR) => false,
+            // the path is missing, so its last folder surely is
+            Err(Errno::NOENT) if make => true,
             Err(Errno::LOOP) => {
                 return Err(invalid(
                     "a placement parent is a link, and fetchloom only places files in real folders",
@@ -468,12 +476,20 @@ fn open_relative(root: &File, path: &Path, make: bool, fallback: bool) -> io::Re
             }
             Err(error) => return Err(error.into()),
         }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let absent = {
+        let _ = fallback;
+        false
+    };
+    let mut folder: Option<File> = None;
+    let mut parts = parts(path).peekable();
+    while let Some(part) = parts.next() {
+        let last = parts.peek().is_none();
+        let parent = folder.as_ref().unwrap_or(root);
+        folder = Some(component(parent, part?, make, absent && last)?);
     }
-    let mut folder = root.try_clone()?;
-    for part in parts {
-        folder = component(&folder, part, make)?;
-    }
-    Ok(folder)
+    folder.map_or_else(|| root.try_clone(), Ok)
 }
 
 #[cfg(test)]
@@ -500,7 +516,7 @@ mod tests {
         IDENTITY_READS.set(0);
         for name in ["a", "b"] {
             let location = parents
-                .locate(dir.path(), &dir.path().join(name), true, false)
+                .locate(dir.path(), Path::new(name), true, false)
                 .unwrap();
             assert_eq!(
                 location.root_device,
@@ -537,7 +553,7 @@ mod tests {
             fs::create_dir(&outside).unwrap();
             let parents = Parents::default();
             let location = parents
-                .locate(&root, &root.join("set/file"), true, false)
+                .locate(&root, Path::new("set/file"), true, false)
                 .unwrap();
             let (staged, mut output) = location.create(0o600, retain).unwrap();
             output.write_all(b"pinned").unwrap();
@@ -562,7 +578,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let parents = Parents::default();
         let location = parents
-            .locate(dir.path(), &dir.path().join("file"), true, false)
+            .locate(dir.path(), Path::new("file"), true, false)
             .unwrap();
         let (mut staged, mut file) = location.create(0o600, true).unwrap();
         file.write_all(b"placed").unwrap();
@@ -585,10 +601,10 @@ mod tests {
         fs::write(outside.join("file"), b"foreign").unwrap();
         let parents = Parents::default();
         let location = parents
-            .locate(&root, &root.join("set/file"), true, false)
+            .locate(&root, Path::new("set/file"), true, false)
             .unwrap();
         let folder = parents
-            .locate(&root, &root.join("set"), true, false)
+            .locate(&root, Path::new("set"), true, false)
             .unwrap();
         fs::rename(root.join("set"), root.join("saved")).unwrap();
         symlink(&outside, root.join("set")).unwrap();
@@ -625,7 +641,7 @@ mod tests {
         let parents = Parents::default();
         let mut queued = Vec::new();
         for index in 0..256 {
-            let path = dir.path().join(format!("{index}/file"));
+            let path = PathBuf::from(format!("{index}/file"));
             let location = parents.locate(dir.path(), &path, true, true).unwrap();
             let weak = Arc::downgrade(&location.parent.file);
             let (staged, output) = location.create(0o600, false).unwrap();

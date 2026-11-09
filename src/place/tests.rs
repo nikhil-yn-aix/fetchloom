@@ -927,23 +927,14 @@ fn many_copies_are_placed_and_named_whole() {
 
 #[test]
 fn neighbouring_orders_go_to_different_folders() {
-    let object = Path::new("object");
-    let paths: Vec<PathBuf> = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"]
+    let paths = ["a/1", "a/2", "a/3", "b/1", "c/1", "c/2"];
+    let mut folders = schedule::Folders::new(paths.len());
+    let orders: Vec<_> = paths
         .iter()
-        .map(PathBuf::from)
+        .enumerate()
+        .map(|(index, path)| (index, folders.record(index, Path::new(path)).0))
         .collect();
-    let orders = paths.iter().enumerate().map(|(index, destination)| {
-        (
-            index,
-            Order {
-                object: object.to_path_buf(),
-                destination: destination.clone(),
-                writable: false,
-            },
-        )
-    });
-    let indexes = spread(orders);
-    assert_eq!(indexes, [0, 3, 4, 1, 5, 2]);
+    assert_eq!(spread(orders), [0, 3, 4, 1, 5, 2]);
 }
 
 #[test]
