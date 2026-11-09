@@ -28,29 +28,37 @@ jobs:
           test "${{ needs.test.result }}" = success
           test "${{ needs.musl.result }}" = success
 
-  # the linux release ships a static musl binary that uses mimalloc, while the test job builds
-  # for glibc. this builds the shipped target the way release.yml does and runs it
+  # the linux release ships static musl binaries that use mimalloc, while the test job builds
+  # for glibc. this builds each shipped target the way release.yml does and runs it
   musl:
-    name: x86_64-unknown-linux-musl
-    runs-on: ubuntu-latest
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - run: rustup target add x86_64-unknown-linux-musl
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # the cc crate builds zstd, liblzma, ring and mimalloc with musl-gcc for the musl target
       - name: install the musl C compiler
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq musl-tools > /dev/null
-      - run: cargo build --locked --release --target x86_64-unknown-linux-musl
+      - run: cargo build --locked --release --target ${{ matrix.target }}
       - name: check that the binary runs
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          said=$(target/x86_64-unknown-linux-musl/release/fetchloom --version)
+          said=$(target/${{ matrix.target }}/release/fetchloom --version)
           echo "fetchloom --version: $said"
           if [ "$said" != "fetchloom $version" ]; then
             echo "::error::fetchloom --version printed $said"

@@ -38,7 +38,7 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 
 ## musl job
 
-the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static binaries that use mimalloc in place of musl's allocator for every allocation, libc's own too, while the `test` job builds for glibc. the `musl` job, named `x86_64-unknown-linux-musl`, builds that target on `ubuntu-latest` the way [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) does: it installs musl-tools for the C dependencies and runs `cargo build --locked --release --target x86_64-unknown-linux-musl`. it then checks that the binary's `--version` prints `fetchloom` and the Cargo version. it has a 45-minute timeout and restores the rust cache. it does not run the tests or the release workflow's linkage checks.
+the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static binaries that use mimalloc in place of musl's allocator for every allocation, libc's own too, while the `test` job builds for glibc. the `musl` job builds each of those targets on its own architecture, `x86_64-unknown-linux-musl` on `ubuntu-latest` and `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`, the way [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) does: it installs musl-tools for the C dependencies and runs `cargo build --locked --release` for the target. its runs are named after the targets and do not fail fast. it then checks that the binary's `--version` prints `fetchloom` and the Cargo version. it has a 45-minute timeout and restores the rust cache. it does not run the tests or the release workflow's linkage checks.
 
 ## filesystem runs
 
