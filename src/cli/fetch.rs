@@ -544,7 +544,15 @@ async fn run_each(
                 results[index] = Some(Err(kept(err, held[index].load(Ordering::Relaxed))));
             }
             Ok((_, Err(err))) => {
-                tasks.abort_all();
+                if err.kind == Kind::Interrupted {
+                    // a ctrl-c read as a key at a question reaches no signal handler, so the stop
+                    // is asked here too. every download then winds down and keeps what it
+                    // received; one cut off would lose bytes this count already promised
+                    context.stop.ask();
+                    wind_down(&mut tasks, &held).await;
+                } else {
+                    tasks.abort_all();
+                }
                 let bytes = held.iter().map(|bytes| bytes.load(Ordering::Relaxed)).sum();
                 return Err(kept(err, bytes));
             }
@@ -558,6 +566,19 @@ async fn run_each(
         }
     }
     Ok(results.into_iter().flatten().collect())
+}
+
+/// waits for the downloads still running to wind down from a stop, leaving in `held` what each
+/// one that stopped unfinished keeps for the next run.
+async fn wind_down(tasks: &mut JoinSet<(usize, Result<Fetched, Error>)>, held: &[AtomicU64]) {
+    while let Some(joined) = tasks.join_next().await {
+        // a finished file, or one failed on its own, leaves nothing to go on from
+        if let Ok((index, result)) = joined
+            && result.as_ref().map_or_else(on_its_own, |_| true)
+        {
+            held[index].store(0, Ordering::Relaxed);
+        }
+    }
 }
 
 /// tells a person who stopped, or whose network failed, that the bytes so far are not lost:

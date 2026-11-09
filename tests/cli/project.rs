@@ -2235,7 +2235,8 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
 #[test]
 fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
     let sandbox = Sandbox::new()?;
-    let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
+    // about six seconds at the pace of a slow file's first answer, so the stop comes first
+    let body: Vec<u8> = (0..4u32 << 20).map(|n| (n % 251) as u8).collect();
     let cows = Server::slow_file("/files/cows.csv", body.clone())?;
     let pigs = Server::slow_file("/files/pigs.csv", body)?;
     fs::write(
@@ -2282,6 +2283,50 @@ fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
         })
         .ok_or_else(|| format!("the second sync continued nothing: {told}"))?;
     assert_eq!(kept, earlier, "{stderr}\n{told}");
+    Ok(())
+}
+
+/// ctrl-c at the question about a large download stops the downloads already running too,
+/// rather than waiting for them to finish.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
+    let large = Server::start("/huge.bin", vec![huge(), huge()])?;
+    // about six seconds at the pace of a slow file's first answer
+    let body: Vec<u8> = (0..4u32 << 20).map(|n| (n % 251) as u8).collect();
+    let slow = Server::slow_file("/files/slow.csv", body)?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.huge]\nref = \"{}\"\n\n[datasets.slow]\nref = \"{}\"\n",
+            large.url, slow.url
+        ),
+    )?;
+    // -isig lets ctrl-c reach the question as the key it reads
+    let Some((exit, screen)) = crate::support::typed(
+        &sandbox.work(),
+        &sandbox.command(&["sync"]),
+        "-isig",
+        "download huge/huge.bin (2.0 GiB)?",
+        "\u{3}",
+    )?
+    else {
+        return Ok(());
+    };
+    assert_eq!(exit, Some(130), "{screen}");
+    assert!(!screen.contains("error:"), "{screen}");
+    let mut folders = vec![sandbox.cache().join("objects")];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let found = entry.metadata()?;
+            assert!(found.is_dir() || found.len() != 4 << 20, "{screen}");
+            if found.is_dir() {
+                folders.push(entry.path());
+            }
+        }
+    }
     Ok(())
 }
 
