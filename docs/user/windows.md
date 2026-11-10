@@ -2,6 +2,19 @@
 
 windows supports the same fetchloom commands, with placement affected by the drive and synced folders.
 
+## install
+
+no release has been published yet, so build fetchloom from source, as [getting started](getting-started.md#install) shows.
+
+after the first release, the installer in the [readme](https://github.com/nikhil-yn-aix/fetchloom#install) puts fetchloom in `%LOCALAPPDATA%\Programs\fetchloom\bin`, which needs no administrator. the release executables are not signed. [Microsoft Defender SmartScreen](https://learn.microsoft.com/en-us/windows/security/operating-system-security/virus-and-threat-protection/microsoft-defender-smartscreen/) checks programs downloaded from the internet and warns about one without an established reputation, as a new unsigned release can be, with a "Windows protected your PC" window. a browser marks the files it saves as downloaded from the internet. for a release archive saved from a browser, compare its SHA-256 with the line for it in the release's `SHA256SUMS`, then remove the mark before unpacking it, so the program inside carries none:
+
+```powershell
+Get-FileHash .\fetchloom-*.zip
+Unblock-File .\fetchloom-*.zip
+```
+
+[`Unblock-File`](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/unblock-file) removes the mark, the file's `Zone.Identifier` stream. if the warning already shows, "More info" and then "Run anyway" starts the program.
+
 ## defender and new files
 
 many small files give Microsoft Defender many new files to scan. the [historical defender observations](../dev/performance/windows-defender.md#recorded-workload) describe one laptop; costs depend on the machine and its protection settings.
