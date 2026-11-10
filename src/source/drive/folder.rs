@@ -8,7 +8,7 @@ use url::Url;
 use super::{Item, ItemKind, file_url, html};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Listing, MOST_FILES, Reference, Remote, Unavailable};
+use crate::source::{Listing, Reference, Remote, Unavailable, most_files, too_many};
 
 /// a drive id, with the resource key drive asks for along with items shared before 2021.
 #[derive(Debug, PartialEq, Eq)]
@@ -101,8 +101,11 @@ impl Walk {
                             &format!("the folder {path} appears twice"),
                         ));
                     }
-                    if self.seen.len() > MOST_FILES {
-                        return Err(unreadable(item, "the listing holds too many folders"));
+                    if self.seen.len() > most_files() {
+                        return Err(too_many(
+                            link(&item.id),
+                            "pass the link of each subfolder you need to `fetchloom add`",
+                        ));
                     }
                     self.folders.push_back((key, path));
                 }
@@ -115,9 +118,11 @@ impl Walk {
                     named_by_server: false,
                 }),
             }
-            if self.files.len() + self.unavailable.len() > MOST_FILES {
-                return Err(Error::new(Kind::SourceInvalid, format!("{} holds more than {MOST_FILES} entries, more than fetchloom handles in one dataset", link(&item.id)))
-                    .help("pass the link of each subfolder you need to `fetchloom add`"));
+            if self.files.len() + self.unavailable.len() > most_files() {
+                return Err(too_many(
+                    link(&item.id),
+                    "pass the link of each subfolder you need to `fetchloom add`",
+                ));
             }
         }
         Ok(())

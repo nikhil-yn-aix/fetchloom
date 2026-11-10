@@ -8,7 +8,7 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval and memory settings for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory and file-count settings for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 | variable | effect |
 |---|---|
@@ -20,6 +20,7 @@ $env:FETCHLOOM_RATE = '2.5M'
 | `FETCHLOOM_TIMEOUT` | integer seconds from 1 to 3600; how long a server may send nothing in a response body before the try fails and is retried. unset or empty means 30. time held back on this machine by the rate cap, the writer or a question does not count. connecting may take 45 s, or this long when it is longer, and the response headers must come within the connect time plus this |
 | `FETCHLOOM_ASK_ABOVE` | a size such as `500M` or `20G`, with the units of `FETCHLOOM_RATE`; a download bigger than it needs [approval](../concepts.md#approval). unset or empty means 1 GiB |
 | `FETCHLOOM_MEMORY` | a size such as `512M` or `8G`, with the units of `FETCHLOOM_RATE`; the memory download buffers aim to stay within. the downloads running at once share it for the data waiting to be hashed, up to 16 MiB each. unset or empty means, on linux, a quarter of the memory available, inside the limit of the process's cgroup, from 256 MiB to 4 GiB and never more than half of what is available. on macos and windows it means 256 MiB |
+| `FETCHLOOM_MOST_FILES` | integer from 1 to 1,000,000,000; the most files one dataset may list, counted before select patterns apply. unset or empty means the memory budget at about 2 KiB a file, so `FETCHLOOM_MEMORY` raises it too: a 4 GiB budget allows 2,097,152. it is never less than 100,000. a listing past it stops with `source.invalid`, exit 10, naming this setting |
 | `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
@@ -73,7 +74,7 @@ ask_above = "50G"
 memory = "8G"
 ```
 
-the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above` and `memory`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
+the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory` and `most_files`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
 
 each value comes from the first of these that sets it: its variable, the settings file, this machine, fetchloom's default. so `FETCHLOOM_JOBS=4 fetchloom sync` changes one run without editing the file. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from. the other variables on this page have no key in the file.
 

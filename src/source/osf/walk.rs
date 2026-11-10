@@ -9,7 +9,7 @@ use super::Node;
 use crate::digest::{Md5, Sha256};
 use crate::error::Error;
 use crate::net::Api;
-use crate::source::{Listing, MOST_FILES, Reference, Remote};
+use crate::source::{Listing, Reference, Remote};
 
 #[derive(Deserialize)]
 struct Page {
@@ -131,8 +131,11 @@ impl Walk {
         if entry.id.is_empty() || !self.seen.insert(entry.id.clone()) {
             return Err(node.invalid("the files API repeated a file or folder id"));
         }
-        if self.seen.len() > MOST_FILES {
-            return Err(node.invalid("the files API listed too many files or folders"));
+        if self.seen.len() > crate::source::most_files() {
+            return Err(crate::source::too_many(
+                node,
+                "select the folders you need with --select",
+            ));
         }
         let path = if parent.is_empty() {
             entry.attributes.name.clone()

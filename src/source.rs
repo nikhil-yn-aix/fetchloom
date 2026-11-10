@@ -30,8 +30,41 @@ use crate::error::{Error, Kind};
 use crate::name;
 use crate::net::{self, Api, Credential, Fetch, Response};
 
-/// the most files one dataset may list, so `data.lock` stays small and memory stays bounded.
+/// the most files one dataset lists when a run says nothing else, and the least it ever allows.
+/// a run sizes its own from its memory with [`set_most_files`].
 pub(crate) const MOST_FILES: usize = 100_000;
+
+/// about the memory one listed file takes while a run works, from its listing to its placing,
+/// which sizes [`most_files`] from the memory a run may use.
+pub(crate) const PER_FILE: u64 = 2 << 10;
+
+/// the most files one dataset may list in this run.
+static MOST: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(MOST_FILES);
+
+/// sets the most files one dataset may list, for every later listing in the run.
+pub(crate) fn set_most_files(most: usize) {
+    MOST.store(most.max(1), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// the most files one dataset may list in this run, so memory stays bounded.
+pub(crate) fn most_files() -> usize {
+    MOST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// the error for `subject`, a dataset that lists more than [`most_files`] files, with `instead`
+/// saying how to need fewer.
+pub(crate) fn too_many(subject: impl fmt::Display, instead: &str) -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        format!(
+            "{subject} lists more than {} files, the most this run lists for one dataset",
+            most_files()
+        ),
+    )
+    .help(format!(
+        "{instead}, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+    ))
+}
 
 /// reads the environment, so tests can give each run its own.
 pub(crate) type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
@@ -588,9 +621,11 @@ fn check(reference: &Reference, mut listing: Listing) -> Result<Listing, Error> 
         ));
     }
     let count = listing.files.len() + listing.unavailable.len();
-    if count > MOST_FILES {
-        return Err(Error::new(Kind::SourceInvalid, format!("{reference} lists {count} entries, more than the {MOST_FILES} fetchloom handles in one dataset"))
-            .help("ask the dataset's authors to pack its files into archives, or pass the link of each file you need to `fetchloom add`"));
+    if count > most_files() {
+        return Err(too_many(
+            reference,
+            "select the folders you need with --select",
+        ));
     }
     let mut seen = HashSet::with_capacity(count);
     for path in listing.paths() {

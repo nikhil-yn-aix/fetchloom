@@ -9,7 +9,6 @@ use super::{Object, Prefix, object_url, query};
 use crate::digest::Md5;
 use crate::error::Error;
 use crate::net::Api;
-use crate::source::MOST_FILES;
 
 /// the object fields a listing needs, so pages stay small.
 const FIELDS: &str = "items(name,size,md5Hash,generation),nextPageToken";
@@ -63,7 +62,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         let page: Page = response.json()?;
         for item in page.items {
             objects.push(object(prefix, &objects_at, item)?);
-            if objects.len() > MOST_FILES {
+            if objects.len() > crate::source::most_files() {
                 return Err(prefix.too_many());
             }
         }

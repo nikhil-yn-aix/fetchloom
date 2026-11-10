@@ -62,6 +62,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        1G by default
   FETCHLOOM_MEMORY     memory for download buffers, as 512M; on linux a quarter
                        of what is free by default, from 256M to 4G; else 256M
+  FETCHLOOM_MOST_FILES the most files one dataset may list; by default 1 for
+                       each 2K of FETCHLOOM_MEMORY, at least 100000
   FETCHLOOM_THREADS    a cap on local worker threads, 1 to 256
   FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
   FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in
@@ -75,9 +77,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
-a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above and
-memory for every run, one per line, as jobs = 16. a variable wins over the
-file. fetchloom settings shows each value and where it came from.
+a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
+memory and most_files for every run, one per line, as jobs = 16. a variable
+wins over the file. fetchloom settings shows each value and where it came from.
 
 keys are read where each source's own tools keep them: HF_TOKEN and the hugging
 face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,

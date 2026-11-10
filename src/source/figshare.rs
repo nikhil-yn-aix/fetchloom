@@ -161,8 +161,11 @@ impl Article {
                 return Err(self.invalid("the files endpoint repeated a file"));
             }
             files.extend(entries);
-            if files.len() > super::MOST_FILES {
-                return Err(self.invalid("the files endpoint listed too many files"));
+            if files.len() > super::most_files() {
+                return Err(super::too_many(
+                    self,
+                    "select the files you need with --select",
+                ));
             }
             if is_last {
                 return Ok(files);

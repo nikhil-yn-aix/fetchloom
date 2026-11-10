@@ -460,6 +460,7 @@ pub(crate) fn run() -> ExitCode {
     match Settings::read(&var, file, Machine::read()) {
         Ok(settings) => {
             crate::cache::set_hash_batches(settings.hash_batches());
+            crate::source::set_most_files(settings.most_files.value);
             context.settings = settings;
         }
         Err(error) => return finish::<()>(&context, name, Err(error), started),

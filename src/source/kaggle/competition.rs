@@ -12,7 +12,7 @@ use super::{HOST, is_part, malformed, parts, selected};
 use crate::auth::Account;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
-use crate::source::{Listing, MOST_FILES, Reference, Remote};
+use crate::source::{Listing, Reference, Remote};
 
 /// files asked for in one page, as for datasets. a smaller page from kaggle only means more
 /// pages.
@@ -165,14 +165,14 @@ impl Competition {
             for file in page.files {
                 files.push(self.remote(file)?);
             }
-            if files.len() > MOST_FILES {
-                return Err(Error::new(
-                    Kind::SourceInvalid,
-                    format!(
-                        "{self} holds more than {MOST_FILES} files, more than fetchloom handles in one dataset"
+            if files.len() > crate::source::most_files() {
+                return Err(crate::source::too_many(
+                    self,
+                    &format!(
+                        "download the competition with the kaggle CLI, kaggle competitions download -c {}",
+                        self.slug
                     ),
-                )
-                .help(format!("download the competition with the kaggle CLI: kaggle competitions download -c {}", self.slug)));
+                ));
             }
             if page.next_page_token.is_empty() {
                 return Ok(files);

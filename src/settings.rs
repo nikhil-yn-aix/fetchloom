@@ -38,7 +38,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 7] = [
+const KEYS: [(&str, &str); 8] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -46,6 +46,7 @@ const KEYS: [(&str, &str); 7] = [
     ("timeout", "FETCHLOOM_TIMEOUT"),
     ("ask_above", "FETCHLOOM_ASK_ABOVE"),
     ("memory", "FETCHLOOM_MEMORY"),
+    ("most_files", "FETCHLOOM_MOST_FILES"),
 ];
 
 /// where a setting's value came from.
@@ -228,6 +229,8 @@ pub(crate) struct Settings {
     pub(crate) ask_above: Set<u64>,
     /// the memory a run's buffers aim to stay within: download queues share it.
     pub(crate) memory: Set<u64>,
+    /// the most files one dataset may list, sized from `memory` unless set.
+    pub(crate) most_files: Set<usize>,
 }
 
 impl Settings {
@@ -249,6 +252,7 @@ impl Settings {
             retries: Set::default(crate::net::RETRIES),
             timeout: Set::default(TIMEOUT),
             ask_above: Set::default(ASK_ABOVE),
+            most_files: most_files(memory),
             memory,
         }
     }
@@ -263,6 +267,7 @@ impl Settings {
     pub(crate) fn read(var: Var<'_>, file: File, machine: Machine) -> Result<Settings, Error> {
         let defaults = Settings::defaults(machine);
         let given = Given { var, file: &file };
+        let memory = size(&given, "memory", defaults.memory)?;
         Ok(Settings {
             machine,
             jobs: count(&given, "jobs", 1..=256, defaults.jobs)?,
@@ -275,7 +280,8 @@ impl Settings {
             )?,
             timeout: seconds(&given, "timeout", 1..=3600, defaults.timeout)?,
             ask_above: size(&given, "ask_above", defaults.ask_above)?,
-            memory: size(&given, "memory", defaults.memory)?,
+            most_files: count(&given, "most_files", 1..=1_000_000_000, most_files(memory))?,
+            memory,
             file,
         })
     }
@@ -285,6 +291,22 @@ impl Settings {
     pub(crate) fn hash_batches(&self) -> usize {
         let jobs = u64::try_from(self.jobs.value).unwrap_or(u64::MAX).max(1);
         usize::try_from(((self.memory.value / jobs) >> 20).clamp(1, 16)).unwrap_or(16)
+    }
+}
+
+/// the most files a dataset may list within `memory`, never fewer than fetchloom's own default.
+fn most_files(memory: Set<u64>) -> Set<usize> {
+    let sized = usize::try_from(memory.value / crate::source::PER_FILE).unwrap_or(usize::MAX);
+    if sized <= crate::source::MOST_FILES {
+        return Set::default(crate::source::MOST_FILES);
+    }
+    Set {
+        value: sized,
+        // sized from what the machine gives, or from memory a person set
+        origin: match memory.origin {
+            Origin::Default => Origin::Default,
+            _ => Origin::Machine,
+        },
     }
 }
 
@@ -545,6 +567,48 @@ mod tests {
             "jobs in the settings file /home/ada/.config/fetchloom/settings.toml is a boolean, not a whole number or text in quotes"
         );
         assert!(self::file("jobs = [").is_err());
+    }
+
+    #[test]
+    fn the_most_files_a_dataset_lists_follow_the_memory_budget() {
+        let gib = 1 << 30;
+        let most = |memory: Option<u64>, pairs: &[(&str, &str)]| {
+            Settings::read(&env(pairs), File::default(), machine(memory))
+                .unwrap()
+                .most_files
+        };
+        // 32 GiB available: a 4 GiB budget, at 2 KiB a file
+        assert_eq!(
+            most(Some(32 * gib), &[]),
+            Set {
+                value: 2_097_152,
+                origin: Origin::Machine
+            }
+        );
+        // a small pod never lists fewer than fetchloom always allowed
+        assert_eq!(
+            most(Some(100 << 20), &[]),
+            Set::default(crate::source::MOST_FILES)
+        );
+        assert_eq!(most(None, &[]).value, 131_072);
+        assert_eq!(most(None, &[("FETCHLOOM_MEMORY", "32G")]).value, 16_777_216);
+        assert_eq!(
+            most(Some(32 * gib), &[("FETCHLOOM_MOST_FILES", "5000000")]),
+            Set {
+                value: 5_000_000,
+                origin: Origin::Environment
+            }
+        );
+        let error = Settings::read(
+            &env(&[("FETCHLOOM_MOST_FILES", "0")]),
+            File::default(),
+            machine(None),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.message,
+            "FETCHLOOM_MOST_FILES is \"0\", which is not a number from 1 to 1000000000"
+        );
     }
 
     #[test]

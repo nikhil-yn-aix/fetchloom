@@ -9,7 +9,7 @@ use url::Url;
 use super::{Dataset, HOST, is_part};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Listing, MOST_FILES, Reference, Remote};
+use crate::source::{Listing, Reference, Remote};
 
 /// the most files kaggle sends in one page, whatever page size is asked for.
 const PAGE: usize = 200;
@@ -138,14 +138,11 @@ impl Dataset {
             for file in page.dataset_files {
                 files.push(self.remote(&version, file)?);
             }
-            if files.len() > MOST_FILES {
-                return Err(Error::new(
-                    Kind::SourceInvalid,
-                    format!(
-                        "{self} holds more than {MOST_FILES} files, more than fetchloom handles in one dataset"
-                    ),
-                )
-                .help("pick a smaller dataset, or ask its owner to pack the files into archives"));
+            if files.len() > crate::source::most_files() {
+                return Err(crate::source::too_many(
+                    self,
+                    "select the files you need with --select",
+                ));
             }
             if page.next_page_token.is_empty() {
                 return Ok(files);

@@ -10,7 +10,7 @@ use std::fmt;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use super::{Listing, MOST_FILES, Reference, Remote, malformed};
+use super::{Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{self, Api, Response};
@@ -228,13 +228,10 @@ impl Prefix {
 
     /// the error for a listing that counted more objects than one dataset may hold.
     fn too_many(&self) -> Error {
-        Error::new(
-            Kind::SourceInvalid,
-            format!(
-                "{self} holds more than the {MOST_FILES} objects fetchloom handles in one dataset"
-            ),
+        super::too_many(
+            self,
+            "name a narrower prefix, ending in /, for the folder you need",
         )
-        .help("name a narrower prefix, ending in /, for the folder you need")
     }
 
     fn invalid(&self, reason: &str) -> Error {

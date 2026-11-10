@@ -114,7 +114,7 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, each a number or text"
+        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, each a number or text"
     );
     for arguments in [
         &["--version"][..],

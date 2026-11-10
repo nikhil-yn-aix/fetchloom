@@ -8,7 +8,7 @@ use super::listing::hub;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{MOST_FILES, Remote};
+use crate::source::{Remote, most_files, too_many};
 
 /// the most pages followed, so a server that keeps sending pages cannot keep fetchloom busy
 /// forever. the hub sends 1,000 entries a page.
@@ -98,12 +98,8 @@ impl Repo {
             for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
                 files.push(self.remote(commit, entry)?);
             }
-            if files.len() > MOST_FILES {
-                return Err(Error::new(
-                    Kind::SourceInvalid,
-                    format!("{self} holds more than {MOST_FILES} files, more than fetchloom handles in one dataset"),
-                )
-                .help("ask the owner to pack the files into archives, or pick a smaller repository"));
+            if files.len() > most_files() {
+                return Err(too_many(self, "select the folders you need with --select"));
             }
             next = response.next;
         }
@@ -232,7 +228,7 @@ mod tests {
         let error = block_on(repo.tree(&recorded, "abc123", None)).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("100000 files"));
-        assert!(error.help.unwrap().contains("archives"));
+        assert!(error.help.unwrap().contains("FETCHLOOM_MOST_FILES"));
         assert_eq!(recorded.asked(), [FIRST, FIRST, SECOND]);
     }
 

@@ -7,7 +7,6 @@ use super::{Object, Prefix, is_region, object_url, query, s3_host, xml};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
-use crate::source::MOST_FILES;
 
 /// where a bucket's requests go: the bucket's own host, or for a name with dots, which the
 /// service's wildcard certificate does not cover, a path on the service's host.
@@ -87,7 +86,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
         let escaped = page.text_of("EncodingType") == Some("url");
         for contents in page.children("Contents") {
             objects.push(object(prefix, &endpoint, contents, escaped)?);
-            if objects.len() > MOST_FILES {
+            if objects.len() > crate::source::most_files() {
                 return Err(prefix.too_many());
             }
         }

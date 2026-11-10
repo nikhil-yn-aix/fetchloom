@@ -135,6 +135,11 @@ fn rows(context: &Context) -> Vec<Shown> {
     });
     shown.push(size("ask_above", settings.ask_above));
     shown.push(size("memory", settings.memory));
+    shown.push(count(
+        "most_files",
+        settings.most_files.value,
+        settings.most_files.origin,
+    ));
     let threads = context.threads.limit(settings.machine.processors.max(1));
     shown.push(Shown {
         name: "threads",

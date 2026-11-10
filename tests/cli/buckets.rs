@@ -555,3 +555,30 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     assert!(!stderr.contains("panicked"), "{stderr}");
     Ok(())
 }
+
+/// the most files a dataset may list is a setting, and the error names it with the way to need
+/// fewer.
+#[test]
+fn a_listing_past_the_most_files_names_the_setting() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["--json", "add", "s3://openneuro.org/ds000001/"],
+    )
+    .env("FETCHLOOM_MOST_FILES", "2")
+    .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "source.invalid");
+    assert_eq!(
+        document["errors"][0]["message"],
+        "s3://openneuro.org/ds000001/ lists more than 2 files, the most this run lists for one dataset"
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "name a narrower prefix, ending in /, for the folder you need, or raise FETCHLOOM_MOST_FILES, or most_files in the settings file; each listed file takes about 2 KiB of memory"
+    );
+    Ok(())
+}
