@@ -5,8 +5,6 @@ with the kind and message of the JSON error. the kinds and their exit codes are 
 https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import shutil
@@ -185,7 +183,7 @@ def _program() -> str:
         sysconfig.get_path("scripts", vars={"base": sys.base_prefix}),
     ])
     try:
-        folders.append(sysconfig.get_path("scripts", _user_scheme()))
+        folders.append(sysconfig.get_path("scripts", sysconfig.get_preferred_scheme("user")))
     except KeyError:
         pass
     for folder in folders:
@@ -198,12 +196,3 @@ def _program() -> str:
             "https://github.com/nikhil-yn-aix/fetchloom#install says, or put it on PATH"
         )
     return found
-
-
-def _user_scheme() -> str:
-    preferred = getattr(sysconfig, "get_preferred_scheme", None)
-    if preferred is not None:
-        return preferred("user")
-    if sys.platform == "darwin" and getattr(sys, "_framework", None):
-        return "osx_framework_user"
-    return f"{os.name}_user"

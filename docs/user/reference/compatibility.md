@@ -45,7 +45,7 @@ shell completions: bash, zsh, fish, elvish, windows powershell 5.1 and powershel
 
 ## the python helper
 
-python 3.9 or later, on the systems above.
+python 3.10 or later, on the systems above.
 
 ## building from source
 

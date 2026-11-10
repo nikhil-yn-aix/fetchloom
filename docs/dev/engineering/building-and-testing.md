@@ -16,7 +16,7 @@ cargo build --locked
 cargo run --locked -- --version
 ```
 
-the first cold build can take several minutes, especially while compiling native compression libraries and optimized development dependencies. subsequent focused test runs reuse those artifacts. python helper tests need python 3.9 or newer, matching `requires-python` in [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml).
+the first cold build can take several minutes, especially while compiling native compression libraries and optimized development dependencies. subsequent focused test runs reuse those artifacts. python helper tests need python 3.10 or newer, matching `requires-python` in [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml).
 
 the crate package includes `src`, `Cargo.toml`, `Cargo.lock`, the license and notice files, the README, and the two reference pages its help tests check (`environment.md` and `exit-codes.md`); `include` in [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) keeps test data, other docs and the benchmark out. `fetchloom help` prints shorter built-in topics, not the full reference pages. [pyproject.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/pyproject.toml) takes the package version from Cargo and uses maturin's binary binding mode; python calls the executable rather than rust bindings.
 
@@ -82,7 +82,7 @@ cargo test --locked --lib source::zenodo::tests::live_zenodo -- --ignored --exac
 cargo test --locked -- --ignored
 ```
 
-on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest discover -s python` when python 3.9+ is on PATH. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. nine ignored rust tests need working DNS, HTTPS and access to public records at zenodo, figshare, dataverse, OSF, hugging face, kaggle, doi.org, s3 and google cloud storage. all but one construct clients without credentials; the kaggle competition test uses a kaggle key when one is found and skips without it. allow time for real network retries and service rate limits; an unavailable or changed upstream record can fail them. Cargo's `--offline` only disables dependency downloads; it does not make live tests offline. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
+on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest discover -s python` when python 3.10 or later is on PATH. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. nine ignored rust tests need working DNS, HTTPS and access to public records at zenodo, figshare, dataverse, OSF, hugging face, kaggle, doi.org, s3 and google cloud storage. all but one construct clients without credentials; the kaggle competition test uses a kaggle key when one is found and skips without it. allow time for real network retries and service rate limits; an unavailable or changed upstream record can fail them. Cargo's `--offline` only disables dependency downloads; it does not make live tests offline. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
 
 ### code gates
 

@@ -45,7 +45,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetc
 the python package will install the executable and [python helper](docs/user/scripting.md#python-helper):
 
 ```sh
-# python 3.9 or later
+# python 3.10 or later
 pip install fetchloom
 ```
 

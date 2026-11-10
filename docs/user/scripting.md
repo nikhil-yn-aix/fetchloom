@@ -105,13 +105,13 @@ download errors include each failed file under `failures`, with its kind, messag
 
 ## python helper
 
-install from source with python 3.9 or later and the [rust build prerequisites](getting-started.md#install). maturin builds the executable and packages it with the helper; no PyPI package is published yet.
+install from source with python 3.10 or later and the [rust build prerequisites](getting-started.md#install). maturin builds the executable and packages it with the helper; no PyPI package is published yet.
 
 ```sh
 pip install "git+https://github.com/nikhil-yn-aix/fetchloom"
 ```
 
-on python 3.9 or later:
+on python 3.10 or later:
 
 ```python
 import fetchloom

@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "fetchloom"
 description = "put the exact data a project needs onto any machine with one command"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Nikhil Y N" }, { name = "KairosLab India Private Limited" }]
