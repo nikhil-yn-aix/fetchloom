@@ -36,10 +36,10 @@ the cache keeps each file once, under its fingerprint. a file in data/ is a
 link to it where the disk allows, or a copy, so projects that use the same file
 store it once. files in data/ are read-only by default.
 
-commit data.toml and data.lock with your code, and leave data/ out. anyone who
-clones the project runs `fetchloom sync` to place the pinned files. sync warns
-when it keeps edited or conflicting files. `fetchloom status` shows what
-differs.
+commit data.toml and data.lock with your code, with data.lock.d when a big
+dataset keeps its file list there, and leave data/ out. anyone who clones the
+project runs `fetchloom sync` to place the pinned files. sync warns when it
+keeps edited or conflicting files. `fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a
 quick look.";

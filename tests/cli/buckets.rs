@@ -582,3 +582,76 @@ fn a_listing_past_the_most_files_names_the_setting() -> Result {
     );
     Ok(())
 }
+
+/// a dataset of more files than data.lock lists in itself keeps them in a compressed list beside
+/// it: a clone syncs from the list, a damaged list is refused and keeps the cache as it is, and a
+/// dataset that shrinks back lists its files inline again.
+#[test]
+fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let run = |folder: &std::path::Path, args: &[&str]| {
+        let mut command = command(&sandbox, &routes, args);
+        command
+            .current_dir(folder)
+            .env("FETCHLOOM_TEST_INLINE", "2");
+        command.output()
+    };
+    let work = sandbox.work();
+    let output = run(&work, &["add", "s3://openneuro.org/ds000001/"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(lock.starts_with("version = 2\n"), "{lock}");
+    assert!(lock.contains("file_count = 3\n"), "{lock}");
+    let parts: Vec<_> = fs::read_dir(work.join("data.lock.d"))?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<_>>()?;
+    assert_eq!(parts.len(), 1, "{parts:?}");
+    assert!(
+        lock.contains(&format!("files_in = [\"data.lock.d/{}\"]", parts[0])),
+        "{lock}"
+    );
+    let listed = json(&run(&work, &["--json", "list", "ds000001"])?)?;
+    assert_eq!(
+        listed["result"]["datasets"][0]["locked_files"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    // a clone with its own cache syncs from the list
+    let clone = sandbox.folder("clone")?;
+    fs::create_dir(clone.join("data.lock.d"))?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), clone.join(file))?;
+    }
+    let part = format!("data.lock.d/{}", parts[0]);
+    fs::copy(work.join(&part), clone.join(&part))?;
+    let output = run(&clone, &["sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(clone.join("data/ds000001/participants.tsv"))?,
+        PARTICIPANTS
+    );
+    // a damaged list is refused, and gc keeps everything rather than guess
+    fs::write(clone.join(&part), b"not a list")?;
+    let status = json(&run(&clone, &["--json", "status"])?)?;
+    assert_eq!(status["errors"][0]["kind"], "project.invalid");
+    let gc = run(&clone, &["--json", "cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(50), "{}", text(&gc.stderr)?);
+    assert!(
+        json(&gc)?["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.ends_with("cannot be read, so the cache stays as it is")),
+    );
+    // shrunk to what data.lock lists in itself, the list and its folder go
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        format!("{manifest}exclude = \"README\"\n"),
+    )?;
+    let output = run(&work, &["sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(fs::read_to_string(work.join("data.lock"))?.starts_with("version = 1\n"));
+    assert!(!work.join("data.lock.d").exists());
+    Ok(())
+}

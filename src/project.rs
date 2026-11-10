@@ -256,7 +256,7 @@ impl Project {
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                Ok(Some((Lock::parse(&text)?, text)))
+                Ok(Some((Lock::read(&text, &self.root)?, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
@@ -299,6 +299,53 @@ impl Project {
     pub(crate) fn write(&self, name: &str, bytes: &[u8]) -> Result<(), Error> {
         write_atomically(&self.root.join(name), bytes)
             .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
+    }
+
+    /// writes the parts of the file lists `lock` keeps beside data.lock that are not there yet.
+    /// a part's name changes with its list, so one already there holds the same list.
+    pub(crate) fn write_lists(&self, lock: &Lock) -> Result<(), Error> {
+        let parts = lock.lists();
+        if parts.is_empty() {
+            return Ok(());
+        }
+        let folder = self.root.join(lock::lists::FOLDER);
+        fs::create_dir_all(&folder).map_err(|err| {
+            self.refused(format_args!("could not make {}", lock::lists::FOLDER), &err)
+        })?;
+        for (part, text) in parts {
+            let path = self
+                .root
+                .join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if path.is_file() {
+                continue;
+            }
+            let bytes = lock::lists::compress(&text)
+                .map_err(|err| Error::io(format_args!("could not compress {part}"), &err))?;
+            self.write(&part, &bytes)?;
+        }
+        Ok(())
+    }
+
+    /// removes the parts of file lists `lock` no longer names, and their folder once it is
+    /// empty. other files there stay. a part that cannot be removed is left for the next write.
+    pub(crate) fn sweep_lists(&self, lock: &Lock) {
+        let folder = self.root.join(lock::lists::FOLDER);
+        let Ok(entries) = fs::read_dir(&folder) else {
+            return;
+        };
+        let named: std::collections::HashSet<String> =
+            lock.lists().into_iter().map(|(part, _)| part).collect();
+        for entry in entries.flatten() {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if lock::lists::is_part(&file)
+                && !named.contains(&format!("{}/{file}", lock::lists::FOLDER))
+                && let Err(err) = fs::remove_file(entry.path())
+            {
+                tracing::debug!(%err, file, "could not remove a file list data.lock no longer names");
+            }
+        }
+        // only an empty folder goes
+        let _ = fs::remove_dir(&folder);
     }
 
     /// fails, naming the folder, when the project folder is read-only for this user, so a

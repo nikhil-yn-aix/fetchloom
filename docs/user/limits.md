@@ -17,6 +17,17 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | recursive archive extraction | nested archives remain files |
 | cross-user cache administration | cache writers are trusted; no group-permission management is provided |
 
+## scale
+
+| what | bound | how to go further |
+|---|---|---|
+| files one dataset lists | `FETCHLOOM_MOST_FILES`: the memory budget at about 2 KiB a file, at least 100,000; 2,097,152 with a 4 GiB budget | raise `FETCHLOOM_MOST_FILES` or `FETCHLOOM_MEMORY`, or list a folder with select patterns |
+| files in `data.lock` | 50,000 a dataset; more go to compressed parts in [`data.lock.d`](reference/data-lock.md#big-datasets) | commit `data.lock.d` with `data.lock` |
+| bytes a run downloads | none; past `FETCHLOOM_ASK_ABOVE` it asks first, and it checks the free space of the cache's disk before starting | `--yes`, or a bigger cache disk with `FETCHLOOM_CACHE` |
+| downloads at once | `FETCHLOOM_JOBS`, 8, and `FETCHLOOM_HOST_JOBS`, 4 to one site | raise both for a fast link or your own mirror |
+
+a stopped download keeps what it fetched and goes on from there in the next run, so a pull of hundreds of gigabytes survives a dropped connection or a full disk.
+
 ## commands and integrations not implemented
 
 `cite`, archive-service fallbacks and lab administration are not implemented. public S3 and google cloud storage buckets are listed anonymously over HTTPS; signed requests, other S3-compatible hosts and azure blob storage are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.

@@ -20,7 +20,7 @@ files = [
 
 | field | value |
 |---|---|
-| `version` | integer `1` |
+| `version` | integer `1`, or `2` when a dataset keeps its files in [`data.lock.d`](#big-datasets) |
 | `dataset` | array of dataset tables; omitted for an empty lock |
 | `dataset[].name` | name in `data.toml` |
 | `dataset[].ref` | the manifest reference |
@@ -43,6 +43,36 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
 
 a newer lock version asks you to update fetchloom. a broken or older lock must be restored from git, or deleted before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
+
+## big datasets
+
+a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock.
+
+```toml
+version = 2
+
+[[dataset]]
+name = "photos"
+ref = "hf:datasets/org/photos"
+spec = "sha256:..."
+resolved = "hf:datasets/org/photos@3c1f0e2..."
+locked = "2026-11-10T00:00:00Z"
+files_in = ["data.lock.d/photos.0123456789ab.1.tsv.zst", "data.lock.d/photos.0123456789ab.2.tsv.zst"]
+file_count = 412000
+file_bytes = 98765432100
+files_sha256 = "sha256:0123456789ab..."
+```
+
+| field | value |
+|---|---|
+| `files_in` | the parts, in order, in place of `files` |
+| `file_count` | the files the parts list |
+| `file_bytes` | the sum of their sizes |
+| `files_sha256` | `sha256:` and the SHA-256 of the parts' text, one part after another |
+
+a part is a zstandard frame of UTF-8 text: a header line `path\tsize\tsha256\tmd5\turl\tunpacks_to`, then one line per file with the fields of an inline file table, sorted by path, at most 250,000 files a part. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.1.tsv.zst | head` shows one.
+
+reading checks every part's name, line, order and count against `data.lock`, and the SHA-256 of the whole. a missing, changed or foreign part fails with `project.invalid`, and `cache gc` then keeps the whole cache rather than guess what the project needs. a list of more files than [`FETCHLOOM_MOST_FILES`](environment.md) allows is refused before it is read. a million files take about 46 bytes each, 47 MB in four parts; listed inline they would take about 300 MB.
 
 ## the spec hash
 

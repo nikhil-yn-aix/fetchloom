@@ -393,7 +393,9 @@ impl<'a> Loop<'a> {
         if before.holds(lock) {
             return Ok(None);
         }
-        self.write_rendered(before, lock, lock.render()).map(Some)
+        let text = self.write_rendered(before, lock, lock.render())?;
+        self.project.sweep_lists(lock);
+        Ok(Some(text))
     }
 
     /// writes `text`, `lock` as rendered, to data.lock, and says which datasets it pins anew or
@@ -405,6 +407,8 @@ impl<'a> Loop<'a> {
         text: String,
     ) -> Result<String, Error> {
         let _span = tracing::debug_span!("write_lock").entered();
+        // the lists first, so data.lock never names a part that is not there yet
+        self.project.write_lists(lock)?;
         self.project.write(lock::FILE, text.as_bytes())?;
         self.wrote_lock.store(true, Ordering::Relaxed);
         tell_lock(

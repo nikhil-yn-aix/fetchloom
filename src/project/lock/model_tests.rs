@@ -98,7 +98,7 @@ fn compare(lock: &Lock) {
         Some(lock),
         "{rendered}"
     );
-    let generic = Lock::parse_toml(&rendered).unwrap();
+    let generic = Lock::parse_toml(&rendered, None).unwrap();
     assert_eq!(&generic, lock, "{rendered}");
     assert_eq!(Lock::parse(&rendered).as_ref().unwrap(), lock);
     assert_eq!(
@@ -145,7 +145,7 @@ fn lock_reader_mutations_agree() {
             format!("{text}# comment\n"),
         ];
         for changed in variants {
-            let generic = Lock::parse_toml(&changed);
+            let generic = Lock::parse_toml(&changed, None);
             let normal = Lock::parse(&changed);
             assert_eq!(normal.as_ref().ok(), generic.as_ref().ok(), "{changed}");
             for comments in [false, true] {

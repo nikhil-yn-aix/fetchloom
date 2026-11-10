@@ -314,7 +314,7 @@ mod tests {
     }
 
     fn full(text: &str) -> Lock {
-        Lock::parse_toml(text).unwrap()
+        Lock::parse_toml(text, None).unwrap()
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
             commented.push_str("# trailing");
             assert_eq!(read(&commented, false), None);
             assert_eq!(read(&commented, true), Some(lock.clone()));
-            assert_eq!(Lock::parse_toml(&commented).unwrap(), lock);
+            assert_eq!(Lock::parse_toml(&commented, None).unwrap(), lock);
             assert_eq!(Lock::parse(&commented).unwrap(), lock);
             assert_eq!(Lock::parse(&commented.replace('\n', "\r\n")).unwrap(), lock);
             for invalid in [
@@ -447,7 +447,7 @@ mod tests {
             for comments in [false, true] {
                 if let Some(lock) = read(text, comments) {
                     assert_eq!(
-                        Lock::parse_toml(text).ok().as_ref(),
+                        Lock::parse_toml(text, None).ok().as_ref(),
                         Some(&lock),
                         "{text:?}"
                     );

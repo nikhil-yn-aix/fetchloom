@@ -634,6 +634,10 @@ async fn sync_add(
     match committed {
         Ok(outcome) => {
             work.drop_unpacked(&lock);
+            // parts the old data.lock named stayed until the add could no longer go back to it
+            if outcome.lock_changed {
+                project.sweep_lists(&lock);
+            }
             register(work);
             Ok(outcome)
         }
@@ -902,10 +906,21 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str, here: &Path) -> 
             &format!("{name}, its archives contain no regular files"),
         );
     }
-    work.context
-        .output
-        .next("commit data.toml and data.lock; anyone who clones runs `fetchloom sync`");
+    work.context.output.next(&format!(
+        "commit {}; anyone who clones runs `fetchloom sync`",
+        committed(work.project)
+    ));
     Ok(())
+}
+
+/// the project files a person commits: data.lock.d as well when a big dataset keeps its file
+/// list there, since a clone without it cannot read data.lock.
+fn committed(project: &Project) -> &'static str {
+    if project.root.join(lock::lists::FOLDER).is_dir() {
+        "data.toml, data.lock and data.lock.d"
+    } else {
+        "data.toml and data.lock"
+    }
 }
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.
@@ -965,14 +980,17 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     context.stop.check()?;
     context.stop.finish();
     project.write(manifest::FILE, updated.as_bytes())?;
+    project.write_lists(&lock)?;
     project.write(lock::FILE, lock.render().as_bytes())?;
+    project.sweep_lists(&lock);
     let placement = placing.remove_only(&context.output).map_err(|error| {
         error.detail("data.toml and data.lock were updated; after fixing the error, `fetchloom sync` finishes the removal")
     })?;
     context.output.done("Removed", &args.name);
-    context.output.next(
-        "commit data.toml and data.lock; after pulling, other clones remove unchanged files with `fetchloom sync`",
-    );
+    context.output.next(&format!(
+        "commit {}; after pulling, other clones remove unchanged files with `fetchloom sync`",
+        committed(&project)
+    ));
     Ok(Report {
         project: project.root,
         datasets: vec![args.name],
@@ -1046,7 +1064,14 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
     ignore_data(&work, &manifest)?;
-    tell_synced(context, &manifest, lock_changed, &placement, args.verify);
+    tell_synced(
+        context,
+        &project,
+        &manifest,
+        lock_changed,
+        &placement,
+        args.verify,
+    );
     Ok(Report {
         project: project.root,
         datasets: pins,
@@ -1102,7 +1127,7 @@ fn settled_unheld(
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
-    tell_synced(context, &manifest, false, &placement, args.verify);
+    tell_synced(context, project, &manifest, false, &placement, args.verify);
     Ok(Some(Report {
         project: project.root.clone(),
         datasets: Vec::new(),
@@ -1115,6 +1140,7 @@ fn settled_unheld(
 /// the last lines of a sync: nothing to do, or what it synced and what to do next.
 fn tell_synced(
     context: &Context,
+    project: &Project,
     manifest: &Manifest,
     lock_changed: bool,
     placement: &Placement,
@@ -1153,9 +1179,10 @@ fn tell_synced(
             );
         }
         if lock_changed {
-            context
-                .output
-                .next("commit data.toml and data.lock, so other clones use these pins");
+            context.output.next(&format!(
+                "commit {}, so other clones use these pins",
+                committed(project)
+            ));
         } else if let Some(name) = manifest.datasets.keys().next()
             && placement.placed + placement.replaced > 0
         {
@@ -1257,8 +1284,9 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if changed {
         context.output.done("Locked", "data.toml into data.lock");
         context.output.next(&format!(
-            "run `fetchloom sync` to update {}/, then commit data.toml and data.lock",
-            manifest.data_dir
+            "run `fetchloom sync` to update {}/, then commit {}",
+            manifest.data_dir,
+            committed(&project)
         ));
     } else {
         context

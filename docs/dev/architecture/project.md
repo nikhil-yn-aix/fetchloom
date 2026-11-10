@@ -14,6 +14,7 @@
 | [manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | manifest parsing and edits that preserve comments | `Manifest`, `Entry`, `Reader`, `parse`, `with_dataset`, `without_dataset` |
 | [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | pin validation and deterministic serialization | `Lock`, `Locked`, `LockedFile`, `parse`, `render`, `spec`, `timestamp` |
 | [lock/canonical.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/canonical.rs) | fast reader for fetchloom's own lock output | `read` |
+| [lock/lists.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/lists.rs) | the compressed file lists of datasets past 50,000 files in `data.lock.d` | `Listed`, `texts`, `listed`, `read`, `compress`, `is_part`, `inline` |
 | [state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | local observations and settled-sync evidence | `State`, `Placed`, `Look`, `Synced`, `nanos` |
 
 ## how it works
@@ -50,7 +51,7 @@ payload durability belongs to [placement](placing.md#copy-durability). writing s
 
 ## lock reading
 
-already canonical locks use the narrow reader first. the next pass skips blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser.
+runs read a lock with `Lock::read`, which loads and checks the lists a format 2 lock names below the project; `Lock::parse` is for tests. a writer writes missing list parts before `data.lock`, and `Project::sweep_lists` removes parts no lock names once the new lock is final: right after `lock` and `sync` write it, and after `add` commits, since a failed add puts the old lock back. already canonical locks use the narrow reader first. the next pass skips blank lines and valid TOML comments around the writer’s fields and after values. hash signs inside escaped or plain strings stay data. field order, duplicate checks, sizes and safe paths retain the same validation; other hand-edited TOML falls back to the general parser.
 
 ## ready path waiters
 
