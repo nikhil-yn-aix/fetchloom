@@ -552,47 +552,61 @@ fn inside_git_the_data_folder_is_ignored_once() -> Result {
     Ok(())
 }
 
+/// a project that became a git repository after its first add gets the ignore rule from the next
+/// command that places files, for the folder `data_dir` names: `add` again, `sync`, whose dry run
+/// only says it would, and `path`, which places the files it answers with first.
 #[test]
-fn adding_again_after_git_init_ignores_the_data_folder() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
-    assert!(sandbox.run(&["add", &server.url])?.status.success());
-    assert!(!sandbox.work().join(".gitignore").exists());
-    fs::create_dir(sandbox.work().join(".git"))?;
-    let output = sandbox.run(&["add", &server.url])?;
-    let stderr = text(&output.stderr)?;
-    assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("Ignored data/ in .gitignore"), "{stderr}");
-    assert!(stderr.contains("iris is already in data.toml"), "{stderr}");
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join(".gitignore"))?,
-        "/data/\n"
-    );
-    Ok(())
-}
-
-#[test]
-fn syncing_after_git_init_ignores_the_data_folder() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    assert!(sandbox.run(&["add", &server.url])?.status.success());
-    fs::create_dir(sandbox.work().join(".git"))?;
-
-    let previewed = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
-    assert!(
-        previewed.contains("Would add data/ to .gitignore"),
-        "{previewed}"
-    );
-    assert!(!sandbox.work().join(".gitignore").exists());
-    let output = sandbox.run(&["sync"])?;
-
-    let stderr = text(&output.stderr)?;
-    assert!(output.status.success(), "{stderr}");
-    assert!(stderr.contains("Ignored data/ in .gitignore"), "{stderr}");
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join(".gitignore"))?,
-        "/data/\n"
-    );
+fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
+    for (command, data_dir) in [("add", "data"), ("sync", "data"), ("path", "inputs/raw")] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+        let work = sandbox.work();
+        if data_dir != "data" {
+            fs::write(
+                work.join("data.toml"),
+                format!("[project]\ndata_dir = \"{data_dir}\"\n"),
+            )?;
+        }
+        added(&sandbox, &server)?;
+        assert!(!work.join(".gitignore").exists(), "{command}");
+        fs::create_dir(work.join(".git"))?;
+        let args = match command {
+            "add" => vec!["add", server.url.as_str()],
+            "sync" => {
+                let previewed = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
+                assert!(
+                    previewed.contains("Would add data/ to .gitignore"),
+                    "{previewed}"
+                );
+                assert!(!work.join(".gitignore").exists());
+                vec!["sync"]
+            }
+            _ => {
+                delete(&work.join(data_dir).join("iris").join("iris.csv"))?;
+                vec!["path", "iris"]
+            }
+        };
+        let output = sandbox.run(&args)?;
+        let stderr = text(&output.stderr)?;
+        assert!(output.status.success(), "{command}: {stderr}");
+        assert!(
+            stderr.contains(&format!("Ignored {data_dir}/ in .gitignore")),
+            "{command}: {stderr}"
+        );
+        assert_eq!(
+            fs::read_to_string(work.join(".gitignore"))?,
+            format!("/{data_dir}/\n"),
+            "{command}"
+        );
+        match command {
+            "add" => assert!(stderr.contains("iris is already in data.toml"), "{stderr}"),
+            "path" => assert_eq!(
+                text(&output.stdout)?,
+                format!("{}\n", work.join(data_dir).join("iris").display())
+            ),
+            _ => {}
+        }
+    }
     Ok(())
 }
 

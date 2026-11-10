@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::args;
-use super::project::{Read, Waited, find, hold_until, known, net, sync_all};
+use super::project::{Read, Waited, find, hold_until, ignore_data, known, net, sync_all};
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
 use super::sync::{Loop, Upgrade};
@@ -84,6 +84,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
                         Read::Planned(&seen),
                     )
                     .await?;
+                    ignore_data(&work, &manifest)?;
                     drop(held);
                     let lock = project.lock()?.unwrap_or_default();
                     let planned = plan::from_cache(&manifest, &lock, &work.cache)?;
