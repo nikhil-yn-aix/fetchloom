@@ -41,6 +41,9 @@ pub(crate) struct Locked {
     /// the hash of the data.toml keys that decide what is downloaded. while it matches, the
     /// dataset is not resolved again.
     pub(crate) spec: String,
+    /// whether archives unpack, as data.toml asked when the dataset was pinned. it is compared
+    /// apart from `spec`, since a switch keeps the files and changes only what they unpack to.
+    pub(crate) extract: bool,
     pub(crate) resolved: String,
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
@@ -49,6 +52,28 @@ pub(crate) struct Locked {
     pub(crate) timestamp: String,
     /// sorted by path.
     pub(crate) files: Vec<LockedFile>,
+}
+
+/// what changed in a data.toml entry since its dataset was pinned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Drift {
+    /// only `extract`: the pinned files stand, and only what their archives unpack to changes.
+    Extract,
+    /// what is downloaded, so the dataset is resolved again.
+    Spec,
+}
+
+impl Locked {
+    /// what changed in `entry` since this pin was made, or nothing when it still answers it.
+    pub(crate) fn drift(&self, entry: &Entry) -> Option<Drift> {
+        if self.spec != spec(entry) {
+            Some(Drift::Spec)
+        } else if self.extract != entry.extract {
+            Some(Drift::Extract)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -96,6 +121,7 @@ struct StoredDataset {
     #[serde(rename = "ref")]
     reference: String,
     spec: String,
+    extract: Option<bool>,
     resolved: String,
     title: Option<String>,
     license: Option<String>,
@@ -146,6 +172,7 @@ impl StoredDataset {
             name: self.name,
             reference: self.reference,
             spec: self.spec,
+            extract: self.extract.unwrap_or(true),
             resolved: self.resolved,
             title: self.title,
             license: self.license,
@@ -198,62 +225,75 @@ impl Lock {
         datasets.sort_by(|a, b| a.name.cmp(&b.name));
         let mut out = format!("version = {VERSION}\n");
         for dataset in datasets {
-            out.push_str("\n[[dataset]]\n");
-            for (key, value) in [
-                ("name", Some(&dataset.name)),
-                ("ref", Some(&dataset.reference)),
-                ("spec", Some(&dataset.spec)),
-                ("resolved", Some(&dataset.resolved)),
-                ("title", dataset.title.as_ref()),
-                ("license", dataset.license.as_ref()),
-                ("doi", dataset.doi.as_ref()),
-                ("locked", Some(&dataset.timestamp)),
-            ] {
-                if let Some(value) = value {
-                    let _ = writeln!(out, "{key} = {}", quoted(value));
-                }
-            }
-            if dataset.files.len() > inline {
-                let listed = lists::listed(
-                    &dataset.name,
-                    &dataset.files,
-                    &lists::texts(&sorted(&dataset.files)),
-                );
-                let parts: Vec<String> = listed.parts.iter().map(|part| quoted(part)).collect();
-                let _ = writeln!(out, "files_in = [{}]", parts.join(", "));
-                let _ = writeln!(out, "file_count = {}", listed.count);
-                let _ = writeln!(out, "file_bytes = {}", listed.bytes);
-                let _ = writeln!(out, "files_sha256 = \"sha256:{}\"", listed.sha256);
-                continue;
-            }
-            let mut files: Vec<&LockedFile> = dataset.files.iter().collect();
-            files.sort_by(|a, b| a.path.cmp(&b.path));
-            if files.is_empty() {
-                out.push_str("files = []\n");
-                continue;
-            }
-            out.push_str("files = [\n");
-            for file in files {
-                let _ = write!(
-                    out,
-                    "  {{ path = {}, size = {}, sha256 = \"{}\"",
-                    quoted(&file.path),
-                    file.size,
-                    file.sha256
-                );
-                if let Some(md5) = file.md5 {
-                    let _ = write!(out, ", md5 = \"{md5}\"");
-                }
-                let _ = write!(out, ", url = {}", quoted(&file.url));
-                if let Some(tree) = file.unpacks_to {
-                    let _ = write!(out, ", unpacks_to = \"sha256:{tree}\"");
-                }
-                out.push_str(" },\n");
-            }
-            out.push_str("]\n");
+            write_source(&mut out, dataset, inline);
         }
         out
     }
+}
+
+/// a source's table in the order data.lock keeps its keys, optional ones only when set.
+fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
+    out.push_str("\n[[dataset]]\n");
+    for (key, value) in [
+        ("name", &dataset.name),
+        ("ref", &dataset.reference),
+        ("spec", &dataset.spec),
+    ] {
+        let _ = writeln!(out, "{key} = {}", quoted(value));
+    }
+    if !dataset.extract {
+        out.push_str("extract = false\n");
+    }
+    let _ = writeln!(out, "resolved = {}", quoted(&dataset.resolved));
+    for (key, value) in [
+        ("title", &dataset.title),
+        ("license", &dataset.license),
+        ("doi", &dataset.doi),
+    ] {
+        if let Some(value) = value {
+            let _ = writeln!(out, "{key} = {}", quoted(value));
+        }
+    }
+    let _ = writeln!(out, "locked = {}", quoted(&dataset.timestamp));
+    if dataset.files.len() > inline {
+        let texts = lists::texts(&sorted(&dataset.files));
+        write_listed(out, &lists::listed(&dataset.name, &dataset.files, &texts));
+        return;
+    }
+    let mut files: Vec<&LockedFile> = dataset.files.iter().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    if files.is_empty() {
+        out.push_str("files = []\n");
+        return;
+    }
+    out.push_str("files = [\n");
+    for file in files {
+        let _ = write!(
+            out,
+            "  {{ path = {}, size = {}, sha256 = \"{}\"",
+            quoted(&file.path),
+            file.size,
+            file.sha256
+        );
+        if let Some(md5) = file.md5 {
+            let _ = write!(out, ", md5 = \"{md5}\"");
+        }
+        let _ = write!(out, ", url = {}", quoted(&file.url));
+        if let Some(tree) = file.unpacks_to {
+            let _ = write!(out, ", unpacks_to = \"sha256:{tree}\"");
+        }
+        out.push_str(" },\n");
+    }
+    out.push_str("]\n");
+}
+
+/// the keys that name a list kept beside data.lock in place of `files`.
+fn write_listed(out: &mut String, listed: &lists::Listed) {
+    let parts: Vec<String> = listed.parts.iter().map(|part| quoted(part)).collect();
+    let _ = writeln!(out, "files_in = [{}]", parts.join(", "));
+    let _ = writeln!(out, "file_count = {}", listed.count);
+    let _ = writeln!(out, "file_bytes = {}", listed.bytes);
+    let _ = writeln!(out, "files_sha256 = \"sha256:{}\"", listed.sha256);
 }
 
 impl Lock {
@@ -368,7 +408,7 @@ fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
 }
 
 /// the hash of everything in a data.toml entry that decides what is downloaded. `copy` and
-/// `path` only change where files go, so they are left out.
+/// `path` only change where files go, and `extract` what they unpack to, so they are left out.
 pub(crate) fn spec(entry: &Entry) -> String {
     let mut text = format!("ref={}\n", entry.reference);
     for (key, globs) in [("select", &entry.select), ("exclude", &entry.exclude)] {
@@ -376,7 +416,6 @@ pub(crate) fn spec(entry: &Entry) -> String {
             let _ = writeln!(text, "{key}={glob}");
         }
     }
-    let _ = writeln!(text, "extract={}", entry.extract);
     format!("sha256:{}", digest::sha256(text.as_bytes()))
 }
 
@@ -510,6 +549,7 @@ mod tests {
                     name: "zeta".to_owned(),
                     reference: "https://example.org/z.csv".to_owned(),
                     spec: "sha256:00".to_owned(),
+                    extract: false,
                     resolved: "https://example.org/z.csv".to_owned(),
                     title: None,
                     license: None,
@@ -521,6 +561,7 @@ mod tests {
                     name: "iris".to_owned(),
                     reference: "zenodo:3608990".to_owned(),
                     spec: "sha256:11".to_owned(),
+                    extract: true,
                     resolved: "zenodo:3608990".to_owned(),
                     title: Some("Iris \"classic\"\tset".to_owned()),
                     license: Some("CC-BY-4.0".to_owned()),
@@ -707,8 +748,47 @@ mod tests {
             "copy and path do not change what is downloaded"
         );
         assert_ne!(plain, spec(&entry("select = \"*.csv\"\n")));
-        assert_ne!(plain, spec(&entry("extract = false\n")));
+        assert_eq!(
+            plain,
+            spec(&entry("extract = false\n")),
+            "extract is compared on its own, so a switch keeps the files"
+        );
         assert!(plain.starts_with("sha256:") && plain.len() == 71);
+    }
+
+    #[test]
+    fn extract_is_written_only_when_false_and_drifts_apart_from_the_spec() {
+        let text = sample().render();
+        assert!(
+            text.contains("spec = \"sha256:00\"\nextract = false\nresolved = "),
+            "{text}"
+        );
+        assert_eq!(text.matches("extract").count(), 1, "{text}");
+        let written = Lock::parse(&text.replace("extract = false", "extract = true")).unwrap();
+        assert!(written.datasets.iter().all(|dataset| dataset.extract));
+        assert!(!written.render().contains("extract"));
+
+        let entry = |extra: &str| {
+            Manifest::parse(&format!("[datasets.x]\nref = \"zenodo:1\"\n{extra}"))
+                .unwrap()
+                .datasets["x"]
+                .clone()
+        };
+        let locked = Locked {
+            spec: spec(&entry("")),
+            extract: true,
+            ..sample().datasets[1].clone()
+        };
+        assert_eq!(locked.drift(&entry("")), None);
+        assert_eq!(locked.drift(&entry("copy = true\n")), None);
+        assert_eq!(
+            locked.drift(&entry("extract = false\n")),
+            Some(Drift::Extract)
+        );
+        assert_eq!(
+            locked.drift(&entry("extract = false\nselect = \"*.csv\"\n")),
+            Some(Drift::Spec)
+        );
     }
 
     #[test]

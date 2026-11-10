@@ -3,6 +3,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use url::Url;
+
 use super::super::fetch::{self, Job};
 use crate::archive::{self, Packed};
 use crate::cache::Cache;
@@ -25,7 +27,11 @@ pub(super) struct Draft {
     extract: bool,
     /// where the entry's patterns were written, for the help of an error.
     patterns: Patterns,
-    listing: Listing,
+    /// what the listing resolved to and says about the dataset, as data.lock records them.
+    resolved: String,
+    title: Option<String>,
+    license: Option<String>,
+    doi: Option<String>,
     files: Vec<DraftFile>,
 }
 
@@ -115,7 +121,49 @@ impl Draft {
             spec: lock::spec(entry),
             extract: entry.extract,
             patterns: written(entry),
-            listing,
+            resolved: listing.resolved.to_string(),
+            title: listing.title,
+            license: listing.license,
+            doi: listing.doi,
+            files,
+        })
+    }
+
+    /// a dataset whose entry changed only in `extract`, from the files data.lock pins, so it
+    /// needs no listing. what each archive unpacks to is learned again as for any draft: from
+    /// this machine's record of it, or from its bytes, downloaded only when the cache lacks them.
+    pub(super) fn switched(entry: &Entry, locked: &Locked) -> Result<Draft, Error> {
+        let files = locked
+            .files
+            .iter()
+            .map(|file| {
+                let remote = Remote {
+                    path: file.path.clone(),
+                    size: Some(file.size),
+                    sha256: Some(file.sha256),
+                    md5: file.md5,
+                    url: link(&locked.name, file)?,
+                    named_by_server: false,
+                };
+                Ok(DraftFile {
+                    remote,
+                    path: file.path.clone(),
+                    known: Some((file.sha256, file.size)),
+                    unpacks_to: None,
+                    was: None,
+                })
+            })
+            .collect::<Result<_, Error>>()?;
+        Ok(Draft {
+            name: locked.name.clone(),
+            reference: entry.reference.clone(),
+            spec: lock::spec(entry),
+            extract: entry.extract,
+            patterns: written(entry),
+            resolved: locked.resolved.clone(),
+            title: locked.title.clone(),
+            license: locked.license.clone(),
+            doi: locked.doi.clone(),
             files,
         })
     }
@@ -305,14 +353,30 @@ impl Draft {
             name: self.name,
             reference: self.reference,
             spec: self.spec,
-            resolved: self.listing.resolved.to_string(),
-            title: self.listing.title,
-            license: self.listing.license,
-            doi: self.listing.doi,
+            extract: self.extract,
+            resolved: self.resolved,
+            title: self.title,
+            license: self.license,
+            doi: self.doi,
             timestamp: now.to_owned(),
             files,
         })
     }
+}
+
+/// the link data.lock pins for `file` of `dataset`.
+pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
+    Url::parse(&file.url).map_err(|err| {
+        Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "data.lock has a broken link for {dataset}/{}: {err}",
+                file.path
+            ),
+        )
+        // `fetchloom lock` keeps a dataset whose entry did not change, link and all
+        .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
+    })
 }
 
 /// a hash no bytes have, standing for one a dry run cannot learn without downloading.
@@ -537,12 +601,10 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
 
 #[cfg(test)]
 mod tests {
-    use url::Url;
-
     use super::*;
     use crate::cache::Member;
     use crate::cache::tests::store;
-    use crate::digest;
+    use crate::digest::{self, Md5};
     use crate::project::manifest::Manifest;
     use crate::source::Reference;
 
@@ -583,6 +645,7 @@ mod tests {
             name: "set".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            extract: true,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -609,6 +672,91 @@ mod tests {
             upgraded.files[0].unpacks_to,
             Some(recorded),
             "an upgrade pins what this fetchloom unpacks"
+        );
+    }
+
+    /// a switch of extract keeps every pin data.lock has and learns only what archives unpack
+    /// to: from this machine's record, with nothing to download or unpack, and nothing at all
+    /// when they stay packed.
+    #[test]
+    fn an_extract_switch_keeps_the_pins_and_learns_only_trees() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let archive = store(&cache, b"the zip");
+        let inside = store(&cache, b"a,b\n");
+        let members = [Member {
+            path: "a.csv".to_owned(),
+            size: inside.size,
+            sha256: inside.digest,
+        }];
+        let recorded = cache.record_unpacked(&archive.digest, &members).unwrap();
+        let entry = |extra: &str| {
+            Manifest::parse(&format!(
+                "[datasets.set]\nref = \"https://example.org/set.zip\"\n{extra}"
+            ))
+            .unwrap()
+            .datasets["set"]
+                .clone()
+        };
+        let packed = entry("extract = false\n");
+        let file = |path: &str, sha256, size| LockedFile {
+            path: path.to_owned(),
+            size,
+            sha256,
+            md5: Md5::from_hex("900150983cd24fb0d6963f7d28e17f72"),
+            url: format!("https://example.org/{path}"),
+            unpacks_to: None,
+        };
+        let locked = Locked {
+            name: "set".to_owned(),
+            reference: packed.reference.clone(),
+            spec: lock::spec(&packed),
+            extract: false,
+            resolved: "https://example.org/set.zip".to_owned(),
+            title: Some("set".to_owned()),
+            license: None,
+            doi: None,
+            timestamp: "2026-01-01T00:00:00Z".to_owned(),
+            files: vec![
+                file("notes.txt", digest::sha256(b"notes"), 5),
+                file("set.zip", archive.digest, archive.size),
+            ],
+        };
+        let unpacking = entry("");
+        let mut draft = Draft::switched(&unpacking, &locked).unwrap();
+        assert!(draft.jobs(&cache).is_empty());
+        assert!(draft.unknown_archives(&cache).is_empty());
+        let unpacked = draft.finish("2026-02-02T00:00:00Z").unwrap();
+        assert!(unpacked.extract);
+        assert_eq!(unpacked.files[1].unpacks_to, Some(recorded));
+        assert_eq!(
+            Locked {
+                extract: false,
+                timestamp: locked.timestamp.clone(),
+                files: locked.files.clone(),
+                ..unpacked.clone()
+            },
+            locked,
+            "every other field is as data.lock had it"
+        );
+        let repacked = Draft::switched(&packed, &unpacked)
+            .unwrap()
+            .finish(&locked.timestamp)
+            .unwrap();
+        assert_eq!(repacked, locked);
+
+        let mut broken = locked.clone();
+        broken.files[1].url = "not a link".to_owned();
+        let Err(error) = Draft::switched(&unpacking, &broken) else {
+            panic!("a broken link drafts nothing");
+        };
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(
+            error
+                .message
+                .starts_with("data.lock has a broken link for set/set.zip"),
+            "{}",
+            error.message
         );
     }
 
@@ -643,6 +791,7 @@ mod tests {
             name: "w".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            extract: true,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -687,6 +836,7 @@ mod tests {
             name: "d".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            extract: true,
             resolved: url.to_string(),
             title: None,
             license: None,
@@ -721,6 +871,7 @@ mod tests {
             name: "d".to_owned(),
             reference: url.to_string(),
             spec: String::new(),
+            extract: true,
             resolved: url.to_string(),
             title: None,
             license: None,

@@ -12,7 +12,7 @@
 |---|---|---|
 | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs) | discovery, locking and metadata writes | `Project`, `Held`, `Hold`, `Owner`, `find`, `hold`, `write`, `write_state`, `data_dir` |
 | [manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | manifest parsing and edits that preserve comments | `Manifest`, `Entry`, `Reader`, `parse`, `with_dataset`, `without_dataset` |
-| [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | pin validation and deterministic serialization | `Lock`, `Locked`, `LockedFile`, `parse`, `render`, `spec`, `timestamp` |
+| [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | pin validation and deterministic serialization | `Lock`, `Locked`, `LockedFile`, `Drift`, `parse`, `render`, `spec`, `timestamp` |
 | [lock/canonical.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/canonical.rs) | fast reader for fetchloom's own lock output | `read` |
 | [lock/lists.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/lists.rs) | the compressed file lists of datasets past 50,000 files in `data.lock.d` | `Listed`, `texts`, `listed`, `read`, `compress`, `is_part`, `inline` |
 | [state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | local observations and settled-sync evidence | `State`, `Placed`, `Look`, `Synced`, `nanos` |

@@ -26,7 +26,7 @@ use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
-use crate::project::lock::{self, Lock, Locked, LockedFile};
+use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
 use crate::project::state::Synced;
 use crate::source::{self, Listing, Reference};
@@ -260,7 +260,8 @@ impl<'a> Loop<'a> {
     }
 
     /// datasets whose entry is unchanged, moved from data.lock as it has them, and drafts of the
-    /// others, resolved and with every hash known without a download.
+    /// others with every hash known without a download: from data.lock's files when only
+    /// `extract` changed, otherwise resolved again.
     async fn draft(
         &self,
         manifest: &Manifest,
@@ -270,13 +271,17 @@ impl<'a> Loop<'a> {
     ) -> Result<Drafted, Error> {
         let mut kept: Vec<Locked> = Vec::new();
         let mut others = Vec::new();
+        let mut drafts = Vec::new();
         for locked in old.datasets {
             match manifest.datasets.get(&locked.name) {
-                Some(entry)
-                    if locked.spec == lock::spec(entry) && !upgrade.includes(&locked.name) =>
-                {
-                    kept.push(locked);
-                }
+                Some(entry) if !upgrade.includes(&locked.name) => match locked.drift(entry) {
+                    None => kept.push(locked),
+                    Some(Drift::Extract) => {
+                        drafts.push((locked.name.clone(), Draft::switched(entry, &locked)?));
+                        others.push(locked);
+                    }
+                    Some(Drift::Spec) => others.push(locked),
+                },
                 _ => others.push(locked),
             }
         }
@@ -286,7 +291,7 @@ impl<'a> Loop<'a> {
             let is_kept = kept
                 .binary_search_by(|locked| locked.name.as_str().cmp(name))
                 .is_ok();
-            if !is_kept {
+            if !is_kept && !drafts.iter().any(|(drafted, _)| drafted == name) {
                 asks.push((
                     name.clone(),
                     pinned(entry, others.get(name), upgrade.includes(name)),
@@ -294,20 +299,21 @@ impl<'a> Loop<'a> {
             }
         }
         let listings = self.resolve_all(manifest, asks, given).await?;
-        let mut drafts = Vec::with_capacity(listings.len());
         for (name, listing) in listings {
-            drafts.push(Draft::new(
+            let draft = Draft::new(
                 &name,
                 &manifest.datasets[&name],
                 listing,
                 others.get(&name),
                 upgrade.includes(&name),
                 &self.cache,
-            )?);
+            )?;
+            drafts.push((name, draft));
         }
+        drafts.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(Drafted {
             kept,
-            drafts,
+            drafts: drafts.into_iter().map(|(_, draft)| draft).collect(),
             others,
         })
     }
@@ -1027,17 +1033,7 @@ fn pinned(entry: &Entry, previous: Option<&Locked>, upgrading: bool) -> String {
 /// the download of one locked file. when its recorded link is dead, the source is asked again
 /// at the version the lock pins.
 fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
-    let url = Url::parse(&file.url).map_err(|err| {
-        Error::new(
-            Kind::ProjectInvalid,
-            format!(
-                "data.lock has a broken link for {dataset}/{}: {err}",
-                file.path
-            ),
-        )
-        // `fetchloom lock` keeps a dataset whose entry did not change, link and all
-        .help(format!("restore data.lock from git, or run `fetchloom lock --upgrade {dataset}`, which resolves it again and may pin newer data"))
-    })?;
+    let url = draft::link(dataset, file)?;
     Ok(make_job(lock, dataset, file, &url))
 }
 
@@ -1287,6 +1283,7 @@ mod tests {
             name: name.to_owned(),
             reference: "zenodo:1".to_owned(),
             spec: String::new(),
+            extract: true,
             resolved: "zenodo:2".to_owned(),
             title: None,
             license: None,

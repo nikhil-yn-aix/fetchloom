@@ -140,6 +140,11 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
     let name = lines.value("name")?;
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
+    // the writer records extract only when it is false
+    let extract = !lines.sets("extract");
+    if !extract && lines.next()? != "extract = false" {
+        return None;
+    }
     let resolved = lines.value("resolved")?;
     let mut optional = [None, None, None];
     for (key, value) in ["title", "license", "doi"].into_iter().zip(&mut optional) {
@@ -172,6 +177,7 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
         name,
         reference,
         spec,
+        extract,
         resolved,
         title,
         license,
@@ -326,6 +332,7 @@ mod tests {
             name: name.to_owned(),
             reference: format!("zenodo:{name}"),
             spec: format!("sha256:{}", digest::sha256(name.as_bytes())),
+            extract: !extra,
             resolved: format!("zenodo:{name}@1"),
             title: extra.then(|| "Iris \"classic\"\tset\nline\r\u{1f}\u{7}".to_owned()),
             license: extra.then(|| "CC-BY-4.0".to_owned()),

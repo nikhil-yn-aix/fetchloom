@@ -10,7 +10,7 @@ version = 1
 [[dataset]]
 name = "iris"
 ref = "zenodo:3608990"
-spec = "sha256:add8bf89a369d1494b5c180d377362cbdcd2d1c064f8867eb934aab59c1adaf2"
+spec = "sha256:7e24dc80010999fe1ec2eaa0e602e1a3af375a2a5bd0e9d70173e62871f56744"
 resolved = "zenodo:3608990"
 locked = "2026-10-28T00:00:00Z"
 files = [
@@ -25,6 +25,7 @@ files = [
 | `dataset[].name` | name in `data.toml` |
 | `dataset[].ref` | the manifest reference |
 | `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
+| `dataset[].extract` | `false` when `data.toml` keeps the dataset's archives packed; omitted when they unpack |
 | `dataset[].resolved` | the source reference used to list the files |
 | `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
 | `dataset[].locked` | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ` |
@@ -84,14 +85,13 @@ for the unfiltered iris entry above, SHA-256 hashes these UTF-8 bytes, including
 
 ```text
 ref=zenodo:3608990
-extract=true
 ```
 
 the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines.
 
-the final `extract=` value is `true` or `false`. `copy`, `path` and `project.data_dir` are excluded.
+`extract`, `copy`, `path` and `project.data_dir` are excluded, since they decide what happens to the downloaded files, not which files are downloaded.
 
-an unchanged spec keeps the existing lock entry unless an upgrade is requested. filter or extraction edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
+an unchanged spec and `extract` keep the existing lock entry unless an upgrade is requested. when only `extract` changed, the entry keeps every pinned file and learns again only what its archives unpack to: from this machine's record of an earlier unpacking, or from the cached archive, so the source is not listed again and a `--offline` run works while the archives are cached. an archive the cache lacks is downloaded by its pinned link. filter edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 
 `resolved` is not always immutable. plain URLs, drive links, dropbox links, OSF nodes and bucket prefixes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
 

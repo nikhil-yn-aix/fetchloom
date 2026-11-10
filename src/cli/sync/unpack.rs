@@ -405,6 +405,7 @@ mod tests {
                 name: "set".to_owned(),
                 reference: "https://example.org/set.tar".to_owned(),
                 spec: String::new(),
+                extract: true,
                 resolved: "https://example.org/set.tar".to_owned(),
                 title: None,
                 license: None,

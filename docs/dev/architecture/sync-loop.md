@@ -22,11 +22,11 @@
 
 ### locked entry
 
-`sync --locked` runs the same manifest-membership and spec check as `lock --check` before opening the cache or entering `sync_all`. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
+`sync --locked` runs the same manifest-membership, spec and `extract` check as `lock --check` before opening the cache or entering `sync_all`. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
 
 ### resolve only changed specifications
 
-an entry's spec hash covers the manifest choices that affect its locked data. `relock` keeps an entry when that hash matches and no upgrade asks to resolve it again. filter or extraction changes can reuse the old resolved reference when the manifest reference itself is unchanged; changing the reference or upgrading resolves the requested reference again.
+an entry's spec hash covers the manifest choices that decide which files are downloaded; `Locked::drift` compares it and `extract` separately. `relock` keeps an entry when both match and no upgrade asks to resolve it again. when only `extract` changed, `Draft::switched` drafts the entry from data.lock's own files without a listing, so only what archives unpack to is learned again, from cache records or cached archives, offline when the cache holds them. filter changes can reuse the old resolved reference when the manifest reference itself is unchanged; changing the reference or upgrading resolves the requested reference again.
 
 `Draft` prefers a usable source SHA-256, reusable old pins or a checked MD5-to-SHA-256 mapping. it downloads when those do not establish the pin. a new archive must be unpacked to learn its member tree. unchanged resolved data retain their old lock timestamp. `Draft::finish` refuses two files pinned on one path, as when kaggle sends a competition file as a zip of itself, which takes the name `<name>.zip`, beside a listed `<name>.zip`: such a `data.lock` could not be read again.
 

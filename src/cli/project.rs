@@ -21,7 +21,7 @@ use crate::error::{Error, Kind};
 use crate::name;
 use crate::output::Output;
 use crate::plan;
-use crate::project::lock::{self, Lock};
+use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
@@ -468,12 +468,13 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
     let old = old.unwrap_or(&empty);
     let mut stale: Vec<String> = Vec::new();
     for (name, entry) in &manifest.datasets {
-        match old.get(name) {
+        match old.get(name).map(|locked| locked.drift(entry)) {
             None => stale.push(format!("{name} is not in data.lock yet")),
-            Some(locked) if locked.spec != lock::spec(entry) => {
-                stale.push(format!("{name} changed in data.toml"));
-            }
-            Some(_) => {}
+            Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
+            Some(Some(Drift::Extract)) => stale.push(format!(
+                "{name} changed extract in data.toml; `fetchloom lock` needs no network for it while its archives are cached"
+            )),
+            Some(None) => {}
         }
     }
     for dataset in &old.datasets {
@@ -948,6 +949,7 @@ pub(crate) mod tests {
             name: name.to_owned(),
             reference: format!("https://example.org/{name}"),
             spec,
+            extract: true,
             resolved: format!("https://example.org/{name}"),
             title: None,
             license: None,

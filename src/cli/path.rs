@@ -18,7 +18,7 @@ use crate::error::{Error, Kind};
 use crate::name;
 use crate::plan;
 use crate::project::Project;
-use crate::project::lock::{self, Lock};
+use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
 use crate::project::state::Look;
 
@@ -205,7 +205,7 @@ fn ready_path(
         manifest
             .datasets
             .get(name)
-            .is_some_and(|entry| locked.spec == lock::spec(entry))
+            .is_some_and(|entry| locked.drift(entry).is_none())
     });
     if !fresh {
         return Ok(None);
@@ -280,8 +280,8 @@ mod tests {
 
     use super::*;
     use crate::cli::project::tests::{pinned, waiting_project};
-    use crate::project::manifest;
     use crate::project::state::Synced;
+    use crate::project::{lock, manifest};
 
     fn waiter_state(
         project: &Project,

@@ -63,7 +63,7 @@ status arrays:
 
 | field | entries |
 |---|---|
-| `unlocked` | dataset names missing from the lock or with a changed spec |
+| `unlocked` | dataset names missing from the lock or with a changed spec or `extract` |
 | `removed` | dataset names in data.lock but no longer in data.toml |
 | `missing` | absent target paths |
 | `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |

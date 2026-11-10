@@ -72,6 +72,7 @@ fn generated(bytes: &[u8]) -> Lock {
                     .then(|| digest::sha256(input.text().as_bytes())),
             });
         }
+        let extract = input.byte() & 1 != 0;
         let mut optional = || (input.byte() & 1 != 0).then(|| input.text());
         let title = optional();
         let license = optional();
@@ -80,6 +81,7 @@ fn generated(bytes: &[u8]) -> Lock {
             name: format!("set{dataset_index}"),
             reference: format!("https://example.org/{}", input.text()),
             spec: format!("sha256:{}", digest::sha256(bytes)),
+            extract,
             resolved: input.text(),
             title,
             license,

@@ -18,7 +18,7 @@ fetchloom lock [options]
 
 | option | effect |
 |---|---|
-| `--check` | check manifest membership and spec hashes without changing anything |
+| `--check` | check manifest membership, spec hashes and `extract` without changing anything |
 | `--upgrade [name ...]` | resolve named datasets again; with no names, consider every dataset |
 | `-n`, `--dry-run` | list what locking would change without writing `data.lock` or downloading |
 
@@ -27,7 +27,7 @@ fetchloom lock [options]
 ## what happens
 
 1. read `data.toml` and the existing lock, if present.
-2. keep entries whose specs are unchanged, unless an upgrade was requested.
+2. keep entries whose specs and `extract` are unchanged, unless an upgrade was requested.
 3. resolve changed entries and learn file sizes, hashes and archive trees. this may download data into the cache.
 4. write `data.lock` without placing files or registering the project with the cache.
 
@@ -43,7 +43,7 @@ already pinned ordinary files need not be cached. a source that supplies SHA-256
 
 `--upgrade` revalidates unchecksummed URLs and files whose source now states an MD5 that `data.lock` lacks. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
 
-filter or extraction changes resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting an upgrade resolves the manifest reference instead. [spec hashes](../reference/data-lock.md#the-spec-hash) defines these rules.
+filter changes resolve the existing `resolved` reference. an `extract` change alone keeps the pinned files and lists nothing again; it needs the network only for archives the cache lacks. changing `ref`, deleting the lock or requesting an upgrade resolves the manifest reference instead. [spec hashes](../reference/data-lock.md#the-spec-hash) defines these rules.
 
 after an upgrade, run `fetchloom sync` to place the new inputs and commit `data.lock`. unchanged resolved references and file lists retain their previous `locked` timestamp.
 

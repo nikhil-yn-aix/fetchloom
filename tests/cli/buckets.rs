@@ -655,3 +655,90 @@ fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
     assert!(!work.join("data.lock.d").exists());
     Ok(())
 }
+
+/// switching extract never lists the bucket again: an archive the cache holds unpacks offline,
+/// an archive the cache dropped once unpacked is fetched by its own link to stay packed, and
+/// `sync --locked` calls a lock with the other extract out of date.
+#[test]
+fn switching_extract_needs_no_listing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
+    )?;
+    let listing = s3_listing("/shard-bucket.s3.amazonaws.com/", "shards/", None);
+    let object = "/shard-bucket.s3.amazonaws.com/shards/train.zip".to_owned();
+    let routes = Routes::start(vec![
+        (
+            listing.clone(),
+            s3_page(&[("shards/train.zip", &zip)], None),
+        ),
+        (object.clone(), file(&zip, &format!("\"{}\"", md5(&zip)))),
+    ])?;
+    let run = |args: &[&str]| command(&sandbox, &routes, args).output();
+    let added = run(&[
+        "add",
+        "--no-extract",
+        "s3://shard-bucket/shards/",
+        "--as",
+        "shards",
+    ])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let lock = sandbox.work().join("data.lock");
+    let packed = fs::read_to_string(&manifest)?;
+    assert!(fs::read_to_string(&lock)?.contains("\nextract = false\n"));
+    fs::write(&manifest, packed.replace("extract = false\n", ""))?;
+
+    let status = json(&run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["unlocked"], serde_json::json!(["shards"]));
+    let locked = run(&["--json", "sync", "--locked"])?;
+    assert_eq!(locked.status.code(), Some(1), "{}", text(&locked.stderr)?);
+    let document = json(&locked)?;
+    assert_eq!(document["errors"][0]["kind"], "lock.outdated");
+    assert_eq!(
+        document["errors"][0]["details"][0],
+        "shards changed extract in data.toml; `fetchloom lock` needs no network for it while its archives are cached"
+    );
+    let unpacked = run(&["--offline", "sync"])?;
+    assert_eq!(
+        unpacked.status.code(),
+        Some(0),
+        "{}",
+        text(&unpacked.stderr)?
+    );
+    let folder = sandbox.work().join("data/shards");
+    assert_eq!(fs::read(folder.join("README.md"))?, b"# sample dataset\n");
+    assert!(!folder.join("train.zip").exists());
+    let text_now = fs::read_to_string(&lock)?;
+    assert!(text_now.contains(", unpacks_to = \"sha256:"), "{text_now}");
+    assert!(!text_now.contains("extract"), "{text_now}");
+    assert_eq!(routes.targets(), [listing.clone(), object.clone()]);
+
+    fs::write(&manifest, &packed)?;
+    let offline = run(&["--json", "--offline", "sync"])?;
+    assert_eq!(
+        offline.status.code(),
+        Some(20),
+        "{}",
+        text(&offline.stderr)?
+    );
+    let document = json(&offline)?;
+    assert_eq!(document["errors"][0]["kind"], "offline.missing");
+    assert_eq!(
+        document["errors"][0]["details"],
+        serde_json::json!(["shards/train.zip"])
+    );
+    let repacked = run(&["sync"])?;
+    assert_eq!(
+        repacked.status.code(),
+        Some(0),
+        "{}",
+        text(&repacked.stderr)?
+    );
+    assert_eq!(fs::read(folder.join("train.zip"))?, zip);
+    assert!(!folder.join("README.md").exists());
+    assert!(!fs::read_to_string(&lock)?.contains("unpacks_to"));
+    assert_eq!(routes.targets(), [listing, object.clone(), object]);
+    assert_anonymous(&routes);
+    Ok(())
+}

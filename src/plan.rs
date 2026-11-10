@@ -336,6 +336,7 @@ mod tests {
                     name: (*name).to_owned(),
                     reference: "https://example.org/x".to_owned(),
                     spec: String::new(),
+                    extract: true,
                     resolved: String::new(),
                     title: None,
                     license: None,

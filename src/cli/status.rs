@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
-use crate::project::lock::{self, Lock};
+use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
 use crate::threads::Threads;
 use crate::units;
@@ -108,14 +108,14 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 }
 
 /// the datasets data.lock no longer pins as data.toml asks: those data.toml lists that the lock
-/// lacks or pins for another spec, and those the lock pins that data.toml dropped.
+/// lacks or pins for another spec or extract, and those the lock pins that data.toml dropped.
 fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
     let unlocked = manifest
         .datasets
         .iter()
         .filter(|(name, entry)| {
             lock.get(name)
-                .is_none_or(|locked| locked.spec != lock::spec(entry))
+                .is_none_or(|locked| locked.drift(entry).is_some())
         })
         .map(|(name, _)| name.clone())
         .collect();

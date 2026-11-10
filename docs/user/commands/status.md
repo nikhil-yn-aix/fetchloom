@@ -43,7 +43,7 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 
 | JSON field | difference |
 |---|---|
-| `unlocked` | a manifest entry is missing from the lock or has a changed spec |
+| `unlocked` | a manifest entry is missing from the lock or has a changed spec or `extract` |
 | `removed` | a locked dataset is no longer in the manifest |
 | `missing` | a target path is absent |
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
