@@ -1083,6 +1083,10 @@ fn settled_unheld(
         Err(_) => (peek_cache()?, false),
     };
     let mut survey = Survey::read(project, &manifest.data_dir, context.threads);
+    // hashing proved the files placed too recently to trust by time unchanged, and only asks
+    // for the state to be written again, which this project cannot be. an edit hashing found
+    // stays an edit
+    survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
     if args.verify {
         survey.verify(&project.root)?;

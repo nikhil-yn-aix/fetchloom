@@ -2943,6 +2943,12 @@ fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
+    // a sync right after placing, as a fast machine or an image build runs it, finds file times
+    // no older than its state's, so it hashes them before trusting them
+    fs::File::options()
+        .write(true)
+        .open(sandbox.work().join(".fetchloom/state"))?
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_hours(24))?;
     let fresh = clone(&sandbox, "fresh")?;
     writable(&sandbox.work(), false)?;
     writable(&fresh, false)?;
