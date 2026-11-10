@@ -1,6 +1,27 @@
 # roadmap
 
-pending work concerns remaining performance costs and publishing tested releases.
+pending work covers the features planned for 0.1.0, remaining performance costs and publishing tested releases.
+
+## features
+
+each line goes when its feature lands, in the same change that documents it in the [user guide](../user/README.md).
+
+1. one `data.lock` format, version 1, for small and big datasets alike, with an `extract` switch that works offline and an advisory `access` field for each dataset.
+2. `fetchloom get <link> -o <file>` writes one writable, verified file and never replaces an existing one without `--force`; python gains `fetchloom.get`.
+3. `fetchloom sync <names>` and `fetchloom path <name>` sync only the named datasets.
+4. `path = "."` places a dataset at the root of the data folder, and datasets share a folder when none of their files clash.
+5. `fetchloom export` writes SHA-256 sums, links or an aria2 input for placed files and source objects, and `list --json` gives each file's SHA-256 and link.
+6. `fetchloom lock` resolves a conflicted `data.toml` and `data.lock` offline, with `--ours` or `--theirs` for two changes to one dataset.
+7. `fetchloom add ./folder` pins local bytes, and a list of links with their SHA-256 imports in one step.
+8. recipes: datasets a command makes from other datasets, with `fetchloom build` and its `--check`, `--accept`, `--prepare` and `--locked`, and a peak-space preview.
+9. mirrors: reading from mirrors in settings or `--mirror`, a mirror-only mode and `fetchloom push` to a folder mirror.
+10. `cache gc --inputs` frees inputs that a verified mirror holds, and `fetchloom cache` estimates needed, unneeded, linked and copied bytes.
+11. member filters for archives and `fetchloom drop <path>`.
+12. private S3 buckets, with keys from the environment or shared profiles, and S3-compatible hosts.
+13. rar after a decoder trial, a hint for shards of numbered `.tar` files and a refusal before copying a file too big for FAT32.
+14. a migration and exit guide that says what carries over from dvc, git-lfs and datalad, and what does not.
+
+deferred until a need shows: a data root on another disk, a link mode for build inputs, finding results across projects, a cache budget, STS and `credential_process` for S3, signed google cloud storage, azure and FTP, split archives beyond plain byte splits, adopting the hugging face cache and relinking copies to the cache.
 
 ## measurement work
 
