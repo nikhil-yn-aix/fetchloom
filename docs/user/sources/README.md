@@ -11,6 +11,8 @@ use [search](../commands/search.md) when you have words rather than a reference.
 
 fetchloom pins data it can download again, so a reference is always a link, a DOI or an id, never a path on this machine. `add` and `get` refuse a path such as `./flowers.csv`, `/data/flowers.csv`, `~/flowers.csv`, `C:\data\flowers.csv` or `file:///data/flowers.csv` with `reference.invalid`, exit 10, before any request, and so does sync for a path written as `ref` in data.toml. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, is not searched for either: it exits 2 with `usage`, and `fetchloom search iris` searches for it.
 
+a link to a folder or a site's page, which answers with a web page rather than a file, is refused with `source.invalid` before anything is cached or pinned; [URLs and DOIs](urls-and-dois.md) says when.
+
 | family | reference spellings | what gets pinned | credentials | limits |
 |---|---|---|---|---|
 | [URLs and DOIs](urls-and-dois.md) | HTTP or HTTPS URL; `doi:10.5281/zenodo.3608990`, bare DOI or doi.org link | direct file bytes, or files from the routed source | HTTPS host logins from `.netrc`; one-off signed URLs work with `get` | DOI must route to a known source; project URLs reject recognized secrets |

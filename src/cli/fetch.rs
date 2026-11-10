@@ -306,6 +306,22 @@ impl<'a> Watch<'a> {
             }
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
+                // a page that names no file, at a link whose own name has no extension, is a
+                // folder listing or a site's page rather than data; hashes that prove the bytes
+                // decide instead
+                if given.is_none()
+                    && std::path::Path::new(label).extension().is_none()
+                    && !self.job.fetch.expect.proves()
+                {
+                    return Err(Error::new(
+                        Kind::SourceInvalid,
+                        format!(
+                            "{} answered with a web page, such as a folder listing, not a file",
+                            crate::net::Shown(&self.job.fetch.url)
+                        ),
+                    )
+                    .help("open it in a browser, copy the link of each file you want, and give fetchloom those links"));
+                }
                 let name = given.as_deref().unwrap_or(label);
                 if std::path::Path::new(name)
                     .extension()
@@ -1049,6 +1065,85 @@ mod tests {
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
         let second = Watch::new(&second, &output, &overall, &approval, false, &position);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    #[test]
+    fn a_web_page_that_names_no_file_is_refused_before_its_bytes() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let overall = Overall {
+            bar: None,
+            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
+            length: std::sync::Mutex::default(),
+        };
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let position = AtomicU64::new(0);
+        let pinned = Some(crate::digest::sha256(b"a pinned listing"));
+        for (link, label, name, sha256, refused) in [
+            ("http://lab.example/shards/", "shards", None, None, true),
+            ("http://lab.example/", "download", None, None, true),
+            (
+                "http://lab.example/shards/",
+                "shards",
+                Some("index.html"),
+                None,
+                false,
+            ),
+            ("http://lab.example/shards/", "shards", None, pinned, false),
+            (
+                "http://lab.example/page.html",
+                "page.html",
+                None,
+                None,
+                false,
+            ),
+            ("http://lab.example/data.csv", "data.csv", None, None, false),
+        ] {
+            let job = Job {
+                fetch: Fetch {
+                    expect: Expect {
+                        sha256,
+                        ..Expect::default()
+                    },
+                    ..Fetch::new(Url::parse(link).unwrap())
+                },
+                label: label.to_owned(),
+                dataset: None,
+                again: None,
+            };
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+            let page = Event::WebPage {
+                name: name.map(str::to_owned),
+            };
+            match watch.on(&page) {
+                Err(error) if refused => {
+                    assert_eq!(error.kind, Kind::SourceInvalid);
+                    assert_eq!(
+                        error.message,
+                        format!(
+                            "{link} answered with a web page, such as a folder listing, not a file"
+                        )
+                    );
+                    assert_eq!(
+                        error.help.as_deref(),
+                        Some(
+                            "open it in a browser, copy the link of each file you want, and give fetchloom those links"
+                        )
+                    );
+                }
+                result => assert_eq!(result.is_err(), refused, "{link} as {label}"),
+            }
+        }
     }
 
     #[test]

@@ -729,7 +729,6 @@ fn data_file_links_warn_when_the_server_returns_html() -> Result {
         ("/index.html", false),
         ("/index.HTM", false),
         ("/index.xhtml", false),
-        ("/download", false),
     ] {
         let sandbox = Sandbox::new()?;
         let body = b"<html>not the data</html>";
@@ -750,6 +749,44 @@ fn data_file_links_warn_when_the_server_returns_html() -> Result {
         );
         assert_eq!(stderr.contains(&message), warns, "{stderr}");
     }
+    Ok(())
+}
+
+#[test]
+fn a_link_that_answers_with_a_web_page_is_refused_before_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let listing = || {
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html; charset=utf-8")],
+            b"<html><a href=\"part-1.zip\">part-1.zip</a></html>",
+        )
+    };
+    let server = Server::start("/shards/", vec![listing(), listing()])?;
+    for command in ["get", "add"] {
+        let output = sandbox.run(&["--json", command, &server.url])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(10), "{command}: {document}");
+        assert_eq!(document["errors"][0]["kind"], "source.invalid");
+        assert_eq!(
+            document["errors"][0]["message"],
+            format!(
+                "{} answered with a web page, such as a folder listing, not a file",
+                server.url
+            )
+        );
+        assert_eq!(document["work"]["objects_written"], 0);
+    }
+    assert_eq!(server.requests().len(), 2);
+    let stored = fs::read_dir(sandbox.cache().join("objects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|fan| fs::read_dir(fan.path()).into_iter().flatten().flatten())
+        .count();
+    assert_eq!(stored, 0);
+    assert!(!sandbox.work().join("data.toml").exists());
+    assert!(!sandbox.work().join("shards").exists());
     Ok(())
 }
 
