@@ -85,23 +85,44 @@ pub(crate) fn stem(name: &str) -> &str {
 }
 
 /// what an archive may unpack to. every limit counts the bytes actually written, never the sizes
-/// the archive declares.
+/// the archive declares. they guard against archives built to fill a disk, so only the person
+/// running fetchloom moves them, through `FETCHLOOM_ARCHIVE_*` or the settings file, and never a
+/// data.toml someone else wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limits {
     /// entries of any kind, folders included.
     pub(crate) members: u64,
     pub(crate) bytes: u64,
-    /// bytes written for each compressed byte read.
+    /// bytes written for each compressed byte read. deflate cannot pass about 1032, so the
+    /// default lets nearly all zip data through and still stops bzip2, xz and zstd bombs.
     pub(crate) ratio: u64,
+    /// the memory one archive's decompressor may take.
+    pub(crate) memory: u64,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
         Limits {
-            members: 1_000_000,
-            bytes: 1 << 40,
-            ratio: 200,
+            members: 10_000_000,
+            bytes: 16 << 40,
+            ratio: 1_000,
+            memory: tar::XZ_MEMORY,
         }
+    }
+}
+
+/// the limits of this run, once it read its settings.
+static LIMITS: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
+
+/// sets the limits every archive in the run unpacks within.
+pub(crate) fn set_limits(limits: Limits) {
+    let _ = LIMITS.set(limits);
+}
+
+impl Limits {
+    /// the limits of this run: what its settings say, else the defaults.
+    pub(crate) fn current() -> Limits {
+        LIMITS.get().copied().unwrap_or_default()
     }
 }
 
@@ -184,7 +205,7 @@ pub(crate) fn unpack_cached(
         Detected::Archive(format) => format,
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
-    let unpacked = unpack(&object, format, &Limits::default(), cache, watch, writers)?;
+    let unpacked = unpack(&object, format, &Limits::current(), cache, watch, writers)?;
     if tree.is_none_or(|tree| *tree == unpacked.tree) {
         cache
             .record_unpacked(archive, &unpacked.members)
@@ -207,6 +228,14 @@ fn refused(message: impl Into<String>) -> Error {
     Error::new(Kind::SourceInvalid, message).help(REFUSED_HELP)
 }
 
+/// an archive past a limit the person running fetchloom may move, as `variable` and the
+/// settings file's `key` do.
+fn past(message: impl Into<String>, variable: &str, key: &str) -> Error {
+    Error::new(Kind::SourceInvalid, message).help(format!(
+        "if you trust the archive, raise {variable}, or {key} in the settings file. otherwise {REFUSED_HELP}"
+    ))
+}
+
 /// an archive holding a member that fetchloom refuses for its name or its kind.
 fn refused_member(path: &str, reason: &str) -> Error {
     refused(format!(
@@ -225,10 +254,14 @@ fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
         return Error::io(doing, error);
     }
     if tar::needs_too_much_memory(err) {
-        return refused(format!(
-            "the archive's xz stream needs more than {} of memory to unpack",
-            crate::units::size(tar::XZ_MEMORY)
-        ));
+        return past(
+            format!(
+                "the archive's xz stream needs more than {} of memory to unpack",
+                crate::units::size(Limits::current().memory)
+            ),
+            "FETCHLOOM_MEMORY, which gives each archive a quarter of it",
+            "memory",
+        );
     }
     let message = match at {
         Some(path) => format!("the archive is damaged at \"{path}\": {err}"),

@@ -625,3 +625,25 @@ fn sync_drops_an_archive_extracted_by_a_failed_get() -> Result {
     );
     Ok(())
 }
+
+/// an archive past a limit says which setting lifts it, for a person who trusts the archive.
+#[test]
+fn an_archive_past_a_limit_names_the_setting_that_lifts_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_ARCHIVE_FILES", "3")
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["message"],
+        "the archive holds more than 3 entries, the most fetchloom unpacks from one archive"
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "if you trust the archive, raise FETCHLOOM_ARCHIVE_FILES, or archive_files in the settings file. otherwise keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract"
+    );
+    Ok(())
+}

@@ -49,14 +49,16 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 
 ### bounds and names
 
+`Limits::current` is set once a run reads its settings; only the environment and the settings file move it, never data.toml, since a cloned repository is someone else's input. a refusal past a limit names its variable. deflate cannot pass about 1032:1, so the 1000:1 default admits nearly all zip data while bzip2, xz and zstd bombs still stop.
+
 | limit | what it counts |
 |---|---|
-| 1,000,000 entries | files and folders exposed by the decoder |
-| 1 TiB unpacked | actual member bytes across one archive |
-| 200:1 expansion | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB; zip rereads cannot raise the denominator past the physical archive size |
+| 10,000,000 entries, `FETCHLOOM_ARCHIVE_FILES` | files and folders exposed by the decoder |
+| 16 TiB unpacked, `FETCHLOOM_ARCHIVE_SIZE` | actual member bytes across one archive |
+| 1000:1 expansion, `FETCHLOOM_ARCHIVE_RATIO` | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB; zip rereads cannot raise the denominator past the physical archive size |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
-| 256 MiB xz decoder memory | what an xz header asks for, checked before decoding |
-| 128 MiB zstd window | what a zstd frame header asks for; frames past it, as `zstd --long=28` and above write them, are still detected as archives and refused |
+| xz decoder memory: a quarter of `FETCHLOOM_MEMORY`, at least 256 MiB | what an xz header asks for, checked before decoding |
+| zstd window: half the decoder memory as a power of two, from 128 MiB to 2 GiB | what a zstd frame header asks for; with the default budget, frames from `zstd --long=28` and above are still detected as archives and refused |
 | 4,096-byte member paths | the path as the archive spells it and in NFC |
 | 256 MiB of names | every entry's path length, plus each folder or file name seen for the first time, its spelling in the archive when that is not NFC, and 64 bytes for keeping it |
 

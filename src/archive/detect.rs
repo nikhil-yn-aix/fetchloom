@@ -80,7 +80,8 @@ fn compression(head: &[u8]) -> Option<Format> {
 /// archive, unless xz or zstd asks for more memory than unpacking allows: unpacking then refuses
 /// it and says why, rather than a tar staying packed unnoticed.
 fn holds_tar(format: Format, file: File) -> bool {
-    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file)) else {
+    let memory = super::Limits::current().memory;
+    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
         return false;
     };
     let mut block = [0; BLOCK];

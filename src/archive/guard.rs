@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 
 use super::names::{Named, Names};
 use super::tar::unreadable_stream;
-use super::{Limits, not_written, refused};
+use super::{Limits, not_written, past};
 use crate::error::{Error, Kind};
 use crate::units;
 
@@ -67,6 +67,10 @@ impl<'a> Guard<'a> {
         self.meter
     }
 
+    pub(super) fn limits(&self) -> &'a Limits {
+        self.limits
+    }
+
     /// counts one entry of any kind, refusing the archive past the member limit.
     pub(super) fn entry(&mut self) -> Result<(), Error> {
         self.check_stopped()?;
@@ -76,10 +80,14 @@ impl<'a> Guard<'a> {
 
     pub(super) fn check_entries(&self, entries: u64) -> Result<(), Error> {
         if entries > self.limits.members {
-            return Err(refused(format!(
-                "the archive holds more than {}, the most fetchloom unpacks from one archive",
-                units::count(self.limits.members, "entry", "entries")
-            )));
+            return Err(past(
+                format!(
+                    "the archive holds more than {}, the most fetchloom unpacks from one archive",
+                    units::count(self.limits.members, "entry", "entries")
+                ),
+                "FETCHLOOM_ARCHIVE_FILES",
+                "archive_files",
+            ));
         }
         Ok(())
     }
@@ -132,10 +140,14 @@ impl<'a> Guard<'a> {
 
     fn check_limits(&self, path: &str) -> Result<(), Error> {
         if self.written > self.limits.bytes {
-            return Err(refused(format!(
-                "\"{path}\" takes the archive past {}, the most fetchloom unpacks from one archive",
-                units::size(self.limits.bytes)
-            )));
+            return Err(past(
+                format!(
+                    "\"{path}\" takes the archive past {}, the most fetchloom unpacks from one archive",
+                    units::size(self.limits.bytes)
+                ),
+                "FETCHLOOM_ARCHIVE_SIZE",
+                "archive_size",
+            ));
         }
         self.check_ratio(Some(path))
     }
@@ -147,10 +159,14 @@ impl<'a> Guard<'a> {
             && u128::from(expanded) > u128::from(compressed) * u128::from(self.limits.ratio)
         {
             let at = at.map(|path| format!(" at \"{path}\"")).unwrap_or_default();
-            return Err(refused(format!(
-                "the archive grew past {} times its compressed size{at}, which is how zip bombs fill disks",
-                self.limits.ratio
-            )));
+            return Err(past(
+                format!(
+                    "the archive grew past {} times its compressed size{at}, which is how zip bombs fill disks",
+                    self.limits.ratio
+                ),
+                "FETCHLOOM_ARCHIVE_RATIO",
+                "archive_ratio",
+            ));
         }
         Ok(())
     }
@@ -281,7 +297,7 @@ mod tests {
             assert!(copy(guard, &small).is_ok(), "1 MiB from 1 byte is allowed");
             let more = vec![0; usize::try_from(RATIO_FLOOR).unwrap()];
             let err = copy(guard, &more).unwrap_err();
-            assert!(err.message.contains("200 times"), "{}", err.message);
+            assert!(err.message.contains("1000 times"), "{}", err.message);
         });
     }
 

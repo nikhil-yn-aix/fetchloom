@@ -25,6 +25,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | files in `data.lock` | 50,000 a dataset; more go to compressed parts in [`data.lock.d`](reference/data-lock.md#big-datasets) | commit `data.lock.d` with `data.lock` |
 | bytes a run downloads | none; past `FETCHLOOM_ASK_ABOVE` it asks first, and it checks the free space of the cache's disk before starting | `--yes`, or a bigger cache disk with `FETCHLOOM_CACHE` |
 | downloads at once | `FETCHLOOM_JOBS`, 8, and `FETCHLOOM_HOST_JOBS`, 4 to one site | raise both for a fast link or your own mirror |
+| what one archive unpacks to | 10,000,000 entries, 16 TiB, 1000 times its packed size | `FETCHLOOM_ARCHIVE_FILES`, `FETCHLOOM_ARCHIVE_SIZE`, `FETCHLOOM_ARCHIVE_RATIO`, for an archive you trust |
 
 a stopped download keeps what it fetched and goes on from there in the next run, so a pull of hundreds of gigabytes survives a dropped connection or a full disk.
 

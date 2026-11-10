@@ -123,12 +123,46 @@ fn large_archives_with_modest_expansion_unpack() {
 
 #[test]
 fn a_ratio_bomb_is_refused() {
+    // deflate cannot pass about 1032 times, so a ratio below that catches every family
+    let limits = Limits {
+        ratio: 200,
+        ..Limits::default()
+    };
     let zeros = vec![0; 10 << 20];
     for format in FAMILIES {
         let bomb = archive(format, &[("zeros.bin", &zeros)]);
-        let err = Scratch::new().refuse(format, &bomb);
+        let scratch = Scratch::new();
+        let err = scratch
+            .unpack_with(format, &bomb, &limits, &|_| false)
+            .unwrap_err();
+        scratch.assert_empty();
         assert_eq!(err.kind, Kind::SourceInvalid);
         assert!(err.message.contains("200 times"), "{}", err.message);
+        assert!(
+            err.help
+                .as_deref()
+                .is_some_and(|help| help.contains("FETCHLOOM_ARCHIVE_RATIO")),
+            "{:?}",
+            err.help
+        );
+    }
+}
+
+#[test]
+fn the_default_limits_let_big_archives_through_and_stop_bombs() {
+    let limits = Limits::default();
+    assert_eq!(limits.members, 10_000_000);
+    assert_eq!(limits.bytes, 16 << 40);
+    assert_eq!(limits.ratio, 1_000);
+    let zeros = vec![0; 32 << 20];
+    for format in [Format::TarBz2, Format::TarXz, Format::TarZst] {
+        let bomb = archive(format, &[("zeros.bin", &zeros)]);
+        let err = Scratch::new().refuse(format, &bomb);
+        assert!(
+            err.message.contains("1000 times"),
+            "{format:?}: {}",
+            err.message
+        );
     }
 }
 

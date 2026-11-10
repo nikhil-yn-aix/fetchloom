@@ -38,7 +38,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 8] = [
+const KEYS: [(&str, &str); 11] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -47,6 +47,9 @@ const KEYS: [(&str, &str); 8] = [
     ("ask_above", "FETCHLOOM_ASK_ABOVE"),
     ("memory", "FETCHLOOM_MEMORY"),
     ("most_files", "FETCHLOOM_MOST_FILES"),
+    ("archive_files", "FETCHLOOM_ARCHIVE_FILES"),
+    ("archive_size", "FETCHLOOM_ARCHIVE_SIZE"),
+    ("archive_ratio", "FETCHLOOM_ARCHIVE_RATIO"),
 ];
 
 /// where a setting's value came from.
@@ -231,6 +234,12 @@ pub(crate) struct Settings {
     pub(crate) memory: Set<u64>,
     /// the most files one dataset may list, sized from `memory` unless set.
     pub(crate) most_files: Set<usize>,
+    /// the most entries one archive may unpack to.
+    pub(crate) archive_files: Set<u64>,
+    /// the most bytes one archive may unpack to.
+    pub(crate) archive_size: Set<u64>,
+    /// the most bytes one archive may unpack to for each compressed byte.
+    pub(crate) archive_ratio: Set<u64>,
 }
 
 impl Settings {
@@ -253,6 +262,9 @@ impl Settings {
             timeout: Set::default(TIMEOUT),
             ask_above: Set::default(ASK_ABOVE),
             most_files: most_files(memory),
+            archive_files: Set::default(crate::archive::Limits::default().members),
+            archive_size: Set::default(crate::archive::Limits::default().bytes),
+            archive_ratio: Set::default(crate::archive::Limits::default().ratio),
             memory,
         }
     }
@@ -281,9 +293,35 @@ impl Settings {
             timeout: seconds(&given, "timeout", 1..=3600, defaults.timeout)?,
             ask_above: size(&given, "ask_above", defaults.ask_above)?,
             most_files: count(&given, "most_files", 1..=1_000_000_000, most_files(memory))?,
+            archive_files: count(
+                &given,
+                "archive_files",
+                1..=1_000_000_000_000,
+                defaults.archive_files,
+            )?,
+            archive_size: size(&given, "archive_size", defaults.archive_size)?,
+            archive_ratio: count(
+                &given,
+                "archive_ratio",
+                1..=1_000_000_000,
+                defaults.archive_ratio,
+            )?,
             memory,
             file,
         })
+    }
+
+    /// the limits every archive unpacks within: as set, with each of the at most four archives
+    /// unpacking at once given a quarter of the memory budget to decompress in, never less than
+    /// the default.
+    pub(crate) fn archive_limits(&self) -> crate::archive::Limits {
+        let defaults = crate::archive::Limits::default();
+        crate::archive::Limits {
+            members: self.archive_files.value,
+            bytes: self.archive_size.value,
+            ratio: self.archive_ratio.value,
+            memory: (self.memory.value / 4).max(defaults.memory),
+        }
     }
 
     /// how many batches each download may queue for its hash worker: the memory budget shared
@@ -608,6 +646,37 @@ mod tests {
         assert_eq!(
             error.message,
             "FETCHLOOM_MOST_FILES is \"0\", which is not a number from 1 to 1000000000"
+        );
+    }
+
+    #[test]
+    fn archives_unpack_within_their_settings_and_a_share_of_the_memory() {
+        let defaults = crate::archive::Limits::default();
+        let limits = |pairs: &[(&str, &str)]| {
+            Settings::read(&env(pairs), File::default(), machine(None))
+                .unwrap()
+                .archive_limits()
+        };
+        assert_eq!(limits(&[]), defaults);
+        let raised = limits(&[
+            ("FETCHLOOM_ARCHIVE_FILES", "50000000"),
+            ("FETCHLOOM_ARCHIVE_SIZE", "64T"),
+            ("FETCHLOOM_ARCHIVE_RATIO", "5000"),
+            ("FETCHLOOM_MEMORY", "16G"),
+        ]);
+        assert_eq!(
+            raised,
+            crate::archive::Limits {
+                members: 50_000_000,
+                bytes: 64 << 40,
+                ratio: 5_000,
+                memory: 4 << 30,
+            }
+        );
+        // a small budget never takes decoders below what fetchloom always allowed
+        assert_eq!(
+            limits(&[("FETCHLOOM_MEMORY", "64M")]).memory,
+            defaults.memory
         );
     }
 

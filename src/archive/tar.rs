@@ -25,27 +25,29 @@ const HEADERS_CAP: u64 = 16 << 20;
 /// while a header of a few bytes may ask for 4 GiB before any output.
 pub(super) const XZ_MEMORY: u64 = 256 << 20;
 
-/// the largest window a zstd frame may ask for: 128 MiB, libzstd's own default. `zstd --long`
-/// stays within it, while `--long=28` and above go past it.
-pub(super) const ZSTD_WINDOW: u64 = 1 << ZSTD_WINDOW_LOG;
-
-const ZSTD_WINDOW_LOG: u32 = 27;
+/// the largest window a zstd frame may ask for, as a power of two: half of `memory`, as the window
+/// shares it with the decoder's buffers, never less than libzstd's own default of 128 MiB, which
+/// `zstd --long` stays within, and at most the 2 GiB that `--long=31` asks for.
+fn zstd_window_log(memory: u64) -> u32 {
+    (memory / 2).max(1).ilog2().clamp(27, 31)
+}
 
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
 /// to end, as pigz, bgzip and pbzip2 write them.
 pub(super) fn decompressed<'r>(
     format: Format,
     compressed: impl BufRead + 'r,
+    memory: u64,
 ) -> io::Result<Box<dyn Read + 'r>> {
     Ok(match format {
         Format::TarGz => Box::new(MultiGzDecoder::new(compressed)),
         Format::TarXz => Box::new(XzDecoder::new_stream(
             compressed,
-            Stream::new_auto_decoder(XZ_MEMORY, CONCATENATED)?,
+            Stream::new_auto_decoder(memory.max(XZ_MEMORY), CONCATENATED)?,
         )),
         Format::TarZst => {
             let mut decoder = zstd::stream::read::Decoder::with_buffer(compressed)?;
-            decoder.window_log_max(ZSTD_WINDOW_LOG)?;
+            decoder.window_log_max(zstd_window_log(memory))?;
             Box::new(decoder)
         }
         Format::TarBz2 => Box::new(MultiBzDecoder::new(compressed)),
@@ -61,7 +63,7 @@ pub(super) fn needs_too_much_memory(err: &(dyn std::error::Error + 'static)) -> 
         .is_some_and(|inner| *inner == liblzma::stream::Error::MemLimit)
 }
 
-/// whether `err` is a zstd frame refused for asking a window larger than [`ZSTD_WINDOW`].
+/// whether `err` is a zstd frame refused for asking a window larger than its decoder allows.
 pub(super) fn needs_too_large_window(err: &(dyn std::error::Error + 'static)) -> bool {
     use zstd::zstd_safe::{get_error_name, zstd_sys::ZSTD_ErrorCode};
     // the zstd crate keeps only libzstd's name for the error, so the name is what tells it apart
@@ -79,10 +81,15 @@ pub(super) fn unreadable_stream(
     err: &(dyn std::error::Error + 'static),
 ) -> Error {
     if needs_too_large_window(err) {
-        return refused(format!(
-            "the archive's zstd stream needs a window larger than {} to unpack",
-            units::size(ZSTD_WINDOW)
-        ));
+        let window = 1 << zstd_window_log(super::Limits::current().memory);
+        return super::past(
+            format!(
+                "the archive's zstd stream needs a window larger than {} to unpack",
+                units::size(window)
+            ),
+            "FETCHLOOM_MEMORY, which gives each archive a quarter of it",
+            "memory",
+        );
     }
     damaged(at, err)
 }
@@ -98,7 +105,9 @@ pub(super) fn unpack(
         inner: BufReader::with_capacity(BUFFER, file),
         meter: guard.meter(),
     };
-    let decoded = decompressed(format, counted).map_err(|err| unreadable_stream(None, &err))?;
+    let memory = guard.limits().memory;
+    let decoded =
+        decompressed(format, counted, memory).map_err(|err| unreadable_stream(None, &err))?;
     let headers = Headers::default();
     let mut tar = Archive::new(Capped {
         inner: decoded,
@@ -459,7 +468,22 @@ mod tests {
             raw_entry(tar, b"a.csv", EntryType::Regular, b"1");
         });
         let err = Scratch::new().refuse(Format::TarZst, &compress(Format::TarZst, &tar));
-        assert!(err.message.contains("200 times"), "{}", err.message);
+        assert!(err.message.contains("1000 times"), "{}", err.message);
+    }
+
+    #[test]
+    fn a_zstd_window_takes_half_the_memory_within_libzstd_bounds() {
+        let mib = 1 << 20;
+        for (memory, log) in [
+            (1, 27),
+            (256 * mib, 27),
+            (512 * mib, 28),
+            (1024 * mib, 29),
+            (4096 * mib, 31),
+            (u64::MAX, 31),
+        ] {
+            assert_eq!(super::zstd_window_log(memory), log, "{memory}");
+        }
     }
 
     #[test]

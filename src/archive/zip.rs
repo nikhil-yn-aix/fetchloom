@@ -467,7 +467,10 @@ mod tests {
                 .unwrap();
         }
         let bytes = writer.finish().unwrap().into_inner();
-        let limits = crate::archive::Limits::default();
+        let limits = crate::archive::Limits {
+            ratio: 200,
+            ..crate::archive::Limits::default()
+        };
         assert!((payload.len() as u64) * 512 > bytes.len() as u64 * limits.ratio);
         assert!(
             ::zip::ZipArchive::new(Cursor::new(&bytes))

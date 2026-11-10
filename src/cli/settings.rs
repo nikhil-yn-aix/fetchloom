@@ -88,13 +88,6 @@ pub(super) fn run(context: &Context) -> Report {
 fn rows(context: &Context) -> Vec<Shown> {
     let settings = &context.settings;
     let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
-    let from_env = |name: &str| {
-        if var(name).is_some() {
-            Origin::Environment
-        } else {
-            Origin::Default
-        }
-    };
     let mut shown = Vec::new();
     let cache = super::cache_folder();
     shown.push(Shown {
@@ -140,6 +133,33 @@ fn rows(context: &Context) -> Vec<Shown> {
         settings.most_files.value,
         settings.most_files.origin,
     ));
+    shown.push(count(
+        "archive_files",
+        settings.archive_files.value,
+        settings.archive_files.origin,
+    ));
+    shown.push(size("archive_size", settings.archive_size));
+    shown.push(count(
+        "archive_ratio",
+        settings.archive_ratio.value,
+        settings.archive_ratio.origin,
+    ));
+    shown.extend(variables(context));
+    shown
+}
+
+/// the settings only a variable sets: threads, rate and split.
+fn variables(context: &Context) -> Vec<Shown> {
+    let settings = &context.settings;
+    let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    let from_env = |name: &str| {
+        if var(name).is_some() {
+            Origin::Environment
+        } else {
+            Origin::Default
+        }
+    };
+    let mut shown = Vec::new();
     let threads = context.threads.limit(settings.machine.processors.max(1));
     shown.push(Shown {
         name: "threads",

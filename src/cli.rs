@@ -461,6 +461,7 @@ pub(crate) fn run() -> ExitCode {
         Ok(settings) => {
             crate::cache::set_hash_batches(settings.hash_batches());
             crate::source::set_most_files(settings.most_files.value);
+            crate::archive::set_limits(settings.archive_limits());
             context.settings = settings;
         }
         Err(error) => return finish::<()>(&context, name, Err(error), started),
