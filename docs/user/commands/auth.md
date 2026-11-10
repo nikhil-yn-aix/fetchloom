@@ -79,7 +79,7 @@ a gated hugging face dataset, a restricted zenodo record or a kaggle competition
 fetchloom auth
 ```
 
-`fetchloom auth status` does the same. it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
+it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
 
 ```text
   Signed in hugging face as ada · /home/ada/.cache/huggingface/token

@@ -60,7 +60,7 @@ pub(crate) enum Secret {
     Password,
 }
 
-/// where a key came from, as `auth status` shows it.
+/// where a key came from, as `auth` shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
     Variable(&'static str),
@@ -535,7 +535,7 @@ pub(crate) fn dataverses(var: Var<'_>) -> Vec<String> {
     hosts
 }
 
-/// every account worth listing in `auth status`: the sources, and each dataverse and login host
+/// every account worth listing in `auth`: the sources, and each dataverse and login host
 /// a key is known for.
 pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
     let mut accounts = vec![

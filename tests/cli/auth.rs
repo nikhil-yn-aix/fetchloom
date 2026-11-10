@@ -49,20 +49,25 @@ fn nobody_is_signed_in_on_a_fresh_machine() -> Result {
     Ok(())
 }
 
+/// plain `auth` lists every account. `auth status`, the spelling other tools use, is no command,
+/// and its help names the one that is.
 #[test]
-fn auth_status_lists_every_account_like_plain_auth() -> Result {
+fn auth_alone_lists_every_account() -> Result {
     let sandbox = Sandbox::new()?;
     let plain = sandbox.run(&["auth", "--offline"])?;
-    let status = sandbox.run(&["auth", "status", "--offline"])?;
-    assert!(status.status.success(), "{}", text(&status.stderr)?);
-    let story = text(&status.stderr)?;
-    assert_eq!(story, text(&plain.stderr)?);
+    assert!(plain.status.success(), "{}", text(&plain.stderr)?);
+    let story = text(&plain.stderr)?;
     assert!(
         story
             .lines()
             .any(|line| line.starts_with(" Signed out hugging face, kaggle, zenodo")),
         "{story}"
     );
+    let status = sandbox.run(&["--json", "auth", "status", "--offline"])?;
+    assert_eq!(status.status.code(), Some(2), "{}", text(&status.stdout)?);
+    let error = &json(&status)?["errors"][0];
+    assert_eq!(error["kind"], "usage");
+    assert_eq!(error["fix"], "fetchloom auth");
     Ok(())
 }
 

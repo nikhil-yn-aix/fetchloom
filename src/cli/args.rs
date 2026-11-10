@@ -515,9 +515,7 @@ impl Command {
             Command::Settings(_) => "settings",
             Command::Get(_) => "get",
             Command::Search(_) => "search",
-            Command::Auth(Auth {
-                action: None | Some(AuthAction::Status),
-            }) => "auth",
+            Command::Auth(Auth { action: None }) => "auth",
             Command::Auth(Auth {
                 action: Some(AuthAction::Login(_)),
             }) => "auth login",
@@ -576,10 +574,6 @@ pub(crate) enum AuthAction {
     /// remove a key fetchloom or the source's tools saved
     #[command(override_usage = "fetchloom auth logout [options] <account>", help_template = TEMPLATE, after_help = examples::LOGOUT)]
     Logout(Logout),
-
-    /// list each account, as plain `fetchloom auth` does
-    #[command(hide = true, override_usage = "fetchloom auth [options]", help_template = TEMPLATE)]
-    Status,
 }
 
 /// options of `auth login`.
@@ -835,22 +829,24 @@ mod tests {
     }
 
     #[test]
-    fn cache_verify_has_one_name_and_auth_status_reports_auth() {
-        assert_eq!(
-            Args::try_parse_from(["fetchloom", "cache", "check"])
-                .unwrap_err()
-                .kind(),
-            clap::error::ErrorKind::InvalidSubcommand
-        );
+    fn cache_verify_and_auth_each_have_one_name() {
         for line in [
-            &["fetchloom", "auth"][..],
+            &["fetchloom", "cache", "check"][..],
             &["fetchloom", "auth", "status"][..],
         ] {
             assert_eq!(
-                Args::try_parse_from(line).unwrap().command.unwrap().name(),
-                "auth"
+                Args::try_parse_from(line).unwrap_err().kind(),
+                clap::error::ErrorKind::InvalidSubcommand
             );
         }
+        assert_eq!(
+            Args::try_parse_from(["fetchloom", "auth"])
+                .unwrap()
+                .command
+                .unwrap()
+                .name(),
+            "auth"
+        );
         assert_eq!(
             Args::try_parse_from(["fetchloom", "cache", "verify"])
                 .unwrap()

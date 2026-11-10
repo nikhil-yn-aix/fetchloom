@@ -123,10 +123,11 @@ fn message(err: &clap::Error) -> String {
     }
 }
 
-/// what a command people bring from pip, git, npm or wget is called here: the nearest
+/// what a command people bring from pip, git, gh, npm or wget is called here: the nearest
 /// spelling would send `install` to `list` and `update` to `path`.
 fn habit(command: &str) -> Option<&'static str> {
     Some(match command {
+        "auth status" => "`fetchloom auth` alone lists each account and whether it is signed in",
         "init" => "no init needed: `fetchloom add <link>` starts a project in this folder",
         "new" => "no setup needed: `fetchloom add <link>` starts a project in this folder",
         "install" => "`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/",
@@ -177,10 +178,13 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         });
     let help = if let Some(placement) = placement.or(quoted) {
         placement
-    } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
+    } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand)
         .then(|| named(ContextKind::InvalidSubcommand))
         .flatten()
-        .and_then(|command| habit(&command))
+        .and_then(|command| match parent {
+            Some(parent) => habit(&format!("{parent} {command}")),
+            None => habit(&command),
+        })
     {
         meant.to_owned()
     } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
@@ -446,6 +450,12 @@ mod tests {
             );
             assert_eq!(error.help.as_deref(), Some(help), "{word}");
         }
+        let status = problem(&["fetchloom", "auth", "status"])?;
+        assert_eq!(status.message, "there is no command called \"status\"");
+        assert_eq!(
+            status.help.as_deref(),
+            Some("`fetchloom auth` alone lists each account and whether it is signed in")
+        );
         Ok(())
     }
 

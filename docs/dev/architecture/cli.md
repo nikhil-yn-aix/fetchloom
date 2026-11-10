@@ -72,7 +72,7 @@ plain-word `add` and `get` call `search::pick` before source resolution. an inte
 6. add its page under [docs/user/commands](../../user/commands/README.md), link it from that index, the [user guide](../../user/README.md) and the book's [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md), and update [llms.txt](https://github.com/nikhil-yn-aix/fetchloom/blob/main/llms.txt). document its result and failure payloads in the [JSON reference](../../user/reference/json-output.md).
 7. run the owning tests, [review snapshots](../engineering/building-and-testing.md#update-snapshots), then run the full gate.
 
-`cache verify` has no other name. `auth status` is a hidden name for `auth`, the form people know from other tools.
+every command has one name. a name people bring from other tools, such as `install` or `auth status`, is a usage error whose help names the command meant; `habit` in [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) holds them.
 
 ### adding an option
 

@@ -26,7 +26,7 @@ pub(super) enum Report {
     },
 }
 
-/// one account in `auth status`.
+/// one account in `auth`.
 #[derive(Serialize)]
 pub(super) struct State {
     account: String,
@@ -48,7 +48,7 @@ pub(super) struct Outcome {
 
 pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Error> {
     match args.action {
-        None | Some(AuthAction::Status) => status(context).await,
+        None => status(context).await,
         Some(AuthAction::Login(login)) => {
             let account = Account::parse(&login.account, login.host.as_deref())?;
             sign_in(context, &account, &login, false)
