@@ -70,3 +70,9 @@ then each member runs `umask 002`, so the files and folders they add stay writab
 ## no internet on compute nodes
 
 a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. [CI](ci.md) shows the same idea for build machines.
+
+## backups and copies
+
+a file fetchloom placed by hardlink and its cached copy are one file with two names. `rsync -a` copies each name as a file of its own, so a backup of a project together with its cache stores every file twice. `rsync -aH`, and `cp -a` on linux, keep the links among the files they copy. in one test on linux, a project and its cache holding one 4.0 MiB file took 4.1 MiB after `rsync -aH` and 8.1 MiB after `rsync -a`.
+
+`status` and `sync` in such a copy report nothing wrong and leave both copies as they are. to link a copy's files to its cache again, delete its `data/` folder, if it holds no edits you need, and run `fetchloom sync` there with `FETCHLOOM_CACHE` naming that cache. to copy a project alone, leave `data/` out and run `fetchloom sync` in the copy.
