@@ -121,7 +121,10 @@ impl Volume {
 
     /// renames a verified replacement over an old file without leaving its name empty. windows
     /// may require clearing the old file's read-only flag; restoring it through the same handle
-    /// also restores any placed hardlinks, without changing the new file at the name.
+    /// also restores any placed hardlinks, without changing the new file at the name. a volume
+    /// that cannot rename over the old file, as FAT and exFAT on windows may not, moves it aside
+    /// into the scratch folder first and puts it back when the new file cannot take its name, so
+    /// its bytes stay until the replacement is in place.
     pub(crate) fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
         // FAT and exFAT on windows answer a rename over a read-only file with "already exists"
         let refused = match self.rename(from, to) {
@@ -144,24 +147,49 @@ impl Volume {
         file.set_permissions(writable(before.clone()))?;
         if self.can_hardlink() == Some(false) {
             // FAT and exFAT: an open handle blocks renaming over the old file, and some refuse to
-            // rename over a file at all. the old file has no other name, so it may go first
+            // rename over a file at all. they make no hardlinks, so the cleared flag reaches no
+            // other name
             drop(file);
             if self.rename(from, to).is_ok() {
                 return Ok(());
             }
-            if let Err(err) = (self.remove_file)(to) {
-                // the old file stays, as sealed as it was
-                if let Ok(file) = open_attributes(to) {
-                    let _ = file.set_permissions(before);
-                }
-                return Err(err);
-            }
-            return self.rename(from, to);
+            return self.replace_aside(from, to, &before);
         }
         // a hardlink placed in a project may still name the old file, so it gets its flag back
         let renamed = self.rename(from, to);
         let restored = file.set_permissions(before);
         renamed.and(restored)
+    }
+
+    /// replaces `to` with `from` by moving the old file aside first, and back when `from` cannot
+    /// take its name, sealed again with the permissions it had, `before`.
+    fn replace_aside(&self, from: &Path, to: &Path, before: &Permissions) -> io::Result<()> {
+        let reseal = || {
+            if let Ok(file) = open_attributes(to) {
+                let _ = file.set_permissions(before.clone());
+            }
+        };
+        let aside = self
+            .scratch
+            .join(format!(".fetchloom-{:016x}.old", fastrand::u64(..)));
+        if let Err(err) = self.rename(to, &aside) {
+            reseal();
+            return Err(err);
+        }
+        match self.rename(from, to) {
+            Ok(()) => {
+                let _ = (self.remove_file)(&aside);
+                Ok(())
+            }
+            Err(err) => {
+                // a sealed object another writer published meanwhile refuses the move back, and
+                // the old bytes then stay aside, where gc finds them
+                if self.rename(&aside, to).is_ok() {
+                    reseal();
+                }
+                Err(err)
+            }
+        }
     }
 
     /// removes the file at `path`. FAT32 and exFAT refuse to remove a read-only file on windows.
@@ -494,6 +522,54 @@ mod tests {
         assert!(object.exists());
         assert!(fs::metadata(&placed).unwrap().permissions().readonly());
         assert_eq!(probes_left(dir.path()), 0);
+    }
+
+    /// FAT and exFAT on windows may rename over no file at all, so a replacement moves the old
+    /// file aside first. the old bytes stay at their name until the new file takes it: when the
+    /// new file cannot, the old one goes back, read-only as it was.
+    #[test]
+    fn a_replacement_on_fat_keeps_the_old_file_until_the_new_one_has_its_name() {
+        let renaming_over_nothing: fn(&Path, &Path) -> io::Result<()> = |from, to| {
+            if fs::symlink_metadata(to).is_ok() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            fs::rename(from, to)
+        };
+        let refusing_the_new_file: fn(&Path, &Path) -> io::Result<()> = |from, to| {
+            if fs::symlink_metadata(to).is_ok() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            if from.file_name().is_some_and(|name| name == "new") {
+                return Err(io::Error::other("the disk refused the new file"));
+            }
+            fs::rename(from, to)
+        };
+        for (rename, replaced) in [
+            (refusing_the_new_file, false),
+            (renaming_over_nothing, true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let fat = Volume {
+                rename,
+                ..volume(dir.path(), false)
+            };
+            let old = dir.path().join("object");
+            sealed(&old);
+            let new = dir.path().join("new");
+            fs::write(&new, b"new").unwrap();
+            seal(&new);
+
+            let result = fat.replace(&new, &old);
+
+            assert_eq!(result.is_ok(), replaced, "{result:?}");
+            let expected: &[u8] = if replaced { b"new" } else { b"abc" };
+            assert_eq!(fs::read(&old).unwrap(), expected);
+            assert_eq!(new.exists(), !replaced);
+            if !replaced {
+                assert!(fs::metadata(&old).unwrap().permissions().readonly());
+            }
+            assert_eq!(probes_left(dir.path()), 0, "nothing is left aside");
+        }
     }
 
     #[test]
