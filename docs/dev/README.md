@@ -61,7 +61,7 @@ commands run from the repository root. start with one named test inside the indi
 
 | change | page and first file | tests to run |
 |---|---|---|
-| add a source | [sources](architecture/sources.md), [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | `cargo test --locked --lib source::`; `cargo test --locked --test cli get::`; `cargo test --locked --test cli project::` |
+| add a source | [sources](architecture/sources.md), [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | `cargo test --locked --lib source::`; `cargo test --locked --test cli get::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli project::` |
 | change output | [output](architecture/output.md), [output.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/output.rs) | `cargo test --locked --lib output::`; `cargo test --locked --test cli progress::`; `cargo test --locked --test cli hints::` |
 | fix a placement bug | [placing](architecture/placing.md), [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | `cargo test --locked --lib place::`; `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
 | change the network layer | [network](architecture/network.md), [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs) | `cargo test --locked --lib net::`; `cargo test --locked --test cli split::`; `cargo test --locked --test cli proxy::`; `cargo test --locked --test cli secrets::` |

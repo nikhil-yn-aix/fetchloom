@@ -29,7 +29,7 @@ flowchart TD
     sync --> output
 ```
 
-`cli/project.rs` orders project mutations. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. the [primitives](primitives.md) page covers shared types omitted from the call graph.
+`cli/project.rs` orders project mutations for `sync` and `lock`, and `cli/add.rs`, `cli/remove.rs` and `cli/path.rs` for their own commands. `cli/sync/place.rs` uses `plan` to decide what is needed and `place` to do filesystem work. the cache uses `place::real_folder` for directory checks; placement uses `cache::read_unfollowed` when copying an object. the [primitives](primitives.md) page covers shared types omitted from the call graph.
 
 ## the life of sync
 

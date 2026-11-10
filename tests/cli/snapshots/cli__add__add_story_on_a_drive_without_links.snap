@@ -1,9 +1,10 @@
 ---
-source: tests/cli/project.rs
-assertion_line: 133
+source: tests/cli/add.rs
+assertion_line: 57
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
+warning: the drive holding data cannot link files, so files were copied
     Started a project in [sandbox]/work
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`

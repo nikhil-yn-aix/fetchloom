@@ -1,5 +1,6 @@
 //! the command line: read the arguments, run the command, return the exit code.
 
+mod add;
 mod args;
 mod auth;
 mod cache;
@@ -9,7 +10,9 @@ mod get;
 mod help;
 mod list;
 mod logs;
+mod path;
 mod project;
+mod remove;
 mod search;
 mod settings;
 mod status;
@@ -582,11 +585,11 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
     let name = Some(command.name());
     match command {
         args::Command::Add(args) => {
-            let outcome = block_on(context, project::add(context, args));
+            let outcome = block_on(context, add::add(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Remove(args) => {
-            let outcome = block_on(context, project::remove(context, args));
+            let outcome = block_on(context, remove::remove(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {
@@ -602,7 +605,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::Path(args) => {
-            let outcome = block_on(context, project::path(context, args));
+            let outcome = block_on(context, path::path(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache { action: None }) => {

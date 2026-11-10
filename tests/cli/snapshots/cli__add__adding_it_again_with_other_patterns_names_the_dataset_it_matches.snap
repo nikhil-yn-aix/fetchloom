@@ -1,5 +1,5 @@
 ---
-source: tests/cli/project.rs
+source: tests/cli/add.rs
 assertion_line: 87
 expression: stderr
 ---

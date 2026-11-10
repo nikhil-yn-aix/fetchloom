@@ -1,5 +1,6 @@
 //! the binary as a user runs it, against servers scripted on this machine.
 
+mod add;
 mod archives;
 mod auth;
 mod basics;
@@ -13,11 +14,13 @@ mod dry_run;
 mod get;
 mod hints;
 mod moved;
+mod path;
 mod placing;
 mod progress;
 mod project;
 mod proxy;
 mod recovery;
+mod remove;
 mod search;
 mod secrets;
 mod split;

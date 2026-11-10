@@ -71,7 +71,7 @@ a waiting `path` notices a changed state file and runs the normal read-only read
 |---|---|
 | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs), [manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs), [lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs), [state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | `cargo test --locked --lib project::` |
 | [concurrent.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/concurrent.rs) | `cargo test --locked --test cli concurrent::` |
-| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli project::`; `cargo test --locked --test cli moved::` |
+| [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs), [add.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/add.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli moved::` |
 
 the lock reader models use fixed generated inputs and mutations to compare canonical and general TOML decoding, including escaped strings, integer limits, line endings, path rejection and deterministic rendering.
 

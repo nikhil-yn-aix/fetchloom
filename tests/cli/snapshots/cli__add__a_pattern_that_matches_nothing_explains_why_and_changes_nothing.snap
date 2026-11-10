@@ -1,5 +1,5 @@
 ---
-source: tests/cli/project.rs
+source: tests/cli/add.rs
 expression: stderr
 ---
 error: the pattern "*.txt" matched no file in http://127.0.0.1:[port]/files/iris.csv

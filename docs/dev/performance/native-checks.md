@@ -59,7 +59,7 @@ use the native host target, including arm64 on an arm64 machine. run the [full g
 | redirects and secret masking through the executable | `cargo test --locked --test cli secrets::`; `cargo test --locked --test cli proxy::` |
 | concurrent cold downloads and gc exclusion | `cargo test --locked --test cli concurrent::`; `cargo test --locked --test cli cache::` |
 | folder handles, link roots, long paths, copies and interruption | `cargo test --locked --lib place::`; `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |
-| project pins, aliases, help routing and JSON | `cargo test --locked --test cli project::`; `cargo test --locked --test cli basics::`; `cargo test --locked --test cli hints::`; `cargo test --locked --lib cli::sync::disk::` |
+| project pins, aliases, help routing and JSON | `cargo test --locked --test cli project::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli path::`; `cargo test --locked --test cli remove::`; `cargo test --locked --test cli basics::`; `cargo test --locked --test cli hints::`; `cargo test --locked --lib cli::sync::disk::` |
 
 check selected-test counts and native exit codes. windows cases include metadata crossing 260 characters, a refused 300-character working folder, non-BMP names and complete JSON failures. on macos, run composed/decomposed-name cases on apfs and hfs+, and distinguish aliases from separate files on case-sensitive apfs when available. use the [CI filesystem recipes](../engineering/ci.md#filesystem-runs) for owned virtual volumes; never format a physical disk for this check.
 
