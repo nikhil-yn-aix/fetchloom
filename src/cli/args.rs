@@ -62,8 +62,9 @@ on disk: nothing. it reads data.toml and data.lock";
   fetchloom path iris
   fetchloom path iris/Iris.csv
   fetchloom path iris -q
+  fetchloom path iris --locked
 
-on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchloom sync` does";
+on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchloom sync` does, or with --locked fails rather than change data.lock";
 
     pub(super) const SETTINGS: &str = "examples:
   fetchloom settings
@@ -751,6 +752,10 @@ pub(crate) struct Path {
     /// a dataset's name, or a file inside it as name/path
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) target: String,
+
+    /// fail instead of updating data.lock when it is out of date with data.toml, for CI
+    #[arg(long, help_heading = "options")]
+    pub(crate) locked: bool,
 }
 
 /// fetch something once, without a project

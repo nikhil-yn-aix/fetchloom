@@ -81,6 +81,51 @@ fn path_syncs_first_when_the_files_are_not_there() -> Result {
     Ok(())
 }
 
+/// `path --locked` never writes data.lock: a dataset added to data.toml by hand fails as
+/// `sync --locked` does, before any request, while a dataset already in place still answers.
+#[test]
+fn a_locked_path_fails_instead_of_pinning_a_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let weather = Server::start(
+        "/files/weather.csv",
+        vec![file(b"day,rain\n1,0\n", "\"w1\"")],
+    )?;
+    let manifest = sandbox.work().join("data.toml");
+    let before = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{before}\n[datasets.weather]\nref = \"{}\"\n", weather.url),
+    )?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read(&lock)?;
+    let refused = sandbox.run(&["--json", "path", "weather", "--locked"])?;
+    assert_eq!(refused.status.code(), Some(1), "{}", text(&refused.stdout)?);
+    let report = json(&refused)?;
+    let error = &report["errors"][0];
+    assert_eq!(error["kind"], "lock.outdated");
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["weather is not in data.lock yet"])
+    );
+    assert_eq!(
+        error["help"],
+        "run `fetchloom lock` and commit data.lock, or run path without --locked"
+    );
+    assert_eq!(report["work"]["requests"], 0);
+    assert_eq!(weather.requests().len(), 0);
+    assert_eq!(fs::read(&lock)?, pinned);
+    let ready = sandbox.run(&["path", "iris", "--locked"])?;
+    assert_eq!(ready.status.code(), Some(0), "{}", text(&ready.stderr)?);
+    assert_eq!(
+        text(&ready.stdout)?,
+        format!("{}\n", sandbox.work().join("data").join("iris").display())
+    );
+    assert_eq!(fs::read(&lock)?, pinned);
+    Ok(())
+}
+
 #[test]
 fn path_rejects_an_impossible_locked_member_before_syncing() -> Result {
     let sandbox = Sandbox::new()?;

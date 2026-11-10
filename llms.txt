@@ -15,7 +15,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
 - [search](docs/user/commands/search.md): concurrent public catalog search and explicit selection
 - [status](docs/user/commands/status.md): local differences and success-with-differences behavior
-- [path](docs/user/commands/path.md): absolute paths and implicit sync
+- [path](docs/user/commands/path.md): absolute paths, implicit sync, `--locked` and the `result.path` JSON answer
 - [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
 - [get](docs/user/commands/get.md): one-off downloads, repeatable real batch folders, cancellable link lists and explicit output-folder link rules
 - [cache](docs/user/commands/cache.md): inspection, exclusively locked garbage collection and verification; filesystem failures retain their causes

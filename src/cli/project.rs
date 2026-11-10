@@ -117,13 +117,12 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
     if args.locked {
-        let Some((lock, _)) = &read else {
-            return Err(Error::new(Kind::Outdated, "there is no data.lock yet")
-                .help("run `fetchloom lock` and commit data.lock, or sync without --locked"));
-        };
-        check(&project, &manifest, Some(lock)).map_err(|error| {
-            error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
-        })?;
+        locked(
+            &project,
+            &manifest,
+            read.as_ref().map(|(lock, _)| lock),
+            "sync without --locked",
+        )?;
     }
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
@@ -189,9 +188,7 @@ fn settled_unheld(
         return Ok(None);
     };
     if args.locked {
-        check(project, &manifest, Some(&lock)).map_err(|error| {
-            error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
-        })?;
+        locked(project, &manifest, Some(&lock), "sync without --locked")?;
     }
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
@@ -466,6 +463,24 @@ async fn preview_lock(
             ..Changes::default()
         }),
     })
+}
+
+/// what `--locked` asks: data.lock exists and is up to date with data.toml, or the command fails
+/// without writing it. `instead` is the other way out the help names, such as
+/// "sync without --locked".
+pub(super) fn locked(
+    project: &Project,
+    manifest: &Manifest,
+    lock: Option<&Lock>,
+    instead: &str,
+) -> Result<(), Error> {
+    let help = format!("run `fetchloom lock` and commit data.lock, or {instead}");
+    let Some(lock) = lock else {
+        return Err(Error::new(Kind::Outdated, "there is no data.lock yet").help(help));
+    };
+    check(project, manifest, Some(lock))
+        .map(drop)
+        .map_err(|error| error.help(help))
 }
 
 /// `lock --check`: compares without the network and without writing.

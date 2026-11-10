@@ -75,9 +75,10 @@ fetchloom --json get https://zenodo.org/records/3608990 -o flowers
 ```sh
 fetchloom --json path iris/Iris.csv
 fetchloom -q path iris
+fetchloom --json path iris --locked
 ```
 
-JSON `result.path` is the absolute path. the quiet form prints only the path on stdout. either can sync the whole project when the requested dataset is not ready. neither proves that an edited file was replaced.
+JSON `result.path` is the absolute path. the quiet form prints only the path on stdout. either can sync the whole project when the requested dataset is not ready. neither proves that an edited file was replaced. `--locked` keeps that sync from changing data.lock: when data.lock is missing or out of date with data.toml, it fails with `lock.outdated`, exit 1, before any request.
 
 `-C` chooses the folder where project discovery starts. the search includes its parents, up to the top of the git repository it starts in. quiet mode keeps stdout answers and errors; JSON warnings remain in the document.
 
@@ -121,8 +122,8 @@ iris = fetchloom.path("iris/Iris.csv", project=".", offline=True)
 
 | function | return |
 |---|---|
-| `fetchloom.sync(project=".", *, yes=False, offline=False, strict=False)` | absolute project root as `pathlib.Path` |
-| `fetchloom.path(name, project=".", *, yes=False, offline=False)` | dataset, file or subfolder as `pathlib.Path` |
+| `fetchloom.sync(project=".", *, yes=False, offline=False, strict=False, locked=False)` | absolute project root as `pathlib.Path` |
+| `fetchloom.path(name, project=".", *, yes=False, offline=False, locked=False)` | dataset, file or subfolder as `pathlib.Path` |
 
 `project` accepts a string or path-like object naming any folder in the project and defaults to the current directory. `path()` may sync the whole project and download data when the dataset is not ready.
 
@@ -130,8 +131,8 @@ the helper first looks for the executable beside the imported package or in its 
 
 both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. a file sync put back as pinned matches the lock again, so it raises nothing; its warning says what was put back. use CLI JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
 
-`yes`, `offline` and sync's `strict` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`.
+`yes`, `offline`, `locked` and sync's `strict` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`. `locked=True` passes `--locked`, so a data.lock that is missing or out of date with data.toml raises `lock.outdated` instead of being updated; use it in pipelines that must run on committed pins.
 
-neither helper exposes `--force` or `--locked`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
+neither helper exposes `--force`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
 
 a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. printed, or in a traceback, the error reads like the command line's: the message, then each detail and the help on a line of its own. a missing executable raises `FileNotFoundError`.

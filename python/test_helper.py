@@ -1,5 +1,6 @@
 """the python helper's command arguments and returned paths."""
 
+import itertools
 import json
 import pickle
 import subprocess
@@ -12,26 +13,29 @@ import fetchloom
 
 
 class HelperOptions(unittest.TestCase):
-    def test_path_and_sync_forward_approval_and_offline_flags(self):
+    def test_path_and_sync_forward_approval_offline_and_locked_flags(self):
         for command in ["path", "sync"]:
-            for yes, offline in [(False, False), (True, False), (False, True), (True, True)]:
-                with self.subTest(command=command, yes=yes, offline=offline):
+            for yes, offline, locked in itertools.product([False, True], repeat=3):
+                with self.subTest(command=command, yes=yes, offline=offline, locked=locked):
                     result = {"path": "resolved"} if command == "path" else {"project": "resolved"}
                     response = subprocess.CompletedProcess(
                         [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
                     )
+                    flags = {"yes": yes, "offline": offline, "locked": locked}
                     with patch.object(fetchloom, "_program", return_value="fetchloom"):
                         with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
                             if command == "path":
-                                actual = fetchloom.path("iris/data.csv", Path("project"), yes=yes, offline=offline)
+                                actual = fetchloom.path("iris/data.csv", Path("project"), **flags)
                                 arguments = ["path", "iris/data.csv"]
                             else:
-                                actual = fetchloom.sync(Path("project"), yes=yes, offline=offline)
+                                actual = fetchloom.sync(Path("project"), **flags)
                                 arguments = ["sync"]
                     if yes:
                         arguments.append("--yes")
                     if offline:
                         arguments.append("--offline")
+                    if locked:
+                        arguments.append("--locked")
                     self.assertEqual(actual, Path("resolved"))
                     self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "project", *arguments])
                     self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)

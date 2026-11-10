@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Read, Waited, find, hold_until, ignore_data, known, net, sync_all};
+use super::project::{Read, Waited, find, hold_until, ignore_data, known, locked, net, sync_all};
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
 use super::sync::{Loop, Upgrade};
@@ -70,6 +70,14 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                 )? {
                     path
                 } else {
+                    if args.locked {
+                        locked(
+                            &project,
+                            &manifest,
+                            read.as_ref().map(|(lock, _)| lock),
+                            "run path without --locked",
+                        )?;
+                    }
                     let cache = match cache {
                         Some(cache) => cache,
                         None => open_cache()?,

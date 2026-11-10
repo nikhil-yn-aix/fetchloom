@@ -74,6 +74,7 @@ def path(
     *,
     yes: bool = False,
     offline: bool = False,
+    locked: bool = False,
 ) -> Path:
     """return the absolute path of a dataset, or of a file or folder inside one.
 
@@ -81,13 +82,10 @@ def path(
     ``iris/Iris.csv``. ``project`` is the project folder or any folder inside it. when the
     dataset is not in place yet, fetchloom syncs the project first and may download data.
     ``yes=True`` approves large downloads; ``offline=True`` prevents network requests.
+    ``locked=True`` never changes data.lock: when that sync would, it raises :class:`Error`
+    with kind ``lock.outdated``.
     """
-    arguments = ["path", name]
-    if yes:
-        arguments.append("--yes")
-    if offline:
-        arguments.append("--offline")
-    return Path(_run(arguments, project)["path"])
+    return Path(_run(_options(["path", name], yes, offline, locked), project)["path"])
 
 
 def sync(
@@ -96,6 +94,7 @@ def sync(
     yes: bool = False,
     offline: bool = False,
     strict: bool = False,
+    locked: bool = False,
 ) -> Path:
     """make the project's data folder match data.lock and return the project's path.
 
@@ -106,14 +105,11 @@ def sync(
     as one linked to the cache's copy that was edited in place, matches the lock again: its
     warning says so and names the file that keeps the changed copy, and nothing is raised. a
     download above 1 GiB raises :class:`Error` with kind ``unconfirmed`` unless ``yes=True``
-    approves it. ``offline=True`` prevents network requests.
+    approves it. ``offline=True`` prevents network requests. ``locked=True`` raises
+    :class:`Error` with kind ``lock.outdated`` instead of updating a data.lock that is
+    missing or out of date with data.toml.
     """
-    arguments = ["sync"]
-    if yes:
-        arguments.append("--yes")
-    if offline:
-        arguments.append("--offline")
-    result = _run(arguments, project)
+    result = _run(_options(["sync"], yes, offline, locked), project)
     placement = result.get("placement") or {}
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
@@ -124,6 +120,13 @@ def sync(
             "save any changes you need, then run `fetchloom sync --force`",
         )
     return Path(result["project"])
+
+
+def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> list[str]:
+    for flag, wanted in [("--yes", yes), ("--offline", offline), ("--locked", locked)]:
+        if wanted:
+            arguments.append(flag)
+    return arguments
 
 
 def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
