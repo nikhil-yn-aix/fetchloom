@@ -96,12 +96,6 @@ anstyle-query = "1.1"
 winapi-util = "0.1"
 # safe volume filesystem names for the optional placement worker policy
 sysinfo = { version = "0.37", default-features = false, features = ["disk"] }
-# the memory a run may use; already under anstyle-query, so only a feature is added
-windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
-
-# the memory a run may use; already under rustix and tokio
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }

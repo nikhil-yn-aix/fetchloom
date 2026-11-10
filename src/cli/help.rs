@@ -60,8 +60,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        1 to 3600; 30 by default
   FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;
                        1G by default
-  FETCHLOOM_MEMORY     memory for download buffers, as 512M; by default a
-                       quarter of what is free, from 256M to 4G
+  FETCHLOOM_MEMORY     memory for download buffers, as 512M; on linux a quarter
+                       of what is free by default, from 256M to 4G; else 256M
   FETCHLOOM_THREADS    a cap on local worker threads, 1 to 256
   FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
   FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in

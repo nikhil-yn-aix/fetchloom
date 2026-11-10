@@ -787,7 +787,6 @@ dependencies = [
  "indicatif",
  "insta",
  "keyring",
- "libc",
  "liblzma",
  "md-5",
  "mimalloc",
@@ -813,7 +812,6 @@ dependencies = [
  "url",
  "webpki-root-certs",
  "winapi-util",
- "windows-sys 0.61.2",
  "zip",
  "zstd",
 ]

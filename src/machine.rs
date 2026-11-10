@@ -20,8 +20,8 @@ const OPEN_MAX: u64 = 10_240;
 pub(crate) struct Machine {
     /// processors the run may use, after a container's cpu quota and the affinity mask.
     pub(crate) processors: usize,
-    /// bytes of memory a run may use: what the system has free, or what is left under a
-    /// container's memory limit when that is less. none when the system does not say.
+    /// bytes of memory a run may use: on linux what the system has available, or what is left
+    /// under a container's memory limit when that is less. none elsewhere.
     pub(crate) memory: Option<u64>,
     /// files the process may hold open, after raising its soft limit as far as the system lets
     /// it. none where the system sets no such limit.
@@ -44,45 +44,9 @@ fn memory() -> Option<u64> {
     memory_under(Path::new("/"))
 }
 
-/// what macos reports as physical memory. it keeps much of the rest as caches it frees on demand,
-/// so half of it stands for what a run may use.
-#[cfg(target_os = "macos")]
-fn memory() -> Option<u64> {
-    let mut bytes: u64 = 0;
-    let mut size = size_of::<u64>();
-    // SAFETY: the name is a nul-terminated string and the out pointer and size describe `bytes`.
-    let status = unsafe {
-        libc::sysctlbyname(
-            c"hw.memsize".as_ptr(),
-            (&raw mut bytes).cast(),
-            &raw mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    (status == 0 && bytes > 0).then_some(bytes / 2)
-}
-
-#[cfg(windows)]
-fn memory() -> Option<u64> {
-    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
-    let mut status = MEMORYSTATUSEX {
-        dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).ok()?,
-        dwMemoryLoad: 0,
-        ullTotalPhys: 0,
-        ullAvailPhys: 0,
-        ullTotalPageFile: 0,
-        ullAvailPageFile: 0,
-        ullTotalVirtual: 0,
-        ullAvailVirtual: 0,
-        ullAvailExtendedVirtual: 0,
-    };
-    // SAFETY: `status` is a MEMORYSTATUSEX whose length field says its size, as the call needs.
-    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) };
-    (read != 0 && status.ullAvailPhys > 0).then_some(status.ullAvailPhys)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+/// other systems tell their free memory only through calls this crate keeps out, as it holds
+/// no unsafe code, so a run there uses `FETCHLOOM_MEMORY` or the smallest budget.
+#[cfg(not(target_os = "linux"))]
 fn memory() -> Option<u64> {
     None
 }

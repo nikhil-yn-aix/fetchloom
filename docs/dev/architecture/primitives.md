@@ -16,7 +16,7 @@ these modules contain small value types and policies used by more than one compo
 | [units.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/units.rs) | human sizes, rates, durations and clipping, and sizes typed as `512M` | `size`, `rate`, `speed`, `duration`, `count`, `clip`, `bytes` |
 | [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | filesystem capability and safe read-only removal | `Volume`, `can_hardlink`, `replace`, `remove_hardlink`, `is_plain`, `create_hidden` |
 | [settings.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs) | every setting with its origin: variable, settings file, machine or default | `Settings`, `File`, `Set`, `Origin`, `read`, `defaults`, `hash_batches` |
-| [machine.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/machine.rs) | what the machine allows: processors, available memory inside cgroup limits, open files | `Machine`, `read` |
+| [machine.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/machine.rs) | what the machine allows: processors, available memory on linux inside cgroup limits, open files | `Machine`, `read` |
 | [threads.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/threads.rs) | local worker ceilings | `Threads`, `read`, `limit`, `archives` |
 | [error.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/error.rs) | stable failure kinds and explanations | `Kind`, `Error`, `FileFailure`, `name`, `exit_code`, `advice` |
 | [stop.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/stop.rs) | shared cancellation | `Stop`, `ask`, `asked`, `is_asked`, `check` |
