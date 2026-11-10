@@ -51,7 +51,7 @@ pub(super) fn decompressed<'r>(
             Box::new(decoder)
         }
         Format::TarBz2 => Box::new(MultiBzDecoder::new(compressed)),
-        Format::Tar | Format::Zip => Box::new(compressed),
+        Format::Tar | Format::Zip | Format::SevenZ => Box::new(compressed),
     })
 }
 

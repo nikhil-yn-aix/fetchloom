@@ -2,8 +2,11 @@
 //! once their files are in, and refused whole when unsafe.
 
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+
+use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
 use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
 
@@ -285,6 +288,44 @@ fn add_with_no_extract_writes_extract_false() -> Result {
     assert!(manifest.contains("extract = false"), "{manifest}");
     let folder = sandbox.work().join("data").join("dataset");
     assert_eq!(fs::read(folder.join("dataset.zip"))?, zip);
+    Ok(())
+}
+
+/// the files python.zip holds, under the same top folder, in one solid 7z block.
+fn seven_zip() -> Result<Vec<u8>> {
+    let mut entries = Vec::new();
+    let mut readers = Vec::new();
+    for (path, bytes) in FILES {
+        let mut entry = ArchiveEntry::new_file(&format!("dataset/{path}"));
+        entry.has_stream = !bytes.is_empty();
+        entries.push(entry);
+        readers.push(SourceReader::from(bytes));
+    }
+    let mut writer = ArchiveWriter::new(Cursor::new(Vec::new()))?;
+    writer.push_archive_entries(entries, readers)?;
+    Ok(writer.finish()?.into_inner())
+}
+
+#[test]
+fn a_7z_unpacks_and_no_extract_keeps_it_packed() -> Result {
+    let seven = seven_zip()?;
+    let server = Server::start(
+        "/files/dataset.7z",
+        vec![file(&seven, "\"s1\""), file(&seven, "\"s1\"")],
+    )?;
+    let unpacked = Sandbox::new()?;
+    ok(&unpacked.run(&["add", &server.url])?)?;
+    holds_the_archive(&unpacked.work().join("data").join("dataset"))?;
+    let lock = fs::read_to_string(unpacked.work().join("data.lock"))?;
+    assert!(
+        lock.contains(&format!("unpacks_to = \"sha256:{TREE}\"")),
+        "{lock}"
+    );
+    let packed = Sandbox::new()?;
+    ok(&packed.run(&["add", "--no-extract", &server.url])?)?;
+    let folder = packed.work().join("data").join("dataset");
+    assert_eq!(fs::read(folder.join("dataset.7z"))?, seven);
+    assert_eq!(fs::read_dir(&folder)?.count(), 1, "only the 7z");
     Ok(())
 }
 

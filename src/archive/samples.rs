@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use ::tar::{Builder, EntryType, Header};
 use ::zip::ZipWriter;
 use ::zip::write::SimpleFileOptions;
+use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
 use super::{Format, Limits, Member, Unpacked, unpack};
 use crate::cache::Cache;
@@ -133,9 +134,41 @@ pub(super) fn pax(tar: &mut Builder<Vec<u8>>, records: &[(&str, &[u8])]) {
     raw_entry(tar, b"PaxHeader", EntryType::XHeader, &data);
 }
 
+/// a 7z holding `files` in one solid block, as 7-Zip writes them by default. a name ending in `/`
+/// is a folder, and a file without bytes holds no data, as 7-Zip keeps an empty file.
+pub(super) fn seven_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    seven_zip_with(|writer| {
+        let mut entries = Vec::new();
+        let mut readers = Vec::new();
+        for (name, bytes) in files {
+            let empty = match name.strip_suffix('/') {
+                Some(folder) => ArchiveEntry::new_directory(folder),
+                None if bytes.is_empty() => ArchiveEntry::new_file(name),
+                None => {
+                    entries.push(ArchiveEntry::new_file(name));
+                    readers.push(SourceReader::from(*bytes));
+                    continue;
+                }
+            };
+            writer.push_archive_entry::<&[u8]>(empty, None).unwrap();
+        }
+        if !entries.is_empty() {
+            writer.push_archive_entries(entries, readers).unwrap();
+        }
+    })
+}
+
+/// a 7z of what `write` pushes into it.
+pub(super) fn seven_zip_with(write: impl FnOnce(&mut ArchiveWriter<Cursor<Vec<u8>>>)) -> Vec<u8> {
+    let mut writer = ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+    write(&mut writer);
+    writer.finish().unwrap().into_inner()
+}
+
 pub(super) fn compress(format: Format, bytes: &[u8]) -> Vec<u8> {
     match format {
         Format::Zip | Format::Tar => bytes.to_vec(),
+        Format::SevenZ => panic!("a 7z is no compressed tar; use seven_zip"),
         Format::TarGz => {
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());

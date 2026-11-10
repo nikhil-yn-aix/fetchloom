@@ -9,6 +9,7 @@ use super::tar;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Format {
     Zip,
+    SevenZ,
     Tar,
     TarGz,
     TarXz,
@@ -19,7 +20,7 @@ pub(crate) enum Format {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Detected {
     Archive(Format),
-    /// an archive fetchloom does not unpack: `7z` or `rar`.
+    /// an archive fetchloom does not unpack: `rar`.
     Unsupported(&'static str),
     /// any other file, including a single compressed file such as `reads.fastq.gz`, which stays
     /// as it is.
@@ -39,7 +40,7 @@ pub(crate) fn detect(path: &Path) -> io::Result<Detected> {
         return Ok(Detected::Archive(Format::Zip));
     }
     if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
-        return Ok(Detected::Unsupported("7z"));
+        return Ok(Detected::Archive(Format::SevenZ));
     }
     if head.starts_with(b"Rar!\x1a\x07") {
         return Ok(Detected::Unsupported("rar"));
@@ -219,10 +220,10 @@ mod tests {
     }
 
     #[test]
-    fn seven_zip_and_rar_are_named() {
+    fn a_7z_is_an_archive_and_a_rar_is_named() {
         assert_eq!(
             detected("a.7z", b"7z\xbc\xaf\x27\x1c\x00\x04rest"),
-            Detected::Unsupported("7z")
+            Detected::Archive(Format::SevenZ)
         );
         assert_eq!(
             detected("a.rar", b"Rar!\x1a\x07\x00rest"),

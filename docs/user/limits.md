@@ -13,7 +13,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | plugins | source adapters live in the fetchloom crate |
 | fetchloom accounts, hosting and telemetry | fetchloom is a local command |
 | controlled-data access approval | request access from the institution or owner |
-| 7z and rar extraction | keep the packed file and use another decoder |
+| rar extraction | keep the packed file and use another decoder |
 | recursive archive extraction | nested archives remain files |
 | cross-user cache administration | cache writers are trusted; no group-permission management is provided |
 

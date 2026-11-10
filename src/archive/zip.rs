@@ -5,15 +5,16 @@ mod directory;
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use ::zip::read::ZipFileEntry;
 use ::zip::{SUPPORTED_COMPRESSION_METHODS, System, ZipArchive};
 
 use super::guard::{Guard, Meter};
+use super::input::{self, Source};
 use super::names::Named;
-use super::{BUFFER, Keep, damaged, refused, refused_member, unreadable};
+use super::{Keep, damaged, refused, refused_member, unreadable};
 use crate::error::Error;
 
 /// the file type bits of a unix mode, as zip entries made on unix carry them.
@@ -26,22 +27,9 @@ pub(super) fn unpack(
     guard: &mut Guard<'_>,
     keep: &mut Keep<'_>,
 ) -> Result<(), Error> {
-    let file = File::open(archive).map_err(|err| unreadable(archive, &err))?;
-    let size = file
-        .metadata()
-        .map_err(|err| unreadable(archive, &err))?
-        .len();
-    guard.meter().cap_at(size);
-    let mut file = BufReader::with_capacity(BUFFER, file);
+    let mut file = input::open(archive, guard.meter())?;
     directory::check(&mut file, guard)?;
-    let position = file
-        .stream_position()
-        .map_err(|error| unreadable(archive, &error))?;
-    let source = Source {
-        file,
-        position,
-        meter: guard.meter(),
-    };
+    let source = Source::new(file, guard.meter()).map_err(|err| unreadable(archive, &err))?;
     let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err))?;
     if zip.has_duplicate_names() {
         let name = repeated_name(archive, zip.central_directory_start())
@@ -172,44 +160,6 @@ pub(super) fn sole_member(archive: &Path) -> Option<String> {
     }
     let name = name(&entry).ok()?;
     Some(name.trim_start_matches("./").to_owned())
-}
-
-/// the archive file, buffered, and counting every byte read for the ratio check. a seek that
-/// lands inside the buffer keeps it, since every member means a jump from its header to its data.
-struct Source<'m> {
-    file: BufReader<File>,
-    position: u64,
-    meter: &'m Meter,
-}
-
-impl Read for Source<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let read = self.file.read(buffer)?;
-        self.position += read as u64;
-        self.meter.count(read);
-        Ok(read)
-    }
-}
-
-impl Seek for Source<'_> {
-    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
-        let target = match to {
-            SeekFrom::Start(offset) => offset,
-            SeekFrom::Current(offset) => self
-                .position
-                .checked_add_signed(offset)
-                .ok_or(io::ErrorKind::InvalidInput)?,
-            SeekFrom::End(_) => {
-                self.position = self.file.seek(to)?;
-                return Ok(self.position);
-            }
-        };
-        let offset = i64::try_from(i128::from(target) - i128::from(self.position))
-            .map_err(|_| io::ErrorKind::InvalidInput)?;
-        self.file.seek_relative(offset)?;
-        self.position = target;
-        Ok(target)
-    }
 }
 
 #[cfg(test)]

@@ -5,3 +5,4 @@
 *.xz binary
 *.zst binary
 *.bz2 binary
+*.7z binary

@@ -3,7 +3,9 @@
 
 mod detect;
 mod guard;
+mod input;
 mod names;
+mod sevenz;
 mod store;
 mod tar;
 mod zip;
@@ -24,17 +26,17 @@ use guard::{Guard, Meter};
 const BUFFER: usize = 256 * 1024;
 
 /// the endings of the archives fetchloom unpacks, longest first so `.tar.gz` wins over `.gz`.
-const UNPACKED: [&str; 11] = [
+const UNPACKED: [&str; 12] = [
     ".tar.bz2", ".tar.zst", ".tar.gz", ".tar.xz", ".tbz2", ".tzst", ".tar", ".tbz", ".tgz", ".txz",
-    ".zip",
+    ".zip", ".7z",
 ];
 
 /// what a file's name says about unpacking it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Packed {
-    /// zip or a tar, which unpacks when its bytes agree.
+    /// zip, 7z or a tar, which unpacks when its bytes agree.
     Archive,
-    /// an archive fetchloom leaves packed: `7z` or `rar`.
+    /// an archive fetchloom leaves packed: `rar`.
     Unsupported(&'static str),
 }
 
@@ -46,10 +48,10 @@ pub(crate) fn by_name(path: &str) -> Option<Packed> {
     if UNPACKED.iter().any(|ending| name.ends_with(ending)) {
         return Some(Packed::Archive);
     }
-    [("7z", ".7z"), ("rar", ".rar")]
-        .into_iter()
-        .find(|(_, ending)| name.ends_with(ending))
-        .map(|(format, _)| Packed::Unsupported(format))
+    let is_rar = name
+        .rsplit_once('.')
+        .is_some_and(|(_, ending)| ending == "rar");
+    is_rar.then_some(Packed::Unsupported("rar"))
 }
 
 /// whether the bytes the cache holds under `digest` are a zip of the one file `path` names, as a
@@ -163,6 +165,7 @@ pub(crate) fn unpack(
         };
         match format {
             Format::Zip => zip::unpack(archive, &mut guard, &mut keep)?,
+            Format::SevenZ => sevenz::unpack(archive, &mut guard, &mut keep)?,
             Format::Tar | Format::TarGz | Format::TarXz | Format::TarZst | Format::TarBz2 => {
                 tar::unpack(archive, format, &mut guard, &mut keep)?;
             }

@@ -4,7 +4,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use super::samples::{Scratch, compress, tar_of, zip_of, zstd_asking_for};
+use super::samples::{Scratch, compress, seven_zip, tar_of, zip_of, zstd_asking_for};
 use super::{Detected, Format, Limits, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
 
@@ -85,6 +85,11 @@ fn the_oldest_tar_format_unpacks() {
 fn hostile_archives_made_by_real_tools_are_refused() {
     for (name, reason) in [
         ("bsdtar-encrypted.zip", "because it is encrypted"),
+        ("sevenz-rust2-encrypted.7z", "the archive is encrypted"),
+        (
+            "sevenz-rust2-encrypted-headers.7z",
+            "the archive is encrypted",
+        ),
         ("python-escape.zip", "because it climbs out of its folder"),
         ("python-symlink.tar", "because it is a symlink"),
         ("bsdtar-gnu.tar", "a name that is not valid UTF-8"),
@@ -95,12 +100,14 @@ fn hostile_archives_made_by_real_tools_are_refused() {
     }
 }
 
-/// one format from each family: zip read through its directory, tar read as a stream.
-const FAMILIES: [Format; 2] = [Format::Zip, Format::TarZst];
+/// one format from each family: zip read through its directory, tar read as a stream, and 7z
+/// read block by block.
+const FAMILIES: [Format; 3] = [Format::Zip, Format::TarZst, Format::SevenZ];
 
 fn archive(format: Format, files: &[(&str, &[u8])]) -> Vec<u8> {
     match format {
         Format::Zip => zip_of(files),
+        Format::SevenZ => seven_zip(files),
         tar => compress(tar, &tar_of(files)),
     }
 }
@@ -358,6 +365,7 @@ fn only_names_decide_what_may_unpack() {
         "x.tar.bz2",
         "x.tbz2",
         "x.tbz",
+        "x.7z",
     ] {
         assert_eq!(
             super::by_name(archive),
@@ -365,10 +373,6 @@ fn only_names_decide_what_may_unpack() {
             "{archive}"
         );
     }
-    assert_eq!(
-        super::by_name("a.7z"),
-        Some(super::Packed::Unsupported("7z"))
-    );
     assert_eq!(
         super::by_name("a.RAR"),
         Some(super::Packed::Unsupported("rar"))

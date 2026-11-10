@@ -13,9 +13,11 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 | [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits and entry points | `Packed`, `Limits`, `Unpacked`, `by_name`, `stem`, `unpack`, `unpack_cached` |
 | [detect.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
 | [guard.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
+| [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | the archive file zip and 7z read: buffered, seekable and metered | `open`, `Source` |
 | [names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | normalized paths and collision tracking | `Named`, `Names`, `add` |
 | [zip.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
 | [tar.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
+| [sevenz.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/sevenz.rs) | 7z header limits, encryption and link checks, block decoding | `unpack` |
 | [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
 | [cli/sync/unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
 
@@ -23,15 +25,15 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 
 ### names choose candidates, bytes choose decoders
 
-`by_name` selects zip and tar names, including supported compressed tar endings. `.npz` and `.xlsx` stay whole even though they are zip containers. `detect` then inspects bytes; a misleading extension cannot force a decoder. `7z` and `rar` are recognized as unsupported and left packed.
+`by_name` selects zip, 7z and tar names, including supported compressed tar endings. `.npz` and `.xlsx` stay whole even though they are zip containers. `detect` then inspects bytes; a misleading extension cannot force a decoder. `rar` is recognized as unsupported and left packed.
 
-zip first bounds central-directory entry counts, raw path lengths and 256 MiB of directory/ZIP64 metadata work before the decoder collects entries. a separate footer scan reads at most 65,558 bytes. wrapper probes use the same preflight with a one-entry ceiling. zip then checks decoded names and entry kinds before reading members. tar reads sequentially, including gzip, xz, zstd and bzip2 decoding. both pass names and member bodies through the same guard.
+zip first bounds central-directory entry counts, raw path lengths and 256 MiB of directory/ZIP64 metadata work before the decoder collects entries. a separate footer scan reads at most 65,558 bytes. wrapper probes use the same preflight with a one-entry ceiling. zip then checks decoded names and entry kinds before reading members. tar reads sequentially, including gzip, xz, zstd and bzip2 decoding. 7z reads its header within the archive memory, and refuses more entries than the limit or any encrypted block before decoding. it then decodes each block in order on one thread, so its entries reach the guard as tar entries do; lzma2's threaded decoder would hold a whole block in memory first. all three pass names and member bodies through the same guard, and 7z data under an entry no file keeps counts toward the ratio.
 
 ### validate before publication
 
 ```mermaid
 flowchart LR
-    detect["inspect bytes"] --> reader["zip or tar reader"]
+    detect["inspect bytes"] --> reader["zip, tar or 7z reader"]
     reader --> guard["shared names and byte guard"]
     guard --> stage["locked staging folder"]
     stage --> seal["writers hash and seal members"]
@@ -55,16 +57,17 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 |---|---|
 | 10,000,000 entries, `FETCHLOOM_ARCHIVE_FILES` | files and folders exposed by the decoder |
 | 16 TiB unpacked, `FETCHLOOM_ARCHIVE_SIZE` | actual member bytes across one archive |
-| 1000:1 expansion, `FETCHLOOM_ARCHIVE_RATIO` | output, plus tar data read only to be skipped (folder contents, pax global headers, padding), against compressed bytes read, after 4 MiB; zip rereads cannot raise the denominator past the physical archive size |
+| 1000:1 expansion, `FETCHLOOM_ARCHIVE_RATIO` | output, plus tar data read only to be skipped (folder contents, pax global headers, padding) and 7z data under an entry no file keeps, against compressed bytes read, after 4 MiB; zip and 7z rereads cannot raise the denominator past the physical archive size |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
 | xz decoder memory: a quarter of `FETCHLOOM_MEMORY`, at least 256 MiB | what an xz header asks for, checked before decoding |
 | zstd window: half the decoder memory as a power of two, from 128 MiB to 2 GiB | what a zstd frame header asks for; with the default budget, frames from `zstd --long=28` and above are still detected as archives and refused |
+| 7z decoder memory: a quarter of `FETCHLOOM_MEMORY`, at least 256 MiB | what the header and each coder's dictionary ask for, checked before decoding. the limit holds for each coder, and sevenz-rust2 takes up to 64 coders in a block, so a block can hold a dictionary for each; zstd inside a 7z keeps libzstd's 128 MiB window |
 | 4,096-byte member paths | the path as the archive spells it and in NFC |
 | 256 MiB of names | every entry's path length, plus each folder or file name seen for the first time, its spelling in the archive when that is not NFC, and 64 bytes for keeping it |
 
-names become NFC, a unicode normalization form that gives canonically equivalent text one representation. leading `./` is removed; windows-made zip separators become `/`. absolute paths, traversal, controls, duplicate files, folded-name collisions and file/folder clashes fail. names are kept as a tree of folded names, one node per folder or file, so memory grows with the bytes of the names rather than with every folder above each path. identical repeated tar folder declarations are allowed; duplicate zip folder names are rejected by the zip reader.
+names become NFC, a unicode normalization form that gives canonically equivalent text one representation. leading `./` is removed; windows-made zip and 7z separators become `/`. absolute paths, traversal, controls, duplicate files, folded-name collisions and file/folder clashes fail. names are kept as a tree of folded names, one node per folder or file, so memory grows with the bytes of the names rather than with every folder above each path. identical repeated tar folder declarations are allowed; duplicate zip folder names are rejected by the zip reader.
 
-links, devices, fifos, sparse tar entries, encrypted zip entries and unsupported zip compression methods fail. windows-specific name restrictions apply on windows. archive permissions and timestamps are not restored.
+links, devices, fifos, sparse tar entries, encrypted zip entries, encrypted 7z archives and unsupported zip and 7z compression methods fail. a 7z link is known by the unix mode p7zip stores or by windows' reparse-point attribute. windows-specific name restrictions apply on windows. archive permissions and timestamps are not restored.
 
 native filesystem errors while reading cached archives remain `local.io`, with the OS reason and member path when known. malformed archive bytes remain `source.invalid`; decoder wrappers must not turn a disk error into a damaged-source diagnosis.
 

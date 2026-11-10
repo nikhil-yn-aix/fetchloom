@@ -669,7 +669,7 @@ pub(crate) struct Add {
     #[command(flatten)]
     pub(crate) filter: Filter,
 
-    /// keep zip and tar archives packed, as extract = false in data.toml does
+    /// keep zip, 7z and tar archives packed, as extract = false in data.toml does
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
 
@@ -783,7 +783,7 @@ pub(crate) struct Get {
     #[command(flatten)]
     pub(crate) filter: Filter,
 
-    /// keep zip and tar archives packed instead of unpacking them
+    /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
 }

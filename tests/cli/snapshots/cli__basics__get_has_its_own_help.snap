@@ -24,8 +24,8 @@ options:
                            "**/*.csv". repeat it for more
       --exclude <glob>     leave out files matching this pattern. repeat it for
                            more
-      --no-extract         keep zip and tar archives packed instead of unpacking
-                           them
+      --no-extract         keep zip, 7z and tar archives packed instead of
+                           unpacking them
   -q, --quiet              print only the answer, warnings and errors
   -v, --verbose...         say more: -v adds detail and counters, -vv adds debug
                            logs
