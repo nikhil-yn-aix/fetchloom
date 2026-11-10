@@ -60,6 +60,19 @@ class HelperOptions(unittest.TestCase):
                     fetchloom.sync("p", strict=True)
         self.assertEqual(raised.exception.kind, "conflict.kept")
         self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])
+        self.assertEqual(raised.exception.message, "1 file in the data folder differs from data.lock")
+
+    def test_strict_names_several_files_in_the_plural(self):
+        files = [{"path": f"data/iris/{name}", "reason": "changed"} for name in ["a.csv", "b.csv"]]
+        result = {"project": "p", "placement": {"kept": files}}
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.sync("p", strict=True)
+        self.assertEqual(raised.exception.message, "2 files in the data folder differ from data.lock")
 
 
 class Errors(unittest.TestCase):
@@ -86,6 +99,30 @@ class Errors(unittest.TestCase):
             "  help: did you mean `fetchloom path iris/Iris.csv`?\n",
         )
         self.assertEqual(raised.exception.code, 2)
+
+    def test_hints_show_the_command_a_person_runs(self):
+        typed = "unset FETCHLOOM_OFFLINE, then run `fetchloom --json -C {project} path iris`"
+        for project, shown in [
+            (".", "unset FETCHLOOM_OFFLINE, then run `fetchloom path iris`"),
+            ("analysis", "unset FETCHLOOM_OFFLINE, then run `fetchloom -C analysis path iris`"),
+        ]:
+            answer = {
+                "status": "error",
+                "errors": [{
+                    "kind": "offline.missing",
+                    "message": "offline, and 1 file data.lock names is not in the cache",
+                    "details": ["iris/iris.csv"],
+                    "help": typed.format(project=project),
+                }],
+                "warnings": [],
+            }
+            response = subprocess.CompletedProcess([], 20, json.dumps(answer), "")
+            with self.subTest(project=project):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            fetchloom.path("iris", project)
+                self.assertEqual(raised.exception.help, shown)
 
     def test_an_error_without_details_or_help_is_one_line(self):
         self.assertEqual(str(fetchloom.Error("usage", "no data.toml here")), "usage: no data.toml here")
@@ -165,9 +202,14 @@ class ProgramDiscovery(unittest.TestCase):
     def test_path_fallback_remains_available(self):
         self.assertEqual(self.locate("source/fetchloom", [], "from-path"), "from-path")
 
-    def test_missing_program_names_the_reinstall_command(self):
-        with self.assertRaisesRegex(FileNotFoundError, "pip install fetchloom"):
+    def test_missing_program_points_at_the_install_steps(self):
+        with self.assertRaises(FileNotFoundError) as raised:
             self.locate("source/fetchloom", [])
+        self.assertEqual(
+            str(raised.exception),
+            "the fetchloom program is missing: install it as "
+            "https://github.com/nikhil-yn-aix/fetchloom#install says, or put it on PATH",
+        )
 
     def test_user_scheme_follows_interpreter_policy(self):
         with patch.object(fetchloom.sysconfig, "get_preferred_scheme", return_value="custom_user", create=True):

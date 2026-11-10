@@ -113,9 +113,10 @@ def sync(
     placement = result.get("placement") or {}
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
+        files = "1 file in the data folder differs" if len(kept) == 1 else f"{len(kept)} files in the data folder differ"
         raise Error(
             "conflict.kept",
-            f"{len(kept)} file{'' if len(kept) == 1 else 's'} in the data folder differ from data.lock",
+            f"{files} from data.lock",
             kept,
             "save any changes you need, then run `fetchloom sync --force`",
         )
@@ -151,7 +152,13 @@ def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
         warnings.warn(warning, stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
-        raise Error(error["kind"], error["message"], error["details"], error["help"], finished.returncode)
+        help = error["help"]
+        if help:
+            # the program quotes its own command line, which holds the flags this helper adds
+            help = help.replace("`fetchloom --json ", "`fetchloom ")
+            if os.fspath(project) == ".":
+                help = help.replace("`fetchloom -C . ", "`fetchloom ")
+        raise Error(error["kind"], error["message"], error["details"], help, finished.returncode)
     return answer["result"]
 
 
@@ -186,7 +193,10 @@ def _program() -> str:
             return str(Path(folder, name))
     found = shutil.which("fetchloom")
     if found is None:
-        raise FileNotFoundError("the fetchloom program is missing. reinstall it with `pip install fetchloom`")
+        raise FileNotFoundError(
+            "the fetchloom program is missing: install it as "
+            "https://github.com/nikhil-yn-aix/fetchloom#install says, or put it on PATH"
+        )
     return found
 
 
