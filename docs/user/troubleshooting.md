@@ -113,7 +113,21 @@ export HTTPS_PROXY=http://127.0.0.1:3128
 export HTTP_PROXY=http://127.0.0.1:3128
 ```
 
-the variables win over the system's settings, and fetchloom reaches a proxy on a private or loopback address, such as a relay on your own machine. to keep the variables, put the lines in your shell's profile.
+the variables win over the system's settings, and fetchloom reaches a proxy on a private or loopback address, such as a relay on your own machine. to keep the variables, put the lines in your shell's profile, as the next section shows.
+
+## slow or metered links
+
+`FETCHLOOM_RATE` caps the bytes fetchloom receives, all downloads together, such as `500K` for 500 KiB a second; [environment](reference/environment.md) gives the units. the settings file has no key for it, so to keep a cap in every session, set it in your shell's profile: `~/.bashrc` for bash, `~/.zshrc` for zsh, or the file `$PROFILE` names in powershell.
+
+```sh
+export FETCHLOOM_RATE=500K
+```
+
+```powershell
+$env:FETCHLOOM_RATE = '500K'
+```
+
+in a new terminal, `fetchloom settings` shows the `rate` row coming from the environment.
 
 ## project recovery
 
