@@ -31,6 +31,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
 | `error: offline, and 1 file data.lock names is not in the cache` | an offline project needs uncached bytes | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1`. a CI job can restore a cache that holds them, as [CI](ci.md) shows |
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
+| `error: gave up on huggingface.co after 5 tries: could not connect to huggingface.co`, on a network whose proxy asks for your windows sign-in | the proxy wants NTLM or Kerberos, which fetchloom cannot send | run a local relay that signs in for you, as [company proxies](#company-proxies) shows |
 | `error: iris/iris.csv is not the file data.lock records` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here` | a large download needs a yes, and no one is at a terminal to answer | check the size, then pass `--yes` if you want it |
 | `error: SSL_CERT_FILE names /etc/ssl/corp.pem, which holds no certificates fetchloom can read` | the variable names a missing file, or one without PEM certificates | unset it to use the system's certificates, or set it to a file of PEM certificates |
@@ -95,6 +96,24 @@ warning: iris is inside onedrive, which breaks links, so the file was copied
 ```
 
 move the project outside synced storage if you want fetchloom to try hardlinks. reflinks may still work inside a synced folder. [windows](windows.md) covers drive choice and Defender scanning.
+
+## company proxies
+
+fetchloom sends its requests through the proxy that `HTTPS_PROXY` or `HTTP_PROXY` names. on windows and macos, the system's proxy settings fill in when those variables are unset. a proxy that inspects https needs its certificate in the system's certificate store, as the certificate error says.
+
+a proxy that asks for your windows sign-in, by NTLM or Kerberos, refuses every request until it gets that sign-in, which fetchloom cannot send. an https link then fails as `could not connect to <host>` after every retry, and a plain http link as `<host> answered 407`. `curl -v -x http://proxy.example.org:8080 https://huggingface.co`, with your proxy's address, shows `407 Proxy Authentication Required` and a `Proxy-Authenticate` header naming `NTLM` or `Negotiate`. a local relay can sign in for you: [px](https://github.com/genotrance/px) uses your windows sign-in, and [cntlm](https://github.com/versat/cntlm) the user name and password in its settings. both take requests from this machine on port 3128 by default, so point fetchloom there:
+
+```powershell
+$env:HTTPS_PROXY = 'http://127.0.0.1:3128'
+$env:HTTP_PROXY = 'http://127.0.0.1:3128'
+```
+
+```sh
+export HTTPS_PROXY=http://127.0.0.1:3128
+export HTTP_PROXY=http://127.0.0.1:3128
+```
+
+the variables win over the system's settings, and fetchloom reaches a proxy on a private or loopback address, such as a relay on your own machine. to keep the variables, put the lines in your shell's profile.
 
 ## project recovery
 

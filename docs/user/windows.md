@@ -72,3 +72,7 @@ use `/` inside `data.toml` paths and `fetchloom path iris/Iris.csv` on windows t
 fetchloom uses the windows long-path form for project metadata renames. a working directory can still be too long for `-C`; that error reports the path length and suggests moving the project to a shorter path before rerunning. other programs opening your data may still impose their own path limits. keep the project root and cache path short when working with deeply nested datasets. a short `path` in the manifest can shorten the dataset folder too.
 
 if a replacement or deletion fails, close editors, notebooks or other programs holding the file open, then check permissions. [troubleshooting](troubleshooting.md) covers error handling without discarding local work.
+
+## company proxies
+
+fetchloom uses the proxy that `HTTPS_PROXY` names, or the system's proxy settings when that is unset. a proxy that asks for your windows sign-in needs a local relay that signs in for you, as [company proxies](troubleshooting.md#company-proxies) shows.
