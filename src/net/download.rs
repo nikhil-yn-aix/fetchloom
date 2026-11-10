@@ -13,7 +13,7 @@ use url::Url;
 
 use super::failure::{self, Failure, Retry};
 use super::headers::{self, if_range};
-use super::{IDLE, Net, Splitting, host};
+use super::{Net, Splitting, host};
 use crate::cache::{Cache, Claim, Partial, PartialWriter, Stored, UrlRecord, Validators};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -880,12 +880,12 @@ impl Net {
     ) -> Result<String, Failure> {
         let mut page = Vec::new();
         loop {
-            match tokio::time::timeout(IDLE, response.chunk()).await {
+            match tokio::time::timeout(self.idle, response.chunk()).await {
                 Err(_) => {
                     return Err(failure::transient(format!(
                         "{} sent nothing for {} s",
                         host(url),
-                        IDLE.as_secs()
+                        self.idle.as_secs()
                     )));
                 }
                 Ok(Err(err)) => {

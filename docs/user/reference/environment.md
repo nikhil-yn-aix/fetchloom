@@ -8,14 +8,19 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-there is no config file. [CLI options](../commands/README.md#global-options) set per-run behavior.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval and memory settings for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 | variable | effect |
 |---|---|
 | `FETCHLOOM_CACHE` | nonempty cache root override |
 | `FETCHLOOM_OFFLINE` | exactly `1` enables offline mode; `--offline` also enables it. offline recovery hints name the flag, variable or both, whichever enabled it |
-| `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted. requests sharing an initial hostname are capped at 4 at once, the streams of a split download included. redirects keep that initial host's slots, so several initial hosts can send more than 4 requests to one destination host. `FETCHLOOM_JOBS` does not raise the initial-host cap |
+| `FETCHLOOM_JOBS` | integer from 1 to 256; unset or empty means 8; surrounding whitespace is accepted. requests sharing an initial hostname are capped at `FETCHLOOM_HOST_JOBS` at once, 4 by default, the streams of a split download included. redirects keep that initial host's slots, so several initial hosts can send more than that to one destination host. `FETCHLOOM_JOBS` does not raise the initial-host cap |
 | `FETCHLOOM_RETRIES` | integer from 0 to 20; how many more times a request is tried after it fails and makes no progress. unset or empty means 4; surrounding whitespace is accepted. each wait is a random part of a limit that doubles from 1 s up to 1 min, so 10 waits about 2 minutes in all and 20 about 8: raise it on a network that drops for minutes at a time. a try that moves the download on earns the count back, up to 50 tries in all |
+| `FETCHLOOM_HOST_JOBS` | integer from 1 to 256; how many requests may share one initial hostname at once, the streams of a split download included. unset or empty means 4; surrounding whitespace is accepted. `FETCHLOOM_JOBS` still caps every host together. raise it for a host that serves many connections well, such as your own mirror; lower it for one that limits each client |
+| `FETCHLOOM_TIMEOUT` | integer seconds from 1 to 3600; how long a server may send nothing in a response body before the try fails and is retried. unset or empty means 30. time held back on this machine by the rate cap, the writer or a question does not count. connecting may take 45 s, or this long when it is longer, and the response headers must come within the connect time plus this |
+| `FETCHLOOM_ASK_ABOVE` | a size such as `500M` or `20G`, with the units of `FETCHLOOM_RATE`; a download bigger than it needs [approval](../concepts.md#approval). unset or empty means 1 GiB |
+| `FETCHLOOM_MEMORY` | a size such as `512M` or `8G`, with the units of `FETCHLOOM_RATE`; the memory download buffers aim to stay within. the downloads running at once share it for the data waiting to be hashed, up to 16 MiB each. unset or empty means a quarter of the memory this machine has available, inside the limit of its linux cgroup, from 256 MiB to 4 GiB, and never more than half of what is available |
+| `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
 | `FETCHLOOM_SPLIT` | exactly `0` disables splitting; exactly `1` starts eligible split downloads from the first answer. unset, empty or any other value uses the adaptive trigger: under 1 MB/s over 2 s, with at least 16 MiB left. files must be at least 64 MiB and pass the [range checks](../../dev/architecture/network.md#the-1-mbs-handover). a `FETCHLOOM_RATE` cap turns off the adaptive trigger; `1` and a resumed download whose later ranges are kept still split |
@@ -42,9 +47,34 @@ the shared rate limit permits a burst of one second's bytes or 1 MiB, whichever 
 
 rate values accept surrounding whitespace and a decimal fraction with digits on both sides of the point. suffixes multiply by powers of 1024; fractions of any precision round down to whole bytes per second after that multiplication. the resulting rate must be from 1 to 18,446,744,073,709,551,615. signs, exponent notation, lowercase suffixes and suffixes such as `MB` are refused.
 
-invalid jobs and rate values fail a named command with kind `usage` and exit 2, even when it does not download. welcome, bare-project status, help, version and completions bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help, version and completions bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
+an invalid value for a setting above or the rate fails a named command with kind `usage` and exit 2, even when it does not download; the message names the variable, or the key and the settings file. welcome, bare-project status, help, version and completions bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help, version and completions bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
 synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, the icloud drive folder on windows, and on macos `~/Library/Mobile Documents` and the onedrive and dropbox folders in `~/Library/CloudStorage`. the home folder is `HOME`, else `USERPROFILE`. system proxy settings and proxy environment variables are read by the HTTP stack.
+
+## settings file
+
+a settings file keeps settings for every run, so a shared machine or a big scratch disk needs no exported variables. fetchloom reads `settings.toml` in its own folder, beside saved credentials:
+
+| system | settings file |
+|---|---|
+| linux | `$XDG_CONFIG_HOME/fetchloom/settings.toml` when that variable holds an absolute path, else `~/.config/fetchloom/settings.toml` |
+| macos | `~/Library/Application Support/fetchloom/settings.toml` |
+| windows | `%APPDATA%\fetchloom\settings.toml` |
+
+`FETCHLOOM_SETTINGS` names another file. no file at the default place is fine; a file the variable names must exist.
+
+```toml
+cache = "/scratch/lab/fetchloom-cache"
+jobs = 32
+host_jobs = 8
+timeout = 120
+ask_above = "50G"
+memory = "8G"
+```
+
+the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above` and `memory`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
+
+each value comes from the first of these that sets it: its variable, the settings file, this machine, fetchloom's default. so `FETCHLOOM_JOBS=4 fetchloom sync` changes one run without editing the file. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from. the other variables on this page have no key in the file.
 
 ## credentials
 

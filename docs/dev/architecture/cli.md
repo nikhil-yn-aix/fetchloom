@@ -28,9 +28,9 @@ command handlers order effects across modules. `Context` reads settings once and
 
 ### startup
 
-`run` parses before creating the command context. output style and logging start before `-C`; an explicit trace path is created or truncated there, even for a dry run. version, help and completions return before `-C` and resource-setting validation. other commands change the working folder and read `Threads`; named commands also read job and rate limits. bare welcome and project status bypass the job and rate checks. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
+`run` parses before creating the command context. output style and logging start before `-C`; an explicit trace path is created or truncated there, even for a dry run. version, help and completions return before `-C` and resource-setting validation. other commands change the working folder and read `Threads`; named commands also read the settings file, `Machine` and the [settings](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/settings.rs) built from them, then the rate limit. `Machine::read` raises the open-file limit as far as the system allows. bare welcome and project status bypass the settings and rate checks. the runtime uses up to four workers, subject to `Threads`. a fallible startup probe is joined before runtime construction, so an immediate thread-creation refusal follows the ordinary I/O error path.
 
-built-in environment help describes the four-request cap per initial hostname; redirects keep that initial host’s slots.
+built-in environment help describes `FETCHLOOM_HOST_JOBS`, the request cap per initial hostname; redirects keep that initial host’s slots.
 
 network clients are created only where commands need them. `Net` delays TLS roots and proxy setup until the first request. version and help paths avoid that work.
 

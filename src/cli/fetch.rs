@@ -161,7 +161,21 @@ impl Overall {
     }
 }
 
-type Approval = OnceLock<Result<(), Error>>;
+/// the one answer a run's downloads share once a large download asks, and the size above which
+/// a download asks.
+struct Approval {
+    answer: OnceLock<Result<(), Error>>,
+    above: u64,
+}
+
+impl Approval {
+    fn new(above: u64) -> Approval {
+        Approval {
+            answer: OnceLock::new(),
+            above,
+        }
+    }
+}
 
 /// one download as it runs: its bar, its part of the overall progress, and the question before
 /// a large file whose size only its server tells.
@@ -218,11 +232,12 @@ impl<'a> Watch<'a> {
     }
 
     fn approve(&self, size: &str) -> Result<(), Error> {
-        if let Some(answer) = self.approval.get() {
+        if let Some(answer) = self.approval.answer.get() {
             return answer.clone();
         }
         let decide = || {
             self.approval
+                .answer
                 .get_or_init(|| super::ask(self.output, self.yes, &self.job.label, size))
                 .clone()
         };
@@ -258,7 +273,7 @@ impl<'a> Watch<'a> {
             Event::Started { total, resumed, .. } => {
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {
-                    if left > super::ASK_ABOVE {
+                    if left > self.approval.above {
                         self.approve(&units::size(left))?;
                     }
                     if let Some(total) = total
@@ -294,8 +309,8 @@ impl<'a> Watch<'a> {
                 self.bar().advance(bytes);
                 self.count(self.position.fetch_add(bytes, Ordering::Relaxed) + bytes);
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
-                if self.unbounded.load(Ordering::Relaxed) && received > super::ASK_ABOVE {
-                    let size = format!("more than {}", units::size(super::ASK_ABOVE));
+                if self.unbounded.load(Ordering::Relaxed) && received > self.approval.above {
+                    let size = format!("more than {}", units::size(self.approval.above));
                     self.approve(&size)?;
                     self.unbounded.store(false, Ordering::Relaxed);
                 }
@@ -472,10 +487,10 @@ async fn run_each(
         std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
-    let in_flight = context.jobs * 2;
+    let in_flight = context.settings.jobs.value * 2;
     let mut done = 0;
     // unknown source sizes share one answer, once headers or received bytes show a large file.
-    let approval = Arc::new(Approval::new());
+    let approval = Arc::new(Approval::new(context.settings.ask_above.value));
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
     let held: Arc<[AtomicU64]> = std::iter::repeat_with(AtomicU64::default)
@@ -830,7 +845,7 @@ mod tests {
             false,
             false,
         ));
-        context.jobs = 2;
+        context.settings.jobs.value = 2;
         context.offline = crate::net::Offline::Flag;
         let net = Arc::new(context.net());
         let (descriptions, urls): (Vec<_>, Vec<_>) = (0..32)
@@ -862,7 +877,7 @@ mod tests {
         ));
         assert_eq!(result.unwrap_err().kind, Kind::OfflineMissing);
         assert!(
-            made.get() <= context.jobs * 2,
+            made.get() <= context.settings.jobs.value * 2,
             "{} jobs were admitted",
             made.get()
         );
@@ -894,11 +909,11 @@ mod tests {
             total: None,
             resumed: 0,
         };
-        let approval = Approval::new();
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
         let position = AtomicU64::new(0);
         let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
         watch.on(&unknown()).unwrap();
-        watch.on(&Event::Bytes(super::super::ASK_ABOVE)).unwrap();
+        watch.on(&Event::Bytes(crate::settings::ASK_ABOVE)).unwrap();
         let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
         assert_eq!(stopped.kind, Kind::Unconfirmed);
         assert_eq!(
@@ -913,16 +928,16 @@ mod tests {
             watch.on(&Event::Bytes(1)).unwrap_err().kind,
             Kind::Unconfirmed
         );
-        let fresh = Approval::new();
+        let fresh = Approval::new(crate::settings::ASK_ABOVE);
         let approved = Watch::new(&job, &output, &overall, &fresh, true, &position);
         approved.on(&unknown()).unwrap();
         approved
-            .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
+            .on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
             .unwrap();
         let another = Watch::new(&job, &output, &overall, &fresh, false, &position);
         another.on(&unknown()).unwrap();
         another
-            .on(&Event::Bytes(2 * super::super::ASK_ABOVE))
+            .on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
             .unwrap();
         let told = Watch::new(&job, &output, &overall, &fresh, false, &position);
         let small = Event::Started {
@@ -930,7 +945,8 @@ mod tests {
             resumed: 0,
         };
         told.on(&small).unwrap();
-        told.on(&Event::Bytes(2 * super::super::ASK_ABOVE)).unwrap();
+        told.on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
+            .unwrap();
     }
 
     #[test]
@@ -963,11 +979,11 @@ mod tests {
         };
         let position = AtomicU64::new(0);
         for (total, resumed, needs_approval) in [
-            (super::super::ASK_ABOVE, 0, false),
-            (super::super::ASK_ABOVE + 1, 0, true),
-            (super::super::ASK_ABOVE + 1, 1, false),
+            (crate::settings::ASK_ABOVE, 0, false),
+            (crate::settings::ASK_ABOVE + 1, 0, true),
+            (crate::settings::ASK_ABOVE + 1, 1, false),
         ] {
-            let approval = Approval::new();
+            let approval = Approval::new(crate::settings::ASK_ABOVE);
             let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
             let result = watch.on(&Event::Started {
                 total: Some(total),
@@ -1008,9 +1024,9 @@ mod tests {
             ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
             length: std::sync::Mutex::default(),
         };
-        let approval = Approval::new();
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
         let event = Event::Started {
-            total: Some(super::super::ASK_ABOVE + 1),
+            total: Some(crate::settings::ASK_ABOVE + 1),
             resumed: 0,
         };
         let position = AtomicU64::new(0);

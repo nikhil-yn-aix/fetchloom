@@ -438,7 +438,7 @@ pub(super) fn remind(context: &Context) {
     if !context.output.can_ask() {
         return;
     }
-    let Some(root) = Cache::locate(&|name| std::env::var_os(name)) else {
+    let Some(root) = super::cache_folder() else {
         return;
     };
     remind_at(&context.output, &root, &context.stop);

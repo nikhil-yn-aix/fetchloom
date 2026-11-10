@@ -109,13 +109,13 @@ transfers retry transient failures, 4 more times by default or as `FETCHLOOM_RET
 fetchloom sync --yes
 ```
 
-approval is required above 1 GiB, not at exactly 1 GiB.
+approval is required above 1 GiB, not at exactly 1 GiB. `FETCHLOOM_ASK_ABOVE`, or `ask_above` in the [settings file](reference/environment.md#settings-file), moves that line, as `FETCHLOOM_ASK_ABOVE=50G` on a machine meant for big data.
 
 | download | bytes checked |
 |---|---|
 | `get` | known bytes still needing download; cached checksummed files and unpacked archives do not count |
 | project commands | known bytes still missing from the cache |
-| unknown source size | the server's length against the remaining download, or received bytes after a file passes 1 GiB |
+| unknown source size | the server's length against the remaining download, or received bytes after a file passes that size |
 | known source size | counted up front, as in the rows above; an answer stating another length is refused before download, and a body without a stated length stops once it passes the known size, so a larger download never slips past the approval |
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.

@@ -493,6 +493,7 @@ impl<'a> Loop<'a> {
         super::confirm(
             &self.context.output,
             self.context.yes,
+            self.context.settings.ask_above.value,
             &units::count(jobs.len() as u64, "file", "files"),
             size,
         )
@@ -567,6 +568,7 @@ impl<'a> Loop<'a> {
         super::confirm(
             &self.context.output,
             self.context.yes,
+            self.context.settings.ask_above.value,
             &units::count(files.len() as u64, "file", "files"),
             size,
         )

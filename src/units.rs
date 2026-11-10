@@ -148,6 +148,31 @@ pub(crate) fn compact(n: u64) -> String {
     }
 }
 
+/// a positive byte count, optionally with a binary suffix `K`, `M`, `G` or `T`, as `500K` or
+/// `2.5M`. surrounding whitespace is accepted.
+pub(crate) fn bytes(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (number, power) = match text.as_bytes().last()? {
+        b'K' => (&text[..text.len() - 1], 1),
+        b'M' => (&text[..text.len() - 1], 2),
+        b'G' => (&text[..text.len() - 1], 3),
+        b'T' => (&text[..text.len() - 1], 4),
+        _ => (text, 0),
+    };
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if !digits(whole) || (number.contains('.') && !digits(fraction)) {
+        return None;
+    }
+    let multiplier = 1024_u64.pow(power);
+    let whole = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
+    // carry decimal digits from the right so rounding needs no precision-sized integer.
+    let fraction = fraction.bytes().rev().fold(0, |tail, digit| {
+        (tail + u64::from(digit - b'0') * multiplier) / 10
+    });
+    whole.checked_add(fraction).filter(|bytes| *bytes > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,7 @@ mod list;
 mod logs;
 mod project;
 mod search;
+mod settings;
 mod status;
 mod sync;
 mod usage;
@@ -25,19 +26,14 @@ use serde::Serialize;
 
 use crate::cache::{Access, Cache};
 use crate::error::{Error, Kind};
+use crate::machine::Machine;
 use crate::net::{self, Net, Notice};
 use crate::output::{Level, Output, Style};
+use crate::settings::{File, Settings};
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
 use crate::work::Work;
-
-/// downloads running at once when `FETCHLOOM_JOBS` says nothing. downloads wait on the network,
-/// not the processor, so the number does not follow the core count.
-const JOBS: usize = 8;
-
-/// a download larger than this asks first.
-const ASK_ABOVE: u64 = 1024 * 1024 * 1024;
 
 /// how long retries to one host stay quiet after the line that told one, so downloads that lost
 /// the network together do not fill the screen with the same line.
@@ -48,9 +44,7 @@ struct Context {
     output: Arc<Output>,
     offline: net::Offline,
     yes: bool,
-    jobs: usize,
-    /// tries after the first that a stalled request gets, which `FETCHLOOM_RETRIES` sets.
-    retries: u32,
+    settings: Settings,
     rate: Option<Arc<net::Rate>>,
     threads: Threads,
     /// when a large download splits across streams, which `FETCHLOOM_SPLIT` sets.
@@ -73,8 +67,7 @@ impl Context {
             output: Arc::new(output),
             offline: net::Offline::No,
             yes: false,
-            jobs: JOBS,
-            retries: net::RETRIES,
+            settings: Settings::defaults(Machine::default()),
             rate: None,
             threads: Threads::default(),
             split: net::Splitting::WhenSlow,
@@ -160,13 +153,15 @@ impl Context {
         });
         let options = net::Options {
             offline: self.offline,
-            jobs: self.jobs,
+            jobs: self.settings.jobs.value,
             credentials,
             split: self.split,
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
-            .with_retries(self.retries)
+            .with_retries(self.settings.retries.value)
+            .with_host_jobs(self.settings.host_jobs.value)
+            .with_timeout(self.settings.timeout.value)
     }
 }
 
@@ -230,51 +225,6 @@ fn splits(value: Option<std::ffi::OsString>) -> net::Splitting {
     }
 }
 
-/// `FETCHLOOM_JOBS`, or the default.
-fn jobs(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<usize, Error> {
-    number(var, "FETCHLOOM_JOBS", 1..=256, JOBS)
-}
-
-/// `FETCHLOOM_RETRIES`, or the default.
-fn retries(var: &dyn Fn(&str) -> Option<std::ffi::OsString>) -> Result<u32, Error> {
-    number(
-        var,
-        "FETCHLOOM_RETRIES",
-        0..=net::MOST_RETRIES,
-        net::RETRIES,
-    )
-}
-
-/// the whole number the setting `name` holds, within `range`, or `default` when it is unset or
-/// empty. surrounding whitespace is accepted.
-fn number<T: std::str::FromStr + PartialOrd + std::fmt::Display>(
-    var: &dyn Fn(&str) -> Option<std::ffi::OsString>,
-    name: &str,
-    range: std::ops::RangeInclusive<T>,
-    default: T,
-) -> Result<T, Error> {
-    let Some(value) = var(name).filter(|value| !value.is_empty()) else {
-        return Ok(default);
-    };
-    let (low, high) = (range.start(), range.end());
-    value
-        .to_str()
-        .and_then(|text| text.trim().parse::<T>().ok())
-        .filter(|number| range.contains(number))
-        .ok_or_else(|| {
-            Error::new(
-                Kind::Usage,
-                format!(
-                    "{name} is \"{}\", which is not a number from {low} to {high}",
-                    value.display()
-                ),
-            )
-            .help(format!(
-                "unset {name} to use the default of {default}, or set it to a number from {low} to {high}"
-            ))
-        })
-}
-
 /// the cache this machine uses, created on first use and held shared until the last clone is
 /// dropped, so `cache gc` waits for this run.
 fn open_cache() -> Result<Cache, Error> {
@@ -322,12 +272,25 @@ fn hold_cache(
     })
 }
 
+/// the settings file this run read, kept for the places that open the cache without a
+/// [`Context`].
+static SETTINGS_FILE: std::sync::OnceLock<File> = std::sync::OnceLock::new();
+
 /// the help for a cache folder that could not be used. a user may not own the folder fetchloom
 /// chose itself, as when a container gives an arbitrary user a home of `/`, so for that folder
 /// the help names the variable that moves the cache as well as its permissions.
 fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
     let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
-    if !chosen && err.kind() == std::io::ErrorKind::PermissionDenied {
+    let filed = SETTINGS_FILE
+        .get()
+        .filter(|file| !chosen && file.cache().is_some())
+        .and_then(|file| file.path.as_deref());
+    if let Some(file) = filed {
+        error.or_help(format!(
+            "change cache in the settings file {}, or set FETCHLOOM_CACHE to a folder fetchloom may write to",
+            file.display()
+        ))
+    } else if !chosen && err.kind() == std::io::ErrorKind::PermissionDenied {
         error.help("check its permissions, or set FETCHLOOM_CACHE to a folder fetchloom may write to, then run the command again")
     } else {
         error.or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
@@ -373,8 +336,14 @@ fn peek_cache() -> Result<Cache, Error> {
     })
 }
 
+/// the cache folder: `FETCHLOOM_CACHE`, else the settings file's `cache`, else the platform's.
+fn cache_folder() -> Option<std::path::PathBuf> {
+    let filed = SETTINGS_FILE.get().and_then(File::cache);
+    Cache::locate(&|name| std::env::var_os(name), filed.as_deref())
+}
+
 fn cache_root() -> Result<std::path::PathBuf, Error> {
-    Cache::locate(&|name| std::env::var_os(name)).ok_or_else(|| {
+    cache_folder().ok_or_else(|| {
         Error::new(Kind::LocalIo, "could not find a folder for the cache")
             .help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
@@ -448,8 +417,15 @@ pub(crate) fn run() -> ExitCode {
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 option_env!("FETCHLOOM_COMMIT").unwrap_or("unknown"),
-                crate::cache::Cache::locate(&var)
-                    .map_or_else(|| "unknown".to_owned(), |root| root.display().to_string())
+                // a broken settings file is told by the commands that use it, not by --version
+                Cache::locate(
+                    &var,
+                    File::read(&var)
+                        .ok()
+                        .and_then(|file| file.cache())
+                        .as_deref()
+                )
+                .map_or_else(|| "unknown".to_owned(), |root| root.display().to_string())
             );
         }
         return about(&context, "", &text, started);
@@ -476,12 +452,16 @@ pub(crate) fn run() -> ExitCode {
     let Some(command) = args.command else {
         return execute(context, None, started);
     };
-    match jobs(&var) {
-        Ok(jobs) => context.jobs = jobs,
+    let file = match File::read(&var) {
+        Ok(file) => file,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
-    }
-    match retries(&var) {
-        Ok(retries) => context.retries = retries,
+    };
+    let _ = SETTINGS_FILE.set(file.clone());
+    match Settings::read(&var, file, Machine::read()) {
+        Ok(settings) => {
+            crate::cache::set_hash_batches(settings.hash_batches());
+            context.settings = settings;
+        }
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     match net::Rate::read(&var) {
@@ -645,6 +625,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = cache::verify(context);
             finish(context, name, outcome, started)
         }
+        args::Command::Settings(_) => {
+            let outcome = Ok(settings::run(context));
+            finish(context, name, outcome, started)
+        }
         args::Command::Get(args) => {
             let outcome = block_on(context, get::run(context, args));
             finish(context, name, outcome, started)
@@ -701,8 +685,8 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
 }
 /// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
 /// it stops and names the flag.
-fn confirm(output: &Output, yes: bool, what: &str, bytes: u64) -> Result<(), Error> {
-    if bytes <= ASK_ABOVE {
+fn confirm(output: &Output, yes: bool, above: u64, what: &str, bytes: u64) -> Result<(), Error> {
+    if bytes <= above {
         return Ok(());
     }
     ask(output, yes, what, &units::size(bytes))
@@ -1173,32 +1157,6 @@ mod tests {
         );
         for other in ["", "2", "yes", " 1"] {
             assert_eq!(splits(Some(other.into())), WhenSlow, "{other:?}");
-        }
-    }
-
-    #[test]
-    fn retries_come_from_the_setting_within_its_range() {
-        let setting = |value: &'static str| {
-            move |name: &str| (name == "FETCHLOOM_RETRIES").then(|| value.into())
-        };
-        assert_eq!(retries(&|_| None).unwrap(), net::RETRIES);
-        assert_eq!(retries(&setting("")).unwrap(), net::RETRIES);
-        assert_eq!(retries(&setting("0")).unwrap(), 0);
-        assert_eq!(retries(&setting(" 12 ")).unwrap(), 12);
-        assert_eq!(retries(&setting("20")).unwrap(), net::MOST_RETRIES);
-        for bad in ["21", "-1", "many", "1.5"] {
-            let error = retries(&setting(bad)).unwrap_err();
-            assert_eq!(error.kind, Kind::Usage, "{bad}");
-            assert_eq!(
-                error.message,
-                format!("FETCHLOOM_RETRIES is \"{bad}\", which is not a number from 0 to 20")
-            );
-            assert_eq!(
-                error.help.as_deref(),
-                Some(
-                    "unset FETCHLOOM_RETRIES to use the default of 4, or set it to a number from 0 to 20"
-                )
-            );
         }
     }
 

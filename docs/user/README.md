@@ -17,6 +17,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [remove](commands/remove.md) | remove an entry without discarding edited files |
 | [get](commands/get.md) | fetch data once without project files |
 | [cache](commands/cache.md) | inspect, collect or verify cached bytes |
+| [settings](commands/settings.md) | see each setting and where it came from |
 | [auth](commands/auth.md) | sign in for private, restricted or gated data with one key |
 | [completions](commands/completions.md) | let your shell complete commands and options |
 | [sources](sources/README.md) | compare accepted references, pins, credentials and limits |

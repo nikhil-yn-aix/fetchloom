@@ -34,7 +34,7 @@ impl Rate {
         };
         value
             .to_str()
-            .and_then(parse)
+            .and_then(crate::units::bytes)
             .map(|rate| Some(Arc::new(Self::new(rate))))
             .ok_or_else(|| {
                 Error::new(
@@ -48,6 +48,11 @@ impl Rate {
                     "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M",
                 )
             })
+    }
+
+    /// the bytes a second the run may receive.
+    pub(crate) fn per_second(&self) -> u64 {
+        self.per_second
     }
 
     fn new(per_second: u64) -> Rate {
@@ -115,29 +120,6 @@ impl Net {
     }
 }
 
-fn parse(text: &str) -> Option<u64> {
-    let text = text.trim();
-    let (number, power) = match text.as_bytes().last()? {
-        b'K' => (&text[..text.len() - 1], 1),
-        b'M' => (&text[..text.len() - 1], 2),
-        b'G' => (&text[..text.len() - 1], 3),
-        b'T' => (&text[..text.len() - 1], 4),
-        _ => (text, 0),
-    };
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
-    if !digits(whole) || (number.contains('.') && !digits(fraction)) {
-        return None;
-    }
-    let multiplier = 1024_u64.pow(power);
-    let whole = whole.parse::<u64>().ok()?.checked_mul(multiplier)?;
-    // carry decimal digits from the right so rounding needs no precision-sized integer.
-    let fraction = fraction.bytes().rev().fold(0, |tail, digit| {
-        (tail + u64::from(digit - b'0') * multiplier) / 10
-    });
-    whole.checked_add(fraction).filter(|bytes| *bytes > 0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,7 +136,7 @@ mod tests {
             ("0.1K", 102),
             ("18446744073709551615", u64::MAX),
         ] {
-            assert_eq!(parse(text), Some(expected), "{text}");
+            assert_eq!(crate::units::bytes(text), Some(expected), "{text}");
         }
         assert!(Rate::read(&|_| None).unwrap().is_none());
         assert!(Rate::read(&|_| Some("".into())).unwrap().is_none());
@@ -178,7 +160,7 @@ mod tests {
             (format!("18446744073709551616.{zeros}"), None),
             (format!("{zeros}1.{zeros}M"), Some(1 << 20)),
         ] {
-            assert_eq!(parse(&text), expected, "{text}");
+            assert_eq!(crate::units::bytes(&text), expected, "{text}");
         }
     }
 
@@ -204,7 +186,7 @@ mod tests {
             "18446744073709551616",
             "18446744073709551615T",
         ] {
-            assert_eq!(parse(text), None, "{text}");
+            assert_eq!(crate::units::bytes(text), None, "{text}");
             let error = Rate::read(&|_| Some(text.into())).err().unwrap();
             assert_eq!(error.kind, crate::error::Kind::Usage);
             assert_eq!(error.kind.exit_code(), 2);

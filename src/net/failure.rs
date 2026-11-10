@@ -114,6 +114,20 @@ impl Net {
         self.retries = retries;
         self
     }
+
+    /// how many requests go to one host at once, as `FETCHLOOM_HOST_JOBS` sets it.
+    pub(crate) fn with_host_jobs(mut self, host_jobs: usize) -> Net {
+        self.host_jobs = host_jobs.max(1);
+        self
+    }
+
+    /// how long a request waits for an answer and an answer may stay silent, as
+    /// `FETCHLOOM_TIMEOUT` sets it. a connection gets at least the usual time to open.
+    pub(crate) fn with_timeout(mut self, timeout: std::time::Duration) -> Net {
+        self.idle = timeout;
+        self.connect = super::CONNECT.max(timeout);
+        self
+    }
 }
 
 /// whether a status says the same request may succeed later.

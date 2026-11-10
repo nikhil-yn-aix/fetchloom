@@ -1,6 +1,256 @@
-//! resource caps read from the environment.
+//! resource caps and the other settings, read from the environment and the settings file.
 
-use crate::support::{Result, Sandbox, Server, file, json, text};
+use std::path::PathBuf;
+use std::time::Duration;
+
+use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text};
+
+/// where fetchloom looks for its settings file in `sandbox`, which gives it `home` as the home
+/// and application data folder.
+fn settings_file(sandbox: &Sandbox) -> Result<PathBuf> {
+    let home = sandbox.folder("home")?;
+    let folder = if cfg!(windows) {
+        home.join("fetchloom")
+    } else if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/fetchloom")
+    } else {
+        home.join(".config/fetchloom")
+    };
+    std::fs::create_dir_all(&folder)?;
+    Ok(folder.join("settings.toml"))
+}
+
+/// the entry `fetchloom settings --json` reports for `name`.
+fn shown<'a>(document: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    document["result"]["settings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|setting| setting["name"] == name)
+        .unwrap_or(&serde_json::Value::Null)
+}
+
+#[test]
+fn settings_show_each_value_and_where_it_came_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(
+        &path,
+        "host_jobs = 6\ntimeout = 90\ncache = \"shared-cache\"\n",
+    )?;
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env_remove("FETCHLOOM_CACHE")
+            .env("FETCHLOOM_JOBS", "12")
+            .output()?,
+    )?;
+    assert_eq!(document["status"], "ok");
+    let cache = path.with_file_name("shared-cache");
+    for (name, value, origin) in [
+        ("jobs", serde_json::json!(12), "environment"),
+        ("host_jobs", serde_json::json!(6), "file"),
+        ("timeout", serde_json::json!(90), "file"),
+        ("retries", serde_json::json!(4), "default"),
+        ("ask_above", serde_json::json!(1_u64 << 30), "default"),
+        (
+            "cache",
+            serde_json::json!(cache.display().to_string()),
+            "file",
+        ),
+    ] {
+        let setting = shown(&document, name);
+        assert_eq!(setting["value"], value, "{name}");
+        assert_eq!(setting["origin"], origin, "{name}");
+    }
+    assert_eq!(
+        shown(&document, "host_jobs")["variable"],
+        "FETCHLOOM_HOST_JOBS"
+    );
+    assert_eq!(
+        document["result"]["file"]["path"],
+        path.display().to_string()
+    );
+    assert_eq!(document["result"]["file"]["found"], true);
+    // the cache the file names is the one every command uses
+    let info = json(
+        &sandbox
+            .command(&["--json", "cache"])
+            .env_remove("FETCHLOOM_CACHE")
+            .output()?,
+    )?;
+    assert_eq!(info["result"]["path"], cache.display().to_string());
+    let table = sandbox.run(&["settings"])?;
+    assert!(table.status.success());
+    let stdout = text(&table.stdout)?;
+    let row = stdout
+        .lines()
+        .find(|line| line.starts_with("host_jobs"))
+        .ok_or("no host_jobs row")?;
+    assert!(
+        row.contains(" 6 ")
+            && row.contains("settings file")
+            && row.ends_with("FETCHLOOM_HOST_JOBS"),
+        "{row}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
+    let sandbox = Sandbox::new()?;
+    let path = settings_file(&sandbox)?;
+    std::fs::write(&path, "job = 3\n")?;
+    let output = sandbox.run(&["--json", "cache"])?;
+    assert_eq!(output.status.code(), Some(2));
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!(
+            "the settings file {} has \"job\", which is not a setting",
+            path.display()
+        )
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, each a number or text"
+    );
+    for arguments in [
+        &["--version"][..],
+        &["-v", "--version"],
+        &["help"],
+        &["--help"],
+        &["completions", "bash"],
+    ] {
+        let output = sandbox.run(arguments)?;
+        assert!(output.status.success(), "{arguments:?}");
+    }
+    std::fs::write(&path, "jobs = 0\n")?;
+    let document = json(&sandbox.run(&["--json", "cache"])?)?;
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!(
+            "jobs in the settings file {} is \"0\", which is not a number from 1 to 256",
+            path.display()
+        )
+    );
+    // the variable wins over the file, so it also works around a bad value there
+    let output = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_JOBS", "2")
+        .output()?;
+    assert!(output.status.success());
+    Ok(())
+}
+
+#[test]
+fn a_settings_file_named_by_the_variable_must_exist() -> Result {
+    let sandbox = Sandbox::new()?;
+    let missing = sandbox.work().join("nowhere.toml");
+    let output = sandbox
+        .command(&["--json", "cache"])
+        .env("FETCHLOOM_SETTINGS", &missing)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2));
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!(
+            "FETCHLOOM_SETTINGS names {}, which does not exist",
+            missing.display()
+        )
+    );
+    let named = sandbox.work().join("fast.toml");
+    std::fs::write(&named, "jobs = 32\nhost_jobs = 16\n")?;
+    let document = json(
+        &sandbox
+            .command(&["--json", "settings"])
+            .env("FETCHLOOM_SETTINGS", &named)
+            .output()?,
+    )?;
+    assert_eq!(shown(&document, "jobs")["value"], 32);
+    assert_eq!(shown(&document, "host_jobs")["origin"], "file");
+    Ok(())
+}
+
+#[test]
+fn bad_settings_in_the_environment_are_usage_errors() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (name, value, said) in [
+        (
+            "FETCHLOOM_HOST_JOBS",
+            "0",
+            "FETCHLOOM_HOST_JOBS is \"0\", which is not a number from 1 to 256",
+        ),
+        (
+            "FETCHLOOM_TIMEOUT",
+            "0",
+            "FETCHLOOM_TIMEOUT is \"0\", which is not a number from 1 to 3600",
+        ),
+        (
+            "FETCHLOOM_ASK_ABOVE",
+            "big",
+            "FETCHLOOM_ASK_ABOVE is \"big\", which is not a size such as 512M or 4G",
+        ),
+        (
+            "FETCHLOOM_MEMORY",
+            "4gb",
+            "FETCHLOOM_MEMORY is \"4gb\", which is not a size such as 512M or 4G",
+        ),
+    ] {
+        let output = sandbox
+            .command(&["--json", "cache"])
+            .env(name, value)
+            .output()?;
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        let document = json(&output)?;
+        assert_eq!(document["errors"][0]["kind"], "usage", "{name}");
+        assert_eq!(document["errors"][0]["message"], said);
+    }
+    Ok(())
+}
+
+#[test]
+fn ask_above_sets_the_size_that_needs_a_yes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 2048];
+    let server = Server::start(
+        "/two.bin",
+        vec![file(&body, "\"v1\""), file(&body, "\"v1\"")],
+    )?;
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_ASK_ABOVE", "1K")
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(json(&output)?["errors"][0]["kind"], "unconfirmed");
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_ASK_ABOVE", "4K")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+#[test]
+fn the_timeout_setting_ends_a_stalled_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut stalled = reply("200 OK", &[("Content-Length", "4096")], b"");
+    stalled.push(Part::Pause(Duration::from_secs(5)));
+    stalled.push(Part::Bytes(vec![b'x'; 4096]));
+    let server = Server::start("/stalled.bin", vec![stalled])?;
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_TIMEOUT", "1")
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    assert!(!output.status.success());
+    let message = json(&output)?["errors"][0]["message"].to_string();
+    assert!(message.contains("sent nothing for 1 s"), "{message}");
+    Ok(())
+}
 
 #[test]
 fn a_rate_capped_download_keeps_every_byte() -> Result {

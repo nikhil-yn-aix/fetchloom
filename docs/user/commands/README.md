@@ -16,6 +16,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
 | [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
+| [`settings`](settings.md) | show each setting, its value and where it came from | check what a run will use, and why |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
 | `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy | learn the [project model](../concepts.md) |

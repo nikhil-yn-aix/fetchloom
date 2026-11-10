@@ -30,7 +30,9 @@ pub(crate) use object::Batch;
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
 pub(crate) use object::{MOST_FLUSHED_ALONE, NewObject, Sealed};
-pub(crate) use partial::{Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed};
+pub(crate) use partial::{
+    Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
+};
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
@@ -105,8 +107,12 @@ fn recorded_url_matches(recorded: &str, url: &str) -> bool {
 }
 
 impl Cache {
-    /// the cache folder: `FETCHLOOM_CACHE` when set, else the platform's cache folder.
-    pub(crate) fn locate(var: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    /// the cache folder: `FETCHLOOM_CACHE` when set, else `configured`, the folder the settings
+    /// file names, else the platform's cache folder.
+    pub(crate) fn locate(
+        var: &dyn Fn(&str) -> Option<OsString>,
+        configured: Option<&Path>,
+    ) -> Option<PathBuf> {
         let set = |name: &str| {
             var(name)
                 .filter(|value| !value.is_empty())
@@ -114,6 +120,9 @@ impl Cache {
         };
         if let Some(path) = set("FETCHLOOM_CACHE") {
             return Some(path);
+        }
+        if let Some(path) = configured {
+            return Some(path.to_path_buf());
         }
         if cfg!(windows) {
             set("LOCALAPPDATA").map(|path| path.join("fetchloom"))
@@ -1551,11 +1560,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn locate_prefers_the_variable_then_the_platform_folder() {
+    fn locate_prefers_the_variable_then_the_settings_file_then_the_platform_folder() {
         let var = |name: &str| (name == "FETCHLOOM_CACHE").then(|| OsString::from("/x/cache"));
-        assert_eq!(Cache::locate(&var), Some(PathBuf::from("/x/cache")));
+        let filed = Path::new("/filed/cache");
+        assert_eq!(Cache::locate(&var, None), Some(PathBuf::from("/x/cache")));
+        assert_eq!(
+            Cache::locate(&var, Some(filed)),
+            Some(PathBuf::from("/x/cache"))
+        );
         let none = |_: &str| None;
-        assert_eq!(Cache::locate(&none), None);
+        assert_eq!(Cache::locate(&none, None), None);
+        assert_eq!(Cache::locate(&none, Some(filed)), Some(filed.to_path_buf()));
         let home = |name: &str| {
             [
                 ("HOME", "/home/ada"),
@@ -1573,7 +1588,7 @@ pub(crate) mod tests {
         } else {
             Path::new("/xdg/fetchloom").to_path_buf()
         };
-        assert_eq!(Cache::locate(&home), Some(expected));
+        assert_eq!(Cache::locate(&home, None), Some(expected));
     }
 
     #[cfg(target_os = "linux")]
@@ -1585,7 +1600,7 @@ pub(crate) mod tests {
             _ => None,
         };
         assert_eq!(
-            Cache::locate(&var),
+            Cache::locate(&var, None),
             Some(Path::new("/home/ada/.cache/fetchloom").to_path_buf())
         );
     }

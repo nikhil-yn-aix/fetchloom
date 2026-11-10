@@ -30,7 +30,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 - pass `--json`. stdout is then one JSON document, with no colors and no questions, whatever the terminal.
 - plain words given to `add` or `get` are a search. without a terminal fetchloom does not guess: it exits 10 with `reference.ambiguous` and lists `result.candidates`. pick one and run again with its `reference`.
-- a download over 1 GiB stops with exit 1 and `unconfirmed`. ask the user before adding `--yes`; it approves the size, never a choice of dataset.
+- a download over 1 GiB, or the size the user set in `FETCHLOOM_ASK_ABOVE`, stops with exit 1 and `unconfirmed`. ask the user before adding `--yes`; it approves the size, never a choice of dataset. do not raise `FETCHLOOM_ASK_ABOVE` to avoid asking.
 - never put a token in data.toml, code or a command you show. fetchloom reads keys the source's own tools saved; if none exists, ask the user to run `fetchloom auth login <source>` in their terminal.
 - `get` checks every target in an output folder before removing earlier versions; a later conflict leaves earlier files in place.
 - `sync` keeps files a person edited and says so. `sync --force` replaces them; use it only with the user's agreement.

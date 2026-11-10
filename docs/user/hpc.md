@@ -29,6 +29,8 @@ cd project
 fetchloom sync
 ```
 
+to keep that cache for every shell and job without an `export`, put `cache = "/scratch/<user>/fetchloom-cache"` in the [settings file](reference/environment.md#settings-file). `fetchloom settings` shows the cache a job will use.
+
 keep the code in git. if scratch deletes old files, `fetchloom status` shows what is missing and `fetchloom sync` downloads it again; a deleted project comes back with `git clone` and `fetchloom sync`.
 
 ## many jobs at once

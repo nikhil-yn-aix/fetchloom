@@ -8,7 +8,7 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use super::failure::{self, Failure, Retry};
-use super::{IDLE, Net, host};
+use super::{Net, host};
 use crate::error::{Error, Kind};
 use crate::work::Work;
 
@@ -121,7 +121,7 @@ impl Net {
         let mut body = Vec::new();
         loop {
             let chunk = tokio::select! {
-                chunk = tokio::time::timeout(IDLE, response.chunk()) => chunk,
+                chunk = tokio::time::timeout(self.idle, response.chunk()) => chunk,
                 () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(url))),
             };
             match chunk {
@@ -129,7 +129,7 @@ impl Net {
                     return Err(failure::transient(format!(
                         "{} sent nothing for {} s",
                         host(url),
-                        IDLE.as_secs()
+                        self.idle.as_secs()
                     )));
                 }
                 Ok(Err(err)) => {

@@ -19,6 +19,8 @@ use crate::volume::is_plain;
 
 mod hashing;
 
+pub(crate) use hashing::set_batches as set_hash_batches;
+
 use hashing::HashPipe;
 
 /// how often a download records its progress, so a killed run loses about this much of it.

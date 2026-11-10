@@ -83,10 +83,10 @@ file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a
 
 | control | value |
 |---|---|
-| network operations | 8 by default, with 4 per initial hostname |
-| connect timeout | 45 s |
-| send and response-header deadline | 75 s per hop |
-| body idle timeout | 30 s between chunks, not counting time held back on this machine by the rate cap, the writer or a question; no total download deadline |
+| network operations | `FETCHLOOM_JOBS`, 8 by default, with `FETCHLOOM_HOST_JOBS`, 4 by default, per initial hostname |
+| connect timeout | 45 s, or `FETCHLOOM_TIMEOUT` when that is longer |
+| send and response-header deadline | the connect timeout plus `FETCHLOOM_TIMEOUT` per hop, 75 s by default |
+| body idle timeout | `FETCHLOOM_TIMEOUT`, 30 s by default, between chunks, not counting time held back on this machine by the rate cap, the writer or a question; no total download deadline |
 | redirects | at most 10 per attempt |
 | metadata body | at most 64 MiB |
 | transient attempts | 5 including the first, or `FETCHLOOM_RETRIES` (0 to 20) more than the first; a download try that leaves more of the file held than any try before counts them from the first again, up to 50 tries in all. retries to one host print one warning line, then another only after 30 s of retrying |

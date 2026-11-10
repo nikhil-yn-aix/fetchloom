@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
@@ -11,7 +12,15 @@ use bytes::Bytes;
 use super::hash_range;
 use crate::digest::{Hasher, Md5, Sha256};
 
+/// how many batches a download queues for its hash worker unless [`set_batches`] says otherwise.
 const QUEUED: usize = 16;
+/// the batches each download queues, which the run's memory budget sets once it is read.
+static BATCHES: AtomicUsize = AtomicUsize::new(QUEUED);
+
+/// sets how many batches each download queues for its hash worker, for every later download.
+pub(crate) fn set_batches(batches: usize) {
+    BATCHES.store(batches.max(1), Ordering::Relaxed);
+}
 
 /// how much the pipe gathers before waking the worker. a message per 16 KiB response chunk spent
 /// more time waking threads than hashing.
@@ -52,7 +61,7 @@ struct Inline {
 
 impl HashPipe {
     pub(super) fn new(hasher: Hasher, file: Arc<File>, received: u64) -> io::Result<Self> {
-        let (sender, inbox) = mpsc::sync_channel(QUEUED);
+        let (sender, inbox) = mpsc::sync_channel(BATCHES.load(Ordering::Relaxed));
         let worker = thread::Builder::new()
             .name("fetchloom-hash".to_owned())
             .spawn(move || hash(&file, hasher, received, &inbox))?;

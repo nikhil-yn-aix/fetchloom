@@ -36,7 +36,9 @@ pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
         return crate::source::home(var)
             .map(|home| home.join("Library/Application Support/fetchloom"));
     }
+    // the XDG spec has a relative value ignored, which would move the file with the working folder
     set("XDG_CONFIG_HOME")
+        .filter(|path| path.is_absolute())
         .or_else(|| crate::source::home(var).map(|home| home.join(".config")))
         .map(|config| config.join("fetchloom"))
 }
@@ -193,6 +195,26 @@ mod tests {
     use std::ffi::OsString;
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_relative_xdg_config_home_is_ignored() {
+        let var = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/ada")),
+            "XDG_CONFIG_HOME" => Some(OsString::from("relative/config")),
+            _ => None,
+        };
+        assert_eq!(
+            folder(&var),
+            Some(PathBuf::from("/home/ada/.config/fetchloom"))
+        );
+        let absolute = |name: &str| match name {
+            "HOME" => Some(OsString::from("/home/ada")),
+            "XDG_CONFIG_HOME" => Some(OsString::from("/xdg")),
+            _ => None,
+        };
+        assert_eq!(folder(&absolute), Some(PathBuf::from("/xdg/fetchloom")));
+    }
 
     #[test]
     fn a_key_replaces_its_file_with_a_new_private_one() {

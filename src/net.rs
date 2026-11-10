@@ -31,12 +31,9 @@ use crate::error::{Error, Kind};
 use crate::stop::Stop;
 use crate::work::Work;
 
+/// how long a connection may take to open, unless `FETCHLOOM_TIMEOUT` asks for longer.
 const CONNECT: Duration = Duration::from_secs(45);
-const RESPONSE: Duration = Duration::from_secs(30);
-const IDLE: Duration = Duration::from_secs(30);
 const REDIRECTS: usize = 10;
-/// requests running at once to one host, so no server sees fetchloom as a flood.
-const PER_HOST: usize = 4;
 /// whether the logs already said a key cannot be sent, which they say once a run.
 static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -172,7 +169,12 @@ pub(crate) struct Net {
     paces: pace::Paces,
     rate: Option<Arc<Rate>>,
     split: Split,
+    /// how long a request waits for an answer, after its connection opens, and how long an
+    /// answer may stay silent.
     idle: Duration,
+    connect: Duration,
+    /// requests running at once to one host, so no server sees fetchloom as a flood.
+    host_jobs: usize,
     /// tries after the first that a request gets once it stops making progress.
     retries: u32,
     work: Arc<Work>,
@@ -215,6 +217,7 @@ struct Wire {
     cookies: Arc<reqwest::cookie::Jar>,
     typed: address::Typed,
     offline: bool,
+    connect: Duration,
     proxies: address::Proxies,
 }
 
@@ -226,16 +229,17 @@ enum Lane {
 }
 
 impl Wire {
-    fn new(typed: &address::Typed, offline: bool) -> Result<Wire, Error> {
+    fn new(typed: &address::Typed, offline: bool, connect: Duration) -> Result<Wire, Error> {
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cookies = Arc::new(reqwest::cookie::Jar::default());
         Ok(Wire {
-            client: Wire::client(typed, offline, &cookies, false)?,
+            client: Wire::client(typed, offline, &cookies, false, connect)?,
             apart: OnceLock::new(),
             cookies,
             typed: typed.clone(),
             offline,
+            connect,
             proxies: address::Proxies::from_system(),
         })
     }
@@ -245,10 +249,11 @@ impl Wire {
         offline: bool,
         cookies: &Arc<reqwest::cookie::Jar>,
         apart: bool,
+        connect: Duration,
     ) -> Result<reqwest::Client, Error> {
         let builder = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(CONNECT)
+            .connect_timeout(connect)
             .dns_resolver(Arc::new(address::Resolver::new(typed.clone(), offline)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
@@ -269,7 +274,9 @@ impl Wire {
             Lane::Shared => Ok(&self.client),
             Lane::Apart => self
                 .apart
-                .get_or_init(|| Wire::client(&self.typed, self.offline, &self.cookies, true))
+                .get_or_init(|| {
+                    Wire::client(&self.typed, self.offline, &self.cookies, true, self.connect)
+                })
                 .as_ref()
                 .map_err(Clone::clone),
         }
@@ -318,7 +325,9 @@ impl Net {
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
             rate: None,
-            idle: IDLE,
+            idle: crate::settings::TIMEOUT,
+            connect: CONNECT,
+            host_jobs: crate::settings::HOST_JOBS,
             retries: RETRIES,
             split: Split {
                 when: options.split,
@@ -337,7 +346,7 @@ impl Net {
     /// not be made stays an error, since nothing about a retry would differ.
     fn wire(&self) -> Result<&Wire, Error> {
         self.wire
-            .get_or_init(|| Wire::new(&self.typed, self.offline.enabled()))
+            .get_or_init(|| Wire::new(&self.typed, self.offline.enabled(), self.connect))
             .as_ref()
             .map_err(Clone::clone)
     }
@@ -433,8 +442,8 @@ impl Net {
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             let request = shape(self.request(client, &hop, first_origin));
             let mut response = tokio::select! {
-                sent = tokio::time::timeout(CONNECT + RESPONSE, request.send()) => match sent {
-                    Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (CONNECT + RESPONSE).as_secs()))),
+                sent = tokio::time::timeout(self.connect + self.idle, request.send()) => match sent {
+                    Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (self.connect + self.idle).as_secs()))),
                     Ok(Err(err)) => return Err(failure::classify(&hop, &err, self.offline)),
                     Ok(Ok(response)) => response,
                 },
@@ -560,7 +569,7 @@ impl Net {
         let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
         hosts
             .entry(host(url).to_ascii_lowercase())
-            .or_insert_with(|| Arc::new(Semaphore::new(PER_HOST)))
+            .or_insert_with(|| Arc::new(Semaphore::new(self.host_jobs)))
             .clone()
     }
 }
@@ -683,7 +692,7 @@ mod tests {
 
     #[test]
     fn request_slots_are_shared_across_paths_and_ports_of_a_host() {
-        for jobs in [1, 8] {
+        for (jobs, host_jobs) in [(1, 4), (8, 4), (32, 16)] {
             let net = Net::new(
                 Options {
                     offline: Offline::No,
@@ -695,10 +704,15 @@ mod tests {
                 Arc::default(),
                 Arc::new(|_| {}),
             );
+            let net = if host_jobs == crate::settings::HOST_JOBS {
+                net
+            } else {
+                net.with_host_jobs(host_jobs)
+            };
             let url = Url::parse("https://example.org/one").unwrap();
-            assert_eq!(net.slots(&url).available_permits(), PER_HOST);
+            assert_eq!(net.slots(&url).available_permits(), host_jobs);
             let held: Vec<_> = std::iter::from_fn(|| net.try_permit(&url)).collect();
-            assert_eq!(held.len(), PER_HOST.min(jobs));
+            assert_eq!(held.len(), host_jobs.min(jobs));
             let other = Url::parse("https://EXAMPLE.org:8443/two").unwrap();
             assert!(net.try_permit(&other).is_none());
         }

@@ -21,7 +21,7 @@ use crate::cache::{PartialWriter, Validators};
 use crate::error::Kind;
 use crate::net::failure::{self, Failure};
 use crate::net::headers::{self, if_range};
-use crate::net::{IDLE, Net, Shown, host};
+use crate::net::{Net, Shown, host};
 use crate::work::Work;
 
 /// the smallest file split across streams.
@@ -573,7 +573,7 @@ impl Net {
         let broke = |reason: String| Ended::Failed(failure::transient(reason));
         while shared.board().left(id) > 0 {
             let next = tokio::select! {
-                next = tokio::time::timeout(IDLE, response.chunk()) => next,
+                next = tokio::time::timeout(self.idle, response.chunk()) => next,
                 () = self.stop.asked() => {
                     return Err(Ended::Failed(Failure::Final(failure::interrupted(url))));
                 }
@@ -583,7 +583,7 @@ impl Net {
                     return Err(broke(format!(
                         "{} sent nothing for {} s",
                         host(url),
-                        IDLE.as_secs()
+                        self.idle.as_secs()
                     )));
                 }
                 Ok(Err(err)) => {

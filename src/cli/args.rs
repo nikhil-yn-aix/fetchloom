@@ -65,6 +65,12 @@ on disk: nothing. it reads data.toml and data.lock";
 
 on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchloom sync` does";
 
+    pub(super) const SETTINGS: &str = "examples:
+  fetchloom settings
+  fetchloom settings --json
+
+on disk: nothing. it reads the FETCHLOOM_* variables and the settings file";
+
     pub(super) const CACHE: &str = "examples:
   fetchloom cache
   fetchloom cache gc
@@ -463,6 +469,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom cache [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::CACHE)]
     Cache(Cache),
 
+    /// show each setting, its value and where it came from
+    #[command(override_usage = "fetchloom settings [options]", help_template = TEMPLATE, after_help = examples::SETTINGS)]
+    Settings(Settings),
+
     /// fetch something once, without a project
     #[command(override_usage = "fetchloom get [options] <link>...", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
@@ -501,6 +511,7 @@ impl Command {
             Command::Cache(Cache {
                 action: Some(CacheAction::Verify),
             }) => "cache verify",
+            Command::Settings(_) => "settings",
             Command::Get(_) => "get",
             Command::Search(_) => "search",
             Command::Auth(Auth {
@@ -721,6 +732,10 @@ pub(crate) struct Lock {
     #[command(flatten)]
     pub(crate) dry: DryRun,
 }
+
+/// show each setting, its value and where it came from
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Settings {}
 
 /// list the project's datasets, or the files of one
 #[derive(Clone, Debug, clap::Args)]

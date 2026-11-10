@@ -18,6 +18,7 @@
     - [remove](user/commands/remove.md)
     - [get](user/commands/get.md)
     - [cache](user/commands/cache.md)
+    - [settings](user/commands/settings.md)
     - [auth](user/commands/auth.md)
     - [completions](user/commands/completions.md)
   - [sources](user/sources/README.md)

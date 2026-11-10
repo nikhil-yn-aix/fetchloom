@@ -60,7 +60,7 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 
 | what | why | contract |
 |---|---|---|
-| use flags and environment variables | avoid a separate config file and another precedence system | [environment](../user/reference/environment.md) |
+| use flags, environment variables and one settings file | a shared machine or a big scratch disk needs settings that last without exported variables. one order for every value, variable then file then machine then default, with `fetchloom settings` showing where each came from, keeps a second source from becoming a precedence puzzle | [settings file](../user/reference/environment.md#settings-file) |
 | require an explicit dataset choice | public catalogs can return several plausible matches; `--yes` only approves downloads | [search selection](../user/commands/search.md#choosing-a-dataset) |
 | give errors stable kinds | scripts can act without parsing prose | [exit codes](../user/reference/exit-codes.md) |
 | keep terminal formatting in one renderer | commands share stream routing, prompts, aligned verbs and progress behavior | [output](architecture/output.md) |

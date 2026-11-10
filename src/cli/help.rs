@@ -48,23 +48,36 @@ quick look.";
 /// has the details; a test keeps the two naming the same variables.
 const ENVIRONMENT: &str = "fetchloom environment
 
-  FETCHLOOM_CACHE     the cache folder, instead of the system's cache folder
-  FETCHLOOM_OFFLINE   1 works offline, as --offline does
-  FETCHLOOM_JOBS      how many files download at once, 1 to 256; 8 by default.
-                      each site gets at most 4 at once
-  FETCHLOOM_RATE      a cap on download speed in bytes a second, as 500K or 2.5M
-  FETCHLOOM_RETRIES   how many more times a failed request is tried, 0 to 20;
-                      4 by default. raise it on a network that drops for minutes
-  FETCHLOOM_THREADS   a cap on local worker threads, 1 to 256
-  FETCHLOOM_SPLIT     0 never splits a slow download into parts, 1 always does
-  FETCHLOOM_LOG       a log filter such as fetchloom=debug, as -vv uses
-  FETCHLOOM_TRACE     a file to write a timeline of the run to, for profiling
-  FETCHLOOM_COLORS    other colors, as done=blue:accent=#d787ff
-  FETCHLOOM_NO_HINTS  1 drops the hint: and next: lines
-  FETCHLOOM_KEYRING   0 keeps keys out of the system's credential store
+  FETCHLOOM_CACHE      the cache folder, instead of the system's cache folder
+  FETCHLOOM_OFFLINE    1 works offline, as --offline does
+  FETCHLOOM_JOBS       how many files download at once, 1 to 256; 8 by default
+  FETCHLOOM_HOST_JOBS  how many of those one site gets at once, 1 to 256;
+                       4 by default
+  FETCHLOOM_RATE       a cap on download speed in bytes a second, as 2.5M
+  FETCHLOOM_RETRIES    how many more times a failed request is tried, 0 to 20;
+                       4 by default. raise it if the network drops for minutes
+  FETCHLOOM_TIMEOUT    seconds a site may send nothing before a try fails,
+                       1 to 3600; 30 by default
+  FETCHLOOM_ASK_ABOVE  a download bigger than this needs a yes, as 20G;
+                       1G by default
+  FETCHLOOM_MEMORY     memory for download buffers, as 512M; by default a
+                       quarter of what is free, from 256M to 4G
+  FETCHLOOM_THREADS    a cap on local worker threads, 1 to 256
+  FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
+  FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in
+                       fetchloom's folder
+  FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
+  FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
+  FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
+  FETCHLOOM_NO_HINTS   1 drops the hint: and next: lines
+  FETCHLOOM_KEYRING    0 keeps keys out of the system's credential store
 
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
+
+a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above and
+memory for every run, one per line, as jobs = 16. a variable wins over the
+file. fetchloom settings shows each value and where it came from.
 
 keys are read where each source's own tools keep them: HF_TOKEN and the hugging
 face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,
@@ -394,7 +407,7 @@ mod tests {
             ),
             "{CONCEPTS}"
         );
-        assert!(flat(ENVIRONMENT).contains("each site gets at most 4 at once"));
+        assert!(flat(ENVIRONMENT).contains("how many of those one site gets at once"));
         assert!(flat(EXIT_CODES).contains("say yes with --yes"));
         for (name, text) in TOPICS {
             for word in ["initial host", "approve"] {

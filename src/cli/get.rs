@@ -830,6 +830,7 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
     super::confirm(
         &context.output,
         context.yes,
+        context.settings.ask_above.value,
         &units::count(missing.len() as u64, "file", "files"),
         size,
     )
@@ -1265,7 +1266,7 @@ mod tests {
         cache.record_unpacked(&digest, &[]).unwrap();
         let remote = Remote {
             path: "large.zip".to_owned(),
-            size: Some(super::super::ASK_ABOVE + 1),
+            size: Some(crate::settings::ASK_ABOVE + 1),
             sha256: Some(digest),
             md5: None,
             url: url::Url::parse("https://example.org/large.zip").unwrap(),
@@ -1291,7 +1292,7 @@ mod tests {
         cache.record_unpacked(&digest, &[]).unwrap();
         let mut remote = Remote {
             path: "cached.zip".to_owned(),
-            size: Some(super::super::ASK_ABOVE),
+            size: Some(crate::settings::ASK_ABOVE),
             sha256: Some(digest),
             md5: None,
             url: url::Url::parse("https://example.org/cached.zip").unwrap(),
@@ -1303,7 +1304,7 @@ mod tests {
         jobs.push(fetch::listed_job(&remote, &remote.path, false));
         let context = approval_context();
         approve(&context, &cache, &jobs).unwrap();
-        jobs[1].fetch.expect.size = Some(super::super::ASK_ABOVE + 1);
+        jobs[1].fetch.expect.size = Some(crate::settings::ASK_ABOVE + 1);
         assert_eq!(
             approve(&context, &cache, &jobs).unwrap_err().kind,
             Kind::Unconfirmed
