@@ -345,7 +345,12 @@ impl<'a> Loop<'a> {
 
     /// what [`Loop::place`] would do, decided without downloading, unpacking or writing, given
     /// `jobs` relocking would download first. a download an offline run could not make stops the
-    /// preview as it would stop the run.
+    /// preview as it would stop the run. files `guessed` by the dry relock, as `<dataset>/<path>`,
+    /// that something already stands at are told as files to check.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one finding of the dry run that the preview builds on"
+    )]
     pub(super) fn preview(
         &self,
         manifest: &Manifest,
@@ -354,6 +359,7 @@ impl<'a> Loop<'a> {
         survey: Survey,
         mut jobs: Vec<Job>,
         damaged: &HashSet<Sha256>,
+        guessed: &HashSet<String>,
     ) -> Result<Preview, Error> {
         let placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
         let mut unpack = Vec::new();
@@ -375,7 +381,7 @@ impl<'a> Loop<'a> {
             |job: &Job| in_cache_where(&self.cache, &job.fetch, |digest| !damaged.contains(digest));
         jobs.retain(|job| !available(job));
         self.refuse_offline_with(&jobs, available)?;
-        let mut preview = placing.preview();
+        let mut preview = placing.preview(guessed);
         preview.changes.download = jobs
             .into_iter()
             .map(|job| Download {

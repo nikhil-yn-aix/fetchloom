@@ -131,6 +131,9 @@ pub(crate) struct Preview {
 pub(crate) struct Planned {
     pub(crate) place: Vec<String>,
     pub(crate) replace: Vec<String>,
+    /// files already at the place of a file whose hash only its download can learn, so only
+    /// the download tells whether they hold the pinned bytes.
+    pub(crate) check: Vec<String>,
 }
 
 impl Preview {
@@ -351,11 +354,26 @@ impl<'a> Placing<'a> {
 
     /// what [`Placing::apply`] would do, decided as it decides and with nothing written. a file
     /// that changes between this look and placing is still left alone when it is placed for real.
-    pub(crate) fn preview(&self) -> Preview {
+    /// a file already at the place of one whose hash is a dry run's stand-in, `guessed` as
+    /// `<dataset>/<path>`, is one to check, since only the download tells whether it holds the
+    /// pinned bytes.
+    pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
+            if !guessed.is_empty()
+                && self.survey.disk.contains_key(&target.path)
+                && guessed.contains(&format!("{}/{}", target.dataset, target.locked.path))
+            {
+                preview
+                    .by_dataset
+                    .entry(target.dataset.to_owned())
+                    .or_default()
+                    .check
+                    .push(target.path.clone());
+                continue;
+            }
             match action {
                 Action::Keep | Action::Adopt(_) | Action::Vouch(_) => placement.unchanged += 1,
                 Action::Leave(reason) => {

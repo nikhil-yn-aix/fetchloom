@@ -628,7 +628,11 @@ pub(super) async fn preview_all(
         });
     }
     let engine::DryRelock {
-        lock, before, jobs, ..
+        lock,
+        before,
+        jobs,
+        guessed,
+        ..
     } = work
         .relock_dry(manifest, old, &Upgrade::Nothing, given)
         .await?;
@@ -644,7 +648,7 @@ pub(super) async fn preview_all(
             &engine::sizeless(&jobs),
         );
     }
-    let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged)?;
+    let preview = work.preview(manifest, &lock, force, survey, jobs, &damaged, &guessed)?;
     for download in &preview.changes.download {
         let size = download
             .size

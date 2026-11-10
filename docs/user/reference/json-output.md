@@ -98,6 +98,8 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 | `download` | files that would be downloaded first, as `{path, size}` with `path` as `<dataset>/<file>` and `size` in bytes, or null when only the download can tell |
 | `unpack` | archives, as `<dataset>/<file>`, that would be unpacked first; their members are not in `place` or the counts |
 
+a file already standing where a file goes whose hash only its download can learn is in neither `place` nor `replace`, nor in the counts: only that download, listed in `download`, tells whether it holds the pinned bytes.
+
 `result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a test run with the project path shortened:
 
 ```json

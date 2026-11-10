@@ -75,7 +75,7 @@ Would place data/iris · 1 file
          Ok dry run, nothing was changed
 ```
 
-the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place, and an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place; when a file already stands where it goes, it is listed under `Would check` instead, with no warning, since only the download tells whether it holds the pinned bytes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
 

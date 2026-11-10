@@ -546,3 +546,39 @@ fn a_dry_run_audits_damaged_read_only_hardlinks() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+/// a file someone put where a new dataset goes may hold the pinned bytes, and only the download
+/// tells, since the link publishes no checksum. the dry run says it would check the file, rather
+/// than calling it different from data.lock.
+#[test]
+fn a_file_already_in_place_is_not_called_different_before_the_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    fs::create_dir_all(placed.parent().ok_or("a placed file has a folder")?)?;
+    fs::write(&placed, IRIS)?;
+    let project = tree(&sandbox.work())?;
+    let output = sandbox.run(&["add", &server.url, "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("differs"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Would check data/iris · 1 file is already there; the download tells whether it holds the pinned bytes"
+        ),
+        "{stderr}"
+    );
+    let document = json(&sandbox.run(&["--json", "add", &server.url, "-n"])?)?;
+    assert_eq!(document["warnings"], serde_json::json!([]), "{document}");
+    let changes = &document["result"]["changes"];
+    assert_eq!(changes["place"], serde_json::json!([]), "{document}");
+    assert_eq!(changes["replace"], serde_json::json!([]), "{document}");
+    assert_eq!(
+        changes["download"],
+        serde_json::json!([{ "path": "iris/iris.csv", "size": null }]),
+        "{document}"
+    );
+    assert_eq!(tree(&sandbox.work())?, project);
+    assert_eq!(server.requests().len(), 0);
+    Ok(())
+}

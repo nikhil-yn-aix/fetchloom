@@ -140,6 +140,9 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     for (dataset, planned) in &preview.by_dataset {
         tell_files("Would renew", dataset, &planned.replace);
     }
+    for (dataset, planned) in &preview.by_dataset {
+        tell_checks(output, manifest, dataset, &planned.check);
+    }
     for overwritten in &preview.placement.overwritten {
         output.warn(&format!(
             "{} is {}, and --force would replace it",
@@ -178,6 +181,26 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
                 ),
             });
         }
+    }
+}
+
+/// the files of `dataset` already where a file goes whose pin only its download can learn, so
+/// the dry run cannot yet tell whether they hold the pinned bytes. `-v` names each file.
+fn tell_checks(output: &Output, manifest: &Manifest, dataset: &str, files: &[String]) {
+    let said = match files.len() {
+        0 => return,
+        1 => "1 file is already there; the download tells whether it holds the pinned bytes"
+            .to_owned(),
+        count => format!(
+            "{count} files are already there; the downloads tell whether they hold the pinned bytes"
+        ),
+    };
+    output.step(
+        "Would check",
+        &format!("{} · {said}", plan::folder(manifest, dataset)),
+    );
+    for path in files {
+        output.detail(path);
     }
 }
 
