@@ -79,7 +79,7 @@ fetchloom -q path iris
 
 JSON `result` is an absolute path string. the quiet form prints only the path on stdout. either can sync the whole project when the requested dataset is not ready. neither proves that an edited file was replaced.
 
-`-C` chooses the folder where project discovery starts. the search includes its parents. quiet mode keeps stdout answers and errors; JSON warnings remain in the document.
+`-C` chooses the folder where project discovery starts. the search includes its parents, up to the top of the git repository it starts in. quiet mode keeps stdout answers and errors; JSON warnings remain in the document.
 
 ## offline jobs
 

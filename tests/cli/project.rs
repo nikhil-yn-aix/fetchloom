@@ -668,6 +668,72 @@ fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
     Ok(())
 }
 
+/// a git repository made inside a project is a project of its own, since data.toml belongs to
+/// the repository that commits it: `add` there starts one and leaves the outer data.toml alone.
+#[test]
+fn a_git_repository_inside_a_project_starts_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let outer = fs::read(sandbox.work().join("data.toml"))?;
+    let inner = sandbox.work().join("experiment");
+    fs::create_dir_all(inner.join(".git"))?;
+    let output = sandbox.command_in(&inner, &["add", &server.url]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Started a project in {}", inner.display())),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("using the project in"), "{stderr}");
+    assert_eq!(
+        fs::read(inner.join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    assert!(inner.join("data.toml").is_file());
+    assert_eq!(fs::read(sandbox.work().join("data.toml"))?, outer);
+    Ok(())
+}
+
+/// in a git repository without a data.toml, the search stops at the repository and says so; a
+/// project outside it is used only when -C names its folder.
+#[test]
+fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let inner = sandbox.work().join("experiment");
+    fs::create_dir_all(inner.join(".git"))?;
+    fs::create_dir_all(inner.join("notebooks"))?;
+    let refused = sandbox
+        .command_in(&inner.join("notebooks"), &["--json", "path", "iris"])
+        .output()?;
+    assert_eq!(refused.status.code(), Some(50));
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "project.invalid");
+    assert_eq!(
+        error["message"],
+        format!(
+            "there is no data.toml in this folder or any folder above it inside the git repository at {}",
+            inner.display()
+        )
+    );
+    assert_eq!(
+        error["help"],
+        "run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    let used = sandbox
+        .command_in(&inner, &["-C", "..", "path", "iris"])
+        .output()?;
+    assert_eq!(used.status.code(), Some(0), "{}", text(&used.stderr)?);
+    assert_eq!(
+        text(&used.stdout)?,
+        format!("{}\n", sandbox.work().join("data").join("iris").display())
+    );
+    Ok(())
+}
+
 #[test]
 fn a_script_never_gets_the_cache_reminder_and_nothing_is_freed() -> Result {
     let sandbox = Sandbox::new()?;

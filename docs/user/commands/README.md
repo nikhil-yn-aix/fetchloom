@@ -55,7 +55,7 @@ fetchloom help --json
 
 ## project discovery
 
-project commands find the nearest `data.toml` at or above the working directory. `-C` chooses where that search starts. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one.
+project commands find the nearest `data.toml` at or above the working directory, inside the git repository the working directory is in. `-C` chooses where that search starts, and is how you use a project above the repository. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one. [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule.
 
 ## output
 

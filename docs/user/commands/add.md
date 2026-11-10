@@ -33,7 +33,7 @@ fetchloom add [options] <link>
 4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
-run in a folder below a project's folder, `add` works on that project. a person at a terminal sees `using the project in <folder>` once, and the folder the dataset's files are in is given from where you stand, such as `../data/iris`.
+run in a folder below a project's folder, `add` works on that project. a person at a terminal sees `using the project in <folder>` once, and the folder the dataset's files are in is given from where you stand, such as `../data/iris`. the search stops at a git repository, so inside a repository with no `data.toml` of its own, `add` starts a project in the current folder even when a folder above the repository holds one; [finding the project](../reference/project-folder.md#finding-the-project) says why.
 
 there is no `init` command; `add` starts a project. `fetchloom init` is a usage error, exit 2, whose help says no init is needed and names `fetchloom add <link>`.
 

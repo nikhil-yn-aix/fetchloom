@@ -1,6 +1,6 @@
 # project folder
 
-`.fetchloom/` holds a project's local lock, owner record and placement state.
+the project folder holds `data.toml`, and its `.fetchloom/` holds the project's local lock, owner record and placement state.
 
 `.fetchloom` must be a real directory. a symlink or junction is refused before fetchloom writes its lock, owner, state or ignore file.
 
@@ -22,6 +22,12 @@ on unix, metadata replacement flushes the new file before rename, then flushes t
 inside a git repository, `add` and `sync` add `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
 
 inside the data folder, a file being copied or cloned into place is first written to a hidden `.fetchloom-<16 hex digits>.copy` beside its destination and then renamed. a hard kill can leave one behind; `status` does not list it, and the next `sync` deletes it.
+
+## finding the project
+
+project commands use the nearest folder at or above the working directory that holds `data.toml`. the search never leaves the git repository it starts in: it checks each folder for `data.toml` first, then stops at the first folder holding `.git`, as a folder or as the file a submodule or worktree has. a `data.toml` above that folder belongs to another repository's history, where a command would pin data in the wrong one, and a stray `data.toml` in a home folder would otherwise take in every repository below it.
+
+in a git repository with no `data.toml` of its own, project commands fail with exit 50 and name the repository, and `add` starts a new project in the working directory. to use a project above the repository on purpose, name its folder with `-C`, as in `fetchloom -C .. sync`.
 
 ## owner record
 

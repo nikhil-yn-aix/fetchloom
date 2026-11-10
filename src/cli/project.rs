@@ -700,12 +700,20 @@ pub(super) fn register(work: &Loop<'_>) {
 pub(super) fn find(output: &Output) -> Result<Project, Error> {
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let project = Project::find(&here).ok_or_else(|| {
-        Error::new(
+    let project = Project::find(&here).ok_or_else(|| match Project::repository(&here) {
+        Some(repository) => Error::new(
+            Kind::ProjectInvalid,
+            format!(
+                "there is no data.toml in this folder or any folder above it inside the git repository at {}",
+                repository.display()
+            ),
+        )
+        .help("run `fetchloom add <link>` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`"),
+        None => Error::new(
             Kind::ProjectInvalid,
             "there is no data.toml in this folder or any folder above it",
         )
-        .help("run `fetchloom add <link>` to start a project here")
+        .help("run `fetchloom add <link>` to start a project here"),
     })?;
     tracing::debug!(root = %project.root.display(), "found data.toml");
     if project.root != here {

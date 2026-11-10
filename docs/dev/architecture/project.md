@@ -4,7 +4,7 @@
 
 ## ownership
 
-`Project` finds the nearest ancestor containing `data.toml` and reads the manifest, lock and local state. it also writes metadata and checks the data-folder chain; command handlers decide when those operations happen.
+`Project` finds the nearest ancestor containing `data.toml`, without crossing the top of the git repository the search starts in, and reads the manifest, lock and local state. it also writes metadata and checks the data-folder chain; command handlers decide when those operations happen.
 
 ## files
 
@@ -62,7 +62,7 @@ a waiting `path` notices a changed state file and runs the normal read-only read
 - commit the manifest and lock, not local observations. a copied state file is not proof of another machine's files.
 - do not treat a broken lock like missing state. recovery may require restoring the lock from git or explicitly resolving all entries again.
 - a tree hash pins archive contents without expanding the lock to one record per member.
-- root discovery uses the nearest manifest. nested projects are distinct roots.
+- root discovery uses the nearest manifest. nested projects are distinct roots. a folder holding `.git`, a folder or a file, ends the search once its own manifest is checked, so a manifest above a repository needs `-C`; `ignored_in_git` uses the same repository test.
 - path checks reject traversal and links in protected directory chains, but do not make a sandbox against another process swapping directories during a run.
 
 ## tests

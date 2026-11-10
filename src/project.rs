@@ -217,14 +217,27 @@ fn read_owner(path: &Path) -> io::Result<(Vec<u8>, SystemTime)> {
 }
 
 impl Project {
-    /// the nearest folder at or above `start` that holds a data.toml.
+    /// the nearest folder at or above `start` that holds a data.toml, inside the git repository
+    /// `start` is in: a data.toml above the repository belongs to another history, so `-C` must
+    /// name it. each folder's data.toml is looked for before its `.git`.
     pub(crate) fn find(start: &Path) -> Option<Project> {
-        start
-            .ancestors()
-            .find(|folder| folder.join(manifest::FILE).is_file())
-            .map(|root| Project {
-                root: root.to_path_buf(),
-            })
+        for folder in start.ancestors() {
+            if folder.join(manifest::FILE).is_file() {
+                return Some(Project {
+                    root: folder.to_path_buf(),
+                });
+            }
+            if is_repository(folder) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// where the git repository `start` is in begins: the nearest folder at or above it holding
+    /// `.git`.
+    pub(crate) fn repository(start: &Path) -> Option<&Path> {
+        start.ancestors().find(|folder| is_repository(folder))
     }
 
     pub(crate) fn manifest_path(&self) -> PathBuf {
@@ -621,11 +634,7 @@ impl Project {
 
     /// the .gitignore that [`Project::ignore_in_git`] would write, or none when it writes nothing.
     pub(crate) fn ignored_in_git(&self, data_dir: &str) -> Result<Option<String>, Error> {
-        if !self
-            .root
-            .ancestors()
-            .any(|folder| folder.join(".git").exists())
-        {
+        if Project::repository(&self.root).is_none() {
             return Ok(None);
         }
         let path = self.root.join(".gitignore");
@@ -712,6 +721,12 @@ impl Project {
             err,
         )
     }
+}
+
+/// whether `folder` is where a git repository begins: it holds `.git`, as a folder or as the file
+/// a submodule or worktree has.
+fn is_repository(folder: &Path) -> bool {
+    folder.join(".git").exists()
 }
 
 /// whether `path` still names the file `file` has open.
@@ -928,6 +943,36 @@ mod tests {
         let found = Project::find(&dir.path().join("a").join("b")).unwrap();
         assert_eq!(found.root, dir.path());
         assert!(Project::find(&tempfile::tempdir().unwrap().path().join("x")).is_none());
+    }
+
+    /// data.toml belongs to the git repository that commits it, so the search ends at the first
+    /// folder holding `.git`, as a folder or as the file a submodule or worktree has, once that
+    /// folder's own data.toml is checked.
+    #[test]
+    fn a_git_repository_ends_the_search_for_data_toml() {
+        let (dir, _) = project(&[
+            ("data.toml", ""),
+            ("folder/.git/HEAD", ""),
+            ("folder/sub/x.txt", ""),
+            ("file/.git", "gitdir: ../.git/worktrees/file\n"),
+            ("file/sub/x.txt", ""),
+            ("own/.git/HEAD", ""),
+            ("own/data.toml", ""),
+            ("own/sub/x.txt", ""),
+        ]);
+        for repository in ["folder", "file"] {
+            let inner = dir.path().join(repository);
+            for start in [inner.clone(), inner.join("sub")] {
+                assert!(Project::find(&start).is_none(), "{}", start.display());
+            }
+            assert_eq!(
+                Project::repository(&inner.join("sub")),
+                Some(inner.as_path())
+            );
+        }
+        let own = dir.path().join("own");
+        assert_eq!(Project::find(&own.join("sub")).unwrap().root, own);
+        assert_eq!(Project::find(dir.path()).unwrap().root, dir.path());
     }
 
     #[test]
