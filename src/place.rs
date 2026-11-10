@@ -613,6 +613,24 @@ impl Placer {
             .link_to(&self.location(to, false)?)
     }
 
+    /// gives `to` a file of its own holding the bytes of the plain file at `from`, both below the
+    /// pinned root: a reflink where the filesystem clones, else a copy flushed to disk, never a
+    /// hardlink, so a later write to either leaves the other as it is. a name already taken is
+    /// refused with `AlreadyExists`, so nothing is replaced.
+    pub(crate) fn copy_file(&self, from: &Path, to: &Path, writable: bool) -> io::Result<Method> {
+        check_stop(&self.stop)?;
+        self.check_parent(from)?;
+        let location = Arc::new(self.location(to, false)?);
+        if self.can_reflink.load(Ordering::Relaxed) {
+            match reflink(from, &location, writable) {
+                Ok(sealed) => return sealed.map(|_| Method::Reflink),
+                Err(error) => self.learn(Method::Reflink, error)?,
+            }
+        }
+        copy_at(from, &location, writable, self.threads, true, &self.stop)?;
+        Ok(Method::Copy)
+    }
+
     /// deletes a temporary file through its parent; it is not a recorded placement.
     pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;

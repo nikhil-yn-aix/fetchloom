@@ -808,8 +808,9 @@ fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBu
 /// writable and appends to it through the first project's link, which changes the cache's own
 /// copy. the other project's status calls that damage to the cached copy, not its own edit, and
 /// its plain sync downloads the file again and puts it back. the first project's plain sync then
-/// puts its link back too, since it is still the very copy the cache found changed. each keeps
-/// the changed copy beside the pinned file, so the edit is not lost.
+/// puts its link back too, since it is still the very copy the cache found changed. each keeps a
+/// changed copy of its own beside the pinned file, so the edit is not lost, and editing one
+/// project's copy changes no other's.
 #[test]
 fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     let sandbox = Sandbox::new()?;
@@ -854,13 +855,23 @@ fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert_eq!(fs::read(&mine)?, V1, "{stderr}");
     assert_eq!(server.requests().len(), 2, "{stderr}");
-    for project in [sandbox.work(), other] {
+    for project in [sandbox.work(), other.clone()] {
         assert_eq!(
             fs::read(project.join("data").join("iris").join("iris.csv.changed"))?,
             grown
         );
         only_the_kept_copy_differs(&sandbox, &project)?;
     }
+    // each project keeps a changed copy of its own, so a later edit of one changes no other
+    let kept = sandbox
+        .work()
+        .join("data")
+        .join("iris")
+        .join("iris.csv.changed");
+    let theirs = other.join("data").join("iris").join("iris.csv.changed");
+    assert!(!same_file::is_same_file(&kept, &theirs)?);
+    edit(&kept, b"mine alone\n")?;
+    assert_eq!(fs::read(&theirs)?, grown);
     Ok(())
 }
 

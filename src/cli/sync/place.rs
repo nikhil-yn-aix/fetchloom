@@ -861,8 +861,11 @@ fn aside_names<'n>(path: &'n str, targets: &'n [Target<'_>]) -> impl Iterator<It
 }
 
 /// keeps the cache's changed copy, linked at `path`, under the first free name of
-/// [`aside_names`], then takes `path` away for the pinned file. the copy gets its new name as a
-/// link first, which a name already there refuses, so no file is replaced. returns that name.
+/// [`aside_names`], then takes `path` away for the pinned file. a copy nothing else names gets
+/// the new name as a second link, which costs nothing. one other names still share, as other
+/// projects' links do, is cloned or copied instead, so each project's changed copy is its own
+/// and an edit of one changes no other. a name already there is refused, so no file is replaced.
+/// returns that name.
 fn keep_aside(
     project: &Project,
     placer: &mut Placer,
@@ -871,9 +874,16 @@ fn keep_aside(
     method: Option<Method>,
 ) -> Result<String, Error> {
     let from = project.root.join(path);
+    let shared = place::has_other_names(&from);
+    let writable = now_writable(&from);
     for name in aside_names(path, targets) {
         let aside = project.root.join(&name);
-        match placer.link_file(&from, &aside) {
+        let kept = if shared {
+            placer.copy_file(&from, &aside, writable).map(drop)
+        } else {
+            placer.link_file(&from, &aside)
+        };
+        match kept {
             Ok(()) => {
                 placer
                     .remove(&from, false, method)

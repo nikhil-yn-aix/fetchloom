@@ -220,6 +220,27 @@ fn a_writable_placement_is_a_writable_copy() {
     assert!(is_read_only(&object));
 }
 
+/// a file copied within the root is a file of its own, so a write to the copy leaves the original
+/// as it was, and a name already taken is refused without a change.
+#[test]
+fn a_copy_within_the_root_is_its_own_file_and_replaces_nothing() {
+    let folder = TempDir::new().unwrap();
+    let from = folder.path().join("iris.csv");
+    fs::write(&from, CONTENTS).unwrap();
+    let to = folder.path().join("iris.csv.changed");
+    let placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
+
+    let method = placer.copy_file(&from, &to, true).unwrap();
+
+    assert_ne!(method, Method::Hardlink);
+    assert!(!same_file::is_same_file(&from, &to).unwrap());
+    fs::write(&to, "edited apart").unwrap();
+    assert_eq!(fs::read_to_string(&from).unwrap(), CONTENTS);
+    let error = placer.copy_file(&from, &to, true).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&to).unwrap(), "edited apart");
+}
+
 #[test]
 fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     let (folder, object) = cache(true);
