@@ -43,6 +43,7 @@
   - [scripting](user/scripting.md)
   - [CI](user/ci.md)
   - [clusters](user/hpc.md)
+  - [notebooks and containers](user/notebooks.md)
   - [AI agents](user/ai-agents.md)
   - [windows](user/windows.md)
   - [macos](user/macos.md)

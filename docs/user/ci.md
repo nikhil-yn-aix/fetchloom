@@ -50,6 +50,8 @@ restore-data:
 
 jobs on different systems, such as linux and windows runners, should use different prefixes, as the github key does with `runner.os`.
 
+a kubernetes job or another container keeps its cache on a volume instead; [notebooks and containers](notebooks.md#a-kubernetes-job) has an example with a read-only root filesystem.
+
 ## keys
 
 a private, gated or competition dataset needs its source's key in the job's environment, from the CI system's secrets: `HF_TOKEN` for hugging face, `KAGGLE_API_TOKEN` for kaggle, and the others in [environment](reference/environment.md#credentials). never write a key into the cache folder or the repository; fetchloom keeps keys out of its cache, logs and output.
