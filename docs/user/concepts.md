@@ -127,3 +127,16 @@ the disk holding the cache is checked too. when what a run is about to download 
 ## interruptions
 
 at a download question, a sign-in prompt or the dataset picker, ctrl-c cancels the question and stops with exit 130, and the terminal shows what you type again. a cancel you choose is not an error: fetchloom prints one `Cancelled` line saying what was cancelled, such as `Cancelled the download of huge.bin (2.0 GiB), so nothing changed`, instead of `error:`. during other work, the first ctrl-c requests a stop, prints `Stopping (press ctrl-c again to quit at once)`, and preserves resumable bytes before exiting 130. a stop you ask for is not an error either: the run ends with one `Stopped` line saying where it stopped, such as `Stopped while talking to 127.0.0.1`, and a dim line under it says how much the unfinished downloads keep, together, which is what the next run goes on from. cache scans check between entries, and verification checks between hash reads. a second ctrl-c clears the progress bars and exits immediately with code 130. once a command's changes are in place, as when `add`, `sync`, `lock` or `remove` prints its last lines, a ctrl-c no longer stops it, and it exits 0.
+
+## deleting a dataset from a machine
+
+a data-use agreement can require deleting a dataset's bytes from a machine. fetchloom keeps them in more than one place, and frees only the ones it manages:
+
+1. in each project that uses the dataset, run `fetchloom remove <name>`, after `fetchloom remove <name> --dry-run` to see what goes. it keeps files you edited and other files in the dataset's folder, such as the `<path>.changed` copies sync kept: delete those yourself. deleting a whole project folder works too.
+2. delete the folders `fetchloom get` wrote; no project records them.
+3. run `fetchloom cache gc --now`, after `fetchloom cache gc --now --dry-run` to see what goes. it deletes the cached files no project needs, including what a deleted project folder alone needed, and every unfinished download no running fetchloom holds. temporary files under the cache's `tmp/` folder keep their one-day grace period even then.
+4. repeat this on each machine and cache that fetched the dataset, such as other computers, CI caches, container volumes and a lab's shared cache.
+
+a cached file stays while another project using the same cache pins the same bytes, under any dataset name, since projects share files by SHA-256. `fetchloom cache` lists the projects that use the cache.
+
+fetchloom cannot reach copies it did not make: backups, a mirror or shared drive you copied files to, a synced folder's trash or version history, and copies other programs made. it deletes a file the way `rm` does, without overwriting it, so snapshots, copy-on-write clones or the disk itself can keep the bytes, and fetchloom does not verify erasure. when an agreement requires that, follow your institution's procedure for the disk. the git history of `data.toml` and `data.lock` keeps the dataset's reference, file names, sizes and SHA-256, not its bytes.

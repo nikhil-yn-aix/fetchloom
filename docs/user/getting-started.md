@@ -140,7 +140,7 @@ the shared cache still holds the bytes. `fetchloom cache gc` frees bytes no proj
 fetchloom cache gc --now
 ```
 
-to remove the whole project, delete its folder.
+to remove the whole project, delete its folder. to remove every copy of a dataset from a machine, as a data-use agreement can require, follow [deleting a dataset from a machine](concepts.md#deleting-a-dataset-from-a-machine).
 
 ## uninstall
 
