@@ -631,6 +631,33 @@ impl Placer {
         Ok(Method::Copy)
     }
 
+    /// replaces the plain file at `destination`, which holds the bytes of `object`, with a
+    /// hardlink to `object`, while `unchanged` says the file still looks as it did. the link is
+    /// made under a hidden name in the same folder first, so the file keeps its bytes until the
+    /// link takes its name in one rename. returns how the link looks; none when the filesystem,
+    /// or a sync client owning the folder, allows no hardlink here, or the file changed.
+    pub(crate) fn relink(
+        &self,
+        object: &Path,
+        destination: &Path,
+        unchanged: impl FnOnce(&Metadata) -> bool,
+    ) -> io::Result<Option<Metadata>> {
+        check_stop(&self.stop)?;
+        if self.synced.is_some() || !self.can_hardlink.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        check_object(object)?;
+        let location = Arc::new(self.location(destination, false)?);
+        let staged = match location.stage_link(object) {
+            Ok(staged) => staged,
+            Err(error) => {
+                self.learn(Method::Hardlink, error)?;
+                return Ok(None);
+            }
+        };
+        staged.replace(unchanged)
+    }
+
     /// deletes a temporary file through its parent; it is not a recorded placement.
     pub(crate) fn delete_file(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;

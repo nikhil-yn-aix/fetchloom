@@ -53,6 +53,13 @@ pub(super) fn tell(
             ),
         );
     }
+    for (dataset, paths) in &placement.adopted {
+        let (linked, kept): (Vec<&String>, Vec<&String>) = paths
+            .iter()
+            .partition(|path| placement.relinked.contains(*path));
+        tell_adopted(output, manifest, dataset, &linked, true);
+        tell_adopted(output, manifest, dataset, &kept, false);
+    }
     if placement.removed > 0 {
         output.step(
             "Removed",
@@ -63,6 +70,7 @@ pub(super) fn tell(
             ),
         );
     }
+    warn_adopted_removed(output, &placement.removed_adopted, "removed");
     if tallies.values().any(|tally| tally.unlinked > 0)
         && let Some(why) = placer.unlinked()
     {
@@ -104,6 +112,52 @@ fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedC
         .find(|copy| copy.path == path)
 }
 
+/// the files of `dataset` that were already at their places with the pinned bytes, which sync
+/// took as placed: `linked` to the cache's copy now, or kept as they were. `-v` names each file.
+fn tell_adopted(
+    output: &Output,
+    manifest: &Manifest,
+    dataset: &str,
+    paths: &[&String],
+    linked: bool,
+) {
+    let said = match (paths.len(), linked) {
+        (0, _) => return,
+        (1, true) => {
+            "1 file already held the pinned bytes, so it is now linked to the cache".to_owned()
+        }
+        (1, false) => "1 file already held the pinned bytes, so it stays as it is".to_owned(),
+        (count, true) => format!(
+            "{count} files already held the pinned bytes, so they are now linked to the cache"
+        ),
+        (count, false) => {
+            format!("{count} files already held the pinned bytes, so they stay as they are")
+        }
+    };
+    output.step(
+        "Adopted",
+        &format!("{} · {said}", plan::folder(manifest, dataset)),
+    );
+    for path in paths {
+        output.detail(path);
+    }
+}
+
+/// a warning for the files a removal deletes, or `verb` says it would, that were already there
+/// when sync adopted them, since someone other than fetchloom put them there.
+fn warn_adopted_removed(output: &Output, paths: &[String], verb: &str) {
+    match paths {
+        [] => {}
+        [path] => output.warn(&format!(
+            "{verb} {path}, a file that was already there when fetchloom adopted it"
+        )),
+        [first, ..] => output.warn(&format!(
+            "{verb} {} files that were already there when fetchloom adopted them, such as {first}",
+            paths.len()
+        )),
+    }
+}
+
 /// why a sync copied files it would rather have linked. a data folder stays inside its project,
 /// so when the cache is on another drive, it is the project that moves.
 pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
@@ -143,6 +197,9 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     for (dataset, planned) in &preview.by_dataset {
         tell_checks(output, manifest, dataset, &planned.check);
     }
+    for (dataset, planned) in &preview.by_dataset {
+        tell_adoptions(output, manifest, dataset, &planned.adopt);
+    }
     for overwritten in &preview.placement.overwritten {
         output.warn(&format!(
             "{} is {}, and --force would replace it",
@@ -164,6 +221,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
             output.detail(path);
         }
     }
+    warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     warn_kept(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -197,6 +255,23 @@ fn tell_checks(output: &Output, manifest: &Manifest, dataset: &str, files: &[Str
     };
     output.step(
         "Would check",
+        &format!("{} · {said}", plan::folder(manifest, dataset)),
+    );
+    for path in files {
+        output.detail(path);
+    }
+}
+
+/// the files of `dataset` fetchloom did not place that already hold the pinned bytes, which a
+/// sync would take as placed. `-v` names each file.
+fn tell_adoptions(output: &Output, manifest: &Manifest, dataset: &str, files: &[String]) {
+    let said = match files.len() {
+        0 => return,
+        1 => "1 file already holds the pinned bytes".to_owned(),
+        count => format!("{count} files already hold the pinned bytes"),
+    };
+    output.step(
+        "Would adopt",
         &format!("{} · {said}", plan::folder(manifest, dataset)),
     );
     for path in files {

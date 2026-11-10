@@ -1703,6 +1703,7 @@ mod tests {
                 },
                 writable: true,
                 checked: 43,
+                adopted: false,
             },
         );
         state.synced = Some(Synced {

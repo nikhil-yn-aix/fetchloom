@@ -884,6 +884,7 @@ mod tests {
             look: Look::of(&fs::metadata(root.join(path)).unwrap()),
             writable: method == Method::Copy,
             checked: 0,
+            adopted: false,
         }
     }
 

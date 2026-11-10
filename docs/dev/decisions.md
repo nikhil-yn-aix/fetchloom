@@ -58,6 +58,7 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 | put all archive decoders behind one guard | entry types, paths and expansion limits must agree before members become reusable | [archives](architecture/archives.md#validate-before-publication) |
 | read 7z with sevenz-rust2's decoders, leaving ppmd out | it bounds header memory, checks crcs and shares the bzip2, zstd and flate2 crates fetchloom already uses. its `deflate` feature turns on flate2's default features: miniz_oxide, adler2 and simd-adler32 compile though zlib-rs stays the backend, and zlib-rs may pick avx2 code at run time. ppmd-rust is licensed `CC0-1.0 OR MIT-0`, outside deny.toml, so a 7z of ppmd data is refused; allowing `MIT-0` is the owner's call once a dataset needs it | [archives](architecture/archives.md#names-choose-candidates-bytes-choose-decoders) |
 | preserve edits and recheck before replacement | files can change while downloads run; interruption recovery must not erase unrelated work | [placing](architecture/placing.md#choose-an-action) |
+| link a file found holding the pinned bytes to the cache's copy | adopting a hand-downloaded file kept it beside the downloaded object, two copies, writable in a read-only dataset; a hardlink keeps one. it is made under a hidden name and renamed over the file only while the file looks as scanned, so the bytes stay until the link has the name | [placing](architecture/placing.md#choose-an-action) |
 
 ## interface and maintenance
 

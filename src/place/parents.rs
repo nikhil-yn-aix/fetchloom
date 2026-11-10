@@ -259,6 +259,36 @@ impl Location {
         .map_err(Into::into)
     }
 
+    /// gives `object` a second name hidden in this location's folder, which goes again when the
+    /// result is dropped, unless it took this location's name.
+    pub(super) fn stage_link(&self, object: &Path) -> io::Result<Staged> {
+        let identity = self.parent.identity()?;
+        loop {
+            let hidden = format!(".fetchloom-{:016x}.copy", fastrand::u64(..));
+            match native::linkat(
+                native::CWD,
+                object,
+                &self.parent.file,
+                hidden.as_str(),
+                AtFlags::empty(),
+            ) {
+                Ok(()) => {
+                    return Ok(Staged {
+                        root: Arc::clone(&self.root),
+                        relative: self.relative.clone(),
+                        identity,
+                        retained: Some(self.parent.clone()),
+                        hidden,
+                        published: false,
+                        name: self.name.clone(),
+                    });
+                }
+                Err(Errno::EXIST) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     pub(super) fn create(&self, mode: u32, retained: bool) -> io::Result<(Staged, File)> {
         #[cfg(target_os = "macos")]
         let mode = u16::try_from(mode).map_err(|_| invalid("a placement mode is out of range"))?;
@@ -322,6 +352,23 @@ impl Staged {
         let parent = self.parent()?;
         self.name_in(&parent)?;
         metadata(&parent, &self.name)
+    }
+
+    /// gives the staged file its name in place of the plain file there, while `unchanged` says
+    /// that file still looks as it did, and returns how the file now at the name looks. none, with
+    /// the staged file gone, when the file there changed or is no plain file.
+    pub(super) fn replace(
+        mut self,
+        unchanged: impl FnOnce(&Metadata) -> bool,
+    ) -> io::Result<Option<Metadata>> {
+        let parent = self.parent()?;
+        let found = metadata(&parent, &self.name)?;
+        if !found.file_type().is_file() || !unchanged(&found) {
+            return Ok(None);
+        }
+        native::renameat(&parent, self.hidden.as_str(), &parent, &self.name)?;
+        self.published = true;
+        metadata(&parent, &self.name).map(Some)
     }
 
     fn name_in(&mut self, parent: &File) -> io::Result<()> {

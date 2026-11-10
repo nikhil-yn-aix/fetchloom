@@ -320,6 +320,7 @@ mod tests {
                 },
                 writable: true,
                 checked: 1,
+                adopted: false,
             },
         );
         state.synced = Some(Synced {

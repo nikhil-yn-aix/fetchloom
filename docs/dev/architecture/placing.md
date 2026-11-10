@@ -11,10 +11,10 @@ placement protects existing files while turning locked data and cached archive t
 | file | what it holds | types and functions |
 |---|---|---|
 | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs) | destination expansion and collision checks | `Plan`, `Target`, `Patterns`, `from_cache`, `expand`, `unpacked_paths`, `check` |
-| [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `remove_unwanted`, `adoption` |
+| [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
 | [cli/sync/place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | batched placement and per-file observations | `Tally`, `put_all` |
 | [cli/sync/place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement summaries | `tell` |
-| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `batches_copies`, `flush_copies`, `run_all` |
+| [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `batches_copies`, `flush_copies`, `run_all` |
 | [place/synced.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/synced.rs) | cloud-sync folder detection | `client` |
 | [cli/get/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/folder.rs) | one-off destination policy | `Outcome`, `check`, `put_all` |
 | [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | hardlink capability and read-only removal | `Volume`, `replace`, `remove`, `remove_hardlink` |
@@ -50,7 +50,7 @@ flowchart TD
 |---|---|
 | keep | tracked file still matches its recorded look, desired digest and requested writable mode |
 | vouch | a doubtful hardlink was hashed and found intact; keep it and record the scan's start |
-| adopt | existing bytes match the target; record them as managed without rewriting them |
+| adopt | existing bytes match the target; record them as managed. a file nothing recorded is marked adopted and, once the run placed everything, linked to the cache's copy where it can be |
 | place | no file occupies the target |
 | replace | old managed data is superseded, an unchanged alias is proven damaged, a matching file needs writable placement, or force permits replacement |
 | leave | preserve an edited or foreign file and report why it stayed |
@@ -61,7 +61,7 @@ flowchart TD
 
 a target with no plain file at its path can still be blocked. the scan records folders, links and special files beside the files it lists, so `Survey::blocker` finds, without another call, a file, link or special file where a folder on the target's way belongs, or a link, special file or folder at its own path. `settle` removes such an entry once, through the placer's pinned parent, after checking it is still what the scan listed: a link or special file, an empty folder, or a file whose size and time are unchanged.
 
-equal files are adopted only when their writable mode fits the dataset. a read-only file whose bytes match is replaced when `copy = true`, whether tracked or untracked; differing untracked bytes still require force. a tracked changed file holding the target bytes can recover an interruption between placement and state writing. adoption detects when the existing file is the cache object under another name and records it as a hardlink.
+equal files are adopted only when their writable mode fits the dataset. a read-only file whose bytes match is replaced when `copy = true`, whether tracked or untracked; differing untracked bytes still require force. a tracked changed file holding the target bytes can recover an interruption between placement and state writing. adoption detects when the existing file is the cache object under another name and records it as a hardlink. any other untracked file is someone's own: its record says `adopted`, so a removal warns, and when the run placed everything it set out to, `link_adopted` asks `Placer::relink` to replace it with a hardlink to the trusted cached object, unless the dataset asks for copies or the file has another name, which a link would not free. `relink` makes the link under a hidden name in the same folder, checks the file still looks as the scan saw it, then renames the link over it, so the file keeps its bytes until the link takes its name; a failed or refused link leaves the file as it was. a failed add, which is rolled back, links nothing.
 
 unwanted tracked files are removed only if unchanged. an edited unwanted file leaves the state but stays on disk as an extra file. get preflights every destination before removing any earlier version, then rechecks each removal against that preflight. replacement and removal recheck size and time immediately before deleting, so an edit made while downloads ran is preserved. deletion and pruning use the same parent-handle resolver as placement. queued unix copies retain only the root handle and parent identity, not one descriptor per file; publication reopens that parent without following links and verifies its identity. a successful publication releases the hidden name: cleanup never unlinks it again, including if another file later reuses that name.
 
@@ -101,7 +101,7 @@ apfs and hfs+ see `café` written with one character and with an `e` and a combi
 - reject traversal, metadata destinations and unsafe folder chains before writing; deletion rechecks its parents after downloads. the placer also rejects parent components below the chosen root before any filesystem work, even if an internal caller bypasses lock or manifest validation. an explicitly chosen root such as `../download` keeps its normal filesystem meaning. aliases above the root are resolved at root selection; this does not permit links below it.
 - a project's data root must be real. the folder explicitly supplied to `get` may itself be a link, but its child folders must be real. `get::finish` also rejects a linked generated root after the final output name is known, including generated children of a multi-link `-o` parent. placement binds that generated root without following a link again, so a change during unpacking cannot bypass the earlier check. only a root explicitly named for one link may resolve through an alias.
 - placement and deletion resolve parents through a pinned root. linux uses `openat2` with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, or component-wise `openat` with `O_NOFOLLOW`; macos uses component-wise `openat`. names, metadata and removals stay relative to those handles. windows holds each directory without delete sharing, so it cannot be replaced while an operation uses its path. a renamed original folder may retain unfinished copies, but a replacement link cannot redirect writes or cleanup.
-- adopting an untracked equal file makes it managed; a later removal can delete it if unchanged.
+- adopting an untracked equal file makes it managed; a later removal can delete it if unchanged, and warns that it was already there.
 - read each placed file's size and time immediately after placement, not after the whole batch.
 
 ## tests

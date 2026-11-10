@@ -190,6 +190,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
                 look,
                 writable,
                 checked: 1,
+                adopted: false,
             },
         );
     }
@@ -266,6 +267,7 @@ fn a_damaged_file_is_replaced_without_force() {
                 look: survey.disk[PATH],
                 writable: true,
                 checked: 1,
+                adopted: false,
             },
         );
         survey.damaged.insert(PATH.to_owned());
@@ -306,6 +308,7 @@ fn unwanted_observations() {
                 look,
                 writable: true,
                 checked: 123,
+                adopted: false,
             },
         );
         if !missing {

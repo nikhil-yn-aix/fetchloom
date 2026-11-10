@@ -105,6 +105,18 @@ impl Location {
         fs::hard_link(object, &self.path)
     }
 
+    /// gives `object` a second name hidden in this location's folder, which goes again when the
+    /// result is dropped, unless it took this location's name.
+    pub(super) fn stage_link(self: &Arc<Self>, object: &Path) -> io::Result<Staged> {
+        let (staged, _) = self.claim(|path| {
+            fs::hard_link(object, path)?;
+            File::open(path).inspect_err(|_| {
+                let _ = fs::remove_file(path);
+            })
+        })?;
+        Ok(staged)
+    }
+
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
         const FILE_ATTRIBUTE_READONLY: u32 = 1;
         let mut options = fs::OpenOptions::new();
@@ -233,6 +245,28 @@ impl Staged {
             .persist_noclobber(&self.location.path)
             .map_err(|error| error.error)?;
         self.location.metadata()
+    }
+
+    /// gives the staged file its name in place of the plain file there, while `unchanged` says
+    /// that file still looks as it did, and returns how the file now at the name looks. none, with
+    /// the staged file gone, when the file there changed or is no plain file.
+    pub(super) fn replace(
+        mut self,
+        unchanged: impl FnOnce(&Metadata) -> bool,
+    ) -> io::Result<Option<Metadata>> {
+        let mut temporary = self
+            .temporary
+            .take()
+            .ok_or_else(|| invalid("a placement was already published"))?;
+        let found = self.location.metadata()?;
+        if !crate::volume::is_plain(&found) || !unchanged(&found) {
+            return Ok(None);
+        }
+        // tempfile's own rename clears the file's attributes, which a hardlink shares with the
+        // cached object and every other link to it
+        fs::rename(&*temporary, &self.location.path)?;
+        temporary.disable_cleanup(true);
+        self.location.metadata().map(Some)
     }
 }
 

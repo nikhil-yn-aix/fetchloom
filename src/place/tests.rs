@@ -241,6 +241,36 @@ fn a_copy_within_the_root_is_its_own_file_and_replaces_nothing() {
     assert_eq!(fs::read_to_string(&to).unwrap(), "edited apart");
 }
 
+/// a file holding an object's bytes is replaced by a hardlink to the object in one rename, only
+/// while it still looks as it did; a file changed since stays, and no hidden link is left.
+#[test]
+fn a_file_is_relinked_to_its_object_only_while_it_looks_as_it_did() {
+    let (folder, object) = cache(true);
+    // FAT32 and exFAT make no hardlinks, so a found file stays as it is there
+    if !makes_hardlinks(folder.path()) {
+        return;
+    }
+    let destination = folder.path().join("found.csv");
+    fs::write(&destination, CONTENTS).unwrap();
+    let placer = Placer::starting_at(folder.path().to_path_buf(), Method::Reflink, None);
+
+    let changed = placer.relink(&object, &destination, |_| false).unwrap();
+
+    assert!(changed.is_none());
+    assert!(!same_file::is_same_file(&object, &destination).unwrap());
+    assert_eq!(placed_names(folder.path()), ["found.csv"]);
+    let seen = fs::symlink_metadata(&destination).unwrap();
+    let linked = placer
+        .relink(&object, &destination, |now| {
+            now.len() == seen.len() && now.modified().ok() == seen.modified().ok()
+        })
+        .unwrap();
+    assert!(linked.is_some());
+    assert!(same_file::is_same_file(&object, &destination).unwrap());
+    assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+    assert_eq!(placed_names(folder.path()), ["found.csv"]);
+}
+
 #[test]
 fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     let (folder, object) = cache(true);

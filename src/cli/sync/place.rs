@@ -27,7 +27,7 @@ use crate::plan::{self, Target};
 use crate::project::Project;
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
-use crate::project::state::{Look, Placed, Synced};
+use crate::project::state::{Look, Placed, State, Synced};
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -54,6 +54,16 @@ pub(crate) struct Placement {
     /// entries `--force` removed from the way of placed files, by path.
     #[serde(skip)]
     pub(crate) cleared: Vec<(String, Entry)>,
+    /// files that were already at their places with the pinned bytes, which sync took as placed
+    /// and counts as unchanged, by dataset.
+    #[serde(skip)]
+    pub(crate) adopted: BTreeMap<String, Vec<String>>,
+    /// those of `adopted` now linked to the cache's copy of their bytes.
+    #[serde(skip)]
+    pub(crate) relinked: HashSet<String>,
+    /// the files `removed` counts that were already there when sync adopted them.
+    #[serde(skip)]
+    pub(crate) removed_adopted: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +144,9 @@ pub(crate) struct Planned {
     /// files already at the place of a file whose hash only its download can learn, so only
     /// the download tells whether they hold the pinned bytes.
     pub(crate) check: Vec<String>,
+    /// files fetchloom did not place that already hold the pinned bytes, which sync would take
+    /// as placed.
+    pub(crate) adopt: Vec<String>,
 }
 
 impl Preview {
@@ -144,6 +157,10 @@ impl Preview {
             && placement.kept.is_empty()
             && self.changes.download.is_empty()
             && self.changes.unpack.is_empty()
+            && self
+                .by_dataset
+                .values()
+                .all(|planned| planned.adopt.is_empty())
     }
 }
 
@@ -375,7 +392,18 @@ impl<'a> Placing<'a> {
                 continue;
             }
             match action {
-                Action::Keep | Action::Adopt(_) | Action::Vouch(_) => placement.unchanged += 1,
+                Action::Keep | Action::Vouch(_) => placement.unchanged += 1,
+                Action::Adopt(_) => {
+                    placement.unchanged += 1;
+                    if !self.survey.state.files.contains_key(&target.path) {
+                        preview
+                            .by_dataset
+                            .entry(target.dataset.to_owned())
+                            .or_default()
+                            .adopt
+                            .push(target.path.clone());
+                    }
+                }
                 Action::Leave(reason) => {
                     placement.kept.push(Kept::new(target.path.clone(), *reason));
                 }
@@ -443,6 +471,15 @@ impl<'a> Placing<'a> {
             match fate {
                 Unwanted::Remove(_) => {
                     preview.placement.removed += 1;
+                    if self
+                        .survey
+                        .state
+                        .files
+                        .get(&path)
+                        .is_some_and(|placed| placed.adopted)
+                    {
+                        preview.placement.removed_adopted.push(path.clone());
+                    }
                     preview.changes.remove.push(path);
                 }
                 Unwanted::Keep => preview
@@ -495,6 +532,7 @@ impl<'a> Placing<'a> {
         )?;
         sweep(project, &mut placer, &survey, &wanted);
         let adding = told.map(|name| added_here(name, &targets, &actions));
+        let found = found_in_place(&targets, &actions, &survey);
         let (todo, adopted) = settle(
             project,
             &mut placer,
@@ -521,6 +559,11 @@ impl<'a> Placing<'a> {
                 .flush_copies()
                 .map_err(|err| Error::io("could not flush the copied files to disk", &err))
         };
+        // a run that placed everything it set out to links what it adopted to the cache, so a
+        // failed add, which is rolled back, leaves those files as they were
+        if !stopped && failure.is_none() && flushed.is_ok() {
+            link_adopted(project, &placer, cache, work, &found, state, &mut placement);
+        }
         // an add that fails is rolled back, so what it placed for its dataset goes too
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
@@ -647,6 +690,77 @@ pub(crate) fn untouched(
     }))
 }
 
+/// the files fetchloom did not place that already hold their target's bytes, those sync adopts,
+/// each with how the scan saw it, for [`link_adopted`]. a dataset that asks for writable copies
+/// keeps its own files as they are.
+fn found_in_place<'t, 'a>(
+    targets: &'t [Target<'a>],
+    actions: &[Action],
+    survey: &Survey,
+) -> Vec<(&'t Target<'a>, Look)> {
+    targets
+        .iter()
+        .zip(actions)
+        .filter_map(|(target, action)| match action {
+            Action::Adopt(seen)
+                if !target.copy && !survey.state.files.contains_key(&target.path) =>
+            {
+                Some((target, *seen))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// links each file of `found` that sync adopted to the cache's copy of its bytes, so one copy
+/// stays on disk, while the file still looks as the scan saw it. a file with another name stays,
+/// since linking this one would free nothing, and so does one whose bytes the cache cannot vouch
+/// for, or one on a drive that makes no hardlinks. a failure leaves the file as it was.
+fn link_adopted(
+    project: &Project,
+    placer: &Placer,
+    cache: &Cache,
+    work: &Work,
+    found: &[(&Target, Look)],
+    state: &mut State,
+    placement: &mut Placement,
+) {
+    if found.is_empty() {
+        return;
+    }
+    let Ok(marks) = cache.doubts() else {
+        return;
+    };
+    for (target, seen) in found {
+        if placer.stop().is_asked() {
+            break;
+        }
+        let Some(record) = state.files.get_mut(&target.path) else {
+            continue;
+        };
+        let destination = project.root.join(&target.path);
+        if !record.adopted || place::has_other_names(&destination) {
+            continue;
+        }
+        let Ok(Some(object)) = cache.trusted(&target.sha256, Some(target.size), &marks) else {
+            continue;
+        };
+        match placer.relink(&object, &destination, |now| Look::of(now) == *seen) {
+            Ok(Some(linked)) => {
+                record.method = Method::Hardlink;
+                record.look = Look::of(&linked);
+                record.writable = false;
+                Work::add(&work.hardlinks, 1);
+                placement.relinked.insert(target.path.clone());
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!(path = %target.path, %err, "could not link an adopted file to the cache");
+            }
+        }
+    }
+}
+
 /// the paths of `dataset`'s files a placing records afresh, each with whether it places the file
 /// where nothing stood, rather than taking a file already there as placed.
 fn added_here(dataset: &str, targets: &[Target], actions: &[Action]) -> Vec<(String, bool)> {
@@ -755,13 +869,20 @@ fn settle<'t, 'a>(
                 ..Kept::new(target.path.clone(), Reason::Blocked)
             }),
             Action::Adopt(seen) => {
-                let found = adoption(
-                    target,
-                    seen,
-                    &project.root.join(&target.path),
-                    cache,
-                    survey.started,
-                );
+                let destination = project.root.join(&target.path);
+                let mut found = adoption(target, seen, &destination, cache, survey.started);
+                // a file nothing recorded, other than a link to the cache's copy a run cut off
+                // before writing the state left, was put there by someone
+                if found.method != Method::Hardlink
+                    && !survey.state.files.contains_key(&target.path)
+                {
+                    found.adopted = true;
+                    placement
+                        .adopted
+                        .entry(target.dataset.to_owned())
+                        .or_default()
+                        .push(target.path.clone());
+                }
                 survey.state.files.insert(target.path.clone(), found);
                 placement.unchanged += 1;
                 adopted = true;
@@ -1051,6 +1172,9 @@ fn remove_unwanted(
                             .remove(&file, true, Some(before.method))
                             .map_err(|err| local(&file, &err))?;
                         placement.removed += 1;
+                        if before.adopted {
+                            placement.removed_adopted.push(path);
+                        }
                     }
                     Some(_) => placement.kept.push(Kept::new(path, Reason::Unneeded)),
                     None => {}
@@ -1140,6 +1264,7 @@ fn placed(target: &Target, method: Method, look: Look, writable: bool, checked: 
         look,
         writable,
         checked,
+        adopted: false,
     }
 }
 
@@ -1296,6 +1421,7 @@ mod tests {
                         look: now(&path).unwrap(),
                         writable: false,
                         checked: 0,
+                        adopted: false,
                     },
                 );
             }

@@ -26,7 +26,7 @@ fetchloom remove [options] <name>
 3. delete unchanged managed files belonging to it.
 4. leave edited and unrelated extra files in place, warning about edits.
 
-nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.
+nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged, and then warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`; `--dry-run` warns the same way first. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.
 
 removing a table also removes its attached comments and strips leading blank lines. other manifest entries remain. commit the manifest and lock after removal.
 
@@ -55,4 +55,4 @@ edited files that a real removal would keep are named in warnings, as they are w
 | some dataset files remain | they were edited or were unrelated extras | inspect and move or delete them yourself |
 | cached bytes remain | other projects may use them, and gc has an age rule | run `cache gc` when cleanup is needed |
 | metadata changed but a file could not be deleted | permissions or an open handle blocked deletion | fix that error, then sync |
-| an identical file that was already there was removed | matching adopted files are managed | keep independent work outside managed inputs |
+| an identical file that was already there was removed, with a warning | matching adopted files are managed | keep independent work outside managed inputs |

@@ -29,7 +29,7 @@ fetchloom sync [options]
 
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, retaining unchanged entries. a dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title, file count and size, so an entry whose id has a typo and pins an unrelated record stands out.
-3. reuse unchanged local files and cached objects, downloading missing bytes when online.
+3. reuse unchanged local files and cached objects, downloading missing bytes when online. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed, as `add` does, so a repository started after the first `add` stops listing `data/`.
@@ -47,6 +47,16 @@ error: iris/iris.csv is not the file data.lock records
 ```
 
 follow the upgrade hint only when you intend to change the input. [recovery](../concepts.md#recovery) covers expired download URLs and interrupted transfers.
+
+## already in place
+
+a file someone put at a pinned path before fetchloom placed it, such as one downloaded by hand, is adopted when it holds the pinned bytes: sync takes it as placed and counts it as unchanged. when `data.lock` or the source states the file's SHA-256, nothing is downloaded for it; otherwise the download that learns the hash puts the bytes in the cache. when the cache holds them and the drive makes hardlinks, sync then replaces the file with a link to the cache's copy, so one copy stays on disk. the file keeps its bytes until the link takes its name in one rename, and a file changed since sync looked at it stays as it is. stderr, matching a test:
+
+```text
+    Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
+```
+
+a file in a dataset with `copy = true`, a file with another name, and a file whose bytes the cache does not hold stay as they are, and the line says so: `so it stays as it is`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there. a dry run lists adoptions under `Would adopt`, and a file whose hash only its download can tell under `Would check`.
 
 ## local changes
 

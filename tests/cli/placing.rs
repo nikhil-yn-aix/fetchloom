@@ -1476,6 +1476,88 @@ fn an_adopted_link_is_recorded_as_a_hardlink() -> Result {
     Ok(())
 }
 
+/// a project where iris was saved by hand at its place before `add`, which then downloaded it
+/// to learn its hash, since the link publishes no checksum. the stderr of that add.
+fn adopted_iris(sandbox: &Sandbox, server: &Server) -> Result<String> {
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    fs::create_dir_all(placed.parent().ok_or("a placed file has a folder")?)?;
+    fs::write(&placed, V1)?;
+    let added = sandbox.run(&["add", &server.url])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(&placed)?, V1, "{stderr}");
+    Ok(stderr)
+}
+
+/// a file already at its place with the pinned bytes is taken as placed. where the disk makes
+/// hardlinks it becomes a link to the downloaded copy, so one copy stays on disk, and the run
+/// says so. elsewhere it stays as it is.
+#[test]
+fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let stderr = adopted_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    let linked = same_file::is_same_file(&placed, iris_object(&sandbox, &sandbox.work())?)?;
+    if sandbox.links()?.hardlink {
+        assert!(linked, "{stderr}");
+        assert!(fs::metadata(&placed)?.permissions().readonly());
+        assert!(
+            stderr.contains(
+                "Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache"
+            ),
+            "{stderr}"
+        );
+    } else {
+        assert!(!linked, "{stderr}");
+        assert!(
+            stderr.contains(
+                "Adopted data/iris · 1 file already held the pinned bytes, so it stays as it is"
+            ),
+            "{stderr}"
+        );
+    }
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// removing a dataset deletes a file sync took as placed when it was already there, as it
+/// deletes the files sync placed, and says so, in a dry run too, since the person put it there.
+#[test]
+fn remove_says_it_deletes_a_file_that_was_there_before_it_was_adopted() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    adopted_iris(&sandbox, &server)?;
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+
+    let dry = json(&sandbox.run(&["--json", "remove", "iris", "--dry-run"])?)?;
+    assert_eq!(
+        dry["warnings"],
+        serde_json::json!([
+            "would remove data/iris/iris.csv, a file that was already there when fetchloom adopted it"
+        ]),
+        "{dry}"
+    );
+    assert_eq!(fs::read(&placed)?, V1);
+    let removed = sandbox.run(&["remove", "iris"])?;
+
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it"
+        ),
+        "{stderr}"
+    );
+    assert!(!placed.exists(), "{stderr}");
+    Ok(())
+}
+
 /// the cached object behind iris in `project`, by the digest its state records.
 fn iris_object(sandbox: &Sandbox, project: &Path) -> Result<std::path::PathBuf> {
     let state: serde_json::Value =

@@ -44,6 +44,10 @@ pub(crate) struct Placed {
     /// the start of the scan that last placed, adopted or vouched for the file, in nanoseconds
     /// since 1970. marks written while placing other files still put it in doubt.
     pub(crate) checked: u64,
+    /// whether the file was already at its place with the pinned bytes before fetchloom took it
+    /// as placed, so a removal of it can say so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) adopted: bool,
 }
 
 /// how a file looks on disk without reading it: its size and modification time.
@@ -119,6 +123,7 @@ mod tests {
                 },
                 writable: true,
                 checked: 43,
+                adopted: false,
             },
         );
         let read = State::parse(&state.render());
@@ -158,6 +163,7 @@ mod tests {
                 },
                 writable: false,
                 checked: 43,
+                adopted: false,
             },
         );
         state.synced = Some(Synced {

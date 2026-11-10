@@ -64,11 +64,12 @@ a record from another os is never reclaimed by its age or pid. delete it only af
 | `files` | object keyed by project-relative path, using `/` |
 | `files[path].dataset` | dataset name |
 | `files[path].sha256` | locked member or file hash, 64 hex digits |
-| `files[path].method` | `reflink`, `hardlink` or `copy`. an adopted file is `hardlink` when it is the cached object's own file, else `copy` |
+| `files[path].method` | `reflink`, `hardlink` or `copy`. an adopted file is `hardlink` when it is, or sync linked it to, the cached object's own file, else `copy` |
 | `files[path].look.size` | byte count |
 | `files[path].look.modified` | modification time in nanoseconds since 1970; zero if unavailable, capped at the largest unsigned 64-bit integer |
 | `files[path].writable` | `true` when the file was placed or adopted writable |
 | `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
+| `files[path].adopted` | `true` when the file was already at its place with the pinned bytes before sync took it as placed, so a removal says so; absent otherwise |
 | `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the settled-sync shortcut](../../dev/architecture/sync-loop.md#settled-sync-shortcut) uses it to skip planning |
 
 there is no inode or file-id field. missing, unreadable, malformed or unsupported-version state counts as empty. matching existing files can then be adopted into state and later removed as managed files. metadata comparisons do not prove content integrity.
