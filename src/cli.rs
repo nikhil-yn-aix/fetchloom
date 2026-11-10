@@ -312,12 +312,26 @@ fn hold_cache(
                 "stopped while waiting for another fetchloom",
             );
         }
-        Error::io(
-            format_args!("could not lock the cache at {}", root.display()),
+        moved_by_variable(
+            Error::io(
+                format_args!("could not lock the cache at {}", root.display()),
+                &err,
+            ),
             &err,
         )
-        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
+}
+
+/// the help for a cache folder that could not be used. a user may not own the folder fetchloom
+/// chose itself, as when a container gives an arbitrary user a home of `/`, so for that folder
+/// the help names the variable that moves the cache as well as its permissions.
+fn moved_by_variable(error: Error, err: &std::io::Error) -> Error {
+    let chosen = std::env::var_os("FETCHLOOM_CACHE").is_some_and(|value| !value.is_empty());
+    if !chosen && err.kind() == std::io::ErrorKind::PermissionDenied {
+        error.help("check its permissions, or set FETCHLOOM_CACHE to a folder fetchloom may write to, then run the command again")
+    } else {
+        error.or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
+    }
 }
 
 /// the cache this machine uses, created on first use, without the cache-wide lock.
@@ -334,11 +348,13 @@ fn open_unheld() -> Result<Cache, Error> {
         .help("set FETCHLOOM_CACHE to a folder fetchloom may write to"));
     }
     Cache::open(root.clone()).map_err(|err| {
-        Error::io(
-            format_args!("could not open the cache at {}", root.display()),
+        moved_by_variable(
+            Error::io(
+                format_args!("could not open the cache at {}", root.display()),
+                &err,
+            ),
             &err,
         )
-        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
 }
 
@@ -347,11 +363,13 @@ fn open_unheld() -> Result<Cache, Error> {
 fn peek_cache() -> Result<Cache, Error> {
     let root = cache_root()?;
     Cache::unopened(root.clone()).map_err(|err| {
-        Error::io(
-            format_args!("could not open the cache at {}", root.display()),
+        moved_by_variable(
+            Error::io(
+                format_args!("could not open the cache at {}", root.display()),
+                &err,
+            ),
             &err,
         )
-        .or_help("set FETCHLOOM_CACHE to a folder fetchloom may write to")
     })
 }
 

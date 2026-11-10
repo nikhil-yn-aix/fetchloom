@@ -247,6 +247,39 @@ fn verify_keeps_damage_findings_in_json() -> Result {
     Ok(())
 }
 
+/// a container can run fetchloom as a user with no home of its own, as openshift does with
+/// HOME=/, where the default cache folder cannot be made. that user cannot fix the folder's
+/// permissions, so the help also names the variable that moves the cache.
+#[cfg(unix)]
+#[test]
+fn a_default_cache_folder_that_cannot_be_made_says_how_to_move_it() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let home = sandbox.folder("locked-home")?;
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o555))?;
+    let output = sandbox
+        .command(&["get", &server.url])
+        .env_remove("FETCHLOOM_CACHE")
+        .env("HOME", &home)
+        .output();
+    fs::set_permissions(&home, fs::Permissions::from_mode(0o755))?;
+    let output = output?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "help: check its permissions, or set FETCHLOOM_CACHE to a folder fetchloom may write to, then run `fetchloom get {}` again",
+            server.url
+        )),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn gc_keeps_projects_with_inaccessible_metadata() -> Result {
