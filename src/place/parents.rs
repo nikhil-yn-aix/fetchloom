@@ -173,6 +173,18 @@ impl Location {
         .map_err(Into::into)
     }
 
+    /// renames to `target`'s name without replacing anything there: a name already taken is
+    /// refused with `AlreadyExists`.
+    pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
+        rename_new(
+            &self.parent.file,
+            &self.name,
+            &target.parent.file,
+            &target.name,
+            false,
+        )
+    }
+
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
         native::linkat(
             &self.parent.file,
@@ -403,18 +415,37 @@ fn metadata(parent: &File, name: &OsStr) -> io::Result<Metadata> {
 }
 
 fn publish(parent: &File, hidden: &str, name: &OsStr, fallback: bool) -> io::Result<()> {
+    rename_new(parent, OsStr::new(hidden), parent, name, fallback)
+}
+
+/// renames `from` in `from_parent` to `to` in `to_parent`, never replacing a file or link there:
+/// linux's rename that refuses an existing name, else, or with `fallback`, a link to the new name
+/// and the old name's removal, which refuses one too.
+fn rename_new(
+    from_parent: &File,
+    from: &OsStr,
+    to_parent: &File,
+    to: &OsStr,
+    fallback: bool,
+) -> io::Result<()> {
     #[cfg(not(target_os = "linux"))]
     let _ = fallback;
     #[cfg(target_os = "linux")]
     if !fallback {
-        match native::renameat_with(parent, hidden, parent, name, native::RenameFlags::NOREPLACE) {
+        match native::renameat_with(
+            from_parent,
+            from,
+            to_parent,
+            to,
+            native::RenameFlags::NOREPLACE,
+        ) {
             Ok(()) => return Ok(()),
             Err(Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR) => {}
             Err(error) => return Err(error.into()),
         }
     }
-    native::linkat(parent, hidden, parent, name, AtFlags::empty())?;
-    native::unlinkat(parent, hidden, AtFlags::empty()).map_err(Into::into)
+    native::linkat(from_parent, from, to_parent, to, AtFlags::empty())?;
+    native::unlinkat(from_parent, from, AtFlags::empty()).map_err(Into::into)
 }
 
 fn flags() -> OFlags {

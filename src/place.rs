@@ -598,11 +598,37 @@ impl Placer {
         self.location(path, false)?.create_file(readonly)
     }
 
-    /// renames between two checked parents below the pinned root.
+    /// renames between two checked parents below the pinned root. like the system's rename, it
+    /// replaces a file already at `to`, so it suits only a folder no one else writes, such as a
+    /// staging folder this run made; [`Placer::move_aside`] never replaces.
     pub(crate) fn rename_file(&self, from: &Path, to: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
         self.location(from, false)?
             .rename_to(&self.location(to, false)?)
+    }
+
+    /// moves the file at `path` to a new name beside it, `.fetchloom-<hex>.old`, never replacing
+    /// anything, so its bytes stay while a replacement takes its name, and returns that name. a
+    /// sync leaves such a file alone, so one a run cut off midway kept is there to find.
+    pub(crate) fn move_aside(&self, path: &Path) -> io::Result<PathBuf> {
+        check_stop(&self.stop)?;
+        let (path, parent) = self.within(path)?;
+        let from = self.location(&path, false)?;
+        loop {
+            let aside = parent.join(format!(".fetchloom-{:016x}.old", fastrand::u64(..)));
+            match from.rename_new_to(&self.location(&aside, false)?) {
+                Ok(()) => return Ok(aside),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// gives a file [`Placer::move_aside`] moved to `aside` its name, `path`, back, never
+    /// replacing a file there. a stop does not stop it, since it puts things back.
+    pub(crate) fn move_back(&self, aside: &Path, path: &Path) -> io::Result<()> {
+        self.location(aside, false)?
+            .rename_new_to(&self.location(path, false)?)
     }
 
     /// gives the file at `from` a second name, `to`, between two checked parents below the pinned

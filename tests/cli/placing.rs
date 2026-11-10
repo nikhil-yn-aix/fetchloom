@@ -2043,6 +2043,12 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
     let stderr = text(&forced.stderr)?;
     assert_eq!(forced.status.code(), Some(0), "{stderr}");
     assert_eq!(fs::read(folder.join("iris.csv"))?, V1, "{stderr}");
+    // the file moved out of the way goes once the files in its stead are in place
+    let after = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&after.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
     Ok(())
 }
 

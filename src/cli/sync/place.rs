@@ -64,6 +64,22 @@ pub(crate) struct Placement {
     /// the files `removed` counts that were already there when sync adopted them.
     #[serde(skip)]
     pub(crate) removed_adopted: Vec<String>,
+    /// files `--force` moved aside to replace them, kept until what replaces them is in place.
+    #[serde(skip)]
+    set_aside: Vec<SetAside>,
+}
+
+/// a file `--force` moved aside to replace it, which goes once what replaces it is in place and
+/// goes back where that failed.
+#[derive(Debug)]
+struct SetAside {
+    /// its path in the project.
+    path: String,
+    /// the hidden name beside it that it was moved to.
+    aside: std::path::PathBuf,
+    /// the files placed in its stead, by path and the bytes data.lock pins there: the one at its
+    /// path, or those under it for a file where a folder belongs.
+    stead: Vec<(String, Sha256)>,
 }
 
 #[derive(Debug, Serialize)]
@@ -533,7 +549,7 @@ impl<'a> Placing<'a> {
         sweep(project, &mut placer, &survey, &wanted);
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
-        let (todo, adopted) = settle(
+        let settled = settle(
             project,
             &mut placer,
             cache,
@@ -541,7 +557,14 @@ impl<'a> Placing<'a> {
             &targets,
             actions,
             &mut placement,
-        )?;
+        );
+        let (todo, adopted) = match settled {
+            Ok(settled) => settled,
+            Err(error) => {
+                settle_aside(project, &data_dir, survey.threads, &placement, |_| false);
+                return Err(error);
+            }
+        };
         survey.smudge_edited();
         let needs_writing = survey.needs_writing;
         let checked = survey.started;
@@ -564,6 +587,13 @@ impl<'a> Placing<'a> {
         if !stopped && failure.is_none() && flushed.is_ok() {
             link_adopted(project, &placer, cache, work, &found, state, &mut placement);
         }
+        settle_aside(project, &data_dir, threads, &placement, |(path, sha256)| {
+            flushed.is_ok()
+                && state
+                    .files
+                    .get(path)
+                    .is_some_and(|placed| placed.checked == checked && placed.sha256 == *sha256)
+        });
         // an add that fails is rolled back, so what it placed for its dataset goes too
         let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding
@@ -815,9 +845,38 @@ fn undo(
     changed
 }
 
+/// deletes each file `--force` moved aside once every file placed in its stead is in place, as
+/// `in_place` says, and moves it back where one is not, so a forced replacement that failed or
+/// stopped leaves what it would have replaced. a file that cannot go back, as when a folder now
+/// stands at its name, stays under the hidden name it was moved to. a stop does not stop this, so
+/// the placer it works with does not listen for one.
+fn settle_aside(
+    project: &Project,
+    data_dir: &Path,
+    threads: crate::threads::Threads,
+    placement: &Placement,
+    in_place: impl Fn(&(String, Sha256)) -> bool,
+) {
+    if placement.set_aside.is_empty() {
+        return;
+    }
+    let mut placer = Placer::new(data_dir).with_threads(threads);
+    for set in &placement.set_aside {
+        let done = if set.stead.iter().all(&in_place) {
+            placer.remove(&set.aside, false, None)
+        } else {
+            placer.move_back(&set.aside, &project.root.join(&set.path))
+        };
+        if let Err(err) = done {
+            tracing::debug!(path = %set.path, %err, "a file --force moved aside stays where it was moved");
+        }
+    }
+}
+
 /// carries out every decision short of placing files: counts what stays, records files found to
 /// hold the locked bytes, and removes files about to be replaced unless they changed since the
-/// scan. returns the targets left to place, and whether the state gained a file.
+/// scan, moving those `--force` replaces aside instead. returns the targets left to place, and
+/// whether the state gained a file.
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
@@ -839,7 +898,7 @@ fn settle<'t, 'a>(
                 let gone = if let Some(gone) = cleared.get(&blocker.path) {
                     *gone
                 } else {
-                    let gone = clear(project, placer, survey, &blocker)?;
+                    let gone = clear(project, placer, survey, &blocker, placement)?;
                     cleared.insert(blocker.path.clone(), gone);
                     if gone {
                         placement
@@ -849,6 +908,13 @@ fn settle<'t, 'a>(
                     gone
                 };
                 if gone {
+                    if let Some(set) = placement
+                        .set_aside
+                        .iter_mut()
+                        .find(|set| set.path == blocker.path)
+                    {
+                        set.stead.push((target.path.clone(), target.sha256));
+                    }
                     placement.replaced += 1;
                     todo.push(target);
                 } else {
@@ -869,22 +935,7 @@ fn settle<'t, 'a>(
                 ..Kept::new(target.path.clone(), Reason::Blocked)
             }),
             Action::Adopt(seen) => {
-                let destination = project.root.join(&target.path);
-                let mut found = adoption(target, seen, &destination, cache, survey.started);
-                // a file nothing recorded, other than a link to the cache's copy a run cut off
-                // before writing the state left, was put there by someone
-                if found.method != Method::Hardlink
-                    && !survey.state.files.contains_key(&target.path)
-                {
-                    found.adopted = true;
-                    placement
-                        .adopted
-                        .entry(target.dataset.to_owned())
-                        .or_default()
-                        .push(target.path.clone());
-                }
-                survey.state.files.insert(target.path.clone(), found);
-                placement.unchanged += 1;
+                adopt(project, cache, survey, target, seen, placement);
                 adopted = true;
             }
             Action::Vouch(seen) => {
@@ -908,7 +959,10 @@ fn settle<'t, 'a>(
                         placement.kept.push(Kept::new(target.path.clone(), reason));
                         continue;
                     }
-                    Some(_) => make_way(project, placer, survey, targets, &target.path, placement)?,
+                    Some(_) => {
+                        let forced = matches!(action, Action::Overwrite(_));
+                        make_way(project, placer, survey, targets, target, forced, placement)?;
+                    }
                     None => {}
                 }
                 if let Action::Overwrite(reason) = action {
@@ -929,6 +983,31 @@ fn settle<'t, 'a>(
     Ok((todo, adopted))
 }
 
+/// records the file at `target`'s place, seen as `seen`, which holds its bytes, as placed. a file
+/// nothing recorded, other than a link to the cache's copy a run cut off before writing the state
+/// left, was put there by someone, so its record and the run's lines say it was adopted.
+fn adopt(
+    project: &Project,
+    cache: &Cache,
+    survey: &mut Survey,
+    target: &Target,
+    seen: Look,
+    placement: &mut Placement,
+) {
+    let destination = project.root.join(&target.path);
+    let mut found = adoption(target, seen, &destination, cache, survey.started);
+    if found.method != Method::Hardlink && !survey.state.files.contains_key(&target.path) {
+        found.adopted = true;
+        placement
+            .adopted
+            .entry(target.dataset.to_owned())
+            .or_default()
+            .push(target.path.clone());
+    }
+    survey.state.files.insert(target.path.clone(), found);
+    placement.unchanged += 1;
+}
+
 /// counts a replaced file as restored when no edit of this project's put it in the survey.
 fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
     if survey.elsewhere.contains(path) {
@@ -942,16 +1021,19 @@ fn restore(survey: &Survey, path: &str, placement: &mut Placement) {
 /// the most names [`keep_aside`] tries beside one file.
 const MOST_KEPT: u32 = 100;
 
-/// takes the file at `path` away for its pinned copy. a link to the cache's changed copy is kept
-/// beside it instead, so an edit made in place through the link is not lost.
+/// takes the file at `target`'s place away for its pinned copy. a link to the cache's changed
+/// copy is kept beside it instead, so an edit made in place through the link is not lost, and a
+/// file `--force` replaces, as `forced` says, is moved aside until the pinned file is in place.
 fn make_way(
     project: &Project,
     placer: &mut Placer,
     survey: &Survey,
     targets: &[Target<'_>],
-    path: &str,
+    target: &Target,
+    forced: bool,
     placement: &mut Placement,
 ) -> Result<(), Error> {
+    let path = target.path.as_str();
     let method = survey.state.files.get(path).map(|placed| placed.method);
     if survey.elsewhere.contains(path) {
         let kept_as = keep_aside(project, placer, targets, path, method)?;
@@ -962,6 +1044,17 @@ fn make_way(
         return Ok(());
     }
     let destination = project.root.join(path);
+    if forced {
+        let aside = placer
+            .move_aside(&destination)
+            .map_err(|err| local(&destination, &err))?;
+        placement.set_aside.push(SetAside {
+            path: path.to_owned(),
+            aside,
+            stead: vec![(path.to_owned(), target.sha256)],
+        });
+        return Ok(());
+    }
     placer
         .remove(&destination, false, method)
         .map_err(|err| local(&destination, &err))
@@ -1024,12 +1117,14 @@ fn keep_aside(
 
 /// removes the entry in the way of placing, without following it, once it still is what the
 /// survey listed: a link or special file, an empty folder, or a file whose size and time are
-/// unchanged, so a file written to since the scan stays. says whether it is gone.
+/// unchanged, so a file written to since the scan stays. a file is moved aside instead, and
+/// stays until the files placed in its stead are in place. says whether it is gone.
 fn clear(
     project: &Project,
     placer: &mut Placer,
     survey: &Survey,
     blocker: &Blocker,
+    placement: &mut Placement,
 ) -> Result<bool, Error> {
     let path = project.root.join(&blocker.path);
     let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -1046,6 +1141,20 @@ fn clear(
     };
     if !unchanged {
         return Ok(false);
+    }
+    if blocker.found == Entry::File {
+        let aside = placer.move_aside(&path).map_err(|err| {
+            Error::io(
+                format_args!("could not move {}, which is in the way", path.display()),
+                &err,
+            )
+        })?;
+        placement.set_aside.push(SetAside {
+            path: blocker.path.clone(),
+            aside,
+            stead: Vec::new(),
+        });
+        return Ok(true);
     }
     let removed = if blocker.found == Entry::Folder {
         placer.delete_folder(&path)
@@ -1462,6 +1571,150 @@ mod tests {
             let checked = recorded.files[&format!("data/weather/{name}.csv")].checked;
 
             assert_eq!(checked, started, "{name} did not record the survey's start");
+        }
+    }
+
+    /// `--force` takes an edited file's place only once the pinned file can take it: when placing
+    /// fails, as when the cache lost the pinned bytes, the edit is still at its path, and when it
+    /// works, nothing of the edit is left beside the pinned file.
+    #[test]
+    fn a_forced_replacement_keeps_the_edit_until_the_pinned_file_is_in_place() {
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        for cached in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let digest = if cached {
+                crate::cache::tests::store(&cache, bytes).digest
+            } else {
+                crate::digest::sha256(bytes)
+            };
+            let locked = LockedFile {
+                path: "weather.csv".to_owned(),
+                size: bytes.len() as u64,
+                sha256: digest,
+                md5: None,
+                url: "https://example.org/weather.csv".to_owned(),
+                unpacks_to: None,
+            };
+            let target = Target {
+                dataset: "weather",
+                path: "data/weather/weather.csv".to_owned(),
+                sha256: digest,
+                size: bytes.len() as u64,
+                copy: false,
+                locked: &locked,
+            };
+            let project = Project {
+                root: dir.path().join("project"),
+            };
+            let edited = project.root.join(&target.path);
+            let folder = project.root.join("data/weather");
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(&edited, b"my own edit\n").unwrap();
+            let manifest =
+                Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                    .unwrap();
+            let placing = Placing {
+                project: &project,
+                manifest: &manifest,
+                targets: vec![target],
+                unknown: Vec::new(),
+                actions: vec![Action::Overwrite(Reason::Foreign)],
+                survey: surveyed(&project),
+            };
+
+            let placed = placing.apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            );
+
+            assert_eq!(placed.is_ok(), cached, "{placed:?}");
+            let expected: &[u8] = if cached { bytes } else { b"my own edit\n" };
+            assert_eq!(fs::read(&edited).unwrap(), expected);
+            let names: Vec<String> = fs::read_dir(&folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(names, ["weather.csv"]);
+        }
+    }
+
+    /// `--force` moves a file that stands where a dataset's folder belongs out of the way, and
+    /// deletes it only once the files under that folder are in place: when placing them fails,
+    /// its bytes are still in the data folder.
+    #[test]
+    fn a_file_in_the_way_stays_until_the_files_in_its_stead_are_in_place() {
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        for cached in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let digest = if cached {
+                crate::cache::tests::store(&cache, bytes).digest
+            } else {
+                crate::digest::sha256(bytes)
+            };
+            let locked = LockedFile {
+                path: "weather.csv".to_owned(),
+                size: bytes.len() as u64,
+                sha256: digest,
+                md5: None,
+                url: "https://example.org/weather.csv".to_owned(),
+                unpacks_to: None,
+            };
+            let target = Target {
+                dataset: "weather",
+                path: "data/weather/weather.csv".to_owned(),
+                sha256: digest,
+                size: bytes.len() as u64,
+                copy: false,
+                locked: &locked,
+            };
+            let project = Project {
+                root: dir.path().join("project"),
+            };
+            let data = project.root.join("data");
+            fs::create_dir_all(&data).unwrap();
+            fs::write(data.join("weather"), b"my notes\n").unwrap();
+            let survey = surveyed(&project);
+            let blocker = survey.blocker(&target.path).unwrap();
+            let manifest =
+                Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                    .unwrap();
+            let placing = Placing {
+                project: &project,
+                manifest: &manifest,
+                targets: vec![target],
+                unknown: Vec::new(),
+                actions: vec![Action::Unblock(blocker)],
+                survey,
+            };
+
+            let placed = placing.apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            );
+
+            assert_eq!(placed.is_ok(), cached, "{placed:?}");
+            let kept: Vec<Vec<u8>> = fs::read_dir(&data)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.is_file())
+                .map(|path| fs::read(path).unwrap())
+                .collect();
+            if cached {
+                assert_eq!(fs::read(data.join("weather/weather.csv")).unwrap(), bytes);
+                assert!(kept.is_empty(), "{kept:?}");
+            } else {
+                assert_eq!(kept, [b"my notes\n"]);
+            }
         }
     }
 

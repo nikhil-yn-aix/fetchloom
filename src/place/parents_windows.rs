@@ -135,6 +135,27 @@ impl Location {
         fs::rename(&self.path, &target.path)
     }
 
+    /// renames to `target`'s name without replacing anything there: a name already taken is
+    /// refused with `AlreadyExists`. std renames over an existing file, so the file gets its new
+    /// name as a second link and loses the old one. FAT and exFAT make no links, and there
+    /// tempfile's rename, which refuses an existing name too, clears the file's attributes.
+    pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
+        match fs::hard_link(&self.path, &target.path) {
+            Ok(()) => fs::remove_file(&self.path).inspect_err(|_| {
+                let _ = fs::remove_file(&target.path);
+            }),
+            Err(error) if crate::volume::refuses_links(&error) => {
+                let mut named = tempfile::TempPath::try_from_path(&self.path)?;
+                // the file is someone's, so a failed rename must not delete it
+                named.disable_cleanup(true);
+                named
+                    .persist_noclobber(&target.path)
+                    .map_err(|error| error.error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
         fs::hard_link(&self.path, &target.path)
     }
