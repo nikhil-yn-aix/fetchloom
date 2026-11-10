@@ -17,6 +17,8 @@ pub(crate) struct Volume {
     scratch: PathBuf,
     hard_link: fn(&Path, &Path) -> io::Result<()>,
     rename: fn(&Path, &Path) -> io::Result<()>,
+    /// a rename that never replaces a file already at the new name.
+    rename_new: fn(&Path, &Path) -> io::Result<()>,
     remove_file: fn(&Path) -> io::Result<()>,
     links: OnceLock<bool>,
     /// for a volume that only pretends, every existing path a removal named.
@@ -36,6 +38,7 @@ impl Volume {
             scratch,
             hard_link: |original, link| fs::hard_link(original, link),
             rename: |from, to| fs::rename(from, to),
+            rename_new: |from, to| crate::place::rename_new(from, to),
             remove_file: |path| fs::remove_file(path),
             links: OnceLock::new(),
             pretended: None,
@@ -61,6 +64,7 @@ impl Volume {
             scratch,
             hard_link: |_, _| Err(io::Error::other("a dry run links nothing")),
             rename: |_, _| Err(io::Error::other("a dry run renames nothing")),
+            rename_new: |_, _| Err(io::Error::other("a dry run renames nothing")),
             remove_file: |path| fs::symlink_metadata(path).map(|_| ()),
             links: OnceLock::new(),
             pretended: Some(Mutex::default()),
@@ -117,6 +121,12 @@ impl Volume {
 
     pub(crate) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         (self.rename)(from, to)
+    }
+
+    /// renames `from` to `to` without replacing anything already at `to`, which is refused with
+    /// `AlreadyExists`.
+    pub(crate) fn rename_new(&self, from: &Path, to: &Path) -> io::Result<()> {
+        (self.rename_new)(from, to)
     }
 
     /// renames a verified replacement over an old file without leaving its name empty. windows
@@ -427,6 +437,7 @@ impl Volume {
                 }
                 fs::rename(from, to)
             },
+            rename_new: |from, to| crate::place::rename_new(from, to),
             remove_file: |path| {
                 if fs::symlink_metadata(path)?.permissions().readonly() {
                     return Err(io::ErrorKind::PermissionDenied.into());
@@ -439,18 +450,51 @@ impl Volume {
     }
 
     /// this volume, losing every rename to another writer: just before the rename, that writer
-    /// publishes the same file read-only at the destination, and the rename is then refused, as
-    /// windows refuses to rename over a read-only file.
+    /// publishes the same bytes at the destination, read-only and dated [`other_writers_time`].
+    /// a rename that replaces then takes the name from it, as a rename on linux and macos does,
+    /// and one that never replaces is refused.
     pub(crate) fn losing_renames(self) -> Volume {
         Volume {
             rename: |from, to| {
-                fs::copy(from, to)?;
-                crate::cache::tests::seal(to);
-                Err(io::ErrorKind::PermissionDenied.into())
+                publish_first(from, to)?;
+                fs::rename(from, to)
+            },
+            rename_new: |from, to| {
+                publish_first(from, to)?;
+                crate::place::rename_new(from, to)
             },
             ..self
         }
     }
+
+    /// this volume, without a rename that refuses a name already taken: asked for one, it
+    /// answers as its link refuses, as a disk without either does once linux falls back to a
+    /// link.
+    pub(crate) fn replacing_only(self) -> Volume {
+        Volume {
+            rename_new: |_, _| Err(io::Error::from_raw_os_error(1)),
+            ..self
+        }
+    }
+}
+
+/// when the other writer of [`Volume::losing_renames`] dated the file it published.
+#[cfg(test)]
+pub(crate) fn other_writers_time() -> std::time::SystemTime {
+    // 2001 began on an even second, which FAT's two-second clock keeps
+    std::time::UNIX_EPOCH + std::time::Duration::from_hours(271_752)
+}
+
+/// another writer publishing the bytes of `from` at `to`, as [`Volume::losing_renames`] has it.
+#[cfg(test)]
+fn publish_first(from: &Path, to: &Path) -> io::Result<()> {
+    fs::write(to, fs::read(from)?)?;
+    OpenOptions::new()
+        .write(true)
+        .open(to)?
+        .set_modified(other_writers_time())?;
+    crate::cache::tests::seal(to);
+    Ok(())
 }
 
 #[cfg(test)]

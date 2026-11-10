@@ -805,6 +805,13 @@ pub(crate) fn has_other_names(path: &Path) -> bool {
     }
 }
 
+/// renames the file at `from` to `to`, never replacing a file or link already at `to`: a name
+/// already taken is refused with `AlreadyExists`. on a disk that can neither link nor rename that
+/// way, it fails with the disk's refusal of the link.
+pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+    parents::rename_new_path(from, to)
+}
+
 /// runs `job` on every item, on a few threads when there are many, and returns the results in
 /// the order of `items`.
 pub(crate) fn run_all<T: Sync, R: Send>(

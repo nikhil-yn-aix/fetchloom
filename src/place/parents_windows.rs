@@ -136,24 +136,9 @@ impl Location {
     }
 
     /// renames to `target`'s name without replacing anything there: a name already taken is
-    /// refused with `AlreadyExists`. std renames over an existing file, so the file gets its new
-    /// name as a second link and loses the old one. FAT and exFAT make no links, and there
-    /// tempfile's rename, which refuses an existing name too, clears the file's attributes.
+    /// refused with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
-        match fs::hard_link(&self.path, &target.path) {
-            Ok(()) => fs::remove_file(&self.path).inspect_err(|_| {
-                let _ = fs::remove_file(&target.path);
-            }),
-            Err(error) if crate::volume::refuses_links(&error) => {
-                let mut named = tempfile::TempPath::try_from_path(&self.path)?;
-                // the file is someone's, so a failed rename must not delete it
-                named.disable_cleanup(true);
-                named
-                    .persist_noclobber(&target.path)
-                    .map_err(|error| error.error)
-            }
-            Err(error) => Err(error),
-        }
+        rename_new_path(&self.path, &target.path)
     }
 
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
@@ -288,6 +273,32 @@ impl Staged {
         fs::rename(&*temporary, &self.location.path)?;
         temporary.disable_cleanup(true);
         self.location.metadata().map(Some)
+    }
+}
+
+/// renames the file at `from` to `to` without replacing anything there: a name already taken is
+/// refused with `AlreadyExists`. std renames over an existing file, so the file gets its new name
+/// as a second link and loses the old one. FAT and exFAT make no links, and there tempfile's
+/// rename, which refuses an existing name too, clears the file's attributes, so a read-only file
+/// is made read-only again under whichever name it has after.
+pub(super) fn rename_new_path(from: &Path, to: &Path) -> io::Result<()> {
+    match fs::hard_link(from, to) {
+        Ok(()) => fs::remove_file(from).inspect_err(|_| {
+            let _ = fs::remove_file(to);
+        }),
+        Err(error) if crate::volume::refuses_links(&error) => {
+            let read_only = fs::symlink_metadata(from)?.permissions().readonly();
+            let mut named = tempfile::TempPath::try_from_path(from)?;
+            // the file is someone's, so a failed rename must not delete it
+            named.disable_cleanup(true);
+            let renamed = named.persist_noclobber(to).map_err(|error| error.error);
+            if read_only {
+                let now = if renamed.is_ok() { to } else { from };
+                let _ = crate::volume::set_read_only(now, true);
+            }
+            renamed
+        }
+        Err(error) => Err(error),
     }
 }
 

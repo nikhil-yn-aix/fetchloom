@@ -3,6 +3,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, Metadata};
 use std::io;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -177,10 +178,10 @@ impl Location {
     /// refused with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
         rename_new(
-            &self.parent.file,
-            &self.name,
-            &target.parent.file,
-            &target.name,
+            self.parent.file.as_fd(),
+            self.name.as_os_str(),
+            target.parent.file.as_fd(),
+            target.name.as_os_str(),
             false,
         )
     }
@@ -415,22 +416,33 @@ fn metadata(parent: &File, name: &OsStr) -> io::Result<Metadata> {
 }
 
 fn publish(parent: &File, hidden: &str, name: &OsStr, fallback: bool) -> io::Result<()> {
-    rename_new(parent, OsStr::new(hidden), parent, name, fallback)
+    rename_new(
+        parent.as_fd(),
+        OsStr::new(hidden),
+        parent.as_fd(),
+        name,
+        fallback,
+    )
+}
+
+/// renames the file at `from` to `to` as [`rename_new`] does, never replacing anything at `to`.
+pub(super) fn rename_new_path(from: &Path, to: &Path) -> io::Result<()> {
+    rename_new(native::CWD, from, native::CWD, to, false)
 }
 
 /// renames `from` in `from_parent` to `to` in `to_parent`, never replacing a file or link there:
-/// linux's rename that refuses an existing name, else, or with `fallback`, a link to the new name
-/// and the old name's removal, which refuses one too.
-fn rename_new(
-    from_parent: &File,
-    from: &OsStr,
-    to_parent: &File,
-    to: &OsStr,
+/// the rename linux and macos have that refuses an existing name, else, or with `fallback`, a
+/// link to the new name and the old name's removal, which refuses one too.
+fn rename_new<P: rustix::path::Arg + Copy, Q: rustix::path::Arg + Copy>(
+    from_parent: BorrowedFd<'_>,
+    from: P,
+    to_parent: BorrowedFd<'_>,
+    to: Q,
     fallback: bool,
 ) -> io::Result<()> {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = fallback;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if !fallback {
         match native::renameat_with(
             from_parent,
@@ -440,12 +452,22 @@ fn rename_new(
             native::RenameFlags::NOREPLACE,
         ) {
             Ok(()) => return Ok(()),
-            Err(Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR) => {}
-            Err(error) => return Err(error.into()),
+            Err(error) if !lacks_rename_new(error) => return Err(error.into()),
+            Err(_) => {}
         }
     }
     native::linkat(from_parent, from, to_parent, to, AtFlags::empty())?;
     native::unlinkat(from_parent, from, AtFlags::empty()).map_err(Into::into)
+}
+
+/// whether `error`, from a rename asked never to replace, says the system or the filesystem has
+/// no such rename.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn lacks_rename_new(error: Errno) -> bool {
+    matches!(
+        error,
+        Errno::NOSYS | Errno::NOTSUP | Errno::INVAL | Errno::NOTDIR
+    )
 }
 
 fn flags() -> OFlags {
