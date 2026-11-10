@@ -30,6 +30,7 @@ research code can outlive the dataset version it used. keep input identities bes
 | cap listings before selection | filtering must not hide unbounded source-list work; this is not a total-project size cap | [sources](architecture/sources.md#keep-listing-and-transfer-separate) |
 | treat local state as observations, not byte authority | missing state can recover by hashing files; a broken pin cannot safely be guessed | [project](architecture/project.md#three-records-with-different-authority) |
 | stop project discovery at the top of a git repository | data.toml belongs to the repository that commits it; a manifest above would put pins in another history, and a stray one in a home folder would capture every repository below. `-C` names such a project on purpose | [finding the project](../user/reference/project-folder.md#finding-the-project) |
+| let status settle a project as sync does | after a move and `cache gc --now`, status listed every archive member as extra while sync, rightly, found nothing to do; one rule for both keeps status saying what sync would do | [settled-sync shortcut](architecture/sync-loop.md#settled-sync-shortcut) |
 
 mutable URLs and OSF nodes cannot preserve an old listing through a filter edit. review lock diffs because new selections can include newer files; recorded hashes still pin the selected bytes.
 

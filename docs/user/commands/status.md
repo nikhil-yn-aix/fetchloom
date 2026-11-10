@@ -26,6 +26,8 @@ fetchloom status [options]
 2. compare file sizes and modification times, hashing where those records need checking.
 3. report changed manifest entries, missing or different files, extra paths and unavailable archive trees.
 
+a project still as the last complete sync left it, with `data.toml` and `data.lock` unchanged byte for byte and every placed file looking as placed, is settled, as `sync` finds it: status lists only files fetchloom did not place as extra. that holds even when the cache no longer records what an archive held, as after moving the project and running `fetchloom cache gc --now` before any sync there.
+
 status changes no project files. without `--verify` it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. `--verify` hashes every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
 
 stderr when `iris.csv` is missing and `notes.txt` is extra:
@@ -70,7 +72,7 @@ an entry in a file's way is listed once as blocked, rather than each file behind
 
 a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as extra, and the files behind it as missing.
 
-human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. without an archive record, files placed from it can also appear as extra.
+human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. once something changed since the last complete sync, files placed from an archive this machine has no record of can also appear as extra.
 
 ## exit codes
 

@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
 use super::sync::place;
+use crate::digest;
 use crate::error::Error;
 use crate::output::Output;
 use crate::plan;
@@ -128,10 +129,19 @@ fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
 }
 
 /// compares the data folder with data.lock, reading only what the disk says about each file,
-/// or, with `verify`, hashing every placed file too.
+/// or, with `verify`, hashing every placed file too. a project still as a complete sync left it
+/// is settled as sync finds it, without a plan, so status agrees with sync even once the cache
+/// no longer records what an archive holds, as after a move and `cache gc --now`.
 fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Error> {
-    let (_, manifest) = project.manifest()?;
-    let lock = project.lock()?.unwrap_or_default();
+    let (text, manifest) = project.manifest()?;
+    let read = project.lock_and_text()?;
+    let seen = place::Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: read
+            .as_ref()
+            .map(|(_, text)| digest::sha256(text.as_bytes())),
+    };
+    let lock = read.map(|(lock, _)| lock).unwrap_or_default();
     let (unlocked, removed) = out_of_date(&manifest, &lock);
     let mut status = Status {
         project: project.root.clone(),
@@ -141,21 +151,37 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
         ..Status::default()
     };
     let cache = super::peek_cache()?;
+    let mut survey = Survey::read(project, &manifest.data_dir, threads);
+    // status writes no state, so files hashing found unchanged ask for nothing
+    survey.needs_writing = false;
+    survey.check_doubted(&project.root, &cache)?;
+    if verify {
+        status.hashed_only = survey.verify(&project.root)?;
+    }
+    if place::untouched(project, &manifest, &survey, &seen, false)?.is_some() {
+        let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
+        status.extra = extra(&survey, &recorded);
+        return Ok(status);
+    }
     let planned = plan::from_cache(&manifest, &lock, &cache)?;
     status.not_unpacked = planned
         .unknown
         .iter()
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
-    let targets = planned.targets;
-    let mut survey = Survey::read(project, &manifest.data_dir, threads);
-    survey.retarget(&project.root, &targets);
-    survey.check_doubted(&project.root, &cache)?;
-    if verify {
-        status.hashed_only = survey.verify(&project.root)?;
-    }
+    survey.retarget(&project.root, &planned.targets);
+    compare(&mut status, project, &survey, &planned);
+    let listed: HashSet<&String> = status.damaged.iter().collect();
+    status.hashed_only.retain(|path| listed.contains(path));
+    Ok(status)
+}
+
+/// files each target of `planned` into the list of what differs, by how `survey` saw it, and
+/// lists as extra every other file in the data folder.
+fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &plan::Plan<'_>) {
+    let targets = &planned.targets;
     let mut going = None;
-    for target in &targets {
+    for target in targets {
         let seen = survey.disk.get(&target.path);
         let file = project.root.join(&target.path);
         let list = match (seen, survey.state.files.get(&target.path)) {
@@ -164,9 +190,8 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
                 Some(blocker)
                     if !survey.frees(
                         &blocker,
-                        going.get_or_insert_with(|| {
-                            place::going(&survey, &targets, &planned.unknown)
-                        }),
+                        going
+                            .get_or_insert_with(|| place::going(survey, targets, &planned.unknown)),
                     ) =>
                 {
                     if !status
@@ -189,7 +214,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
                 if record.look == *seen && !survey.edited.contains(&target.path) =>
             {
                 if record.sha256 == target.sha256 {
-                    if place::fits(target, record, &survey) {
+                    if place::fits(target, record, survey) {
                         continue;
                     }
                     if !target.copy {
@@ -220,10 +245,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     // a file in the way is listed as blocking, not also as extra
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
-    status.extra = extra(&survey, &wanted);
-    let listed: HashSet<&String> = status.damaged.iter().collect();
-    status.hashed_only.retain(|path| listed.contains(path));
-    Ok(status)
+    status.extra = extra(survey, &wanted);
 }
 
 /// the files in the data folder that no dataset places, sorted. what an interrupted placement

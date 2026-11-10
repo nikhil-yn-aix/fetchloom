@@ -1,10 +1,11 @@
 //! data that moved: when a link data.lock recorded is dead, the source is asked again, and what
-//! it points to now must still match the pinned hash.
+//! it points to now must still match the pinned hash. a project folder that moved keeps its
+//! files as they were.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::support::{Result, Sandbox, Server, file, reply, text};
+use crate::support::{Result, Sandbox, Server, file, json, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -132,5 +133,54 @@ fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
         !stderr.contains("still lists"),
         "a link is its own source: {stderr}"
     );
+    Ok(())
+}
+
+/// a project moved to another folder, then `cache gc --now` before any run there: gc no longer
+/// knew the project, so it freed the zip and the record of what it holds. every file still looks
+/// as the last complete sync left it, so status finds nothing, as sync does, with no request.
+#[test]
+fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip =
+        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"))?;
+    let server = Server::start("/files/dataset.zip", vec![file(&zip, "\"z1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // on a clock as coarse as hfs+ or fat, files placed within the state's own second stay racy
+    // and are hashed again, so the state is written once more past that second
+    let state = sandbox.work().join(".fetchloom").join("state");
+    let written = fs::metadata(&state)?.modified()?;
+    if written
+        .duration_since(std::time::UNIX_EPOCH)?
+        .subsec_nanos()
+        == 0
+    {
+        sandbox.wait_for_a_later_time(written)?;
+        fs::write(&state, fs::read(&state)?)?;
+    }
+    let moved = sandbox.folder("elsewhere")?.join("project");
+    fs::rename(sandbox.work(), &moved)?;
+    let cleaned = sandbox
+        .command_in(&moved, &["cache", "gc", "--now"])
+        .output()?;
+    let stderr = text(&cleaned.stderr)?;
+    assert_eq!(cleaned.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Removed"), "gc freed the zip: {stderr}");
+
+    let status = json(&sandbox.command_in(&moved, &["--json", "status"]).output()?)?;
+    let result = status["result"].as_object().ok_or("status has a result")?;
+    for (name, found) in result.iter().filter(|(name, _)| *name != "project") {
+        assert_eq!(found, &serde_json::json!([]), "{name}: {status}");
+    }
+    let told = sandbox.command_in(&moved, &["status"]).output()?;
+    assert_eq!(
+        text(&told.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
+    let synced = json(&sandbox.command_in(&moved, &["--json", "sync"]).output()?)?;
+    assert_eq!(synced["status"], "ok", "{synced}");
+    assert_eq!(synced["work"]["requests"], 0, "{synced}");
+    assert_eq!(server.requests().len(), 1, "only add downloaded");
     Ok(())
 }

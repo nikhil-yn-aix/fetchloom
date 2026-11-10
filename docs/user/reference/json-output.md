@@ -74,7 +74,7 @@ status arrays:
 | `extra` | scanned paths outside the known targets, apart from files listed as blocked |
 | `not_unpacked` | archive paths whose member records are unavailable on this machine |
 
-status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. without an archive record, files already placed from it can also appear as extra.
+status lists all differences in JSON. human output limits each file category to 20 paths; unlocked or removed datasets and not-unpacked archives are not truncated. a project still as the last complete sync left it reports only files no record claims as extra, as sync finds nothing to do; once something changed since, files already placed from an archive whose record is unavailable can also appear as extra.
 
 `status` finding differences and `sync` keeping conflicts still return `ok` and exit 0. inspect the arrays. `cache verify` finding changed bytes returns `integrity.mismatch` and exit 30; when no bytes changed but an object or directory could not be read, it returns `local.io` and exit 50. both errors retain the verification counts and findings in `result`, alongside `errors`. unreadable object and directory paths are also named in `warnings`; unreadable objects are neither marked nor removed. counts include only objects whose metadata could be read, so an unreadable directory can hide objects from the totals. successful `changed`, `stuck` and `unreadable` arrays are empty.
 
