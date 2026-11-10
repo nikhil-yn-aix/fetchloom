@@ -15,7 +15,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | controlled-data access approval | request access from the institution or owner |
 | rar extraction | keep the packed file and use another decoder |
 | recursive archive extraction | nested archives remain files |
-| cross-user cache administration | cache writers are trusted; no group-permission management is provided |
+| cross-user cache administration | cache writers are trusted; no group-permission management is provided. [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows how to share one by hand |
 | verified erasure of deleted data | fetchloom deletes files without overwriting them; [deleting a dataset from a machine](concepts.md#deleting-a-dataset-from-a-machine) lists the copies to remove |
 
 ## scale

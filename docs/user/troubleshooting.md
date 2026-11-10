@@ -61,6 +61,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | `warning: iris was taken, so this one is iris-2` | the project already has a dataset with that name | keep it, or run `fetchloom remove iris-2` and add again with `--as <name>` |
 | status exits 0 with differences | differences are a successful result | inspect all eleven status arrays |
 | an input is read-only | default placement protects shared bytes | set `copy = true` on the dataset and sync |
+| another account on the same machine downloads the same data again | each account has its own cache, readable by its owner only | share one cache among people who trust each other, as [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows |
 | a glob matches no files | it differs from listed paths or targets archive members | quote the glob and check [pattern rules](reference/data-toml.md#patterns) |
 | adding the same reference rejects different filters | the existing entry already owns that reference and settings | edit `data.toml` or pass an unused `--as` name |
 | an archive remains packed | the extension or bytes are unsupported, or extraction is disabled | check [archive rules](concepts.md#archives) |
