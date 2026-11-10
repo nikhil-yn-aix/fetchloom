@@ -242,6 +242,19 @@ impl Reader<'_> {
                 )
                 .help(format!("choose a {key} outside the repository's metadata")));
         }
+        if shorthand(text) {
+            let inside = if key == "data_dir" {
+                "the project"
+            } else {
+                "the data folder"
+            };
+            return Err(self
+                .error(
+                    item.span(),
+                    format!("{key} = \"{text}\" in data.toml is refused because fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"),
+                )
+                .help("to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"));
+        }
         match name::escapes(text) {
             None => Ok(text.to_owned()),
             Some(reason) => Err(self
@@ -322,6 +335,16 @@ impl Reader<'_> {
             format!("{FILE}:{line}   {}", self.text[start..end].trim())
         }
     }
+}
+
+/// whether a folder in data.toml is shell shorthand a person may expect to be expanded: it
+/// starts with `~` or `$`, or names a variable such as `$SCRATCH` or `${SCRATCH}`.
+fn shorthand(folder: &str) -> bool {
+    folder.starts_with(['~', '$'])
+        || folder
+            .split('$')
+            .skip(1)
+            .any(|after| after.starts_with(|c: char| c.is_ascii_alphabetic() || "_{".contains(c)))
 }
 
 /// data.toml's text with one more dataset, or a new file holding just that dataset.
@@ -584,6 +607,59 @@ mod tests {
     #[test]
     fn metadata_dataset_paths_are_refused() {
         refuses_metadata("path", "[datasets.x]\nref = \"https://example.org/x\"");
+    }
+
+    /// data.toml comes with a cloned repository, so fetchloom never expands `~` or a variable in
+    /// it, and a folder that only makes sense expanded is refused rather than made under its
+    /// literal name.
+    #[test]
+    fn folders_are_taken_as_written_so_shell_shorthand_is_refused() {
+        for (key, table, inside) in [
+            ("data_dir", "[project]", "the project"),
+            (
+                "path",
+                "[datasets.x]\nref = \"https://example.org/x\"",
+                "the data folder",
+            ),
+        ] {
+            for folder in ["data~old", "price$", "a$1", "notes/~drafts"] {
+                let text = format!("{table}\n{key} = \"{folder}\"\n");
+                assert!(Manifest::parse(&text).is_ok(), "{key} = {folder}");
+            }
+            for folder in [
+                "~/scratch/data",
+                "~",
+                "~ada/data",
+                "$SCRATCH/data",
+                "${SCRATCH}/data",
+                "$1",
+                "inputs/$USER",
+                "inputs/${RUN}/raw",
+                "runs/$_last",
+            ] {
+                let error = fails(&format!("{table}\n{key} = \"{folder}\"\n"));
+                assert_eq!(error.kind, Kind::ProjectInvalid, "{key} = {folder}");
+                assert_eq!(
+                    error.message,
+                    format!(
+                        "{key} = \"{folder}\" in data.toml is refused because fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"
+                    )
+                );
+                assert_eq!(
+                    error.details,
+                    [format!(
+                        "data.toml:{}   {key} = \"{folder}\"",
+                        table.lines().count() + 1
+                    )]
+                );
+                assert_eq!(
+                    error.help.as_deref(),
+                    Some(
+                        "to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"
+                    )
+                );
+            }
+        }
     }
 
     #[test]
