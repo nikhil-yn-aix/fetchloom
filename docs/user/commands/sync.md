@@ -86,6 +86,8 @@ each file it would download is listed with its size, or `size unknown` when only
 
 `--locked` still checks the lock first. a project still as a complete sync left it has nothing to do, as a real sync finds, even when the cache was emptied since. offline, a dry run that would need a download fails as the sync would, with exit 20. this includes an edited hardlink whose shared cache object must be downloaded again, even if its read-only flag was restored. the dry run checks those bytes without writing a cache change mark. a dry run takes no project hold, so a sync running at the same time can change what it reports. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
+a checkout this user may not write, such as a read-only mount in a job or a container, still syncs when nothing needs writing: `data.toml` and `data.lock` are as the last complete sync left them and every placed file still looks as placed. a sync that would write fails, naming the folder it could not write.
+
 ## exit codes
 
 0 includes success with preserved conflicts or a registration warning. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).

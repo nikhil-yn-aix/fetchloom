@@ -2904,3 +2904,86 @@ fn verbose_path_says_where_the_bytes_are() -> Result {
     }
     Ok(())
 }
+
+/// sets every folder and file under `root` read-only, or writable again, as a checkout on a
+/// read-only mount or owned by another user is.
+#[cfg(unix)]
+fn writable(root: &std::path::Path, yes: bool) -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let mut paths = vec![root.to_path_buf()];
+    let mut at = 0;
+    while at < paths.len() {
+        if paths[at].is_dir() {
+            for entry in fs::read_dir(&paths[at])? {
+                paths.push(entry?.path());
+            }
+        }
+        at += 1;
+    }
+    for path in &paths {
+        let mode = match (path.is_dir(), yes) {
+            (true, true) => 0o755,
+            (true, false) => 0o555,
+            (false, true) => 0o644,
+            (false, false) => 0o444,
+        };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
+}
+
+/// a job that syncs before it reads, on a checkout it may not write, works when nothing needs
+/// writing. one that would write still fails, naming the folder it could not write.
+#[cfg(unix)]
+#[test]
+fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
+    if rustix::process::geteuid().is_root() {
+        return Ok(());
+    }
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let fresh = clone(&sandbox, "fresh")?;
+    writable(&sandbox.work(), false)?;
+    writable(&fresh, false)?;
+    let settled = sandbox.run(&["--json", "sync"]);
+    let locked = sandbox.run(&["sync", "--locked"]);
+    let unsynced = sandbox.command_in(&fresh, &["--json", "sync"]).output();
+    // a container's image may hold the cache read-only as well
+    writable(&sandbox.cache(), false)?;
+    let sealed = sandbox.run(&["sync"]);
+    writable(&sandbox.cache(), true)?;
+    writable(&sandbox.work(), true)?;
+    writable(&fresh, true)?;
+    let settled = settled?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+    let sealed = sealed?;
+    assert_eq!(sealed.status.code(), Some(0), "{}", text(&sealed.stderr)?);
+    let document = json(&settled)?;
+    assert_eq!(document["result"]["lock_changed"], false);
+    assert_eq!(document["result"]["placement"]["unchanged"], 1);
+    let locked = locked?;
+    assert_eq!(locked.status.code(), Some(0), "{}", text(&locked.stderr)?);
+    assert!(
+        text(&locked.stderr)?.contains("all pinned files are in place"),
+        "{}",
+        text(&locked.stderr)?
+    );
+    // a clone never synced would place files, so it needs the hold it cannot take
+    let unsynced = unsynced?;
+    assert_eq!(
+        unsynced.status.code(),
+        Some(50),
+        "{}",
+        text(&unsynced.stderr)?
+    );
+    assert_eq!(
+        json(&unsynced)?["errors"][0]["message"],
+        format!(
+            "could not create {}: the project folder {} is read-only",
+            fresh.join(".fetchloom").display(),
+            fresh.display()
+        )
+    );
+    Ok(())
+}

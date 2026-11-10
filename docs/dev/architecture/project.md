@@ -38,7 +38,7 @@ waiting commands poll every 200 ms, report the holder once and remain cancellabl
 
 a command that set out to start a project and added nothing removes `.fetchloom` with `Project::unstart`, taking out the lock file last while it still holds it. `hold` therefore checks, once it has the lock, that `.fetchloom/lock` still names the locked file (device and inode on unix, volume serial and file index on windows), and opens the name again when it does not, as partial claims do.
 
-`status`, `list`, a ready `path` and `lock --check` need no mutation hold. a `path` that waits must reread the manifest and check readiness again because the preceding command may have completed the work.
+`status`, `list`, a ready `path` and `lock --check` need no mutation hold. a `sync` that cannot take the hold for a local I/O reason, as on a checkout this user may not write, answers without it when it would write nothing to the project: the settled check a dry run uses, plus an ignore rule already in place. it then takes the cache's shared hold to list the project, or only reads the cache when that hold fails too. anything else keeps the hold's error. a `path` that waits must reread the manifest and check readiness again because the preceding command may have completed the work.
 
 ### publication
 

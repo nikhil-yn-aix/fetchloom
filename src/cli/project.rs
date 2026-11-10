@@ -987,7 +987,18 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     let _held = if dry_run {
         None
     } else {
-        Some(hold(context, &project, "sync").await?)
+        match hold(context, &project, "sync").await {
+            Ok(held) => Some(held),
+            // a checkout this user may not write, as a job's read-only mount, still answers a
+            // sync that would write nothing
+            Err(error) if error.kind == Kind::LocalIo => {
+                return match settled_unheld(context, &project, &args)? {
+                    Some(report) => Ok(report),
+                    None => Err(error),
+                };
+            }
+            Err(error) => return Err(error),
+        }
     };
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
@@ -1041,6 +1052,58 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// a sync that would write nothing, found without the project's hold: data.toml and data.lock
+/// are byte for byte as the last complete sync left them, every file still looks as placed, no
+/// doubt is open, and the ignore rule is in place. none when a sync would write anything, which
+/// needs the hold.
+fn settled_unheld(
+    context: &Context,
+    project: &Project,
+    args: &args::Sync,
+) -> Result<Option<Report>, Error> {
+    let (text, manifest) = project.manifest()?;
+    let Some((lock, lock_text)) = project.lock_and_text()? else {
+        return Ok(None);
+    };
+    if args.locked {
+        check(project, &manifest, Some(&lock)).map_err(|error| {
+            error.help("run `fetchloom lock` and commit data.lock, or sync without --locked")
+        })?;
+    }
+    let seen = Seen {
+        manifest: digest::sha256(text.as_bytes()),
+        lock: Some(digest::sha256(lock_text.as_bytes())),
+    };
+    // the cache, unlike the project, may well be writable, and a project listed there needs no
+    // write. a cache this user cannot hold either is only read, as a dry run reads it
+    let (cache, held) = match open_cache() {
+        Ok(cache) => (cache, true),
+        Err(_) => (peek_cache()?, false),
+    };
+    let mut survey = Survey::read(project, &manifest.data_dir, context.threads);
+    survey.check_doubted(&project.root, &cache)?;
+    if args.verify {
+        survey.verify(&project.root)?;
+    }
+    let Some(placement) = place::untouched(project, &manifest, &survey, &seen, false)? else {
+        return Ok(None);
+    };
+    if project.ignored_in_git(&manifest.data_dir)?.is_some() {
+        return Ok(None);
+    }
+    if held && let Err(err) = cache.register(&project.root) {
+        tracing::debug!(%err, "could not list a read-only project in the cache");
+    }
+    tell_synced(context, &manifest, false, &placement, args.verify);
+    Ok(Some(Report {
+        project: project.root.clone(),
+        datasets: Vec::new(),
+        lock_changed: false,
+        placement: Some(placement),
+        ..Report::default()
+    }))
 }
 
 /// the last lines of a sync: nothing to do, or what it synced and what to do next.
