@@ -42,7 +42,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [cache folder](docs/user/reference/cache-folder.md): shared cache layout, durable records, URL fingerprints and unreadable change-mark errors
 - [project folder](docs/user/reference/project-folder.md): owner records, placement state and metadata publication
 - [scripting](docs/user/scripting.md): JSON recipes, conflict checks and the python helper
-- [CI](docs/user/ci.md): a cache kept between jobs and keyed on data.lock, recipes for github actions and gitlab, and keys from CI secrets
+- [CI](docs/user/ci.md): a cache kept between jobs and keyed on data.lock, recipes for github actions and gitlab, keys from CI secrets and exact-input checks
 - [clusters](docs/user/hpc.md): home and scratch disks, many jobs, offline compute nodes, shared-disk locks and one cache for a lab
 - [notebooks and containers](docs/user/notebooks.md): where the cache lasts on hosted notebooks, dev containers and codespaces, read-only roots, a kubernetes job and small disks
 - [AI agents](docs/user/ai-agents.md): the agent skill, JSON contract and why there is no MCP server

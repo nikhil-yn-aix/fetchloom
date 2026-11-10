@@ -56,6 +56,16 @@ a kubernetes job or another container keeps its cache on a volume instead; [note
 
 a private, gated or competition dataset needs its source's key in the job's environment, from the CI system's secrets: `HF_TOKEN` for hugging face, `KAGGLE_API_TOKEN` for kaggle, and the others in [environment](reference/environment.md#credentials). never write a key into the cache folder or the repository; fetchloom keeps keys out of its cache, logs and output.
 
+## exact inputs
+
+`--locked` trusts a cached file whose size and time still match, so a cached file that changed but kept both is placed as it is. a job that needs exactly the pinned bytes adds `--verify`:
+
+```sh
+fetchloom sync --locked --verify --yes
+```
+
+it hashes every placed file, downloads again any whose bytes differ from `data.lock`, and keeps the changed copy beside it as `<path>.changed`, with a warning. it reads every byte of the data, so it takes longer than plain `--locked`.
+
 ## checking the result
 
 the commands above check that sync worked. a job that must also fail on files someone edited in the data folder can read `--json` output, as [scripting](scripting.md#checking-and-syncing) shows. [exit codes](reference/exit-codes.md) lists every failure kind and what to do next.
