@@ -639,14 +639,19 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         "-o",
         "second",
     ]))?;
-    // redirected stderr reports the running batch; the per-file waiting bar is hidden.
-    let waiting = second.wait_for("Downloading");
+    // redirected stderr says the second run waits for the first, and never that it downloads
+    let waiting = second.wait_for("Waiting iris.csv · another fetchloom is downloading it");
     drop(release);
     waiting?;
     let second = second.finish()?;
     let first = first.finish()?;
     assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
     assert_eq!(second.status.code(), Some(0), "{}", text(&second.stderr)?);
+    assert!(
+        !text(&second.stderr)?.contains("Downloading"),
+        "{}",
+        text(&second.stderr)?
+    );
     let downloads = server
         .requests()
         .iter()

@@ -39,6 +39,18 @@ pub(in crate::cli) async fn unpack_all(
     cache: &Cache,
     archives: Vec<Unpack>,
 ) -> Result<Vec<Option<Unpacked>>, Error> {
+    let mut results: Vec<Option<Unpacked>> = archives
+        .iter()
+        .map(|unpack| recorded(cache, unpack))
+        .collect();
+    let archives: Vec<(usize, Unpack)> = archives
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| results[*index].is_none())
+        .collect();
+    if archives.is_empty() {
+        return Ok(results);
+    }
     // each archive keeps a core decompressing and a few threads writing files
     let at_once = std::thread::available_parallelism()
         .map_or(1, NonZero::get)
@@ -47,16 +59,13 @@ pub(in crate::cli) async fn unpack_all(
     let (at_once, writers) = context.threads.archives(at_once);
     let failed = Arc::new(AtomicBool::new(false));
     let what = match archives.as_slice() {
-        [only] => only.label.clone(),
+        [(_, only)] => only.label.clone(),
         _ => units::count(archives.len() as u64, "archive", "archives"),
     };
-    let sizes = archives.iter().map(|unpack| Some(unpack.size));
+    let sizes = archives.iter().map(|(_, unpack)| Some(unpack.size));
     let ticker = Arc::new(context.output.ticker("Unpacking", what, sizes));
-    let mut results: Vec<Option<Unpacked>> = std::iter::repeat_with(|| None)
-        .take(archives.len())
-        .collect();
     let mut tasks = JoinSet::new();
-    let mut queue = archives.into_iter().enumerate();
+    let mut queue = archives.into_iter();
     loop {
         while tasks.len() < at_once
             && let Some((index, unpack)) = queue.next()
@@ -117,6 +126,23 @@ pub(in crate::cli) async fn unpack_all(
         }
     }
     Ok(results)
+}
+
+/// what `unpack` unpacked to when another run recorded it while this one waited, with every file
+/// in the cache, so it needs neither its own bytes nor a second unpacking.
+fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
+    let (tree, members) = cache.unpacked_with_tree(&unpack.archive)?;
+    if unpack.tree.is_some_and(|wanted| wanted != tree) {
+        return None;
+    }
+    members
+        .iter()
+        .all(|member| cache.find(&member.sha256, Some(member.size)).is_some())
+        .then(|| Unpacked {
+            members,
+            tree,
+            added: Vec::new(),
+        })
 }
 
 /// drops each archive's own bytes from the cache, now that its files are in, unless a project on
@@ -429,6 +455,33 @@ mod tests {
             cache.unpacked(&first.digest, None).unwrap()[0].sha256,
             digest::sha256(b"first")
         );
+    }
+
+    #[test]
+    fn an_archive_unpacked_meanwhile_is_not_unpacked_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = store(&cache, &tar(b"member"));
+        let unpack = || Unpack {
+            archive: stored.digest,
+            size: stored.size,
+            label: "set/set.tar".to_owned(),
+            tree: None,
+        };
+        // another run unpacks the archive, then drops its bytes as a sync does once its files
+        // are in, while this run waited for the download
+        let theirs = block_on(unpack_all(&context(), &cache, vec![unpack()])).unwrap();
+        let theirs = theirs[0].as_ref().unwrap();
+        drop_archives(&cache, &[stored.digest], Some(&Lock::default()));
+        assert!(cache.find(&stored.digest, None).is_none());
+        let context = context();
+        let ours = block_on(unpack_all(&context, &cache, vec![unpack()])).unwrap();
+        let ours = ours[0].as_ref().unwrap();
+        assert_eq!(ours.tree, theirs.tree);
+        assert_eq!(ours.members.len(), 1);
+        assert_eq!(ours.members[0].sha256, digest::sha256(b"member"));
+        assert_eq!(ours.added, Vec::new());
+        assert_eq!(context.work.counts().objects_written, 0);
     }
 
     #[test]

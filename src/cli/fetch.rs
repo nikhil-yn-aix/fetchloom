@@ -85,10 +85,15 @@ pub(super) fn wrapped(cache: &Cache, remote: &Remote, path: String, bytes: &Sha2
 }
 
 /// how all the downloads of one call go together: a bar for them all on a terminal when there
-/// are several, and plain lines now and then where no bar shows.
+/// are several, and plain lines now and then where no bar shows, once a download starts.
 struct Overall {
     bar: Option<Bar>,
-    ticker: Ticker,
+    /// made when the first download starts, so a batch another fetchloom filled while this one
+    /// waited prints no line about downloading.
+    ticker: OnceLock<Ticker>,
+    what: String,
+    /// the sizes the batch knows before it starts, added up, and how many files it does not.
+    sizes: (u64, usize),
     /// what the bar fills to so far. downloads run on several threads and learn sizes at once,
     /// so each addition reads and writes it under one lock.
     length: std::sync::Mutex<u64>,
@@ -133,19 +138,35 @@ impl Overall {
             bar
         });
         let length = std::sync::Mutex::new(sizes().flatten().fold(0, u64::saturating_add));
-        let ticker = context.output.ticker("Downloading", what, sizes());
+        let sizes = sizes().fold((0, 0), |(total, unknown), size| match size {
+            Some(size) => (u64::saturating_add(total, size), unknown),
+            None => (total, unknown + 1),
+        });
         Overall {
             bar,
-            ticker,
+            ticker: OnceLock::new(),
+            what,
+            sizes,
             length,
         }
+    }
+
+    /// starts the plain lines, when the first download of the batch starts.
+    fn begin(&self, output: &Output) {
+        let (total, unknown) = self.sizes;
+        self.ticker.get_or_init(|| {
+            let sizes = std::iter::once(Some(total)).chain(std::iter::repeat_n(None, unknown));
+            output.ticker("Downloading", self.what.clone(), sizes)
+        });
     }
 
     fn advance(&self, bytes: u64) {
         if let Some(bar) = &self.bar {
             bar.advance(bytes);
         }
-        self.ticker.advance(bytes);
+        if let Some(ticker) = self.ticker.get() {
+            ticker.advance(bytes);
+        }
     }
 
     fn sized(&self, bytes: u64) {
@@ -157,7 +178,9 @@ impl Overall {
             *length = length.saturating_add(bytes);
             bar.length(*length);
         }
-        self.ticker.sized(bytes);
+        if let Some(ticker) = self.ticker.get() {
+            ticker.sized(bytes);
+        }
     }
 }
 
@@ -207,6 +230,8 @@ struct Watch<'a> {
     /// the furthest point the overall progress counted, so bytes fetched again after a retry or
     /// a fresh start count once.
     counted: AtomicU64,
+    /// plain lines while another fetchloom downloads the file, where no bar says so.
+    waiting: std::sync::Mutex<Option<Ticker>>,
 }
 
 impl<'a> Watch<'a> {
@@ -230,6 +255,7 @@ impl<'a> Watch<'a> {
             received: AtomicU64::new(0),
             position,
             counted: AtomicU64::new(0),
+            waiting: std::sync::Mutex::new(None),
         }
     }
 
@@ -255,6 +281,12 @@ impl<'a> Watch<'a> {
         }
     }
 
+    fn waited(&self) -> std::sync::MutexGuard<'_, Option<Ticker>> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// moves the overall progress up to `position`, never back and never twice over a byte.
     fn count(&self, position: u64) {
         let before = self.counted.fetch_max(position, Ordering::Relaxed);
@@ -267,14 +299,15 @@ impl<'a> Watch<'a> {
         let label = &self.job.label;
         match *event {
             Event::Waiting => {
-                self.bar().message(
-                    "Waiting",
-                    format!("{label} · another fetchloom is downloading it"),
-                );
+                let what = format!("{label} · another fetchloom is downloading it");
+                self.bar().message("Waiting", what.clone());
+                *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
             // no bar yet: the download may still wait for a free slot
             Event::Kept(bytes) => self.position.store(bytes, Ordering::Relaxed),
             Event::Started { total, resumed, .. } => {
+                self.waited().take();
+                self.overall.begin(self.output);
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {
                     // a disk without room asks instead, and its question names the size too
@@ -776,6 +809,17 @@ mod tests {
     use super::*;
     use crate::output::{Level, Style};
 
+    /// a batch with no bar, as off a terminal, whose files left their sizes unknown.
+    fn overall() -> Overall {
+        Overall {
+            bar: None,
+            ticker: OnceLock::new(),
+            what: String::new(),
+            sizes: (0, 0),
+            length: std::sync::Mutex::default(),
+        }
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn only_a_run_of_many_downloads_waits_for_one_flush() {
@@ -931,11 +975,7 @@ mod tests {
             dataset: None,
             again: None,
         };
-        let overall = Overall {
-            bar: None,
-            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
-            length: std::sync::Mutex::default(),
-        };
+        let overall = overall();
         let unknown = || Event::Started {
             total: None,
             resumed: 0,
@@ -1003,11 +1043,7 @@ mod tests {
             dataset: None,
             again: None,
         };
-        let overall = Overall {
-            bar: None,
-            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
-            length: std::sync::Mutex::default(),
-        };
+        let overall = overall();
         let position = AtomicU64::new(0);
         for (total, resumed, needs_approval) in [
             (crate::settings::ASK_ABOVE, 0, false),
@@ -1050,11 +1086,7 @@ mod tests {
         };
         let first = job("first.bin");
         let second = job("second.bin");
-        let overall = Overall {
-            bar: None,
-            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
-            length: std::sync::Mutex::default(),
-        };
+        let overall = overall();
         let approval = Approval::new(crate::settings::ASK_ABOVE);
         let event = Event::Started {
             total: Some(crate::settings::ASK_ABOVE + 1),
@@ -1065,6 +1097,43 @@ mod tests {
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
         let second = Watch::new(&second, &output, &overall, &approval, false, &position);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    #[test]
+    fn a_batch_says_nothing_until_a_download_starts() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big/big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = Overall::new(&context, std::slice::from_ref(&job));
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let position = AtomicU64::new(0);
+        let watch = Watch::new(&job, &context.output, &overall, &approval, false, &position);
+        // another fetchloom downloads the file while this run waits for it
+        watch.on(&Event::Waiting).unwrap();
+        watch.on(&Event::Kept(0)).unwrap();
+        assert!(overall.ticker.get().is_none());
+        watch
+            .on(&Event::Started {
+                total: Some(10),
+                resumed: 0,
+            })
+            .unwrap();
+        assert!(overall.ticker.get().is_some());
     }
 
     #[test]
@@ -1081,11 +1150,7 @@ mod tests {
             false,
             false,
         );
-        let overall = Overall {
-            bar: None,
-            ticker: output.ticker("Downloading", String::new(), std::iter::empty()),
-            length: std::sync::Mutex::default(),
-        };
+        let overall = overall();
         let approval = Approval::new(crate::settings::ASK_ABOVE);
         let position = AtomicU64::new(0);
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
