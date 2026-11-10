@@ -37,10 +37,6 @@ pub(super) struct Status {
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files placed as links that are still the cache's copy, or the very copy the cache found
-    /// changed, whose bytes an edit through a link changed, here or in another project. `sync`
-    /// puts them back.
-    edited_elsewhere: Vec<String>,
     /// files in the data folder that no dataset places.
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
@@ -50,12 +46,18 @@ pub(super) struct Status {
     /// way belongs. `sync --force` replaces them, except a folder that holds anything.
     #[serde(serialize_with = "blocker_paths")]
     blocked: Vec<Blocker>,
-    /// copies and reflinks fetchloom placed that still look as placed but hold other bytes,
-    /// which only hashing every file finds. `sync --verify` puts them back.
+    /// placed files that no longer hold the pinned bytes, though no edit of this project's shows:
+    /// links to the cache's copy, which an edit through a link changed, here or in another
+    /// project, and copies and reflinks that still look as placed, which only hashing finds.
+    /// `sync` puts them back, or `sync --verify` for those only hashing finds.
     damaged: Vec<String>,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
+    /// damaged files that are links to the cache's changed copy, for the reason the terminal
+    /// gives.
+    #[serde(skip)]
+    linked: HashSet<String>,
     /// edited files placed as hardlinks, whose change every project sharing the link sees.
     #[serde(skip)]
     shared: HashSet<String>,
@@ -179,7 +181,8 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
                 _ => &mut status.missing,
             },
             (Some(_), Some(_)) if survey.elsewhere.contains(&target.path) => {
-                &mut status.edited_elsewhere
+                status.linked.insert(target.path.clone());
+                &mut status.damaged
             }
             (Some(_), Some(_)) if survey.damaged.contains(&target.path) => &mut status.damaged,
             (Some(seen), Some(record))
@@ -218,11 +221,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     // a file in the way is listed as blocking, not also as extra
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
     status.extra = extra(&survey, &wanted);
-    let listed: HashSet<&String> = status
-        .edited_elsewhere
-        .iter()
-        .chain(&status.damaged)
-        .collect();
+    let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
 }
@@ -282,9 +281,8 @@ impl Status {
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
             || self
-                .edited_elsewhere
+                .damaged
                 .iter()
-                .chain(&self.damaged)
                 .any(|path| !self.hashed_only.contains(path))
     }
 }
@@ -342,23 +340,15 @@ fn list(output: &Output, status: &Status) {
         output.mark("", &format!("and {more} more"));
     }
     for path in status.damaged.iter().take(SHOWN) {
-        output.mark(
-            "Damaged",
-            &format!("{path} · its bytes changed though its size and time did not"),
-        );
+        let cause = if status.linked.contains(path) {
+            "linked to the cache's copy, which was changed"
+        } else {
+            "its bytes changed though its size and time did not"
+        };
+        output.mark("Damaged", &format!("{path} · {cause}"));
     }
     if status.damaged.len() > SHOWN {
         let more = status.damaged.len() - SHOWN;
-        output.mark("", &format!("and {more} more"));
-    }
-    for path in status.edited_elsewhere.iter().take(SHOWN) {
-        output.mark(
-            "Damaged",
-            &format!("{path} · linked to the cache's copy, which was changed"),
-        );
-    }
-    if status.edited_elsewhere.len() > SHOWN {
-        let more = status.edited_elsewhere.len() - SHOWN;
         output.mark("", &format!("and {more} more"));
     }
 }
@@ -368,7 +358,6 @@ fn sum_up(output: &Output, status: &Status) -> bool {
     let differences = status.removed.len()
         + status.unlocked.len()
         + status.not_unpacked.len()
-        + status.edited_elsewhere.len()
         + status.blocked.len()
         + status.damaged.len()
         + status
@@ -419,7 +408,7 @@ mod tests {
         let clean = Status::default();
         assert!(!clean.needs_sync());
         assert!(!sum_up(&output, &clean));
-        for category in 0..9 {
+        for category in 0..8 {
             let mut status = Status::default();
             let paths = match category {
                 0 => &mut status.removed,
@@ -428,20 +417,25 @@ mod tests {
                 3 => &mut status.not_unpacked,
                 4 => &mut status.outdated,
                 5 => &mut status.untracked,
-                6 => &mut status.edited_elsewhere,
-                7 => &mut status.edited,
+                6 => &mut status.edited,
                 _ => &mut status.extra,
             };
             paths.push("data/set/file.csv".to_owned());
-            assert_eq!(status.needs_sync(), category < 7, "category {category}");
+            assert_eq!(status.needs_sync(), category < 6, "category {category}");
             assert!(sum_up(&output, &status), "category {category}");
         }
+        let mut damaged = Status::default();
+        damaged.damaged.push("data/set/file.csv".to_owned());
+        assert!(damaged.needs_sync());
+        damaged.hashed_only.insert("data/set/file.csv".to_owned());
+        assert!(!damaged.needs_sync(), "only sync --verify finds it");
+        assert!(sum_up(&output, &damaged));
     }
 
     #[test]
     fn json_status_keeps_every_path_including_link_edits_and_unknown_archives() {
         let status = Status {
-            edited_elsewhere: (0..25)
+            damaged: (0..25)
                 .map(|index| format!("data/set/{index}.csv"))
                 .collect(),
             not_unpacked: vec!["data/set/archive.zip".to_owned()],
@@ -449,8 +443,9 @@ mod tests {
             ..Status::default()
         };
         let value = serde_json::to_value(&status).unwrap();
-        assert_eq!(value["edited_elsewhere"].as_array().unwrap().len(), 25);
-        assert_eq!(value["edited_elsewhere"][24], "data/set/24.csv");
+        assert_eq!(value["damaged"].as_array().unwrap().len(), 25);
+        assert_eq!(value["damaged"][24], "data/set/24.csv");
+        assert!(value.get("edited_elsewhere").is_none());
         assert_eq!(
             value["not_unpacked"],
             serde_json::json!(["data/set/archive.zip"])

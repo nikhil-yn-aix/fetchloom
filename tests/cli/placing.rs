@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, delete, edit, file, json, reply, text};
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const V2: &[u8] = b"sepal_length,species\n9.9,new\n";
@@ -829,7 +829,7 @@ fn an_edit_through_a_shared_link_is_put_back_in_every_project() -> Result {
     let status = sandbox.command_in(&other, &["--json", "status"]).output()?;
     let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
     assert_eq!(
-        report["result"]["edited_elsewhere"],
+        report["result"]["damaged"],
         serde_json::json!(["data/iris/iris.csv"]),
         "{report}"
     );
@@ -882,7 +882,6 @@ fn only_the_kept_copy_differs(sandbox: &Sandbox, project: &Path) -> Result {
         "edited",
         "untracked",
         "outdated",
-        "edited_elsewhere",
         "blocked",
         "damaged",
     ] {
@@ -1055,8 +1054,11 @@ fn sync_force_puts_back_a_link_another_project_edited() -> Result {
     Ok(())
 }
 
+/// a link to the cache's copy that an edit through another project's link changed is damaged,
+/// in the terminal and in JSON alike, since both mean the pinned bytes are gone and sync puts
+/// them back.
 #[test]
-fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
+fn status_files_a_changed_shared_copy_as_damaged_in_both_forms() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let Some(other) = shared_and_edited(&sandbox, &server)? else {
@@ -1076,6 +1078,14 @@ fn status_shows_a_link_another_project_edited_once_the_cache_knows() -> Result {
             .contains("Damaged data/iris/iris.csv · linked to the cache's copy, which was changed"),
         "{stderr}"
     );
+    let report = json(&sandbox.command_in(&other, &["--json", "status"]).output()?)?;
+    let result = &report["result"];
+    assert_eq!(
+        result["damaged"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    assert!(result.get("edited_elsewhere").is_none(), "{report}");
     Ok(())
 }
 
@@ -1213,7 +1223,7 @@ fn a_marked_link_whose_size_and_time_stayed_is_put_back() -> Result {
     let before = sandbox.command_in(&other, &["--json", "status"]).output()?;
     let before: serde_json::Value = serde_json::from_slice(&before.stdout)?;
     assert_eq!(
-        before["result"]["edited_elsewhere"],
+        before["result"]["damaged"],
         serde_json::json!(["data/iris/iris.csv"])
     );
 
@@ -2267,7 +2277,7 @@ fn verify_puts_back_a_link_whose_cached_copy_quietly_changed() -> Result {
     let checked = sandbox.run(&["--json", "status", "--verify"])?;
     let report: serde_json::Value = serde_json::from_slice(&checked.stdout)?;
     assert_eq!(
-        report["result"]["edited_elsewhere"],
+        report["result"]["damaged"],
         serde_json::json!(["data/iris/iris.csv"]),
         "{report}"
     );

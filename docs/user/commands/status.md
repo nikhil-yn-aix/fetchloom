@@ -47,9 +47,8 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again |
-| `damaged` | a managed file that shares its bytes with nothing, a copy, a reflink or a link left with a name of its own, holds other bytes though its size and modification time are unchanged. hashing every placed file finds it, and a change mark puts it in doubt too |
+| `damaged` | a managed file holds other bytes, though no edit of this project's shows: a hardlink to the cache's copy, still shared with it or with other projects, after an edit through a link, here or in another project, changed that shared copy; or a file that shares its bytes with nothing, a copy, a reflink or a link left with a name of its own, whose size and modification time are unchanged, which hashing every placed file finds and a change mark puts in doubt too |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
-| `edited_elsewhere` | a hardlink to the cache's copy, still shared with it or with other projects, holds other bytes, because an edit through a link, here or in another project, changed that shared copy |
 | `extra` | a scanned path is outside known targets |
 | `not_unpacked` | an archive's member record is unavailable here |
 
@@ -75,7 +74,7 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 
 ## exit codes
 
-0 means status completed, even when it found differences. scripts must inspect all eleven arrays. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
+0 means status completed, even when it found differences. scripts must inspect every array. invalid usage exits 2; local and project errors use 50. see [exit codes](../reference/exit-codes.md) for all failure kinds.
 
 ## common mistakes
 

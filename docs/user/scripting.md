@@ -53,7 +53,7 @@ invalid or missing JSON raises before inputs are used. pass `--yes` only when yo
 
 `kept` lists project-relative paths and reasons: `changed`, `shared`, `foreign`, `unneeded` or `blocked`, which adds the path of the entry in the way as `blocked_by`. `restored` lists files put back that no edit of the project's explained: links to a changed cached copy, and files `sync --verify` found changed. `changed_copies` names, as `{path, kept_as}`, where each of those links kept its changed copy beside the pinned file. do not add `--force` automatically; it can overwrite a person's files.
 
-kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `edited_elsewhere`, `damaged`, `blocked`, `extra` and `not_unpacked`. every array empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan, unless `--verify` asks it to hash every placed file.
+kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `damaged`, `blocked`, `extra` and `not_unpacked`. every array empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan, unless `--verify` asks it to hash every placed file.
 
 ## adding and fetching
 
