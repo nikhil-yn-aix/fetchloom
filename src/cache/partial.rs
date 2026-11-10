@@ -163,6 +163,14 @@ pub(super) fn take_lock(path: &Path, mut opened: File) -> Result<File, TryLockEr
     }
 }
 
+/// the lock file `opened` from `path`, locked, when no download holds it and `path` still names
+/// it: one gc may remove with what it guarded. a file that lost its name since it was opened
+/// belongs to nobody, and the name to the run that took it with a new file.
+pub(super) fn unheld(path: &Path, opened: File) -> Option<File> {
+    opened.try_lock().ok()?;
+    names(path, &opened).ok()?.then_some(opened)
+}
+
 /// whether `path` still names the file `file` has open.
 fn names(path: &Path, file: &File) -> io::Result<bool> {
     #[cfg(unix)]

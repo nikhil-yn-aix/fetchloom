@@ -244,6 +244,32 @@ fn a_finished_download_leaves_a_lock_file_another_run_holds() {
     drop(second);
 }
 
+/// gc removes a lock file only while it holds the very file the name still names. a file it
+/// opened that lost its name meanwhile is nobody's, and the name now belongs to the run that
+/// took it with a new file.
+#[test]
+fn a_sweep_takes_only_a_lock_file_nobody_holds_under_its_own_name() {
+    let (_dir, cache) = cache();
+    let url = "https://example.org/swept";
+    let first = owned(&cache, url);
+    let lock = first.bytes.with_extension("lock");
+    let opened = || open_unfollowed(&lock, false).unwrap();
+    assert!(unheld(&lock, opened()).is_none(), "a download holds it");
+    drop(first);
+    fs::write(&lock, b"").unwrap();
+    assert!(unheld(&lock, opened()).is_some(), "a killed run left it");
+    let held = owned(&cache, url);
+    let stale = opened();
+    drop(held);
+    // fat and exfat on windows keep a removed file's name until its last handle closes
+    if lock.exists() {
+        return;
+    }
+    let second = owned(&cache, url);
+    assert!(unheld(&lock, stale).is_none(), "the name moved on");
+    drop(second);
+}
+
 /// a writer for a 12 byte file, for streams that each write their own part of it.
 fn split_writer(partial: &Partial) -> PartialWriter {
     partial

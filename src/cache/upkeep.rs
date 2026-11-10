@@ -387,12 +387,12 @@ impl Cache {
             let Some(key) = name.strip_suffix(".lock") else {
                 continue;
             };
-            let Ok(lock) = super::partial::open_unfollowed(&entry.path(), false) else {
+            let Some(_held) = super::partial::open_unfollowed(&entry.path(), false)
+                .ok()
+                .and_then(|lock| super::partial::unheld(&entry.path(), lock))
+            else {
                 continue;
             };
-            if lock.try_lock().is_err() {
-                continue;
-            }
             let bytes = folder.join(format!("{key}.part"));
             let left = match fs::metadata(&bytes) {
                 Ok(metadata) => metadata.modified().is_ok_and(abandoned),
