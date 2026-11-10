@@ -3,13 +3,15 @@
 
 use std::borrow::Cow;
 
-use super::{Lock, Locked, LockedFile, VERSION};
+use super::lists::Listed;
+use super::{Locked, LockedFile, Parsed, VERSION, prefixed};
 use crate::digest::{Md5, Sha256};
 use crate::name;
 
-/// the lock `text` holds, when it is in the exact form [`Lock::render`] writes, with either line
-/// ending. `comments` additionally accepts blank lines and valid TOML comments around it.
-pub(super) fn read(text: &str, comments: bool) -> Option<Lock> {
+/// the datasets `text` gives, when it is in the exact form [`super::Lock::render`] writes, with
+/// either line ending. `comments` additionally accepts blank lines and valid TOML comments around
+/// it.
+pub(super) fn read(text: &str, comments: bool) -> Option<Vec<Parsed>> {
     let mut lines = Lines {
         rest: text,
         comments,
@@ -17,7 +19,7 @@ pub(super) fn read(text: &str, comments: bool) -> Option<Lock> {
     if lines.next()? != format!("version = {VERSION}") {
         return None;
     }
-    let mut datasets: Vec<Locked> = Vec::new();
+    let mut datasets: Vec<Parsed> = Vec::new();
     loop {
         lines.skip_comments()?;
         if lines.rest.is_empty() {
@@ -32,13 +34,13 @@ pub(super) fn read(text: &str, comments: bool) -> Option<Lock> {
         let dataset = dataset(&mut lines)?;
         if datasets
             .last()
-            .is_some_and(|last| last.name >= dataset.name)
+            .is_some_and(|last| last.name() >= dataset.name())
         {
             return None;
         }
         datasets.push(dataset);
     }
-    Some(Lock { datasets })
+    Some(datasets)
 }
 
 /// the lines of a text that ends every line with `\n` or `\r\n`.
@@ -90,6 +92,15 @@ impl<'a> Lines<'a> {
         rest.is_empty().then(|| value.into_owned())
     }
 
+    /// the number of a line `key = 123`, when the next line is one.
+    fn number(&mut self, key: &str) -> Option<u64> {
+        let digits = self.next()?.strip_prefix(key)?.strip_prefix(" = ")?;
+        if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        integer(digits)
+    }
+
     /// whether the next line sets `key`, leaving it unread.
     fn sets(&mut self, key: &str) -> bool {
         if self.skip_comments().is_none() {
@@ -125,7 +136,7 @@ fn uncommented(line: &str) -> Option<&str> {
     Some(line.trim_end_matches([' ', '\t']))
 }
 
-fn dataset(lines: &mut Lines) -> Option<Locked> {
+fn dataset(lines: &mut Lines) -> Option<Parsed> {
     let name = lines.value("name")?;
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
@@ -139,6 +150,7 @@ fn dataset(lines: &mut Lines) -> Option<Locked> {
     let [title, license, doi] = optional;
     let timestamp = lines.value("locked")?;
     let mut files: Vec<LockedFile> = Vec::new();
+    let mut listed = None;
     match lines.next()? {
         "files = []" => {}
         "files = [" => loop {
@@ -154,9 +166,9 @@ fn dataset(lines: &mut Lines) -> Option<Locked> {
             }
             files.push(file);
         },
-        _ => return None,
+        line => listed = Some(list(line, lines)?),
     }
-    Some(Locked {
+    let locked = Locked {
         name,
         reference,
         spec,
@@ -166,6 +178,28 @@ fn dataset(lines: &mut Lines) -> Option<Locked> {
         doi,
         timestamp,
         files,
+    };
+    Some(Parsed::Source(locked, listed))
+}
+
+/// a list kept beside data.lock: the line `files_in = ["…", "…"]`, then the lines of
+/// `file_count`, `file_bytes` and `files_sha256`.
+fn list(line: &str, lines: &mut Lines) -> Option<Listed> {
+    let mut rest = line.strip_prefix("files_in = [")?.strip_suffix(']')?;
+    let mut parts = Vec::new();
+    loop {
+        let (part, after) = string(rest)?;
+        parts.push(part.into_owned());
+        if after.is_empty() {
+            break;
+        }
+        rest = after.strip_prefix(", ")?;
+    }
+    Some(Listed {
+        parts,
+        count: lines.number("file_count")?,
+        bytes: lines.number("file_bytes")?,
+        sha256: prefixed(&lines.value("files_sha256")?)?,
     })
 }
 
@@ -257,6 +291,7 @@ fn refused(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Lock;
     use super::*;
     use crate::digest;
 
@@ -313,8 +348,8 @@ mod tests {
         ]
     }
 
-    fn full(text: &str) -> Lock {
-        Lock::parse_toml(text, None).unwrap()
+    fn full(text: &str) -> Vec<Parsed> {
+        super::super::parse_toml(text).unwrap()
     }
 
     #[test]
@@ -322,8 +357,11 @@ mod tests {
         for lock in samples() {
             let text = lock.render();
             assert_eq!(read(&text, false), Some(full(&text)), "{text}");
-            assert_eq!(read(&text, false), Some(lock.clone()));
-            assert_eq!(read(&text.replace('\n', "\r\n"), false), Some(lock));
+            assert_eq!(read(&text, false), Some(lock.parsed()));
+            assert_eq!(
+                read(&text.replace('\n', "\r\n"), false),
+                Some(lock.parsed())
+            );
         }
         let text = samples()[1].render().replacen("\\t", "\t", 1);
         assert_eq!(
@@ -331,6 +369,22 @@ mod tests {
             Some(full(&text)),
             "a tab as it is reads alike"
         );
+    }
+
+    #[test]
+    fn a_dataset_listed_beside_the_lock_reads_as_the_toml_reader_reads_it() {
+        let text = samples()[2].render_with(2);
+        assert!(text.contains("\nfiles_in = [\""), "{text}");
+        let fast = read(&text, false).unwrap();
+        assert_eq!(fast, full(&text));
+        assert!(matches!(&fast[1], Parsed::Source(_, Some(listed)) if listed.count == 3));
+        for broken in [
+            text.replacen("file_count = 3", "file_count = +3", 1),
+            text.replacen("files_in = [\"", "files_in = [ \"", 1),
+            text.replacen("files_sha256 = \"sha256:", "files_sha256 = \"", 1),
+        ] {
+            assert_eq!(read(&broken, false), None, "{broken}");
+        }
     }
 
     #[test]
@@ -371,8 +425,8 @@ mod tests {
             }
             commented.push_str("# trailing");
             assert_eq!(read(&commented, false), None);
-            assert_eq!(read(&commented, true), Some(lock.clone()));
-            assert_eq!(Lock::parse_toml(&commented, None).unwrap(), lock);
+            assert_eq!(read(&commented, true), Some(lock.parsed()));
+            assert_eq!(full(&commented), lock.parsed());
             assert_eq!(Lock::parse(&commented).unwrap(), lock);
             assert_eq!(Lock::parse(&commented.replace('\n', "\r\n")).unwrap(), lock);
             for invalid in [
@@ -424,7 +478,8 @@ mod tests {
             entry.size = 4096;
             sample.datasets[0].files = vec![entry];
             let read = read(&sample.render(), false).unwrap();
-            let got = &read.datasets[0].files[0].path;
+            let Parsed::Source(dataset, _) = &read[0];
+            let got = &dataset.files[0].path;
             assert_eq!(got, &path);
             capacities.push((url_length, got.len(), got.capacity()));
         }
@@ -445,17 +500,15 @@ mod tests {
                 return;
             };
             for comments in [false, true] {
-                if let Some(lock) = read(text, comments) {
+                if let Some(parsed) = read(text, comments) {
                     assert_eq!(
-                        Lock::parse_toml(text, None).ok().as_ref(),
-                        Some(&lock),
+                        super::super::parse_toml(text).ok().as_ref(),
+                        Some(&parsed),
                         "{text:?}"
                     );
-                    assert_eq!(
-                        read(&lock.render(), false).as_ref(),
-                        Some(&lock),
-                        "{text:?}"
-                    );
+                    if let Ok(lock) = super::super::resolve(parsed, None) {
+                        assert_eq!(read(&lock.render(), false), Some(lock.parsed()), "{text:?}");
+                    }
                 }
             }
             if let Ok(lock) = Lock::parse(text) {

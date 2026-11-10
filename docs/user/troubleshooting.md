@@ -134,7 +134,7 @@ in a new terminal, `fetchloom settings` shows the `rate` row coming from the env
 
 ## project recovery
 
-restore a broken or older lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a newer lock version requires a newer fetchloom.
+restore a broken lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version` comes from a newer fetchloom and needs one.
 
 a failed `add` attempts to restore both `data.toml` and `data.lock`. if either restoration fails, restore the metadata from the named recovery file under `.fetchloom/`. it holds the original bytes, not a JSON string; do not paste its contents into logs, since they may contain credentials. cached downloads and files already placed can remain.
 

@@ -20,7 +20,7 @@ files = [
 
 | field | value |
 |---|---|
-| `version` | integer `1`, or `2` when a dataset keeps its files in [`data.lock.d`](#big-datasets) |
+| `version` | integer `1`, the one format; a dataset may keep its files in [`data.lock.d`](#big-datasets) |
 | `dataset` | array of dataset tables; omitted for an empty lock |
 | `dataset[].name` | name in `data.toml` |
 | `dataset[].ref` | the manifest reference |
@@ -42,7 +42,7 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 
 `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
 
-a newer lock version asks you to update fetchloom. a broken or older lock must be restored from git, or deleted before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
+fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
 
 ## a git merge conflict
 
@@ -53,7 +53,7 @@ a git merge that could not combine two changes leaves both sides in the file bet
 a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock.
 
 ```toml
-version = 2
+version = 1
 
 [[dataset]]
 name = "photos"

@@ -27,7 +27,7 @@ fn a_lock_from_a_newer_fetchloom_or_a_broken_one_gets_advice_that_works() -> Res
     fs::write(sandbox.work().join("data.toml"), "[datasets]\n")?;
     let path = sandbox.work().join("data.lock");
     for (contents, advice) in [
-        (&b"version = 3\n"[..], None),
+        (&b"version = 2\n"[..], None),
         (b"version = [", Some(BROKEN)),
         (b"version = 1\n\xff\xfe\n", Some(BROKEN)),
     ] {
@@ -52,7 +52,7 @@ fn gc_says_where_another_projects_lock_is_fixed() -> Result {
     assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
     let elsewhere = sandbox.folder("elsewhere")?;
     for (contents, advice) in [
-        ("version = 3\n", newer("cache gc")),
+        ("version = 2\n", newer("cache gc")),
         ("version = [", format!("in that project, {BROKEN}")),
     ] {
         fs::write(sandbox.work().join("data.lock"), contents)?;

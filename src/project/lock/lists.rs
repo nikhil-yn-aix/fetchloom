@@ -94,12 +94,15 @@ pub(crate) fn listed(name: &str, files: &[LockedFile], texts: &[String]) -> List
     Listed {
         parts: names(name, &sha256, texts.len()),
         count: files.len() as u64,
-        bytes: files
-            .iter()
-            .map(|file| file.size)
-            .fold(0, u64::saturating_add),
+        bytes: files.iter().fold(0, |bytes, file| add(bytes, file.size)),
         sha256,
     }
+}
+
+/// `bytes` and `size` together, held to the largest integer TOML can write, so data.lock can
+/// always read the sum it records.
+fn add(bytes: u64, size: u64) -> u64 {
+    bytes.saturating_add(size).min(i64::MAX.unsigned_abs())
 }
 
 /// the paths of the `count` parts of `name`'s list with `sha256`. the name changes with the list,
@@ -188,7 +191,7 @@ pub(crate) fn read(root: &Path, name: &str, listed: &Listed) -> Result<Vec<Locke
             if files.len() == count || files.last().is_some_and(|last| last.path >= file.path) {
                 return Err(damaged(part, number));
             }
-            bytes = bytes.saturating_add(file.size);
+            bytes = add(bytes, file.size);
             files.push(file);
         }
         if number == 0 {

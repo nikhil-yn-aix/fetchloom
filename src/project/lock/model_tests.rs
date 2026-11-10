@@ -91,33 +91,42 @@ fn generated(bytes: &[u8]) -> Lock {
     Lock { datasets }
 }
 
+/// the most files a generated dataset lists in data.lock itself, so some keep a list beside it.
+const INLINE: usize = 2;
+
+/// writes the lists `lock` keeps beside data.lock into a project folder.
+fn project(lock: &Lock) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+    for (part, text) in lock.lists_with(INLINE) {
+        std::fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+    }
+    root
+}
+
 fn compare(lock: &Lock) {
-    let rendered = lock.render();
+    let root = project(lock);
+    let read = |text: &str| Lock::read(text, root.path()).unwrap();
+    let rendered = lock.render_with(INLINE);
+    let fast = canonical::read(&rendered, false);
     assert_eq!(
-        canonical::read(&rendered, false).as_ref(),
-        Some(lock),
+        fast.as_ref(),
+        Some(&parse_toml(&rendered).unwrap()),
         "{rendered}"
     );
-    let generic = Lock::parse_toml(&rendered, None).unwrap();
-    assert_eq!(&generic, lock, "{rendered}");
-    assert_eq!(Lock::parse(&rendered).as_ref().unwrap(), lock);
+    assert_eq!(&read(&rendered), lock, "{rendered}");
     assert_eq!(
-        canonical::read(&rendered.replace('\n', "\r\n"), false).as_ref(),
-        Some(lock)
+        canonical::read(&rendered.replace('\n', "\r\n"), false),
+        fast
     );
-    assert_eq!(
-        Lock::parse(&format!("\u{feff}{rendered}"))
-            .as_ref()
-            .unwrap(),
-        lock
-    );
-    assert_eq!(generic.render(), rendered);
+    assert_eq!(&read(&format!("\u{feff}{rendered}")), lock);
+    assert_eq!(read(&rendered).render_with(INLINE), rendered);
     let mut shuffled = lock.clone();
     shuffled.datasets.reverse();
     for dataset in &mut shuffled.datasets {
         dataset.files.reverse();
     }
-    assert_eq!(shuffled.render(), rendered);
+    assert_eq!(shuffled.render_with(INLINE), rendered);
 }
 
 #[test]
@@ -131,29 +140,34 @@ fn lock_round_trips_both_readers() {
 #[test]
 fn lock_reader_mutations_agree() {
     for bytes in inputs() {
-        let text = generated(&bytes).render();
+        let lock = generated(&bytes);
+        let root = project(&lock);
+        let text = lock.render_with(INLINE);
         let variants = [
             text.replacen("version = 1", "version=1", 1),
             text.replacen("version = 1", "version = 0", 1),
+            text.replacen("version = 1", "version = 2", 1),
             text.replacen("size = ", "size = +", 1),
             text.replacen("size = ", "size = 0", 1),
             text.replacen("sha256 = \"", "sha256 = \"x", 1),
             text.replacen("path = \"", "path = \"../", 1),
             text.replacen(" },\n", ", unknown = 1 },\n", 1),
+            text.replacen("file_count = ", "file_count = 1", 1),
+            text.replacen("files_in = [", "files = [", 1),
             text.replace('\n', "\r\n"),
             text.trim_end().to_owned(),
             format!("{text}# comment\n"),
         ];
         for changed in variants {
-            let generic = Lock::parse_toml(&changed, None);
-            let normal = Lock::parse(&changed);
+            let generic = parse_toml(&changed);
+            let normal = parse(&changed);
             assert_eq!(normal.as_ref().ok(), generic.as_ref().ok(), "{changed}");
             for comments in [false, true] {
                 if let Some(fast) = canonical::read(&changed, comments) {
                     assert_eq!(generic.as_ref().ok(), Some(&fast), "{changed}");
                 }
             }
-            if let Ok(lock) = normal {
+            if let Ok(lock) = normal.and_then(|parsed| resolve(parsed, Some(root.path()))) {
                 compare(&lock);
             }
         }

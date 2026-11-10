@@ -21,11 +21,9 @@ use crate::glob::Glob;
 use crate::name;
 
 pub(crate) const FILE: &str = "data.lock";
-/// the format of a lock that lists every file in itself.
+/// the one format of data.lock. a dataset of more files than it lists in itself keeps them in
+/// [`lists::FOLDER`], in the same format.
 const VERSION: u32 = 1;
-/// the format of a lock that keeps a big dataset's file list in [`lists::FOLDER`], which a
-/// fetchloom reading only [`VERSION`] would take for a dataset of no files.
-const LISTED: u32 = 2;
 /// how to recover a data.lock this fetchloom cannot use. `fetchloom lock` alone reads the same
 /// file first and fails the same way.
 pub(crate) const BROKEN: &str = "restore data.lock from git, or delete it and run `fetchloom lock`, which resolves every dataset again and may pin newer data";
@@ -36,11 +34,9 @@ pub(crate) struct Lock {
     pub(crate) datasets: Vec<Locked>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Locked {
     pub(crate) name: String,
-    #[serde(rename = "ref")]
     pub(crate) reference: String,
     /// the hash of the data.toml keys that decide what is downloaded. while it matches, the
     /// dataset is not resolved again.
@@ -50,7 +46,6 @@ pub(crate) struct Locked {
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
     /// when the pinned data last changed, in UTC.
-    #[serde(rename = "locked")]
     pub(crate) timestamp: String,
     /// sorted by path.
     pub(crate) files: Vec<LockedFile>,
@@ -67,6 +62,22 @@ pub(crate) struct LockedFile {
     /// for an archive, the tree hash of the files it unpacks to.
     #[serde(default, deserialize_with = "tree")]
     pub(crate) unpacks_to: Option<Sha256>,
+}
+
+/// a dataset as the text of data.lock gives it, before a list it keeps beside data.lock is read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Parsed {
+    /// a dataset fetched from a source, with its files, or with none yet and the list that holds
+    /// them.
+    Source(Locked, Option<lists::Listed>),
+}
+
+impl Parsed {
+    fn name(&self) -> &str {
+        match self {
+            Parsed::Source(locked, _) => &locked.name,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -99,50 +110,39 @@ struct StoredDataset {
 }
 
 impl StoredDataset {
-    /// the dataset, its files read from the list it names below `root` when it keeps one.
-    fn into_locked(self, version: u32, root: Option<&Path>) -> Result<Locked, Error> {
-        let invalid = |message: String| Error::new(Kind::ProjectInvalid, message).help(BROKEN);
+    /// the dataset, with its files or the list that holds them.
+    fn parsed(self) -> Result<Parsed, Error> {
         let listing = (
             self.files_in,
             self.file_count,
             self.file_bytes,
             self.files_sha256,
         );
-        let files = match (self.files, listing) {
-            (Some(files), (None, None, None, None)) => files,
-            (None, (Some(parts), Some(count), Some(bytes), Some(sha256))) if version == LISTED => {
-                let sha256 = sha256
-                    .strip_prefix("sha256:")
-                    .and_then(Sha256::from_hex)
-                    .ok_or_else(|| {
-                        invalid(format!(
-                            "data.lock gives {} a files_sha256 that is not sha256: and 64 hex digits",
-                            self.name
-                        ))
-                    })?;
+        let (files, listed) = match (self.files, listing) {
+            (Some(files), (None, None, None, None)) => (files, None),
+            (None, (Some(parts), Some(count), Some(bytes), Some(sha256))) => {
+                let sha256 = prefixed(&sha256).ok_or_else(|| {
+                    broken(format!(
+                        "data.lock gives {} a files_sha256 that is not sha256: and 64 hex digits",
+                        self.name
+                    ))
+                })?;
                 let listed = lists::Listed {
                     parts,
                     count,
                     bytes,
                     sha256,
                 };
-                let Some(root) = root else {
-                    return Err(invalid(format!(
-                        "data.lock keeps the files of {} in {}, which only a project can read",
-                        self.name,
-                        lists::FOLDER
-                    )));
-                };
-                lists::read(root, &self.name, &listed)?
+                (Vec::new(), Some(listed))
             }
             _ => {
-                return Err(invalid(format!(
+                return Err(broken(format!(
                     "data.lock gives {} neither its files nor all of files_in, file_count, file_bytes and files_sha256",
                     self.name
                 )));
             }
         };
-        Ok(Locked {
+        let locked = Locked {
             name: self.name,
             reference: self.reference,
             spec: self.spec,
@@ -152,7 +152,8 @@ impl StoredDataset {
             doi: self.doi,
             timestamp: self.timestamp,
             files,
-        })
+        };
+        Ok(Parsed::Source(locked, listed))
     }
 }
 
@@ -166,72 +167,13 @@ impl Lock {
     /// [`Lock::read`], which reads the lists a lock keeps beside it too.
     #[cfg(test)]
     pub(crate) fn parse(text: &str) -> Result<Lock, Error> {
-        Self::parse_in(text, None)
+        resolve(parse(text)?, None)
     }
 
     /// the lock `text` holds, with the file lists it keeps in [`lists::FOLDER`] below `root`
     /// read and checked.
     pub(crate) fn read(text: &str, root: &Path) -> Result<Lock, Error> {
-        Self::parse_in(text, Some(root))
-    }
-
-    fn parse_in(text: &str, root: Option<&Path>) -> Result<Lock, Error> {
-        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        if let Some(lock) = canonical::read(text, false).or_else(|| canonical::read(text, true)) {
-            return Ok(lock);
-        }
-        Self::parse_toml(text, root)
-    }
-
-    fn parse_toml(text: &str, root: Option<&Path>) -> Result<Lock, Error> {
-        match toml::from_str::<Stored>(text) {
-            Ok(stored) if stored.version == VERSION || stored.version == LISTED => {
-                let version = stored.version;
-                let mut datasets = stored
-                    .dataset
-                    .into_iter()
-                    .map(|dataset| dataset.into_locked(version, root))
-                    .collect::<Result<Vec<_>, _>>()?;
-                datasets.sort_by(|a, b| a.name.cmp(&b.name));
-                if let Some(pair) = datasets
-                    .windows(2)
-                    .find(|pair| pair[0].name == pair[1].name)
-                {
-                    return Err(Error::new(
-                        Kind::ProjectInvalid,
-                        format!("data.lock lists the dataset {} twice", pair[0].name),
-                    )
-                    .help(BROKEN));
-                }
-                for dataset in &mut datasets {
-                    dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
-                    if let Some(pair) = dataset
-                        .files
-                        .windows(2)
-                        .find(|pair| pair[0].path == pair[1].path)
-                    {
-                        return Err(Error::new(
-                            Kind::ProjectInvalid,
-                            format!("data.lock lists {} twice in {}", pair[0].path, dataset.name),
-                        )
-                        .help(BROKEN));
-                    }
-                    check_paths(dataset)?;
-                }
-                Ok(Lock { datasets })
-            }
-            Ok(stored) => Err(other_version(stored.version)),
-            Err(err) => match toml::from_str::<VersionOnly>(text) {
-                Ok(VersionOnly {
-                    version: Some(version),
-                }) if version != VERSION && version != LISTED => Err(other_version(version)),
-                _ => Err(Error::new(
-                    Kind::ProjectInvalid,
-                    format!("data.lock cannot be read: {}", err.message()),
-                )
-                .help(BROKEN)),
-            },
-        }
+        resolve(parse(text)?, Some(root))
     }
 
     /// the dataset named `name`, found by halving, since every lock keeps its datasets sorted by
@@ -247,15 +189,14 @@ impl Lock {
     /// the lock's text, the same bytes for the same contents. a dataset of more than
     /// [`lists::INLINE`] files names the list [`Lock::lists`] gives instead of its files.
     pub(crate) fn render(&self) -> String {
+        self.render_with(lists::inline())
+    }
+
+    /// [`Lock::render`], with a dataset of more than `inline` files kept in a list.
+    fn render_with(&self, inline: usize) -> String {
         let mut datasets: Vec<&Locked> = self.datasets.iter().collect();
         datasets.sort_by(|a, b| a.name.cmp(&b.name));
-        let inline = lists::inline();
-        let version = if datasets.iter().any(|dataset| dataset.files.len() > inline) {
-            LISTED
-        } else {
-            VERSION
-        };
-        let mut out = format!("version = {version}\n");
+        let mut out = format!("version = {VERSION}\n");
         for dataset in datasets {
             out.push_str("\n[[dataset]]\n");
             for (key, value) in [
@@ -319,8 +260,12 @@ impl Lock {
     /// the parts of every file list the lock keeps beside it, each with its path below the
     /// project and its text, as [`Lock::render`] names them.
     pub(crate) fn lists(&self) -> Vec<(String, String)> {
+        self.lists_with(lists::inline())
+    }
+
+    /// [`Lock::lists`], as [`Lock::render_with`] names them for `inline`.
+    fn lists_with(&self, inline: usize) -> Vec<(String, String)> {
         let mut parts = Vec::new();
-        let inline = lists::inline();
         for dataset in &self.datasets {
             if dataset.files.len() <= inline {
                 continue;
@@ -338,6 +283,88 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
     let mut sorted = files.to_vec();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
     sorted
+}
+
+/// the datasets the text of a lock gives, in name order: through the narrow reader when the text
+/// is in the writer's form, otherwise through the general TOML reader.
+fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    match canonical::read(text, false).or_else(|| canonical::read(text, true)) {
+        Some(parsed) => Ok(parsed),
+        None => parse_toml(text),
+    }
+}
+
+/// the datasets any valid TOML of the lock's format gives, sorted by name, each source's files
+/// sorted by path.
+fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
+    let stored = match toml::from_str::<Stored>(text) {
+        Ok(stored) if stored.version == VERSION => stored,
+        Ok(stored) => return Err(other_version(stored.version)),
+        Err(err) => {
+            return Err(match toml::from_str::<VersionOnly>(text) {
+                Ok(VersionOnly {
+                    version: Some(version),
+                }) if version != VERSION => other_version(version),
+                _ => broken(format!("data.lock cannot be read: {}", err.message())),
+            });
+        }
+    };
+    let mut parsed = stored
+        .dataset
+        .into_iter()
+        .map(StoredDataset::parsed)
+        .collect::<Result<Vec<_>, _>>()?;
+    parsed.sort_by(|a, b| a.name().cmp(b.name()));
+    if let Some(pair) = parsed
+        .windows(2)
+        .find(|pair| pair[0].name() == pair[1].name())
+    {
+        return Err(broken(format!(
+            "data.lock lists the dataset {} twice",
+            pair[0].name()
+        )));
+    }
+    for entry in &mut parsed {
+        let Parsed::Source(dataset, _) = entry;
+        dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
+        if let Some(pair) = dataset
+            .files
+            .windows(2)
+            .find(|pair| pair[0].path == pair[1].path)
+        {
+            return Err(broken(format!(
+                "data.lock lists {} twice in {}",
+                pair[0].path, dataset.name
+            )));
+        }
+        check_paths(dataset)?;
+    }
+    Ok(parsed)
+}
+
+/// the lock `parsed` gives, with each list it keeps below `root` read and checked.
+fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
+    let mut lock = Lock::default();
+    for entry in parsed {
+        match entry {
+            Parsed::Source(mut dataset, listed) => {
+                if let Some(listed) = listed {
+                    let Some(root) = root else {
+                        return Err(broken(format!(
+                            "data.lock keeps the files of {} in {}, which only a project can read",
+                            dataset.name,
+                            lists::FOLDER
+                        )));
+                    };
+                    dataset.files = lists::read(root, &dataset.name, &listed)?;
+                    check_paths(&dataset)?;
+                }
+                lock.datasets.push(dataset);
+            }
+        }
+    }
+    Ok(lock)
 }
 
 /// the hash of everything in a data.toml entry that decides what is downloaded. `copy` and
@@ -407,16 +434,23 @@ fn quoted(text: &str) -> String {
 fn other_version(version: u32) -> Error {
     let error = Error::new(
         Kind::ProjectInvalid,
-        format!(
-            "data.lock is in format {version}, and this fetchloom reads formats {VERSION} and {LISTED}"
-        ),
+        format!("data.lock is in format {version}, and this fetchloom reads format {VERSION}"),
     );
     // no fetchloom ever wrote an older format, so one is a broken file
-    if version > LISTED {
+    if version > VERSION {
         error.help("install a newer fetchloom, then run the same command again")
     } else {
         error.help(BROKEN)
     }
+}
+
+fn broken(message: String) -> Error {
+    Error::new(Kind::ProjectInvalid, message).help(BROKEN)
+}
+
+/// the hash in `sha256:` and 64 hex digits, as data.lock writes a hash of a list or a tree.
+fn prefixed(text: &str) -> Option<Sha256> {
+    text.strip_prefix("sha256:").and_then(Sha256::from_hex)
 }
 
 /// refuses a lock that would place a file outside its dataset's folder. fetchloom never writes
@@ -424,15 +458,11 @@ fn other_version(version: u32) -> Error {
 fn check_paths(dataset: &Locked) -> Result<(), Error> {
     for file in &dataset.files {
         if let Some(reason) = name::escapes(&file.path) {
-            return Err(Error::new(
-                Kind::ProjectInvalid,
-                format!(
-                    "data.lock lists {} in {}, which fetchloom refuses because {reason}",
-                    quoted(&file.path),
-                    dataset.name
-                ),
-            )
-            .help(BROKEN));
+            return Err(broken(format!(
+                "data.lock lists {} in {}, which fetchloom refuses because {reason}",
+                quoted(&file.path),
+                dataset.name
+            )));
         }
     }
     Ok(())
@@ -442,10 +472,20 @@ fn tree<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Sha256>, D:
     let Some(text) = Option::<String>::deserialize(deserializer)? else {
         return Ok(None);
     };
-    let digest = text.strip_prefix("sha256:").and_then(Sha256::from_hex);
-    digest
+    prefixed(&text)
         .map(Some)
         .ok_or_else(|| D::Error::custom("unpacks_to is sha256: and 64 hex digits"))
+}
+
+#[cfg(test)]
+impl Lock {
+    /// the datasets as a reader gives them when the lock lists every file in itself.
+    fn parsed(&self) -> Vec<Parsed> {
+        self.datasets
+            .iter()
+            .map(|dataset| Parsed::Source(dataset.clone(), None))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -559,16 +599,19 @@ mod tests {
     }
 
     #[test]
-    fn another_format_or_a_broken_file_is_refused_with_the_fix() {
-        let newer = Lock::parse("version = 3\n[[dataset]]\nwhatever = 1\n").unwrap_err();
-        assert_eq!(
-            newer.message,
-            "data.lock is in format 3, and this fetchloom reads formats 1 and 2"
-        );
-        assert_eq!(
-            newer.help.as_deref(),
-            Some("install a newer fetchloom, then run the same command again")
-        );
+    fn a_newer_format_asks_for_a_newer_fetchloom_and_zero_is_broken() {
+        for text in ["version = 2\n", "version = 2\n[[dataset]]\nwhatever = 1\n"] {
+            let newer = Lock::parse(text).unwrap_err();
+            assert_eq!(newer.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                newer.message,
+                "data.lock is in format 2, and this fetchloom reads format 1"
+            );
+            assert_eq!(
+                newer.help.as_deref(),
+                Some("install a newer fetchloom, then run the same command again")
+            );
+        }
         for text in ["version = 0\n", "version = 1\n[[dataset]]\nname = 3\n"] {
             let broken = Lock::parse(text).unwrap_err();
             assert_eq!(broken.kind, Kind::ProjectInvalid);
@@ -578,6 +621,34 @@ mod tests {
             BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
         );
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
+    }
+
+    /// a dataset of more files than data.lock lists in itself keeps them in parts beside it, in
+    /// the same format 1 as every other lock.
+    #[test]
+    fn a_version_1_lock_reads_a_big_dataset_from_its_parts() {
+        let root = tempfile::tempdir().unwrap();
+        let files = sorted(&sample().datasets[1].files);
+        let texts = lists::texts(&files);
+        let listed = lists::listed("iris", &files, &texts);
+        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+        for (part, text) in listed.parts.iter().zip(&texts) {
+            std::fs::write(root.path().join(part), lists::compress(text).unwrap()).unwrap();
+        }
+        let text = format!(
+            "version = 1\n\n[[dataset]]\nname = \"iris\"\nref = \"zenodo:3608990\"\nspec = \"sha256:11\"\nresolved = \"zenodo:3608990\"\nlocked = \"2026-10-27T17:30:00Z\"\nfiles_in = [\"{}\"]\nfile_count = 2\nfile_bytes = {}\nfiles_sha256 = \"sha256:{}\"\n",
+            listed.parts[0], listed.bytes, listed.sha256
+        );
+        let read = Lock::read(&text, root.path()).unwrap();
+        assert_eq!(read.datasets[0].files, files);
+        assert_eq!(read.render_with(1), text, "the writer keeps format 1");
+        let error = Lock::parse(&text).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert!(
+            error.message.contains("only a project can read"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

@@ -601,7 +601,7 @@ fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
     let output = run(&work, &["add", "s3://openneuro.org/ds000001/"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let lock = fs::read_to_string(work.join("data.lock"))?;
-    assert!(lock.starts_with("version = 2\n"), "{lock}");
+    assert!(lock.starts_with("version = 1\n"), "{lock}");
     assert!(lock.contains("file_count = 3\n"), "{lock}");
     let parts: Vec<_> = fs::read_dir(work.join("data.lock.d"))?
         .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
