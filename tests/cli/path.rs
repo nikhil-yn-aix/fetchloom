@@ -20,6 +20,11 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
         text(&file.stdout)?,
         format!("{}\n", folder.join("iris.csv").display())
     );
+    let document = json(&sandbox.run(&["--json", "path", "iris/iris.csv"])?)?;
+    assert_eq!(
+        document["result"],
+        serde_json::json!({ "path": folder.join("iris.csv") })
+    );
     let typo = sandbox.run(&["path", "irs"])?;
     assert_eq!(typo.status.code(), Some(2));
     assert!(

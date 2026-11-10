@@ -42,7 +42,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `get` | `folder`: absolute path, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, and nullable `locked_files`, an array of `path` and `size` records; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
-| `path` | absolute path string, for a dataset, file or subfolder |
+| `path` | `path`: the absolute path of the dataset, file or subfolder |
 | `status` | `project`: absolute path; eleven arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array; `unfinished_downloads`: downloads kept under `partial/` to continue later; `unfinished_bytes`: the disk space they take |
 | `cache gc` | `removed_objects`: removed object count; `removed_bytes`: their payload bytes; `kept_objects`: unneeded objects retained because they are less than a day old; `kept_bytes`: their payload bytes; `removed_leftovers`: removed partial or temporary file count; `removed_leftover_bytes`: the disk space they took; `not_removed`: failure records for paths that could not be removed or inspected for cleanup; `forgotten`: root paths of projects whose registration gc removed because their `data.toml` is gone; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs) |

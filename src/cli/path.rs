@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use super::args;
 use super::project::{Read, Waited, find, hold_until, ignore_data, known, net, sync_all};
 use super::sync::disk::Survey;
@@ -20,7 +22,14 @@ use crate::project::lock::{self, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Look;
 
-pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf, Error> {
+/// what `path --json` reports, as an object so it can grow.
+#[derive(Serialize)]
+pub(super) struct Report {
+    /// the absolute path of the dataset, or of the file or folder in it.
+    path: PathBuf,
+}
+
+pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let before = state_stamp(&project);
     let (_, manifest) = project.manifest()?;
@@ -97,7 +106,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<PathBuf,
     context.output.detail(
         "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
     );
-    Ok(path)
+    Ok(Report { path })
 }
 
 /// validates the answer against the same plan used to check readiness.

@@ -21,7 +21,7 @@ there are no command-specific options. [global options](README.md#global-options
 1. find the dataset in the project manifest.
 2. check whether the requested member can exist in the lock or a cached archive tree.
 3. if the dataset is not ready, sync the whole project and, in a git repository, add the data folder to `.gitignore`, as `sync` does.
-4. print its absolute location on stdout. JSON returns that location as a string in `result`.
+4. print its absolute location on stdout. JSON returns it as `result.path`.
 
 `-v` adds one line on stderr about where the bytes are: a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache. [placement](../concepts.md#placement) says when you get which.
 

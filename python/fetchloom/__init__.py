@@ -87,7 +87,7 @@ def path(
         arguments.append("--yes")
     if offline:
         arguments.append("--offline")
-    return Path(_run(arguments, project))
+    return Path(_run(arguments, project)["path"])
 
 
 def sync(

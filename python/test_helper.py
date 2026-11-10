@@ -16,7 +16,7 @@ class HelperOptions(unittest.TestCase):
         for command in ["path", "sync"]:
             for yes, offline in [(False, False), (True, False), (False, True), (True, True)]:
                 with self.subTest(command=command, yes=yes, offline=offline):
-                    result = "resolved" if command == "path" else {"project": "resolved"}
+                    result = {"path": "resolved"} if command == "path" else {"project": "resolved"}
                     response = subprocess.CompletedProcess(
                         [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
                     )
