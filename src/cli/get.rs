@@ -837,7 +837,9 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         context.settings.ask_above.value,
         &units::count(missing.len() as u64, "file", "files"),
         size,
+        Some((cache.root(), size)),
     )
+    .map(|_| ())
     .map_err(Error::unchanged)
 }
 

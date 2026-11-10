@@ -2993,3 +2993,38 @@ fn a_read_only_project_with_nothing_to_do_syncs() -> Result {
     );
     Ok(())
 }
+
+/// a sync whose downloads each fit on the cache's disk but together do not is told once, before
+/// any of them starts.
+#[test]
+fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
+    let sandbox = Sandbox::new()?;
+    // two different files, as the cache keeps identical ones once
+    let (one, two) = (vec![b'x'; 1024], vec![b'y'; 1024]);
+    let first = Server::start("/one.bin", vec![file(&one, "\"a\""), file(&one, "\"a\"")])?;
+    let second = Server::start("/two.bin", vec![file(&two, "\"b\""), file(&two, "\"b\"")])?;
+    for server in [&first, &second] {
+        let output = sandbox.run(&["add", &server.url])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let fresh = clone(&sandbox, "fresh")?;
+    let empty = sandbox.folder("empty-cache")?;
+    let output = sandbox
+        .command_in(&fresh, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &empty)
+        .env("FETCHLOOM_TEST_FREE", "1500")
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!(
+            "this sync needs at least 2.0 KiB on the disk holding the cache at {}, which has 1.5 KiB free",
+            empty.display()
+        )
+    );
+    assert_eq!(document["work"]["bytes_down"], 0);
+    assert!(!fresh.join("data").join("one").exists());
+    Ok(())
+}

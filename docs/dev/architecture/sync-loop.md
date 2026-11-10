@@ -79,7 +79,7 @@ placement rechecks files before destructive work, flushes copied payloads, then 
 
 ## pinned download admission
 
-every pinned download is validated before approval or transfer. pending pins retain one parsed URL and a small batch description; the full fetch and recovery values are reconstructed only when one of the `jobs * 2` scheduler slots admits the file. initial-host ordering, original result indexes, unknown-size approval, expired-link recovery and final batch publication share the download scheduler. retaining less data while large projects wait for their first responses bounds the memory cost of pending jobs.
+before preparing downloads, `Loop::ask_room` sums what placing lacks, the archives it lacks and each archive of unknown files once more, against `space::free` on the cache's disk, and asks once; a yes there approves every later download's size too. each download batch checks its own part in `confirm`, and a download of unknown size checks when its length arrives. every pinned download is validated before approval or transfer. pending pins retain one parsed URL and a small batch description; the full fetch and recovery values are reconstructed only when one of the `jobs * 2` scheduler slots admits the file. initial-host ordering, original result indexes, unknown-size approval, expired-link recovery and final batch publication share the download scheduler. retaining less data while large projects wait for their first responses bounds the memory cost of pending jobs.
 
 ## invariants and traps
 

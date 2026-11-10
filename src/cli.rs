@@ -683,13 +683,63 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
         started,
     )
 }
-/// asks before a large download, unless `--yes` already said yes. without a terminal to ask on,
-/// it stops and names the flag.
-fn confirm(output: &Output, yes: bool, above: u64, what: &str, bytes: u64) -> Result<(), Error> {
-    if bytes <= above {
-        return Ok(());
+/// asks before a large download, or one the disk holding the cache may lack room for, unless
+/// `--yes` already said yes. without a terminal to ask on, it stops and names the flag. `room` is
+/// the cache folder and the bytes the downloads need on its disk. says whether a person said yes
+/// to going on without room, which says yes to the size as well.
+fn confirm(
+    output: &Output,
+    yes: bool,
+    above: u64,
+    what: &str,
+    bytes: u64,
+    room: Option<(&std::path::Path, u64)>,
+) -> Result<bool, Error> {
+    if let Some((cache, needed)) = room
+        && !yes
+    {
+        let free = crate::space::free(cache);
+        if crate::space::short(needed, free).is_some() {
+            let doing = format!("downloading {what}");
+            ask_room(output, &doing, needed, free.unwrap_or_default(), cache)?;
+            return Ok(true);
+        }
     }
-    ask(output, yes, what, &units::size(bytes))
+    if bytes <= above {
+        return Ok(false);
+    }
+    ask(output, yes, what, &units::size(bytes)).map(|()| false)
+}
+
+/// asks whether to go on `doing` what needs at least `needed` bytes on the disk holding `cache`,
+/// which has `free`. a disk that compresses what it stores can hold more than it tells, so a
+/// person may say yes; without a terminal it stops and names the flag.
+fn ask_room(
+    output: &Output,
+    doing: &str,
+    needed: u64,
+    free: u64,
+    cache: &std::path::Path,
+) -> Result<(), Error> {
+    let (needs, has) = (units::size(needed), units::size(free));
+    let cancel = format!("{doing} ({needs})");
+    match output
+        .confirm(&format!(
+            "{doing} needs at least {needs} on the disk holding the cache, which has {has} free. go on anyway?"
+        ))
+        .map_err(|error| error.cancelling(&cancel))?
+    {
+        Some(true) => Ok(()),
+        Some(false) => Err(Error::new(Kind::Unconfirmed, format!("did not start {doing}")).cancelled(cancel)),
+        None => Err(Error::new(
+            Kind::Unconfirmed,
+            format!(
+                "{doing} needs at least {needs} on the disk holding the cache at {}, which has {has} free",
+                cache.display()
+            ),
+        )
+        .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores")),
+    }
 }
 
 /// asks whether to download `what`, which needs `size`, as [`confirm`] does.

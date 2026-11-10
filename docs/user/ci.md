@@ -29,7 +29,7 @@ steps:
 - after a change to `data.lock`, `restore-keys` brings back the last cache, so only the files that changed download.
 - `cache gc --now` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
 - `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI.
-- without `--yes`, a download larger than 1 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, fails the job with `unconfirmed`, exit 1, instead of starting.
+- without `--yes`, a download larger than 1 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, or one the cache's disk has no room for, fails the job with `unconfirmed`, exit 1, instead of starting.
 
 ## gitlab ci
 

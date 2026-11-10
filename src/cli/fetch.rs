@@ -161,11 +161,12 @@ impl Overall {
     }
 }
 
-/// the one answer a run's downloads share once a large download asks, and the size above which
-/// a download asks.
+/// the one answer a run's downloads share once a large download asks, the size above which a
+/// download asks, and the cache folder whose disk a download needs room on.
 struct Approval {
     answer: OnceLock<Result<(), Error>>,
     above: u64,
+    cache: Option<std::path::PathBuf>,
 }
 
 impl Approval {
@@ -173,7 +174,14 @@ impl Approval {
         Approval {
             answer: OnceLock::new(),
             above,
+            cache: None,
         }
+    }
+
+    /// also asks before a download the disk holding `cache` has no room for.
+    fn with_room(mut self, cache: &std::path::Path) -> Approval {
+        self.cache = Some(cache.to_path_buf());
+        self
     }
 }
 
@@ -231,16 +239,12 @@ impl<'a> Watch<'a> {
             .get_or_init(|| self.output.bar("Downloading", self.job.label.clone()))
     }
 
-    fn approve(&self, size: &str) -> Result<(), Error> {
+    /// the run's one answer, asking `question` when no download asked before.
+    fn approve(&self, question: impl FnOnce() -> Result<(), Error>) -> Result<(), Error> {
         if let Some(answer) = self.approval.answer.get() {
             return answer.clone();
         }
-        let decide = || {
-            self.approval
-                .answer
-                .get_or_init(|| super::ask(self.output, self.yes, &self.job.label, size))
-                .clone()
-        };
+        let decide = || self.approval.answer.get_or_init(question).clone();
         // a terminal question must not occupy a network worker while it waits for an answer.
         if tokio::runtime::Handle::try_current().is_ok_and(|handle| {
             handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
@@ -273,8 +277,18 @@ impl<'a> Watch<'a> {
             Event::Started { total, resumed, .. } => {
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {
-                    if left > self.approval.above {
-                        self.approve(&units::size(left))?;
+                    // a disk without room asks instead, and its question names the size too
+                    let free = self.approval.cache.as_deref().map(crate::space::free);
+                    if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
+                        && !self.yes
+                        && crate::space::short(left, free).is_some()
+                    {
+                        let doing = format!("downloading {}", self.job.label);
+                        let free = free.unwrap_or_default();
+                        self.approve(|| super::ask_room(self.output, &doing, left, free, cache))?;
+                    } else if left > self.approval.above {
+                        let size = units::size(left);
+                        self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
                     }
                     if let Some(total) = total
                         && !self.sized.swap(true, Ordering::Relaxed)
@@ -311,7 +325,7 @@ impl<'a> Watch<'a> {
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > self.approval.above {
                     let size = format!("more than {}", units::size(self.approval.above));
-                    self.approve(&size)?;
+                    self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
                     self.unbounded.store(false, Ordering::Relaxed);
                 }
             }
@@ -490,7 +504,8 @@ async fn run_each(
     let in_flight = context.settings.jobs.value * 2;
     let mut done = 0;
     // unknown source sizes share one answer, once headers or received bytes show a large file.
-    let approval = Arc::new(Approval::new(context.settings.ask_above.value));
+    let approval =
+        Arc::new(Approval::new(context.settings.ask_above.value).with_room(cache.root()));
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
     let held: Arc<[AtomicU64]> = std::iter::repeat_with(AtomicU64::default)

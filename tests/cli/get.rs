@@ -1221,3 +1221,40 @@ fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
     }
     Ok(())
 }
+
+/// a download bigger than the free space on the cache's disk is told before any byte moves, and
+/// `--yes` goes on anyway, as on a disk that compresses what it stores.
+#[test]
+fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 2048];
+    let server = Server::start(PATH, vec![file(&body, "\"v1\""), file(&body, "\"v1\"")])?;
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed");
+    assert_eq!(
+        document["errors"][0]["message"],
+        format!(
+            "downloading iris.csv needs at least 2.0 KiB on the disk holding the cache at {}, which has 1000 B free",
+            sandbox.cache().display()
+        )
+    );
+    assert!(
+        document["errors"][0]["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("FETCHLOOM_CACHE") && help.contains("--yes")),
+        "{}",
+        document["errors"][0]["help"]
+    );
+    assert_eq!(document["work"]["bytes_down"], 0);
+    let output = sandbox
+        .command(&["get", "--yes", &server.url])
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    Ok(())
+}

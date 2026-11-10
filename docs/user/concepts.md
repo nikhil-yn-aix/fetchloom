@@ -120,6 +120,8 @@ approval is required above 1 GiB, not at exactly 1 GiB. `FETCHLOOM_ASK_ABOVE`, o
 
 unknown sizes are checked per file, with at most one such question per batch. offline runs never ask for download approval.
 
+the disk holding the cache is checked too. when what a run is about to download needs more than that disk has free, counting each archive whose files are not known yet once more for unpacking, fetchloom asks before anything starts, or stops with `unconfirmed` and both numbers when no one can answer. a sync asks once for all its downloads, so parts that fit alone but not together are caught. `--yes` goes on anyway, as a disk that compresses what it stores can hold more than it tells. a file of unknown size is checked once its server states the length.
+
 `--yes` or `-y` answers yes to every question a person could be asked, never a [dataset search choice](commands/search.md#choosing-a-dataset). a question shows its default in capitals, as `[y/N]`: downloads and a project in your home folder default to no, saving a key you typed to yes. questions require interactive stdin and stderr. answer with y or yes, or n or no, then enter; enter alone takes the default, and any other answer, such as q, asks the question again. pipes, CI, [coding agents](ai-agents.md) and JSON mode cannot answer; an unapproved download fails with exit 1 and `unconfirmed`. a run asks before it places any file, so a no at the question says that nothing changed. the exception is a `sync` that has already written `data.lock`, which it does before it downloads what placing needs: that change stays, and the `Cancelled` line does not say nothing changed.
 
 ## interruptions

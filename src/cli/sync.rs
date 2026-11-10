@@ -65,6 +65,9 @@ pub(super) struct Loop<'a> {
     /// whether this run wrote data.lock, so a download cancelled later no longer left everything
     /// as it was.
     wrote_lock: AtomicBool,
+    /// whether a person said yes to going on though the cache's disk may lack room, which says
+    /// yes to the size of every download in the run as well.
+    roomy: AtomicBool,
 }
 
 impl<'a> Loop<'a> {
@@ -82,6 +85,7 @@ impl<'a> Loop<'a> {
             unpacked: Mutex::default(),
             told: None,
             wrote_lock: AtomicBool::new(false),
+            roomy: AtomicBool::new(false),
         }
     }
 
@@ -121,6 +125,7 @@ impl<'a> Loop<'a> {
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
         let mut placing = Placing::from_plan(self.project, manifest, plan, force, survey)?;
+        self.ask_room(&placing)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
             self.unpack_locked(lock, &unknown).await?;
@@ -491,14 +496,16 @@ impl<'a> Loop<'a> {
             .filter(|job| !in_cache(&self.cache, &job.fetch))
             .filter_map(|job| job.fetch.expect.size)
             .fold(0, u64::saturating_add);
-        super::confirm(
+        let roomy = super::confirm(
             &self.context.output,
-            self.context.yes,
+            self.yes(),
             self.context.settings.ask_above.value,
             &units::count(jobs.len() as u64, "file", "files"),
             size,
+            Some((self.cache.root(), size)),
         )
         .map_err(|error| self.as_left(error))?;
+        self.roomy.fetch_or(roomy, Ordering::Relaxed);
         let started = Instant::now();
         let fetched = fetch::all(self.context, &self.net, &self.cache, jobs)
             .await
@@ -520,6 +527,47 @@ impl<'a> Loop<'a> {
             error.message = format!("{}, so {left}", error.message);
         }
         error
+    }
+
+    /// whether downloads go on without asking: `--yes`, or a person already said yes to going on
+    /// without room, which covers their size too.
+    fn yes(&self) -> bool {
+        self.context.yes || self.roomy.load(Ordering::Relaxed)
+    }
+
+    /// asks once, before anything downloads, when the disk holding the cache may lack room for
+    /// all placing needs: the files and archives the cache lacks, and as much again for each
+    /// archive whose files are not known yet, which unpacking adds at the least. each download
+    /// asks for its own part too, which this covers when they only together pass the room.
+    fn ask_room(&self, placing: &Placing<'_>) -> Result<(), Error> {
+        if self.yes() || self.net.offline().enabled() {
+            return Ok(());
+        }
+        let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
+        let missing = placing.missing_as_is(&self.cache, &HashSet::new())?;
+        let mut needed = missing
+            .iter()
+            .filter(|(_, file)| lacks(file))
+            .map(|(_, file)| file.size)
+            .fold(0, u64::saturating_add);
+        for (_, file) in placing.unknown() {
+            let download = if lacks(file) { file.size } else { 0 };
+            needed = needed.saturating_add(download).saturating_add(file.size);
+        }
+        let free = crate::space::free(self.cache.root());
+        if crate::space::short(needed, free).is_none() {
+            return Ok(());
+        }
+        super::ask_room(
+            &self.context.output,
+            "this sync",
+            needed,
+            free.unwrap_or_default(),
+            self.cache.root(),
+        )
+        .map_err(|error| self.as_left(error))?;
+        self.roomy.store(true, Ordering::Relaxed);
+        Ok(())
     }
 
     /// `error`, saying that a cancel left everything as it was, unless this run wrote data.lock
@@ -566,14 +614,16 @@ impl<'a> Loop<'a> {
             .filter(|((_, file), _)| !available(file))
             .filter_map(|(_, description)| description.size)
             .fold(0, u64::saturating_add);
-        super::confirm(
+        let roomy = super::confirm(
             &self.context.output,
-            self.context.yes,
+            self.yes(),
             self.context.settings.ask_above.value,
             &units::count(files.len() as u64, "file", "files"),
             size,
+            Some((self.cache.root(), size)),
         )
         .map_err(|error| self.as_left(error))?;
+        self.roomy.fetch_or(roomy, Ordering::Relaxed);
         let started = Instant::now();
         let fetched = fetch::prepared(
             self.context,
