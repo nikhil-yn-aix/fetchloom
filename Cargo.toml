@@ -73,6 +73,12 @@ zstd = { version = "0.14", default-features = false }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["fs", "process"] }
 
+# a linux system or container without a certificate bundle still verifies https with mozilla's
+# roots. macos and windows ask their own verifier. both crates are already under reqwest
+[target.'cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))'.dependencies]
+rustls-native-certs = "0.8"
+webpki-root-certs = "1"
+
 # block cloning on other systems; linux uses rustix
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 reflink-copy = { version = "0.1", default-features = false }

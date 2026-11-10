@@ -403,6 +403,9 @@ fn leaks(name: &str) -> bool {
                 | "XDG_CACHE_HOME"
                 | "XDG_CONFIG_HOME"
                 | "NETRC"
+                // cargo sets both for what it runs, from where openssl keeps its certificates
+                | "SSL_CERT_FILE"
+                | "SSL_CERT_DIR"
                 | "COLORTERM"
                 | "COLORFGBG"
                 // what the terminal running the tests says about itself, so colors and symbols

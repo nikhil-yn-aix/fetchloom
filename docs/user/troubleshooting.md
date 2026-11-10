@@ -33,6 +33,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
 | `error: iris/iris.csv is not the file data.lock records` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here` | a large download needs a yes, and no one is at a terminal to answer | check the size, then pass `--yes` if you want it |
+| `error: SSL_CERT_FILE names /etc/ssl/corp.pem, which holds no certificates fetchloom can read` | the variable names a missing file, or one without PEM certificates | unset it to use the system's certificates, or set it to a file of PEM certificates |
 | `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `-o` |
 | `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
 

@@ -11,7 +11,7 @@ tier 1 means CI builds the program and runs its tests there. tier 2 means the re
 | system | cpu | tier | needs |
 |---|---|---|---|
 | windows 10, 11, server 2016 or later | x86_64, arm64 | 1 | nothing else |
-| linux, any distribution | x86_64, arm64 | 1 | kernel 3.2 or later. the binary is static, so no glibc version matters |
+| linux, any distribution | x86_64, arm64 | 1 | kernel 3.2 or later. the binary is static, so no glibc version matters, and a container without a certificate bundle still checks https against the mozilla roots fetchloom carries |
 | macos 11 or later | apple silicon | 1 | nothing else |
 | macos 11 or later | intel | 2 | nothing else |
 

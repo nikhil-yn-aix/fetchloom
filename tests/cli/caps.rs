@@ -348,3 +348,52 @@ fn one_thread_unpacks_places_and_verifies_a_project() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+/// a variable naming certificates fetchloom cannot read is said plainly, never overruled by other
+/// roots. macos and windows ask their own verifier, which does not read it.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn certificates_named_but_unreadable_are_a_usage_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    let empty = sandbox.work().join("none.pem");
+    std::fs::write(&empty, "")?;
+    let output = sandbox
+        .command(&["--json", "get", "http://127.0.0.1:9/table.csv"])
+        .env("SSL_CERT_FILE", &empty)
+        .output()?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "SSL_CERT_FILE names {}, which holds no certificates fetchloom can read",
+            empty.display()
+        )),
+        "{message}"
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "unset SSL_CERT_FILE to use the system's certificates, or set it to a file of PEM certificates"
+    );
+    Ok(())
+}
+
+/// a system without a certificate store, as in a container built without one, still downloads:
+/// fetchloom trusts the mozilla roots it carries.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn a_system_without_certificates_still_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = b"a,b\n1,2\n";
+    let server = Server::start("/table.csv", vec![file(body, "\"v1\"")])?;
+    // an empty variable has the system's store read as empty
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("SSL_CERT_FILE", "")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    Ok(())
+}

@@ -8,6 +8,8 @@ mod failure;
 mod headers;
 mod pace;
 mod rate;
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+mod roots;
 mod shown;
 
 use std::collections::HashMap;
@@ -34,6 +36,21 @@ use crate::work::Work;
 /// how long a connection may take to open, unless `FETCHLOOM_TIMEOUT` asks for longer.
 const CONNECT: Duration = Duration::from_secs(45);
 const REDIRECTS: usize = 10;
+/// an error's text with the causes beneath it, which some errors, such as reqwest's builder
+/// error, leave out of their own.
+fn with_causes(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut cause = err.source();
+    while let Some(current) = cause {
+        let said = current.to_string();
+        if !text.contains(&said) {
+            text = format!("{text}: {said}");
+        }
+        cause = current.source();
+    }
+    text
+}
+
 /// whether the logs already said a key cannot be sent, which they say once a run.
 static UNSENDABLE_TOLD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -261,10 +278,12 @@ impl Wire {
             // which hands back a cookie the archive then asks for. cookies live for this run only
             .cookie_provider(cookies.clone());
         let builder = if apart { builder.http1_only() } else { builder };
+        #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
+        let builder = builder.tls_certs_merge(roots::extra()?);
         builder.build().map_err(|err| {
             Error::new(
                 Kind::NetworkUnreachable,
-                format!("could not start the network client: {err}"),
+                format!("could not start the network client: {}", with_causes(&err)),
             )
         })
     }
@@ -688,6 +707,34 @@ mod tests {
         assert!(block_on(net.send_body(&url, |request| request)).is_ok());
         let heads = serving.join().unwrap();
         assert!(heads[1].contains("cookie: session=abc"), "{}", heads[1]);
+    }
+
+    #[test]
+    fn an_error_names_the_causes_its_own_text_leaves_out() {
+        #[derive(Debug)]
+        struct Layer(&'static str, Option<Box<Layer>>);
+        impl std::fmt::Display for Layer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Layer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|layer| layer as _)
+            }
+        }
+        let root = Layer("No CA certificates were loaded from the system", None);
+        let middle = Layer("builder error", Some(Box::new(root)));
+        assert_eq!(
+            with_causes(&middle),
+            "builder error: No CA certificates were loaded from the system"
+        );
+        // a cause the text already holds is not said twice
+        let echoed = Layer(
+            "could not connect: refused",
+            Some(Box::new(Layer("refused", None))),
+        );
+        assert_eq!(with_causes(&echoed), "could not connect: refused");
     }
 
     #[test]

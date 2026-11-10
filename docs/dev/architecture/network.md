@@ -20,6 +20,7 @@
 | [rate.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/rate.rs) | shared byte-rate budget | `Rate`, `read`, `throttle` |
 | [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) | typed-host trust, DNS and proxies | `Typed`, `Proxies`, `Resolver`, `is_private` |
 | [shown.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/shown.rs) | URL secret recognition and masking | `Shown`, `secret`, `mask_query` |
+| [roots.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/roots.rs) | TLS roots besides the system's: none where it has a store, mozilla's carried roots on a linux system without one, an error when `SSL_CERT_FILE` or `SSL_CERT_DIR` names unreadable ones | `extra` |
 | [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs), [hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | download storage and ordered hash queue | `PartialWriter`, `HashPipe` |
 
 ## how it works
