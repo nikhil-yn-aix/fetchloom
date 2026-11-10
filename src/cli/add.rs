@@ -191,6 +191,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     let dry_run = args.dry.dry_run;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
+    super::search::refuse_local(&args.link)?;
     let found = Project::find(&here);
     let starting = found.is_none();
     let project = found.unwrap_or_else(|| Project { root: here.clone() });

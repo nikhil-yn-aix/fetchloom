@@ -260,6 +260,7 @@ async fn one(
     args: &Get,
     mut link: String,
 ) -> Result<Report, Error> {
+    super::search::refuse_local(&link)?;
     if is_search(&link) {
         link = super::search::pick(context, net.as_ref(), &link, "get").await?;
     }

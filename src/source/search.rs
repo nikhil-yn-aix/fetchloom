@@ -175,11 +175,13 @@ fn exact(candidate: &Candidate, wanted: &str) -> bool {
     folded(&candidate.title) == wanted || folded(last) == wanted
 }
 
-/// words without a reference prefix are a search; bare DOIs still belong to the DOI resolver.
+/// words without a reference prefix are a search; bare DOIs still belong to the DOI resolver, and
+/// a path on this machine is never sent to a search site.
 pub(crate) fn is_search(text: &str) -> bool {
     !text.contains(':')
         && text.chars().any(char::is_alphanumeric)
         && super::doi::Doi::bare(text.trim()).is_none()
+        && !super::local::is_path(text)
 }
 
 fn query(base: &str, pairs: &[(&str, &str)]) -> Result<Url, Error> {

@@ -6,6 +6,7 @@ use super::{Context, args};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::output::Output;
+use crate::source::local;
 use crate::source::search::{self, Candidate, Catalog};
 use crate::units;
 
@@ -63,6 +64,33 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         ));
     }
     Ok(report)
+}
+
+/// refuses `text`, given to add or get, before any request when it names something on this
+/// machine: a path, or words that name a file or folder in the current folder.
+pub(super) fn refuse_local(text: &str) -> Result<(), Error> {
+    if local::is_path(text) {
+        return Err(local::refused(text));
+    }
+    let word = text.trim();
+    if !search::is_search(word) {
+        return Ok(());
+    }
+    let Some(what) = std::env::current_dir()
+        .ok()
+        .and_then(|here| local::here(word, &here))
+    else {
+        return Ok(());
+    };
+    Err(Error::new(
+        Kind::Usage,
+        format!("\"{word}\" is a {what} here, so fetchloom did not search for it"),
+    )
+    .help(format!(
+        "run `fetchloom add {}` to pin it, or `fetchloom search {}` to search",
+        super::shell_word(&format!("./{word}")),
+        super::shell_word(word)
+    )))
 }
 
 pub(super) async fn pick(
@@ -124,6 +152,15 @@ async fn find(
     if words.trim().is_empty() {
         return Err(Error::new(Kind::Usage, "there are no words to search for")
             .help("name what you are looking for, as in `fetchloom search iris`"));
+    }
+    if let Some(path) = words.split_whitespace().find(|word| local::is_path(word)) {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "\"{path}\" is a path on this machine, and fetchloom does not send paths to search sites"
+            ),
+        )
+        .help("search with words that describe the data, as in `fetchloom search iris`"));
     }
     if context.offline.enabled() {
         return Err(Error::new(

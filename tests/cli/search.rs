@@ -386,3 +386,59 @@ fn prefixed_references_and_bare_dois_are_not_search_words() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn a_local_path_or_name_is_refused_without_a_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    std::fs::write(sandbox.work().join("flowers.csv"), b"a,b\n")?;
+    std::fs::create_dir(sandbox.work().join("iris"))?;
+    let absolute = sandbox.work().join("flowers.csv").display().to_string();
+    for (args, code, kind) in [
+        (["add", absolute.as_str()], 10, "reference.invalid"),
+        (["add", "./flowers.csv"], 10, "reference.invalid"),
+        (["add", "~/flowers.csv"], 10, "reference.invalid"),
+        (["add", "C:\\data\\flowers.csv"], 10, "reference.invalid"),
+        (["add", "file:///etc/hostname"], 10, "reference.invalid"),
+        (["get", "./flowers.csv"], 10, "reference.invalid"),
+        (["search", "./flowers.csv"], 2, "usage"),
+        (["add", "iris"], 2, "usage"),
+        (["get", "flowers.csv"], 2, "usage"),
+    ] {
+        let output = catalogs
+            .command(&sandbox, &[&["--json"], &args[..]].concat())
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {document}");
+        assert_eq!(document["errors"][0]["kind"], kind, "{args:?}");
+        assert_eq!(document["work"]["requests"], 0, "{args:?}");
+    }
+    let path = json(
+        &catalogs
+            .command(&sandbox, &["--json", "add", "./flowers.csv"])
+            .output()?,
+    )?;
+    assert_eq!(
+        path["errors"][0]["message"],
+        "\"./flowers.csv\" is a path on this machine, and fetchloom downloads data from links, DOIs and ids"
+    );
+    let name = json(
+        &catalogs
+            .command(&sandbox, &["--json", "add", "iris"])
+            .output()?,
+    )?;
+    assert_eq!(
+        name["errors"][0]["message"],
+        "\"iris\" is a folder here, so fetchloom did not search for it"
+    );
+    assert_eq!(
+        name["errors"][0]["help"],
+        "run `fetchloom add ./iris` to pin it, or `fetchloom search iris` to search"
+    );
+    for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo] {
+        assert_eq!(catalog.requests(), Vec::<String>::new());
+    }
+    assert!(!sandbox.work().join("data.toml").exists());
+    assert!(!sandbox.work().join(".fetchloom").exists());
+    Ok(())
+}

@@ -11,6 +11,7 @@ mod dropbox;
 mod figshare;
 mod hf;
 mod kaggle;
+pub(crate) mod local;
 mod osf;
 #[cfg(test)]
 pub(crate) mod recorded;
@@ -201,6 +202,9 @@ impl Reference {
                 folder: None,
             })
         };
+        if local::is_path(text) {
+            return Err(local::refused(text));
+        }
         if let Some(doi) = doi::Doi::bare(text) {
             return whole(Reference::Doi(doi));
         }

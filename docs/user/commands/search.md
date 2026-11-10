@@ -43,6 +43,8 @@ fetchloom get "fashion mnist"
 
 a search must be the only argument, so quote a multi-word search. `get` takes several links, ids or DOIs, but no search words among them; extra bare words produce a usage error with a quote hint.
 
+paths and the names of local files never reach a catalog. a path such as `./flowers.csv`, `~/data` or `file:///data` is refused before any request: by `add` and `get` with `reference.invalid`, exit 10, and by `search` with `usage`, exit 2. a plain word that names a file or folder in the current folder, such as `iris` beside an `iris` folder, makes `add` and `get` exit 2 with `usage`; `fetchloom search iris` still searches for it.
+
 with interactive stdin and stderr, an arrow-key picker asks which dataset you mean, in the same columns, and its last line says how to see more matches. up/down or j/k moves; enter selects the current row; 1-9 selects a numbered row. q or esc cancels with exit 2 and `usage`; ctrl-c exits 130. either way stderr shows `Cancelled the choice of a dataset, so nothing changed`, not an error. `--yes` approves downloads but never selects a dataset.
 
 without an interactive terminal, or with `--json`, fetchloom refuses to choose even a single match. it exits 10 with `reference.ambiguous`, lists candidates in error details and preserves them in `result.candidates`. rerun with the intended canonical reference. a successful `add` stores that reference in `data.toml`, not the search words.

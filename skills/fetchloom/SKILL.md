@@ -31,6 +31,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 - pass `--json`. stdout is then one JSON document, with no colors and no questions, whatever the terminal.
 - project commands look for `data.toml` from the current folder up to the top of its git repository, never above it. to use a project above the repository, name its folder with `-C <folder>`.
 - plain words given to `add` or `get` are a search. without a terminal fetchloom does not guess: it exits 10 with `reference.ambiguous` and lists `result.candidates`. pick one and run again with its `reference`.
+- a path such as `./x.csv`, `~/x` or `file:///x` is never searched or fetched: it exits 10 with `reference.invalid`, and plain words that name a file or folder in the current folder exit 2 with `usage`. fetchloom pins only data it can download again, so ask the user for the link, DOI or id where the data is published.
 - a download over 1 GiB, or the size the user set in `FETCHLOOM_ASK_ABOVE`, stops with exit 1 and `unconfirmed`. ask the user before adding `--yes`; it approves the size, never a choice of dataset. do not raise `FETCHLOOM_ASK_ABOVE` to avoid asking.
 - never put a token in data.toml, code or a command you show. fetchloom reads keys the source's own tools saved; if none exists, ask the user to run `fetchloom auth login <source>` in their terminal.
 - `get` checks every target in an output folder before removing earlier versions; a later conflict leaves earlier files in place.
