@@ -12,6 +12,8 @@ a terminal is a window where you type a command and press enter to run it.
 
 type each command below on its own line and press enter after it.
 
+with a screen reader, run `export TERM=dumb` in that terminal first, or `$env:TERM = 'dumb'` in powershell. fetchloom then writes plain lines: no colors, no redrawn progress bars, and ` - ` in place of symbols such as `·`. it also asks no questions, so a download over 1 GiB needs `--yes`, and plain words such as `iris` list the matching datasets, to add by their id, instead of opening a list to move through. `-q` keeps only answers, warnings and errors, `NO_COLOR=1` turns off colors alone, and `--json` gives one document for a script.
+
 ## install
 
 no release has been published yet, so the one-line installers and `pip install fetchloom` do not work. until the first release, build fetchloom from its source code. you do this once and it takes a few minutes.
