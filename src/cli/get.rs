@@ -409,7 +409,10 @@ async fn resolve_all(
             }
         };
         engine::tell_raw(&context.output, link, &parsed.reference);
-        net.trust(parsed.reference.written_host());
+        // a list comes from a file anyone could have written, as data.toml does
+        if index < args.links.len() {
+            net.trust(parsed.reference.written_host());
+        }
         if !engine::resolves_locally(&parsed.reference) {
             asked.push(parsed.reference.shown());
         }

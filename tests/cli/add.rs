@@ -164,6 +164,7 @@ fn a_second_project_adding_the_same_link_moves_no_body() -> Result {
 fn duplicate_add_chooses_the_entry_with_matching_settings() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, (0..4).map(|_| file(IRIS, "\"v1\"")).collect())?;
+    sandbox.allow(&server.url);
     let manifest = format!(
         "[datasets.a-extracted]\nref = \"{url}\"\n\n[datasets.b-selected]\nref = \"{url}\"\nextract = false\nselect = \"*.csv\"\n\n[datasets.c-excluded]\nref = \"{url}\"\nextract = false\nexclude = \"ignored.*\"\n\n[datasets.z-packed]\nref = \"{url}\"\nextract = false\n",
         url = server.url

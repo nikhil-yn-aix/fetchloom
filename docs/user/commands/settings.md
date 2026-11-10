@@ -38,7 +38,7 @@ the [environment](../reference/environment.md) page explains each setting. `thre
 
 `settings` needs no project, downloads nothing and changes nothing. a bad value in a variable or in the settings file stops it as it stops every named command, so it also checks the settings file.
 
-JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for the cache folder and the split mode, and null for no rate cap or no cache folder. `origin` is `environment`, `file`, `machine` or `default`. `result.machine` holds `processors`, `memory`, the bytes this machine has available, read on linux only and null elsewhere, and `open_files`, the most files a run may hold open or null where the system sets no limit. `result.file` holds `path`, null when there is no folder for a settings file, and `found`.
+JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records. `value` is a number for counts, bytes and seconds, text for the cache folder and the split mode, a list of text for `allowed_origins`, and null for no rate cap or no cache folder. `origin` is `environment`, `file`, `machine` or `default`. `result.machine` holds `processors`, `memory`, the bytes this machine has available, read on linux only and null elsewhere, and `open_files`, the most files a run may hold open or null where the system sets no limit. `result.file` holds `path`, null when there is no folder for a settings file, and `found`.
 
 ## exit codes
 

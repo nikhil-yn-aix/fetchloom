@@ -144,6 +144,23 @@ fn rows(context: &Context) -> Vec<Shown> {
         settings.archive_ratio.value,
         settings.archive_ratio.origin,
     ));
+    let origins: Vec<String> = settings
+        .allowed_origins
+        .value
+        .iter()
+        .map(url::Origin::ascii_serialization)
+        .collect();
+    shown.push(Shown {
+        name: "allowed_origins",
+        said: if origins.is_empty() {
+            "none".to_owned()
+        } else {
+            origins.join(", ")
+        },
+        value: json!(origins),
+        origin: settings.allowed_origins.origin,
+        variable: crate::settings::variable("allowed_origins"),
+    });
     shown.extend(variables(context));
     shown
 }

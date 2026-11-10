@@ -935,6 +935,9 @@ fn several_links_land_in_folders_of_their_own_inside_the_output() -> Result {
 fn an_input_file_lists_links_and_skips_blank_lines_and_comments() -> Result {
     let sandbox = Sandbox::new()?;
     let (iris, wine) = two_files()?;
+    // links in a list are not typed on the command line, so their servers must be allowed
+    sandbox.allow(&iris.url);
+    sandbox.allow(&wine.url);
     let list = format!(
         "# measurements to compare\r\n\r\n{}\n   {}   \n# done\n",
         iris.url, wine.url
@@ -966,6 +969,8 @@ fn an_input_file_lists_links_and_skips_blank_lines_and_comments() -> Result {
 fn a_dash_reads_the_links_from_stdin() -> Result {
     let sandbox = Sandbox::new()?;
     let (iris, wine) = two_files()?;
+    sandbox.allow(&iris.url);
+    sandbox.allow(&wine.url);
     let mut child = sandbox
         .command(&["get", "--input-file", "-"])
         .stdin(Stdio::piped())
@@ -1209,6 +1214,7 @@ fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
                 reply("304 Not Modified", &[("ETag", "\"v1\"")], b""),
             ],
         )?;
+        sandbox.allow(&first.url);
         let second = Server::start(
             "/data.tsv",
             vec![
@@ -1216,6 +1222,7 @@ fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
                 reply("304 Not Modified", &[("ETag", "\"w1\"")], b""),
             ],
         )?;
+        sandbox.allow(&second.url);
         fs::write(
             sandbox.work().join("links.txt"),
             format!("{}\n{}\n", first.url, second.url),

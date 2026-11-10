@@ -317,7 +317,10 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     )
-    .help("if you trust that host, give its link to fetchloom yourself, on the command line or as ref in data.toml")
+    .help(format!(
+        "if you trust that server, give its link on the command line, or add {} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS",
+        url.origin().ascii_serialization()
+    ))
 }
 
 pub(super) fn interrupted(url: &Url) -> Error {

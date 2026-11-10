@@ -13,6 +13,7 @@ const PATH: &str = "/files/iris.csv";
 /// cold cache. the server's first response serves `add`, the second answers the dead link and
 /// the third serves the link the source lists now.
 fn moved(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let lock = sandbox.work().join("data.lock");
@@ -97,10 +98,12 @@ fn bytes_found_elsewhere_must_match_the_lock() -> Result {
 fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
     let sandbox = Sandbox::new()?;
     let iris = Server::start(PATH, vec![file(IRIS, "\"v1\""), gone()])?;
+    sandbox.allow(&iris.url);
     let cows = Server::start(
         "/files/cows.csv",
         vec![file(b"cow,sound\nbess,moo\n", "\"c1\""), gone()],
     )?;
+    sandbox.allow(&cows.url);
     for server in [&iris, &cows] {
         let added = sandbox.run(&["add", &server.url])?;
         assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);

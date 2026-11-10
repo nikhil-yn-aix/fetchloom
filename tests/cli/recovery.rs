@@ -78,6 +78,7 @@ fn a_broken_link_in_the_lock_is_pinned_again_by_an_upgrade() -> Result {
         "/iris.csv",
         vec![file(b"iris", "\"v1\""), file(b"iris", "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
     let clone = sandbox.folder("clone")?;
     fs::copy(sandbox.work().join("data.toml"), clone.join("data.toml"))?;
@@ -123,6 +124,7 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
         "/iris.csv",
         vec![file(b"iris\n", "\"v1\""), file(b"iris, again\n", "\"v2\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let state = sandbox.work().join(".fetchloom").join("state");
@@ -169,6 +171,7 @@ fn a_replacement_cut_off_before_the_state_was_written_is_taken_as_placed() -> Re
 fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
     let sandbox = Sandbox::new()?;
     let original = Server::start("/iris.csv", vec![file(b"iris", "\"v1\"")])?;
+    sandbox.allow(&original.url);
     assert!(sandbox.run(&["add", &original.url])?.status.success());
     let locked = fs::read_to_string(sandbox.work().join("data.lock"))?;
     let (_, dataset) = locked.split_once("[[dataset]]").ok_or("missing dataset")?;
@@ -190,6 +193,7 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
             }
         };
         let server = Server::start("/iris.csv", vec![response(), response()])?;
+        sandbox.allow(&server.url);
         let name = format!("d{index:02}");
         write!(manifest, "[datasets.{name}]\nref = \"{}\"\n", original.url)?;
         let entry = dataset

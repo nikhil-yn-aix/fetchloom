@@ -162,6 +162,7 @@ impl Context {
         };
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
+            .with_allowed_origins(&self.settings.allowed_origins.value)
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value)

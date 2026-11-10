@@ -19,6 +19,7 @@ fn names_alias(sandbox: &Sandbox, original: &str, other: &str) -> Result<bool> {
 }
 
 fn copy_iris(sandbox: &Sandbox, server: &Server) -> Result {
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -350,6 +351,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let second = same_second(&sandbox.work())?;
@@ -403,6 +405,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
 fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -513,7 +516,9 @@ fn files_edited_while_a_download_runs_are_kept() -> Result {
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V2, "\"v2\""), slow],
     )?;
+    sandbox.allow(&iris.url);
     let cows = Server::start("/files/cows.csv", vec![file(b"cow\nbess\n", "\"c1\"")])?;
+    sandbox.allow(&cows.url);
     for server in [&iris, &cows] {
         let added = sandbox.run(&["add", &server.url])?;
         assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
@@ -597,6 +602,7 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     // the state the first sync writes must be newer than the file, even on a coarse clock
@@ -765,6 +771,7 @@ fn shared(sandbox: &Sandbox, server: &Server) -> Result<Option<std::path::PathBu
     if !sandbox.links()?.hardlink {
         return Ok(None);
     }
+    sandbox.allow(&server.url);
     let added = sandbox
         .command(&["add", &server.url])
         .env("OneDrive", sandbox.work())
@@ -950,6 +957,7 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_size() -> 
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     link_iris(&sandbox, &sandbox.work())?;
@@ -988,6 +996,7 @@ fn a_new_project_gets_the_locked_bytes_after_a_link_elsewhere_changed_them_in_pl
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     link_iris(&sandbox, &sandbox.work())?;
@@ -1393,6 +1402,7 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
 fn sync_reports_zero_byte_writable_copies_in_a_synced_folder() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/empty.csv", vec![file(b"", "\"empty\"")])?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.empty]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -1691,6 +1701,7 @@ fn a_link_that_still_holds_the_locked_bytes_is_kept_after_a_mark() -> Result {
         "/files/iris.csv",
         vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     let added = sandbox
         .command(&["add", &server.url])
         .env("OneDrive", sandbox.work())
@@ -1935,6 +1946,7 @@ fn force_replaces_a_file_where_a_dataset_folder_belongs() -> Result {
 /// a project that placed iris.csv, its data.lock, and that lock as it is and with iris.csv made a
 /// folder holding the same file.
 fn reshaped(sandbox: &Sandbox, server: &Server) -> Result<(std::path::PathBuf, String, String)> {
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let lock = sandbox.work().join("data.lock");
@@ -2109,6 +2121,7 @@ fn the_counters_tell_files_placed_from_the_cache() -> Result {
 fn status_says_it_compared_sizes_and_times() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -2138,6 +2151,7 @@ fn status_says_it_compared_sizes_and_times() -> Result {
 /// changed in place keeping its size and time, as a failing disk or a tool that restores times
 /// leaves it.
 fn quietly_changed_copy(sandbox: &Sandbox, server: &Server) -> Result<std::path::PathBuf> {
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = \"{}\"\ncopy = true\n", server.url),

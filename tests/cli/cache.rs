@@ -635,6 +635,7 @@ fn check_unreadable_change_marks(mode: Option<u32>) -> Result {
         "/good.bin",
         vec![file(b"good", "\"v1\""), file(b"good", "\"v1\"")],
     )?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.sample]\nref = \"{}\"\ncopy = true\n", server.url),
@@ -746,6 +747,7 @@ fn unreadable_change_marks_stop_a_settled_sync() -> Result {
     }
     let sandbox = Sandbox::new()?;
     let server = Server::start("/good.bin", vec![file(b"good", "\"v1\"")])?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.sample]\nref = \"{}\"\n", server.url),

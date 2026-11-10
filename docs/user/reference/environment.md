@@ -8,7 +8,7 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings, and the allowed origins, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 | variable | effect |
 |---|---|
@@ -24,6 +24,7 @@ $env:FETCHLOOM_RATE = '2.5M'
 | `FETCHLOOM_ARCHIVE_FILES` | integer from 1 to 1,000,000,000,000; the most entries, files and folders, one archive may unpack to. unset or empty means 10,000,000 |
 | `FETCHLOOM_ARCHIVE_SIZE` | a size such as `16T`, with the units of `FETCHLOOM_RATE`; the most bytes one archive may unpack to. unset or empty means 16 TiB |
 | `FETCHLOOM_ARCHIVE_RATIO` | integer from 1 to 1,000,000,000; the most bytes one archive may unpack to for each compressed byte read, counted once 4 MiB are out. unset or empty means 1000, which nearly all zip data stays under while compression bombs pass it. these three guard against archives built to fill a disk, so only this environment and the settings file move them, never `data.toml`. an archive past one stops with `source.invalid`, exit 10, naming it |
+| `FETCHLOOM_ALLOWED_ORIGINS` | origins on this machine or its network that a host written in data.toml, data.lock or a `get -i` list may reach, separated by commas, such as `http://lab.local:8080,http://10.0.0.5:9000`. each is a scheme, a host and a port when it is not the usual one, without a path; another port or scheme on that host stays refused. unset or empty allows none. such a host on a private, loopback or link-local address is otherwise refused with `network.refused`, exit 20, before any request, since a cloned project could point it at your network; a link typed on the command line may reach one for that run |
 | `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
@@ -75,9 +76,10 @@ host_jobs = 8
 timeout = 120
 ask_above = "50G"
 memory = "8G"
+allowed_origins = ["http://lab.local:8080"]
 ```
 
-the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size` and `archive_ratio`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
+the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size`, `archive_ratio` and `allowed_origins`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes; `allowed_origins` also takes a list of text. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
 
 each value comes from the first of these that sets it: its variable, the settings file, this machine, fetchloom's default. so `FETCHLOOM_JOBS=4 fetchloom sync` changes one run without editing the file. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from. the other variables on this page have no key in the file.
 

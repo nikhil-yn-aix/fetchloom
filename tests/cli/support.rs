@@ -25,6 +25,9 @@ pub(crate) struct Sandbox {
     /// the folder as fetchloom sees it. unix resolves links in a working folder, as getcwd does,
     /// so a temporary folder reached through a link shows by its real path.
     root: PathBuf,
+    /// the origins of servers on this machine that data.toml, data.lock or a list of links may
+    /// name, as a person lists them in `allowed_origins`.
+    allowed: Mutex<Vec<String>>,
     /// removes the folder when the sandbox goes.
     _folder: tempfile::TempDir,
 }
@@ -63,8 +66,22 @@ impl Sandbox {
         }
         Ok(Sandbox {
             root,
+            allowed: Mutex::default(),
             _folder: folder,
         })
+    }
+
+    /// lets every later command reach the server `url` is on when data.toml, data.lock or a list
+    /// of links names it, through the `allowed_origins` setting.
+    pub(crate) fn allow(&self, url: &str) {
+        let origin = url.splitn(4, '/').take(3).collect::<Vec<_>>().join("/");
+        let mut allowed = self
+            .allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !allowed.contains(&origin) {
+            allowed.push(origin);
+        }
     }
 
     pub(crate) fn work(&self) -> PathBuf {
@@ -163,6 +180,13 @@ impl Sandbox {
             .env("LOCALAPPDATA", &home)
             // a test never reads or writes the credential store of the machine running it
             .env("FETCHLOOM_KEYRING", "0");
+        let allowed = self
+            .allowed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !allowed.is_empty() {
+            command.env("FETCHLOOM_ALLOWED_ORIGINS", allowed.join(","));
+        }
         command
     }
 

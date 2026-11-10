@@ -19,14 +19,13 @@ use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::Net;
 use crate::output::Output;
 use crate::plan;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
-use crate::source::{Listing, Reference};
+use crate::source::Listing;
 use crate::units;
 
 /// what a project command did, or with `--dry-run` would do, as `--json` prints it.
@@ -134,12 +133,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         return preview_sync(context, &project, &manifest, read, &seen, &args).await;
     }
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(
-        context,
-        &project,
-        Arc::new(net(context, &manifest)),
-        open_cache()?,
-    );
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
     let Outcome {
         lock_changed,
         pins,
@@ -295,12 +289,7 @@ async fn preview_sync(
     args: &args::Sync,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(
-        context,
-        project,
-        Arc::new(net(context, manifest)),
-        peek_cache()?,
-    );
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
     let outcome = preview_all(
         &work,
         manifest,
@@ -352,12 +341,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     if args.dry.dry_run {
         return preview_lock(context, &project, &manifest, old, &upgrade).await;
     }
-    let work = Loop::new(
-        context,
-        &project,
-        Arc::new(net(context, &manifest)),
-        open_cache()?,
-    );
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
     let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
     // a stop asked while the datasets were resolved leaves data.lock as it was
     context.stop.check()?;
@@ -403,12 +387,7 @@ async fn preview_lock(
     old: Option<Lock>,
     upgrade: &Upgrade,
 ) -> Result<Report, Error> {
-    let work = Loop::new(
-        context,
-        project,
-        Arc::new(net(context, manifest)),
-        peek_cache()?,
-    );
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
     let dry = work.relock_dry(manifest, old, upgrade, None).await?;
     let output = &context.output;
     let changed = !dry.before.holds(&dry.lock);
@@ -829,24 +808,13 @@ pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<()
     )
 }
 
-/// the network, trusting every host data.toml names, since a person wrote them.
-pub(super) fn net(context: &Context, manifest: &Manifest) -> Net {
-    let net = context.net();
-    net.trust(manifest.datasets.values().filter_map(|entry| {
-        Reference::parse(&entry.reference)
-            .ok()?
-            .reference
-            .written_host()
-    }));
-    net
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::cache::Cache;
     use crate::output::{Level, Output, Style};
     use crate::project::manifest;
+    use crate::source::Reference;
     use crate::source::recorded::block_on;
 
     pub(crate) fn waiting_project() -> (tempfile::TempDir, Project, Context) {

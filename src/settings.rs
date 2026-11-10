@@ -38,7 +38,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 11] = [
+const KEYS: [(&str, &str); 12] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -50,7 +50,11 @@ const KEYS: [(&str, &str); 11] = [
     ("archive_files", "FETCHLOOM_ARCHIVE_FILES"),
     ("archive_size", "FETCHLOOM_ARCHIVE_SIZE"),
     ("archive_ratio", "FETCHLOOM_ARCHIVE_RATIO"),
+    ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
 ];
+/// the keys that hold a list: an array of text in the settings file, text separated by commas in
+/// a variable.
+const LISTS: [&str; 1] = ["allowed_origins"];
 
 /// where a setting's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -207,6 +211,18 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, String)>, Error> {
             let text = match value {
                 toml::Value::String(text) => text,
                 toml::Value::Integer(number) => number.to_string(),
+                toml::Value::Array(items) if LISTS.contains(&key.as_str()) => items
+                    .into_iter()
+                    .map(|item| match item {
+                        toml::Value::String(text) => Ok(text),
+                        other => Err(invalid(format!(
+                            "{key} in the settings file {} holds a {}, not text in quotes",
+                            path.display(),
+                            other.type_str()
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join(","),
                 other => {
                     return Err(invalid(format!(
                         "{key} in the settings file {} is a {}, not a whole number or text in quotes",
@@ -240,6 +256,9 @@ pub(crate) struct Settings {
     pub(crate) archive_size: Set<u64>,
     /// the most bytes one archive may unpack to for each compressed byte.
     pub(crate) archive_ratio: Set<u64>,
+    /// the origins, such as `http://lab.local:8080`, that may be on this machine or its network
+    /// though only data.toml or data.lock names them.
+    pub(crate) allowed_origins: Set<Vec<url::Origin>>,
 }
 
 impl Settings {
@@ -265,6 +284,7 @@ impl Settings {
             archive_files: Set::default(crate::archive::Limits::default().members),
             archive_size: Set::default(crate::archive::Limits::default().bytes),
             archive_ratio: Set::default(crate::archive::Limits::default().ratio),
+            allowed_origins: Set::default(Vec::new()),
             memory,
         }
     }
@@ -306,6 +326,7 @@ impl Settings {
                 1..=1_000_000_000,
                 defaults.archive_ratio,
             )?,
+            allowed_origins: origins(&given, "allowed_origins")?,
             memory,
             file,
         })
@@ -438,6 +459,47 @@ fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Err
                 units::size(default.value)
             ))
         })
+}
+
+/// the origins `key` lists, separated by commas: each a scheme, a host and a port when it is not
+/// the usual one, without a path. none when it is unset or empty.
+fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error> {
+    let Some((text, origin, named)) = given.get(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let mut origins = Vec::new();
+    for entry in text
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let url = url::Url::parse(entry).ok().filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some_and(|host| !host.is_empty())
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+        });
+        let Some(url) = url else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{entry}\", which is not an origin such as http://lab.local:8080"
+                ),
+            )
+            .help(format!(
+                "{} to allow none, or list origins as a scheme, a host and a port when it is not the usual one, such as http://lab.local:8080, separated by commas",
+                undo(origin, key)
+            )));
+        };
+        origins.push(url.origin());
+    }
+    Ok(Set {
+        value: origins,
+        origin,
+    })
 }
 
 /// the whole seconds `key` holds, within `range`, or `default`.
@@ -752,5 +814,68 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn allowed_origins_are_exact_origins_from_the_environment_or_the_file() {
+        let shown = |settings: &Settings| -> Vec<String> {
+            settings
+                .allowed_origins
+                .value
+                .iter()
+                .map(url::Origin::ascii_serialization)
+                .collect()
+        };
+        assert_eq!(
+            read(&[], None).unwrap().allowed_origins,
+            Set::default(vec![])
+        );
+        let set = read(
+            &[(
+                "FETCHLOOM_ALLOWED_ORIGINS",
+                " http://LAB.local:8080, https://10.0.0.5:443/ ,",
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(shown(&set), ["http://lab.local:8080", "https://10.0.0.5"]);
+        assert_eq!(set.allowed_origins.origin, Origin::Environment);
+        let file = file("allowed_origins = [\"http://lab.local:8080\", \"http://[::1]:9000\"]\n");
+        let set = Settings::read(&env(&[]), file.unwrap(), machine(None)).unwrap();
+        assert_eq!(shown(&set), ["http://lab.local:8080", "http://[::1]:9000"]);
+        assert_eq!(set.allowed_origins.origin, Origin::File);
+        for entry in [
+            "lab.local:8080",
+            "http://lab.local:8080/data",
+            "ftp://lab.local",
+            "http://ada:secret@lab.local",
+            "http://lab.local/?all=1",
+        ] {
+            let error = read(&[("FETCHLOOM_ALLOWED_ORIGINS", entry)], None).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{entry}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "FETCHLOOM_ALLOWED_ORIGINS holds \"{entry}\", which is not an origin such as http://lab.local:8080"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "unset FETCHLOOM_ALLOWED_ORIGINS to allow none, or list origins as a scheme, a host and a port when it is not the usual one, such as http://lab.local:8080, separated by commas"
+                )
+            );
+        }
+        let wrong = self::file("allowed_origins = [8080]\n").unwrap_err();
+        assert_eq!(
+            wrong.message,
+            "allowed_origins in the settings file /home/ada/.config/fetchloom/settings.toml holds a integer, not text in quotes"
+        );
+        let elsewhere = self::file("jobs = [32]\n").unwrap_err();
+        assert!(
+            elsewhere.message.contains("is a array"),
+            "{}",
+            elsewhere.message
+        );
     }
 }

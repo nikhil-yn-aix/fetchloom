@@ -377,9 +377,11 @@ impl Net {
         self.typed.add(url);
     }
 
-    /// trusts the hosts data.toml names, since a person wrote them too.
-    pub(crate) fn trust(&self, manifest_hosts: impl IntoIterator<Item = String>) {
-        for host in manifest_hosts {
+    /// trusts hosts a person typed on the command line, such as a dataverse install on a
+    /// university network. hosts in data.toml get no trust of their own: a cloned project could
+    /// point them at this machine's network, so only `allowed_origins` lets them reach it.
+    pub(crate) fn trust(&self, typed_hosts: impl IntoIterator<Item = String>) {
+        for host in typed_hosts {
             self.typed.add_host(&host);
         }
     }

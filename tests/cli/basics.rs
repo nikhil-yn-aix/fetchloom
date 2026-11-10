@@ -751,6 +751,7 @@ fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
             crate::support::file(b"a,b\n1,2\n", "\"v1\""),
         ],
     )?;
+    sandbox.allow(&server.url);
     let fetched = text(&sandbox.run(&["get", &server.url, "-o", "fetched"])?.stderr)?;
     assert!(
         fetched.contains("Fetched iris.csv into fetched · linked to the cache\n"),

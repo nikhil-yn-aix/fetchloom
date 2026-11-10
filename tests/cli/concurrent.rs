@@ -22,6 +22,7 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
     slow.push(Part::Wait(held));
     slow.push(Part::Bytes(IRIS.to_vec()));
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), slow])?;
+    sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let clone = sandbox.folder("clone")?;
@@ -193,7 +194,9 @@ fn shared_cache_syncs(overlapping: bool, warm: bool) -> Result {
         response.extend(file(body, "\"v1\""));
         let mut responses = vec![response];
         responses.extend((1..processes).map(|_| file(body, "\"v1\"")));
-        servers.push(Server::start(&format!("/part{index}.csv"), responses)?);
+        let server = Server::start(&format!("/part{index}.csv"), responses)?;
+        sandbox.allow(&server.url);
+        servers.push(server);
         if warm {
             let digest = sha256(body);
             let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);

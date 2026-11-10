@@ -95,6 +95,63 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
 }
 
 #[test]
+fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    let origin = server.url.trim_end_matches(PATH).to_owned();
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.local]\nref = \"{}\"\n", server.url),
+    )?;
+    // a cloned project names a server on this machine, allowed nowhere or on another port
+    for allowed in ["", "http://127.0.0.1:9"] {
+        let output = sandbox
+            .command(&["--json", "sync"])
+            .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(20), "{allowed}: {document}");
+        assert_eq!(document["errors"][0]["kind"], "network.refused");
+        assert_eq!(
+            document["errors"][0]["help"],
+            format!(
+                "if you trust that server, give its link on the command line, or add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
+            )
+        );
+    }
+    assert_eq!(server.requests(), Vec::<String>::new());
+    let output = sandbox
+        .command(&["--json", "sync"])
+        .env("FETCHLOOM_ALLOWED_ORIGINS", &origin)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("local").join("data.csv"))?,
+        b"a,b\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_host_in_a_list_of_links_reaches_this_machine_only_as_an_allowed_origin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{}\n", server.url),
+    )?;
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "network.refused");
+    assert_eq!(server.requests(), Vec::<String>::new());
+    sandbox.allow(&server.url);
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    Ok(())
+}
+
+#[test]
 fn a_refused_redirect_never_shows_the_token() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(
@@ -251,6 +308,7 @@ fn configured_keys_stay_out_of_outputs_locks_state_and_url_records() -> Result {
     for mode in MODES {
         let sandbox = Sandbox::new()?;
         let server = Routes::start(vec![(PATH.to_owned(), file(b"a,b\n", "\"v1\""))])?;
+        sandbox.allow(&server.url);
         let url = format!("{}{PATH}", server.url);
         fs::write(
             sandbox.work().join("data.toml"),

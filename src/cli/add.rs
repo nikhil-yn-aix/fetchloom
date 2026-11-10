@@ -10,7 +10,7 @@ use tracing::Instrument as _;
 
 use super::args::Add;
 use super::project::{
-    Outcome, Report, committed, dry_run_done, hold, ignore_data, net, preview_all, preview_ignore,
+    Outcome, Report, committed, dry_run_done, hold, ignore_data, preview_all, preview_ignore,
     register,
 };
 use super::sync::disk::{self, Survey};
@@ -351,7 +351,7 @@ async fn add_held(
         project.check_writable()?;
     }
     let manifest = &adding.manifest;
-    let net = Arc::new(net(context, manifest));
+    let net = Arc::new(context.net());
     let parsed = validate_add(context, manifest, &net, &args)?;
     let cache = if dry_run {
         peek_cache()?

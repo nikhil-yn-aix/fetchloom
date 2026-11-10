@@ -1,7 +1,8 @@
-//! where a request may go. a host a person wrote, on the command line or in data.toml, may be
-//! any address, a lab server included. a URL nobody wrote, from a source's listing, a redirect
-//! or data.lock alone, may not reach private, loopback or link-local addresses, so a hostile
-//! server or a tampered lock cannot reach into a local network.
+//! where a request may go. a host a person typed on the command line may be any address, a lab
+//! server included, and so may an origin the `allowed_origins` setting lists. a URL nobody typed,
+//! from data.toml, data.lock, a source's listing or a redirect, may not reach private, loopback
+//! or link-local addresses, so a cloned project, a hostile server or a tampered lock cannot reach
+//! into a local network.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -13,13 +14,16 @@ use url::{Host, Url};
 
 use super::Shown;
 
-/// the hosts a person wrote, and the proxies this machine sends requests through.
+/// the hosts a person typed, the origins a person allowed, and the proxies this machine sends
+/// requests through.
 #[derive(Clone, Default)]
 pub(crate) struct Typed(Arc<Mutex<Hosts>>);
 
 #[derive(Default)]
 struct Hosts {
     written: HashSet<String>,
+    /// exact origins: a request to another port or scheme of the same host is not allowed.
+    origins: HashSet<url::Origin>,
     /// a proxy may sit on a private address, and only reaching it is allowed: a URL that asks
     /// for the proxy's host itself, as a redirect could, is refused unless a person wrote it.
     proxies: HashSet<String>,
@@ -43,15 +47,26 @@ impl Typed {
         self.hosts().proxies.insert(key(host));
     }
 
-    fn contains(&self, host: &str) -> bool {
-        self.hosts().written.contains(&key(host))
+    /// lets requests reach `origins`, wherever they are, as the `allowed_origins` setting lists
+    /// them.
+    pub(crate) fn allow(&self, origins: impl IntoIterator<Item = url::Origin>) {
+        self.hosts().origins.extend(origins);
     }
 
-    /// whether `host` may resolve to a private address: a person wrote it, or it is a proxy.
+    /// whether a person typed the host of `url` or allowed its origin.
+    fn trusts(&self, url: &Url) -> bool {
+        let hosts = self.hosts();
+        url.host_str()
+            .is_some_and(|host| hosts.written.contains(&key(host)))
+            || hosts.origins.contains(&url.origin())
+    }
+
+    /// whether `host` may resolve to a private address: a person wrote it, an allowed origin is
+    /// on it, or it is a proxy.
     pub(crate) fn may_resolve_privately(&self, host: &str) -> bool {
         let key = key(host);
         let hosts = self.hosts();
-        hosts.written.contains(&key) || hosts.proxies.contains(&key)
+        hosts.written.contains(&key) || hosts.proxies.contains(&key) || hosts.allows_on(&key)
     }
 
     fn hosts(&self) -> std::sync::MutexGuard<'_, Hosts> {
@@ -61,20 +76,28 @@ impl Typed {
     }
 
     /// refuses a URL whose host is a private address written out, or a proxy's host, unless the
-    /// user typed it. names are checked later, on the addresses they resolve to.
+    /// user typed it or allowed its origin. names are checked later, on the addresses they
+    /// resolve to, except a name an allowed origin is on: it may resolve privately, so its other
+    /// origins are refused here.
     pub(crate) fn check(&self, url: &Url) -> Result<(), Refused> {
         let Some(host) = url.host_str() else {
             return Err(Refused(format!("{} has no host", Shown(url))));
         };
         let hosts = self.hosts();
         let host = key(host);
-        if hosts.written.contains(&host) {
+        if hosts.written.contains(&host) || hosts.origins.contains(&url.origin()) {
             return Ok(());
         }
         if hosts.proxies.contains(&host) {
             return Err(Refused(format!(
                 "{} asks for the proxy this machine sends requests through",
                 Shown(url)
+            )));
+        }
+        if matches!(url.host(), Some(Host::Domain(_))) && hosts.allows_on(&host) {
+            return Err(Refused(format!(
+                "allowed_origins lists another origin on {host}, not {}",
+                url.origin().ascii_serialization()
             )));
         }
         let ip = match url.host() {
@@ -89,6 +112,24 @@ impl Typed {
             )));
         }
         Ok(())
+    }
+}
+
+impl super::Net {
+    /// lets requests reach the origins the `allowed_origins` setting lists, wherever they are.
+    pub(crate) fn with_allowed_origins(self, origins: &[url::Origin]) -> super::Net {
+        self.typed.allow(origins.iter().cloned());
+        self
+    }
+}
+
+impl Hosts {
+    /// whether an allowed origin is on `host`, given as [`key`] makes it.
+    fn allows_on(&self, host: &str) -> bool {
+        self.origins.iter().any(|origin| match origin {
+            url::Origin::Tuple(_, on, _) => key(&on.to_string()) == host,
+            url::Origin::Opaque(_) => false,
+        })
     }
 }
 
@@ -205,7 +246,7 @@ impl Proxies {
             return Ok(());
         };
         let name = name.to_ascii_lowercase();
-        if typed.contains(&name) {
+        if typed.trusts(url) {
             return Ok(());
         }
         let known = self.lock().get(&name).cloned();
@@ -492,6 +533,31 @@ mod tests {
                 .is_ok(),
             "unless a person wrote it"
         );
+    }
+
+    #[test]
+    fn an_allowed_origin_reaches_its_server_and_nothing_else_there() {
+        let typed = Typed::default();
+        typed.allow(
+            ["http://lab.local:8080", "http://127.0.0.1:41234"]
+                .map(|origin| Url::parse(origin).unwrap().origin()),
+        );
+        for (url, allowed) in [
+            ("http://lab.local:8080/shards/a.zip", true),
+            ("http://LAB.local:8080/a.zip", true),
+            ("http://127.0.0.1:41234/a.zip", true),
+            ("http://lab.local:9090/a.zip", false),
+            ("https://lab.local:8080/a.zip", false),
+            ("http://lab.local/a.zip", false),
+            ("http://127.0.0.1:41235/a.zip", false),
+            ("http://10.0.0.1/a.zip", false),
+            ("https://zenodo.org/a.zip", true),
+        ] {
+            let checked = typed.check(&Url::parse(url).unwrap());
+            assert_eq!(checked.is_ok(), allowed, "{url}: {checked:?}");
+        }
+        assert!(typed.may_resolve_privately("lab.local"));
+        assert!(!typed.may_resolve_privately("other.local"));
     }
 }
 

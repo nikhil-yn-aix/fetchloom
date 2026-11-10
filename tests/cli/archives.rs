@@ -100,6 +100,7 @@ fn a_fresh_clone_unpacks_what_the_lock_pins() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
     let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
+    sandbox.allow(&server.url);
     ok(&sandbox.run(&["add", &server.url])?)?;
     let clone = sandbox.folder("clone")?;
     for name in ["data.toml", "data.lock"] {
@@ -122,6 +123,7 @@ fn extract_false_keeps_the_zip_as_it_is() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
     let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
+    sandbox.allow(&server.url);
     ok(&sandbox.run(&["add", &server.url])?)?;
     let manifest = sandbox.work().join("data.toml");
     let text_before = fs::read_to_string(&manifest)?;
@@ -475,6 +477,7 @@ fn path_of_an_empty_archive_explains_why_it_has_no_folder() -> Result {
         "/empty.zip",
         vec![file(&zip, "\"empty\""), file(&zip, "\"empty\"")],
     )?;
+    sandbox.allow(&server.url);
     ok(&sandbox.run(&["add", &server.url, "--as", "empty"])?)?;
     for target in ["empty", "empty/missing"] {
         let output = sandbox.run(&["path", target])?;
@@ -522,6 +525,7 @@ fn a_cached_archive_whose_bytes_changed_is_fetched_again() -> Result {
         "/files/set.tar",
         (0..4).map(|_| file(&tar, "\"t1\"")).collect(),
     )?;
+    sandbox.allow(&server.url);
     // a project that keeps the tar packed keeps it in the cache
     let packed = sandbox.folder("packed")?;
     ok(&sandbox
@@ -573,6 +577,7 @@ fn path_checks_known_archive_members_before_syncing() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
     let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
+    sandbox.allow(&server.url);
     ok(&sandbox.run(&["add", &server.url])?)?;
     for known in [true, false] {
         let clone = sandbox.folder(if known {
@@ -603,6 +608,7 @@ fn a_cached_archive_with_crc_damage_is_fetched_again() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = fixture("python.zip")?;
     let server = Server::start(PATH, (0..4).map(|_| file(&zip, "\"z1\"")).collect())?;
+    sandbox.allow(&server.url);
     let packed = sandbox.folder("packed")?;
     ok(&sandbox
         .command_in(&packed, &["add", "--no-extract", &server.url])

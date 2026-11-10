@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Read, Waited, find, hold_until, ignore_data, known, locked, net, sync_all};
+use super::project::{Read, Waited, find, hold_until, ignore_data, known, locked, sync_all};
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
 use super::sync::{Loop, Upgrade};
@@ -82,8 +82,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                         Some(cache) => cache,
                         None => open_cache()?,
                     };
-                    let work =
-                        Loop::new(context, &project, Arc::new(net(context, &manifest)), cache);
+                    let work = Loop::new(context, &project, Arc::new(context.net()), cache);
                     let seen = Seen {
                         manifest: digest::sha256(text.as_bytes()),
                         lock: read

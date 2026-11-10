@@ -71,6 +71,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_SPLIT      0 never splits a slow download into parts, 1 always does
   FETCHLOOM_SETTINGS   the settings file, instead of settings.toml in
                        fetchloom's folder
+  FETCHLOOM_ALLOWED_ORIGINS
+                       servers on your network that data.toml may name, as
+                       http://lab.local:8080, separated by commas
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
@@ -81,9 +84,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
 a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
-memory, most_files and the archive_ settings for every run, one per line, as
-jobs = 16. a variable wins over the file. fetchloom settings shows each value
-and where it came from.
+memory, most_files, the archive_ settings and allowed_origins for every run,
+one per line, as jobs = 16. a variable wins over the file. fetchloom settings
+shows each value and where it came from.
 
 keys are read where each source's own tools keep them: HF_TOKEN and the hugging
 face token file, KAGGLE_API_TOKEN and ~/.kaggle, ZENODO_TOKEN, FIGSHARE_TOKEN,

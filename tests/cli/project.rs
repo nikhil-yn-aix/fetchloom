@@ -10,8 +10,10 @@ use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, t
 pub(crate) const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 pub(crate) const PATH: &str = "/files/iris.csv";
 
-/// a project with iris added from `server`, whose first response serves it.
+/// a project with iris added from `server`, whose first response serves it. later commands may
+/// reach the server through data.toml and data.lock.
 pub(crate) fn added(sandbox: &Sandbox, server: &Server) -> Result {
+    sandbox.allow(&server.url);
     let output = sandbox.run(&["add", &server.url])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     Ok(())
@@ -236,6 +238,7 @@ fn hand_edits_survive_sync_until_forced() -> Result {
 fn an_edit_in_place_through_a_shared_link_is_put_back_and_kept_beside_it() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"changed in place\n")?;
@@ -292,6 +295,7 @@ fn an_edit_in_place_through_a_shared_link_is_put_back_and_kept_beside_it() -> Re
 fn a_kept_changed_copy_never_replaces_a_file_already_there() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     if added["work"]["hardlinks"] != 1 {
         return Ok(());
@@ -1120,6 +1124,7 @@ fn equal_untracked_read_only_files_get_the_requested_writable_copy() -> Result {
         return Ok(());
     }
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.iris]\nref = {:?}\ncopy = true\n", server.url),
@@ -1422,6 +1427,7 @@ fn a_first_pin_by_lock_or_sync_gets_a_line_of_its_own() -> Result {
             &format!("/files/{name}.csv"),
             vec![file(b"cow\nbess\n", "\"c1\"")],
         )?;
+        sandbox.allow(&other.url);
         let updated = format!(
             "{}\n[datasets.{name}]\nref = \"{}\"\n",
             fs::read_to_string(&manifest)?,
@@ -1454,7 +1460,9 @@ fn json_names_the_datasets_whose_pins_changed() -> Result {
     let manifest = sandbox.work().join("data.toml");
     let first = fs::read_to_string(&manifest)?;
     let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    sandbox.allow(&cows.url);
     let hens = Server::start("/files/hens.csv", vec![file(b"hen\n", "\"h\"")])?;
+    sandbox.allow(&hens.url);
     let both = format!(
         "{first}\n[datasets.cows]\nref = \"{}\"\n\n[datasets.hens]\nref = \"{}\"\n",
         cows.url, hens.url
@@ -1620,6 +1628,7 @@ fn a_stopped_sync_says_so_in_a_plain_line() -> Result {
     let sandbox = Sandbox::new()?;
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let slow = Server::slow_file("/files/cows.csv", body)?;
+    sandbox.allow(&slow.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!("[datasets.cows]\nref = \"{}\"\n", slow.url),
@@ -1650,7 +1659,9 @@ fn a_stopped_download_of_several_files_says_what_they_all_keep() -> Result {
     // about six seconds at the pace of a slow file's first answer, so the stop comes first
     let body: Vec<u8> = (0..4u32 << 20).map(|n| (n % 251) as u8).collect();
     let cows = Server::slow_file("/files/cows.csv", body.clone())?;
+    sandbox.allow(&cows.url);
     let pigs = Server::slow_file("/files/pigs.csv", body)?;
+    sandbox.allow(&pigs.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!(
@@ -1706,9 +1717,11 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
     let sandbox = Sandbox::new()?;
     let huge = || reply("200 OK", &[("Content-Length", "2147483648")], b"");
     let large = Server::start("/huge.bin", vec![huge(), huge()])?;
+    sandbox.allow(&large.url);
     // about six seconds at the pace of a slow file's first answer
     let body: Vec<u8> = (0..4u32 << 20).map(|n| (n % 251) as u8).collect();
     let slow = Server::slow_file("/files/slow.csv", body)?;
+    sandbox.allow(&slow.url);
     fs::write(
         sandbox.work().join("data.toml"),
         format!(
@@ -1750,6 +1763,7 @@ fn a_sync_stopped_while_it_downloads_pinned_files_says_nothing_changed() -> Resu
     let sandbox = Sandbox::new()?;
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let site = crate::support::Ranged::start("/files/cows.csv", body, 0)?;
+    sandbox.allow(&site.url);
     let work = sandbox.work();
     fs::write(
         work.join("data.toml"),
