@@ -130,6 +130,7 @@ impl Article {
             }
         }
         Ok(Listing {
+            within: Vec::new(),
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::Figshare(resolved),

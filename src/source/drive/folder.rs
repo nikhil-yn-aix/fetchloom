@@ -63,6 +63,7 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
         .help("check the link in a browser. a link to one file looks like drive.google.com/file/d/..."));
     }
     Ok(Listing {
+        within: Vec::new(),
         unavailable: walk.unavailable,
         warnings: Vec::new(),
         resolved: Reference::Drive(item.clone()),

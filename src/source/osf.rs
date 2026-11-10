@@ -183,6 +183,7 @@ impl Metadata {
 
     fn listing(self, node: &Node, files: Vec<Remote>) -> Listing {
         Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Osf(node.clone()),

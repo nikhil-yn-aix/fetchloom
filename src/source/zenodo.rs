@@ -104,6 +104,7 @@ impl Record {
             .map(|file| file.remote(&resolved))
             .collect::<Result<_, _>>()?;
         Ok(Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Zenodo(resolved),

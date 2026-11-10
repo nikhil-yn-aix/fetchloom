@@ -128,6 +128,7 @@ impl Version {
             .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("doi"))
             .map(|(_, doi)| doi.to_owned());
         Ok(Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Dataverse(Dataset {

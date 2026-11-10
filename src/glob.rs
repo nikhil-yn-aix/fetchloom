@@ -103,6 +103,78 @@ impl Glob {
     pub(crate) fn is_top_level_only(&self) -> bool {
         self.parts.len() == 1 && matches!(self.parts[0], Part::Name(_))
     }
+
+    /// the folder every path the pattern matches lies in, written out in full: `data/train` for
+    /// `data/train/**` or `data/train/*.csv`. none when a match may lie anywhere, as for `*.csv`
+    /// or `**/x.csv`.
+    pub(crate) fn folder(&self) -> Option<String> {
+        let mut names = Vec::new();
+        // the last part names the files, so only the parts before it can name a folder
+        for part in &self.parts[..self.parts.len().saturating_sub(1)] {
+            let Part::Name(tokens) = part else {
+                break;
+            };
+            let Some(name) = literal(tokens) else {
+                break;
+            };
+            names.push(name);
+        }
+        (!names.is_empty()).then(|| names.join("/"))
+    }
+}
+
+/// the most folders listed one by one; past it one listing of everything costs fewer requests.
+const MOST_FOLDERS: usize = 8;
+
+/// the folders that hold every path `patterns` can match, none nested in another, so a source
+/// can list those instead of everything. none when there are no patterns, when one can match
+/// outside any folder, or when they name more folders than are worth listing one by one.
+pub(crate) fn folders(patterns: &[Glob]) -> Option<Vec<String>> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut folders: Vec<String> = patterns.iter().map(Glob::folder).collect::<Option<_>>()?;
+    folders.sort();
+    folders.dedup();
+    let mut kept: Vec<String> = Vec::new();
+    for folder in folders {
+        // sorted, a folder comes after any folder holding it
+        if !kept.iter().any(|outer| {
+            folder
+                .strip_prefix(outer.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        }) {
+            kept.push(folder);
+        }
+    }
+    (kept.len() <= MOST_FOLDERS).then_some(kept)
+}
+
+/// [`folders`] for patterns still as text, none when one is not a valid pattern, so the error
+/// is told where patterns are checked.
+pub(crate) fn folders_of(texts: &[String]) -> Option<Vec<String>> {
+    let patterns: Vec<Glob> = texts
+        .iter()
+        .map(|text| Glob::new(text))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    folders(&patterns)
+}
+
+/// the one name `tokens` match, when they match only one: plain characters, and sets of one
+/// character such as `[*]`, as [`escape`] writes them.
+fn literal(tokens: &[Token]) -> Option<String> {
+    tokens
+        .iter()
+        .map(|token| match token {
+            Token::Char(c) => Some(*c),
+            Token::Set {
+                negated: false,
+                ranges,
+            } if ranges.len() == 1 && ranges[0].0 == ranges[0].1 => Some(ranges[0].0),
+            _ => None,
+        })
+        .collect()
 }
 
 /// a pattern that matches exactly `path`, its `[`, `*` and `?` each made a set of itself, as
@@ -276,5 +348,45 @@ mod tests {
     fn a_name_without_folders_only_matches_the_top() {
         assert!(Glob::new("*.edf").unwrap().is_top_level_only());
         assert!(!Glob::new("**/*.edf").unwrap().is_top_level_only());
+    }
+
+    #[test]
+    fn a_pattern_names_the_folder_its_matches_lie_in() {
+        let folder = |text: &str| Glob::new(text).unwrap().folder();
+        assert_eq!(folder("data/train/**").as_deref(), Some("data/train"));
+        assert_eq!(folder("/data/train/*.csv").as_deref(), Some("data/train"));
+        assert_eq!(folder("data/*/x.csv").as_deref(), Some("data"));
+        assert_eq!(folder("data/**/x.csv").as_deref(), Some("data"));
+        // what a pasted link to a file in a folder selects
+        assert_eq!(
+            folder(&escape("odd [1]/a*b?.csv")).as_deref(),
+            Some("odd [1]")
+        );
+        for anywhere in ["*.csv", "x.csv", "**/x.csv", "*/x.csv", "[ab]/x.csv"] {
+            assert_eq!(folder(anywhere), None, "{anywhere}");
+        }
+    }
+
+    #[test]
+    fn folders_cover_every_pattern_without_nesting() {
+        let globs = |texts: &[&str]| {
+            texts
+                .iter()
+                .map(|t| Glob::new(t).unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            folders(&globs(&["b/**", "a/x/*.csv", "a/**", "a-b/**"])),
+            Some(vec!["a".to_owned(), "a-b".to_owned(), "b".to_owned()])
+        );
+        assert_eq!(folders(&globs(&["train/**", "*.json"])), None);
+        assert_eq!(folders(&[]), None);
+        let many: Vec<String> = (0..=MOST_FOLDERS).map(|n| format!("f{n}/**")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(folders(&globs(&many)), None);
+        assert_eq!(
+            folders(&globs(&many[..MOST_FOLDERS])).map(|kept| kept.len()),
+            Some(MOST_FOLDERS)
+        );
     }
 }

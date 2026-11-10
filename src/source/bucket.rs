@@ -161,6 +161,7 @@ impl Prefix {
             .help("check the prefix: keys are case sensitive, and a folder's prefix ends with /"));
         }
         Ok(Listing {
+            within: Vec::new(),
             resolved: Reference::Bucket(self.clone()),
             title: None,
             license: None,

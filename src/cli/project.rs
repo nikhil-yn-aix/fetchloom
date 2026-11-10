@@ -464,13 +464,15 @@ async fn resolve_add(
     args: &Add,
     parsed: &Parsed,
 ) -> Result<Addition, Error> {
-    let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
-    engine::tell_resolved(&context.output, &listing);
     let select = if args.filter.select.is_empty() {
         parsed.select()
     } else {
         args.filter.select.clone()
     };
+    let folders = crate::glob::folders_of(&select);
+    let listing =
+        engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
+    engine::tell_resolved(&context.output, &listing);
     let reference = stored_reference(&args.link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
@@ -2525,6 +2527,7 @@ mod tests {
 
     fn listed(url: &str, files: Vec<crate::source::Remote>) -> Listing {
         Listing {
+            within: Vec::new(),
             resolved: Reference::Url(url::Url::parse(url).unwrap()),
             title: None,
             license: None,

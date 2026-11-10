@@ -64,6 +64,7 @@ impl Link {
             _ => "download".to_owned(),
         };
         Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Dropbox(self.clone()),

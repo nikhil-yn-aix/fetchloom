@@ -18,8 +18,12 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 
 impl Repo {
     /// lists the repository at one commit: the revision becomes a commit first, then the tree at
-    /// that commit is read page by page.
-    pub(in crate::source) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
+    /// that commit is read page by page, only `folders` when they hold every file wanted.
+    pub(in crate::source) async fn resolve(
+        &self,
+        api: &impl Api,
+        folders: Option<&[String]>,
+    ) -> Result<Listing, Error> {
         let info = self.revision(api).await?;
         let repo = Repo {
             kind: self.kind,
@@ -33,8 +37,9 @@ impl Repo {
             revision: Some(info.sha.clone()),
             ..repo
         };
-        let files = pinned.tree(api, &info.sha).await?;
+        let (files, within) = pinned.tree(api, &info.sha, folders).await?;
         Ok(Listing {
+            within,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::HuggingFace(pinned),
@@ -128,7 +133,7 @@ mod tests {
     #[test]
     fn a_small_dataset_is_listed_at_its_commit() {
         let recorded = imdb();
-        let listing = block_on(repo("datasets/stanfordnlp/imdb").resolve(&recorded)).unwrap();
+        let listing = block_on(repo("datasets/stanfordnlp/imdb").resolve(&recorded, None)).unwrap();
         assert_eq!(
             listing.resolved.to_string(),
             format!("hf:datasets/stanfordnlp/imdb@{IMDB}")
@@ -195,7 +200,7 @@ mod tests {
             .fixture(&first, "hf/fleurs-tree-1.json")
             .next(&first, &second)
             .fixture(&second, "hf/fleurs-tree-2.json");
-        let listing = block_on(repo("datasets/google/fleurs").resolve(&recorded)).unwrap();
+        let listing = block_on(repo("datasets/google/fleurs").resolve(&recorded, None)).unwrap();
         let paths: Vec<&str> = listing
             .files
             .iter()
@@ -220,7 +225,7 @@ mod tests {
         ));
         // the hub answers for a commit exactly as it answered for the branch pointing at it
         let recorded = imdb().fixture(&at_commit, "hf/imdb-revision.json");
-        let first = block_on(repo("datasets/stanfordnlp/imdb").resolve(&recorded)).unwrap();
+        let first = block_on(repo("datasets/stanfordnlp/imdb").resolve(&recorded, None)).unwrap();
         let again = block_on(first.resolved.resolve(&recorded)).unwrap();
         assert_eq!(again.resolved, first.resolved);
         assert_eq!(again.files, first.files);
@@ -298,8 +303,9 @@ mod tests {
             404,
             fixture_bytes("hf/missing-revision.json"),
         );
-        let err = block_on(repo("datasets/stanfordnlp/imdb@no-such-branch").resolve(&recorded))
-            .unwrap_err();
+        let err =
+            block_on(repo("datasets/stanfordnlp/imdb@no-such-branch").resolve(&recorded, None))
+                .unwrap_err();
         assert_eq!(err.kind, Kind::ReferenceUnresolved);
     }
 
@@ -312,8 +318,8 @@ mod tests {
             401,
             fixture_bytes("hf/hidden.json"),
         );
-        let err =
-            block_on(repo("datasets/stanfordnlp/no-such-dataset").resolve(&recorded)).unwrap_err();
+        let err = block_on(repo("datasets/stanfordnlp/no-such-dataset").resolve(&recorded, None))
+            .unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
         assert_eq!(
             err.message,
@@ -341,7 +347,8 @@ mod tests {
                 401,
                 fixture_bytes("hf/llama-auth-check.json"),
             );
-        let err = block_on(repo("models/meta-llama/Llama-2-7b").resolve(&recorded)).unwrap_err();
+        let err =
+            block_on(repo("models/meta-llama/Llama-2-7b").resolve(&recorded, None)).unwrap_err();
         assert_eq!(err.kind, Kind::AuthRequired);
         let help = err.help.unwrap();
         assert!(
@@ -400,9 +407,10 @@ mod tests {
                 )),
                 "hf/imdb-tree.json",
             );
-        let error =
-            block_on(repo(&format!("datasets/stanfordnlp/imdb@{requested}")).resolve(&recorded))
-                .unwrap_err();
+        let error = block_on(
+            repo(&format!("datasets/stanfordnlp/imdb@{requested}")).resolve(&recorded, None),
+        )
+        .unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert_eq!(recorded.asked(), [revision]);
     }
@@ -416,7 +424,8 @@ mod tests {
         let recorded = Recorded::default()
             .fixture(&revision, "hf/stack-revision.json")
             .on(&access, 401, fixture_bytes("hf/stack-auth-check.json"));
-        let error = block_on(repo("datasets/bigcode/the-stack").resolve(&recorded)).unwrap_err();
+        let error =
+            block_on(repo("datasets/bigcode/the-stack").resolve(&recorded, None)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
         let help = error.help.unwrap();
         assert!(help.contains("https://huggingface.co/datasets/bigcode/the-stack"));

@@ -56,6 +56,7 @@ impl Dataset {
         };
         let files = pinned.files(api, version, newest).await?;
         Ok(Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Kaggle(pinned),

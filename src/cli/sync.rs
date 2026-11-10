@@ -450,8 +450,9 @@ impl<'a> Loop<'a> {
                 asked.push(parsed.reference.to_string());
             }
             let net = self.net.clone();
+            let folders = crate::glob::folders(&entry.select);
             tasks.spawn(async move {
-                let listing = parsed.reference.resolve(&*net).await;
+                let listing = parsed.reference.resolve_in(&*net, folders.as_deref()).await;
                 (name, listing)
             });
         }
@@ -932,15 +933,17 @@ fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> St
 
 pub(super) use draft::filter;
 
-/// resolves a reference, with progress or plain lines while its source takes its time.
+/// resolves a reference, with progress or plain lines while its source takes its time, listing
+/// only `folders` where they hold every file wanted.
 pub(super) async fn resolve(
     output: &Output,
     reference: &Reference,
     net: &Net,
+    folders: Option<&[String]>,
 ) -> Result<Listing, Error> {
     let _waiting =
         (!resolves_locally(reference)).then(|| output.wait("Resolving", reference.to_string()));
-    reference.resolve(net).await
+    reference.resolve_in(net, folders).await
 }
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may
@@ -1089,7 +1092,12 @@ fn tell_facts(output: &Output, listing: &Listing) {
             .as_deref()
             .map(|title| output.clip(title, TITLE)),
     );
-    facts.push(units::count(listing.files.len() as u64, "file", "files"));
+    let files = units::count(listing.files.len() as u64, "file", "files");
+    facts.push(if listing.within.is_empty() {
+        files
+    } else {
+        format!("{files} in {}", listing.within.join(", "))
+    });
     let size = listing
         .files
         .iter()
@@ -1585,6 +1593,7 @@ mod tests {
         let context = context();
         let url = Url::parse("https://example.org/data.csv").unwrap();
         let listing = Listing {
+            within: Vec::new(),
             resolved: Reference::Url(url),
             title: None,
             license: None,

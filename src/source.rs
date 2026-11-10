@@ -97,6 +97,9 @@ pub(crate) struct Listing {
     /// what a person should know about the listing, told as warnings once it resolves, such as
     /// files it leaves out.
     pub(crate) warnings: Vec<String>,
+    /// the folders listed when only those were, as they held every file wanted; empty when the
+    /// listing covers the whole dataset.
+    pub(crate) within: Vec<String>,
 }
 
 impl Listing {
@@ -233,16 +236,27 @@ impl Reference {
     /// asks the source what the dataset holds: at the exact version this reference names, or at
     /// the newest one when it names none.
     pub(crate) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
+        self.resolve_in(api, None).await
+    }
+
+    /// [`Reference::resolve`], listing only `folders` where the source can and they hold every
+    /// file wanted, as [`crate::glob::folders`] finds them. the listing names the folders it
+    /// covers.
+    pub(crate) async fn resolve_in(
+        &self,
+        api: &impl Api,
+        folders: Option<&[String]>,
+    ) -> Result<Listing, Error> {
         let span = tracing::debug_span!("resolve", reference = %self.shown());
         let listing = async {
             match self {
                 Reference::Doi(doi) => {
                     let target = doi.locate(api).await?;
-                    let mut listing = target.resolve_direct(api).await?;
+                    let mut listing = target.resolve_direct(api, folders).await?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
                 }
-                other => other.resolve_direct(api).await,
+                other => other.resolve_direct(api, folders).await,
             }
         }
         .instrument(span)
@@ -261,7 +275,11 @@ impl Reference {
         check(self, listing)
     }
 
-    async fn resolve_direct(&self, api: &impl Api) -> Result<Listing, Error> {
+    async fn resolve_direct(
+        &self,
+        api: &impl Api,
+        folders: Option<&[String]>,
+    ) -> Result<Listing, Error> {
         match self {
             Reference::Url(url) => Ok(single(url)),
             Reference::Doi(doi) => Err(Error::new(
@@ -273,7 +291,7 @@ impl Reference {
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
-            Reference::HuggingFace(repo) => repo.resolve(api).await,
+            Reference::HuggingFace(repo) => repo.resolve(api, folders).await,
             Reference::Kaggle(dataset) => dataset.resolve(api).await,
             Reference::KaggleCompetition(competition) => competition.resolve(api).await,
             Reference::Drive(item) => item.resolve(api).await,
@@ -527,6 +545,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
 /// a plain link: one file, named by its last path segment until the server names it.
 fn single(url: &Url) -> Listing {
     Listing {
+        within: Vec::new(),
         unavailable: Vec::new(),
         warnings: Vec::new(),
         resolved: Reference::Url(url.clone()),
@@ -1029,6 +1048,7 @@ mod tests {
     fn listings_cannot_escape_their_folder_or_repeat_a_path() {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             files: paths
@@ -1063,6 +1083,7 @@ mod tests {
     fn a_dataset_holding_only_its_readme_says_so() {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
+            within: Vec::new(),
             files: paths
                 .iter()
                 .map(|path| Remote {

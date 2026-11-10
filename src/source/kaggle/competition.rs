@@ -124,6 +124,7 @@ impl Competition {
             }
         }
         Ok(Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::KaggleCompetition(named),

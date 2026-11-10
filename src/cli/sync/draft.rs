@@ -563,6 +563,7 @@ mod tests {
         let manifest =
             Manifest::parse("[datasets.set]\nref = \"https://example.org/set.zip\"\n").unwrap();
         let listing = || Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),
@@ -622,6 +623,7 @@ mod tests {
         let manifest =
             Manifest::parse("[datasets.w]\nref = \"https://example.org/weights.npz\"\n").unwrap();
         let listing = || Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),
@@ -736,6 +738,7 @@ mod tests {
         // the same link now states the MD5 of other bytes of the same size
         let stated = crate::digest::Md5::from_hex("e80b5017098950fc58aad83c8c14978e");
         let listing = || Listing {
+            within: Vec::new(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),

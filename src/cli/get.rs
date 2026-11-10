@@ -267,7 +267,9 @@ async fn one(
     engine::tell_raw(&context.output, &link, &parsed.reference);
     let cache = open_cache()?;
     net.trust(parsed.reference.written_host());
-    let listing = engine::resolve(&context.output, &parsed.reference, net).await?;
+    let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
+    let listing =
+        engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
     engine::tell_resolved(&context.output, &listing);
     let mut wanted = prepare(&cache, args, args.output.as_deref(), None, parsed, listing)?;
     approve(context, &cache, &wanted.jobs)?;
@@ -306,7 +308,7 @@ async fn many(
     links: &[String],
 ) -> Result<Report, Error> {
     let cache = open_cache()?;
-    let resolved = resolve_all(context, net, links).await?;
+    let resolved = resolve_all(context, net, args, links).await?;
     let mut wanted = Vec::with_capacity(links.len());
     for (link, resolved) in links.iter().zip(resolved) {
         let prepared = resolved.and_then(|(parsed, listing)| {
@@ -390,6 +392,7 @@ async fn many(
 async fn resolve_all(
     context: &Context,
     net: &Arc<Net>,
+    args: &Get,
     links: &[String],
 ) -> Result<Vec<Result<(Parsed, Listing), Error>>, Error> {
     let mut results: Vec<Option<Result<(Parsed, Listing), Error>>> =
@@ -410,8 +413,9 @@ async fn resolve_all(
             asked.push(parsed.reference.shown());
         }
         let net = net.clone();
+        let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
         tasks.spawn(async move {
-            let listing = parsed.reference.resolve(&*net).await;
+            let listing = parsed.reference.resolve_in(&*net, folders.as_deref()).await;
             (index, listing.map(|listing| (parsed, listing)))
         });
     }
@@ -1050,13 +1054,19 @@ fn pin_command(args: &Get, link: &str) -> Option<String> {
     Some(parts.join(" "))
 }
 
-/// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.
-fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote>, Error> {
-    let select = if args.filter.select.is_empty() {
+/// the select patterns of a download: `--select`, or else the one file or folder a pasted link
+/// names.
+fn wanted_patterns(args: &Get, parsed: &Parsed) -> Vec<String> {
+    if args.filter.select.is_empty() {
         parsed.select()
     } else {
         args.filter.select.clone()
-    };
+    }
+}
+
+/// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.
+fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote>, Error> {
+    let select = wanted_patterns(args, parsed);
     if select.is_empty() && args.filter.exclude.is_empty() && listing.unavailable.is_empty() {
         return Ok(listing.files.clone());
     }
@@ -1201,6 +1211,7 @@ mod tests {
     fn a_dataset_named_like_a_windows_device_gets_a_usable_folder() {
         let parsed = Reference::parse("s3://bucket/aux/").unwrap();
         let listing = Listing {
+            within: Vec::new(),
             resolved: parsed.reference.clone(),
             title: Some("Aux".to_owned()),
             license: None,
