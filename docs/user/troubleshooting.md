@@ -59,7 +59,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | `warning: <path> is a link where data.lock places a file` | a link, or another entry, stands where a pinned file belongs | move what you need, then run `fetchloom sync --force`; it removes the link itself, never what it points to |
 | `warning: hf:datasets/mozilla-foundation/common_voice_17_0 holds only .gitattributes and README.md, no data files` | the owner moved the data elsewhere and left a readme saying where | read the dataset's README.md; if the data is gone, run `fetchloom remove <name>` |
 | `warning: iris was taken, so this one is iris-2` | the project already has a dataset with that name | keep it, or run `fetchloom remove iris-2` and add again with `--as <name>` |
-| status exits 0 with differences | differences are a successful result | inspect all eleven status arrays |
+| status exits 0 with differences | differences are a successful result | inspect every status array |
 | an input is read-only | default placement protects shared bytes | set `copy = true` on the dataset and sync |
 | another account on the same machine downloads the same data again | each account has its own cache, readable by its owner only | share one cache among people who trust each other, as [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows |
 | a glob matches no files | it differs from listed paths or targets archive members | quote the glob and check [pattern rules](reference/data-toml.md#patterns) |
