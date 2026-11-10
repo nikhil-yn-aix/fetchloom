@@ -21,7 +21,7 @@ pub(crate) const MOST_RETRIES: u32 = 20;
 /// sends a few bytes before every break still ends.
 const MOST_TRIES: u32 = 50;
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
-/// how many times a request waits for a rate limit to reset before those waits count as tries.
+/// how many times a request waits for a rate limit to reset before those waits spend retries.
 const LIMITED: u32 = 10;
 
 pub(super) enum Failure {
@@ -31,7 +31,7 @@ pub(super) enum Failure {
         retry_after: Option<Duration>,
     },
     /// the host's rate limit is used up and resets within [`pace::LONGEST`]. the next try waits
-    /// for the reset before it is sent, and is not one of the request's tries.
+    /// for the reset before it is sent, and spends none of the request's retries.
     Limited {
         reason: String,
     },
@@ -66,12 +66,13 @@ impl<'a> Retry<'a> {
     }
 
     /// counts a try a rate limit refused. the next one waits for the limit to reset and does not
-    /// spend a try, unless the host keeps refusing.
+    /// spend a retry, unless the host keeps refusing, but it is still one of the tries.
     pub(super) async fn limited(&mut self, reason: String, has_copy: bool) -> Result<(), Error> {
         if self.limited >= LIMITED {
             return self.wait(reason, None, has_copy).await;
         }
         self.limited += 1;
+        self.tries += 1;
         tracing::debug!(%reason, "rate limited, trying again once the limit resets");
         Work::add(&self.net.work.retries, 1);
         Ok(())
@@ -86,7 +87,15 @@ impl<'a> Retry<'a> {
         has_copy: bool,
     ) -> Result<(), Error> {
         if self.attempt > self.net.retries || self.tries >= MOST_TRIES {
-            return Err(gave_up(self.url, self.tries, &reason, has_copy));
+            let error = gave_up(self.url, self.tries, &reason, has_copy);
+            if self.limited == 0 {
+                return Err(error);
+            }
+            return Err(error.detail(format!(
+                "{} of them waited for {}'s rate limit to reset",
+                self.limited,
+                host(self.url)
+            )));
         }
         let wait = backoff(self.attempt, asked).map_err(|asked| rate_limited(self.url, asked))?;
         self.attempt += 1;
@@ -569,6 +578,46 @@ mod tests {
             assert_eq!(help.contains("--offline"), has_copy, "{help}");
             assert_eq!(help.contains("FETCHLOOM_RETRIES"), !has_copy, "{help}");
         }
+    }
+
+    #[test]
+    fn a_rate_limited_request_that_gives_up_counts_every_try() {
+        use crate::net::{Options, Splitting};
+        use crate::source::recorded::block_on;
+        use std::sync::Arc;
+
+        let url = Url::parse("https://example.org/file").unwrap();
+        let net = Net::new(
+            Options {
+                offline: Offline::No,
+                jobs: 1,
+                credentials: Vec::new(),
+                split: Splitting::Never,
+            },
+            Arc::default(),
+            Arc::default(),
+            Arc::new(|_| {}),
+        )
+        .with_retries(0);
+        let mut retry = Retry::new(&net, &url);
+        // a server that answers every request with a 429 whose limit resets at once
+        let mut sent = 1;
+        let error = loop {
+            match block_on(retry.limited("example.org answered 429".to_owned(), false)) {
+                Ok(()) => sent += 1,
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(sent, LIMITED + 1);
+        assert!(
+            error.message.contains(&format!("after {sent} tries:")),
+            "{}",
+            error.message
+        );
+        assert_eq!(
+            error.details,
+            ["10 of them waited for example.org's rate limit to reset"]
+        );
     }
 
     #[test]

@@ -92,7 +92,7 @@ file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a
 | metadata body | at most 64 MiB |
 | transient attempts | 5 including the first, or `FETCHLOOM_RETRIES` (0 to 20) more than the first; a download try that leaves more of the file held than any try before counts them from the first again, up to 50 tries in all. retries to one host print one warning line, then another only after 30 s of retrying |
 | retry delay | jittered exponential backoff; `Retry-After` is a floor; more than 60 s fails |
-| quota wait | reset within 120 s; at most 10 waits per request before consuming attempts |
+| quota wait | reset within 120 s; at most 10 waits per request before consuming attempts. the message after the last try counts every request, waits included, and says how many waited |
 | diversion pages | at most 3, each at most 4 MiB |
 
 408, 425, 429, 500, 502, 503 and 504 are retryable, as are transient connection and timeout failures. a host name that DNS says does not exist fails at once with `network.unreachable`: the resolver in [address.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address.rs) tells that answer apart from a temporary lookup failure, which is still retried. redirects and range restarts do not consume the transient-attempt budget. exhausted retries report `network.rate_limited` after a 429, `network.status` after a 5xx and `network.unreachable` otherwise; excessive requested waits report `network.rate_limited` while retries remain.
