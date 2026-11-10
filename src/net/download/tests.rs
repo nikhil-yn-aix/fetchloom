@@ -1,9 +1,9 @@
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::net::Options;
+use crate::net::scripted::{lines, reply, serve};
 use crate::source::recorded::block_on;
 
 impl Chunks for tokio::sync::mpsc::Receiver<Bytes> {
@@ -165,51 +165,6 @@ fn a_cache_write_the_disk_refuses_says_what_to_do() {
     );
 }
 
-/// a server on this machine that answers each connection with the next response, and the request
-/// line of each connection it took.
-fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    let asked = Arc::new(Mutex::new(Vec::new()));
-    let seen = asked.clone();
-    std::thread::spawn(move || {
-        for response in responses {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            let line = String::from_utf8_lossy(&head)
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_owned();
-            seen.lock().unwrap().push(line);
-            let _ = stream.write_all(&response);
-        }
-    });
-    (url, asked)
-}
-
-fn reply(status: &str, headers: &[(&str, &str)], body: &str) -> Vec<u8> {
-    let mut text = format!(
-        "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n",
-        body.len()
-    );
-    for (name, value) in headers {
-        text.push_str(name);
-        text.push_str(": ");
-        text.push_str(value);
-        text.push_str("\r\n");
-    }
-    text.push_str("\r\n");
-    text.push_str(body);
-    text.into_bytes()
-}
-
 fn net(url: &Url) -> Net {
     let options = Options {
         offline: crate::net::Offline::No,
@@ -251,18 +206,18 @@ const HTML: (&str, &str) = ("Content-Type", "text/html; charset=utf-8");
 #[test]
 fn a_page_is_read_where_it_came_from_after_redirects() {
     let (url, asked) = serve(vec![
-        reply("302 Found", &[("Location", "/pages/confirm")], ""),
-        reply("200 OK", &[HTML], "file"),
+        reply("302 Found", &[("Location", "/pages/confirm")], b""),
+        reply("200 OK", &[HTML], b"file"),
         reply(
             "200 OK",
             &[("Content-Type", "application/octet-stream")],
-            "bytes",
+            b"bytes",
         ),
     ]);
     let fetched = download(&url.join("start").unwrap(), follow).unwrap();
     assert_eq!(fetched.size, 5);
     assert_eq!(
-        *asked.lock().unwrap(),
+        lines(&asked),
         [
             "GET /start HTTP/1.1",
             "GET /pages/confirm HTTP/1.1",
@@ -273,7 +228,7 @@ fn a_page_is_read_where_it_came_from_after_redirects() {
 
 #[test]
 fn a_refusal_page_reaches_the_divert_with_its_status() {
-    let (url, _) = serve(vec![reply("403 Forbidden", &[HTML], "over quota")]);
+    let (url, _) = serve(vec![reply("403 Forbidden", &[HTML], b"over quota")]);
     let err = download(&url.join("file").unwrap(), refuse).unwrap_err();
     assert_eq!(err.kind, Kind::NetworkRateLimited);
     assert_eq!(err.message, "/file 403 over quota");
@@ -288,7 +243,7 @@ fn a_redirect_to_a_metadata_address_is_refused() {
         "http://[::169.254.169.254]/latest/",
         "http://[2002:a9fe:a9fe::1]/latest/",
     ] {
-        let (url, _) = serve(vec![reply("302 Found", &[("Location", target)], "")]);
+        let (url, _) = serve(vec![reply("302 Found", &[("Location", target)], b"")]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let net = net(&url);
@@ -325,7 +280,7 @@ fn an_html_file_the_server_names_is_the_file() {
             HTML,
             ("Content-Disposition", "attachment; filename=\"index.html\""),
         ],
-        "<html></html>",
+        b"<html></html>",
     )]);
     let fetched = download(&url.join("file").unwrap(), refuse).unwrap();
     assert_eq!(fetched.name.as_deref(), Some("index.html"));
@@ -353,9 +308,9 @@ fn a_resume_answered_from_another_version_starts_over() {
             reply(
                 "206 Partial Content",
                 &[("Content-Range", "bytes 4-7/8"), new],
-                "BBBB",
+                b"BBBB",
             ),
-            reply("200 OK", &[new], "BBBBBBBB"),
+            reply("200 OK", &[new], b"BBBBBBBB"),
         ]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -410,7 +365,7 @@ fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
     let (url, asked) = serve(vec![reply(
         "206 Partial Content",
         &[("Content-Range", "bytes 0-3/4")],
-        "abcd",
+        b"abcd",
     )]);
     let fetched = download(&url.join("file").unwrap(), refuse).unwrap();
     assert_eq!(fetched.size, 4);
@@ -422,7 +377,7 @@ fn a_range_nobody_asked_for_is_the_file_from_byte_zero_and_refused_otherwise() {
             reply(
                 "206 Partial Content",
                 &[("Content-Range", range)],
-                "abcd"
+                b"abcd"
             );
             3
         ]);
@@ -444,7 +399,7 @@ fn a_stated_md5_lets_a_download_without_validators_resume() {
         reply(
             "206 Partial Content",
             &[("Content-Range", "bytes 4-7/8")],
-            "bbbb",
+            b"bbbb",
         ),
     ]);
     let folder = tempfile::tempdir().unwrap();
@@ -465,7 +420,7 @@ fn bidi_controls_are_refused_in_server_names() {
         let (url, _) = serve(vec![reply(
             "200 OK",
             &[("Content-Disposition", disposition)],
-            "bytes",
+            b"bytes",
         )]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -495,11 +450,7 @@ fn a_dropbox_page_never_enters_the_cache_as_a_file() {
     let divert = crate::source::fetch_plan(&shared).divert;
     let divert = divert.unwrap();
     let body = crate::source::recorded::fixture_bytes("dropbox/download-page.html");
-    let (url, _) = serve(vec![reply(
-        "200 OK",
-        &[HTML],
-        &String::from_utf8_lossy(&body),
-    )]);
+    let (url, _) = serve(vec![reply("200 OK", &[HTML], &body)]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let fetch = Fetch {
@@ -529,17 +480,17 @@ fn an_expired_osf_storage_link_is_retried_from_its_stable_url() {
     ))
     .unwrap();
     let (url, asked) = serve(vec![
-        reply("302 Found", &[("Location", "/expired")], ""),
+        reply("302 Found", &[("Location", "/expired")], b""),
         reply(
             "403 Forbidden",
             &[("Content-Type", "application/xml; charset=utf-8")],
-            &body,
+            body.as_bytes(),
         ),
-        reply("302 Found", &[("Location", "/fresh")], ""),
+        reply("302 Found", &[("Location", "/fresh")], b""),
         reply(
             "200 OK",
             &[("Content-Type", "application/octet-stream")],
-            "data",
+            b"data",
         ),
     ]);
     let folder = tempfile::tempdir().unwrap();
@@ -557,7 +508,7 @@ fn an_expired_osf_storage_link_is_retried_from_its_stable_url() {
     );
     assert_eq!(net.work.counts().retries, 1);
     assert_eq!(
-        *asked.lock().unwrap(),
+        lines(&asked),
         [
             "GET /start HTTP/1.1",
             "GET /expired HTTP/1.1",
@@ -572,7 +523,7 @@ fn a_plain_osf_403_stays_an_auth_error() {
     let (url, asked) = serve(vec![reply(
         "403 Forbidden",
         &[("Content-Type", "application/xml")],
-        "<Error><Message>Access to this resource is not authorized</Message><Code>AccessDenied</Code></Error>",
+        b"<Error><Message>Access to this resource is not authorized</Message><Code>AccessDenied</Code></Error>",
     )]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -600,7 +551,7 @@ fn expired_storage_responses_are_not_retried_for_other_sources() {
         let (url, _) = serve(vec![reply(
             "403 Forbidden",
             &[("Content-Type", "application/xml")],
-            &body,
+            body.as_bytes(),
         )]);
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
@@ -627,7 +578,7 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
         reply(
             "206 Partial Content",
             &[("Content-Range", &range), ("ETag", "\"v1\"")],
-            &body[received..],
+            &body.as_bytes()[received..],
         ),
     ]);
     let folder = tempfile::tempdir().unwrap();
@@ -680,7 +631,7 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
         reply(
             "206 Partial Content",
             &[("Content-Range", &range), ("ETag", "\"v1\"")],
-            &body[received..],
+            &body.as_bytes()[received..],
         ),
     ]);
     let folder = tempfile::tempdir().unwrap();
@@ -716,7 +667,7 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
 
 #[test]
 fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
-    let (url, _) = serve(vec![reply("200 OK", &[], "abcd")]);
+    let (url, _) = serve(vec![reply("200 OK", &[], b"abcd")]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let net = net(&url);
@@ -729,17 +680,6 @@ fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
     fetch.expect.sha256 = Some(fetched.digest);
     let found = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
     assert_eq!((found.origin, found.moved), (Origin::Cache, 0));
-}
-
-/// a whole answer carrying `body` as it is.
-fn reply_bytes(body: &[u8]) -> Vec<u8> {
-    let mut answer = format!(
-        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    answer.extend_from_slice(body);
-    answer
 }
 
 fn md5(bytes: &[u8]) -> Md5 {
@@ -755,8 +695,8 @@ fn an_md5_the_download_never_computed_stands_for_nothing() {
     // both downloads ask the same link, so only the check on what the first computed keeps its
     // stated MD5 from standing for the bytes it really served
     let (url, asked) = serve(vec![
-        reply("200 OK", &[], "aaaa"),
-        reply("200 OK", &[], "bbbb"),
+        reply("200 OK", &[], b"aaaa"),
+        reply("200 OK", &[], b"bbbb"),
     ]);
     let link = url.join("a").unwrap();
     let folder = tempfile::tempdir().unwrap();
@@ -799,8 +739,8 @@ fn an_md5_checked_for_one_link_proves_nothing_for_another() {
     });
     assert_ne!(first, second);
     assert_eq!(md5(&first), md5(&second));
-    let (one, _) = serve(vec![reply_bytes(&first)]);
-    let (other, asked) = serve(vec![reply_bytes(&second)]);
+    let (one, _) = serve(vec![reply("200 OK", &[], &first)]);
+    let (other, asked) = serve(vec![reply("200 OK", &[], &second)]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let fetch = |url: &Url, bytes: &[u8]| {
@@ -892,7 +832,7 @@ async fn waiting_for_an_answer_is_no_network_silence() {
 #[test]
 fn an_answer_stating_another_length_than_the_pin_is_refused_unread() {
     let body = "x".repeat(256 * 1024);
-    let (url, asked) = serve(vec![reply("200 OK", &[], &body)]);
+    let (url, asked) = serve(vec![reply("200 OK", &[], body.as_bytes())]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let mut fetch = Fetch::new(url.clone());
@@ -954,7 +894,7 @@ fn malformed_tags_do_not_enable_range_splitting() {
 
 #[test]
 fn file_bodies_use_the_separate_connection_pool() {
-    let (url, asked) = serve(vec![reply("200 OK", &[], "data")]);
+    let (url, asked) = serve(vec![reply("200 OK", &[], b"data")]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();
     let net = net(&url);
@@ -973,9 +913,9 @@ fn a_checksum_restart_reacquires_released_download_slots() {
         reply(
             "206 Partial Content",
             &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
-            "bbbb",
+            b"bbbb",
         ),
-        reply("200 OK", &[("ETag", "\"v1\"")], "bbbbbbbb"),
+        reply("200 OK", &[("ETag", "\"v1\"")], b"bbbbbbbb"),
     ]);
     let folder = tempfile::tempdir().unwrap();
     let cache = Cache::open(folder.path().join("cache")).unwrap();

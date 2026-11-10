@@ -622,6 +622,8 @@ fn redirect_target(from: &Url, response: &reqwest::Response) -> Option<Url> {
 
 #[cfg(test)]
 mod credential_tests;
+#[cfg(test)]
+mod scripted;
 
 #[cfg(test)]
 mod tests {
@@ -673,30 +675,13 @@ mod tests {
     /// too.
     #[test]
     fn both_clients_keep_cookies_in_one_jar() {
+        use crate::net::scripted::{reply, serve};
         use crate::source::recorded::block_on;
-        use std::io::{Read, Write};
 
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        let serving = std::thread::spawn(move || {
-            let mut heads = Vec::new();
-            for cookie in ["Set-Cookie: session=abc; Path=/\r\n", ""] {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut head = Vec::new();
-                let mut byte = [0; 1];
-                while !head.ends_with(b"\r\n\r\n")
-                    && stream.read(&mut byte).is_ok_and(|read| read == 1)
-                {
-                    head.push(byte[0]);
-                }
-                heads.push(String::from_utf8_lossy(&head).to_ascii_lowercase());
-                let answer = format!(
-                    "HTTP/1.1 200 OK\r\n{cookie}Content-Length: 0\r\nConnection: close\r\n\r\n"
-                );
-                stream.write_all(answer.as_bytes()).unwrap();
-            }
-            heads
-        });
+        let (url, asked) = serve(vec![
+            reply("200 OK", &[("Set-Cookie", "session=abc; Path=/")], b""),
+            reply("200 OK", &[], b""),
+        ]);
         let options = Options {
             offline: Offline::No,
             jobs: 1,
@@ -707,8 +692,14 @@ mod tests {
         net.typed(&url);
         assert!(block_on(net.send(&url, |request| request)).is_ok());
         assert!(block_on(net.send_body(&url, |request| request)).is_ok());
-        let heads = serving.join().unwrap();
-        assert!(heads[1].contains("cookie: session=abc"), "{}", heads[1]);
+        let heads = asked.lock().unwrap();
+        assert!(
+            heads[1]
+                .to_ascii_lowercase()
+                .contains("cookie: session=abc"),
+            "{}",
+            heads[1]
+        );
     }
 
     #[test]

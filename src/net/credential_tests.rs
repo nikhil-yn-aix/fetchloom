@@ -1,8 +1,7 @@
 use std::ffi::OsString;
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::thread::JoinHandle;
+use std::sync::Mutex;
 
+use super::scripted::{reply, serve};
 use super::*;
 use crate::source::recorded::block_on;
 
@@ -83,43 +82,30 @@ fn transport() -> reqwest::Client {
         .unwrap()
 }
 
-fn server(locations: &[String]) -> (Url, JoinHandle<Vec<Option<String>>>) {
-    server_header(locations, "authorization")
+/// a server on this machine that redirects to each of `locations` in turn, then answers.
+fn server(locations: &[String]) -> (Url, Arc<Mutex<Vec<String>>>) {
+    let mut responses: Vec<_> = locations
+        .iter()
+        .map(|location| reply("302 Found", &[("Location", location)], b""))
+        .collect();
+    responses.push(reply("200 OK", &[], b""));
+    serve(responses)
 }
 
-fn server_header(locations: &[String], header: &str) -> (Url, JoinHandle<Vec<Option<String>>>) {
-    let header = header.to_owned();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let local = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-    let locations = locations.to_vec();
-    let serving = std::thread::spawn(move || {
-        let mut credentials = Vec::new();
-        for index in 0..=locations.len() {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut head = Vec::new();
-            let mut byte = [0; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|read| read == 1)
-            {
-                head.push(byte[0]);
-            }
-            credentials.push(String::from_utf8_lossy(&head).lines().find_map(|line| {
+/// the value of `header` in each request the server took.
+fn sent(asked: &Mutex<Vec<String>>, header: &str) -> Vec<Option<String>> {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|head| {
+            head.lines().find_map(|line| {
                 let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case(&header)
+                name.eq_ignore_ascii_case(header)
                     .then(|| value.trim().to_owned())
-            }));
-            let answer = match locations.get(index) {
-                Some(location) => format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\n"),
-                None => "HTTP/1.1 200 OK\r\n".to_owned(),
-            };
-            stream
-                .write_all(
-                    format!("{answer}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(),
-                )
-                .unwrap();
-        }
-        credentials
-    });
-    (local, serving)
+            })
+        })
+        .collect()
 }
 
 #[test]
@@ -135,7 +121,7 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
             let client = transport();
             net.trust([(*host).to_owned(), other.to_owned()]);
             let start = Url::parse(&format!("https://{host}/start")).unwrap();
-            let (local, serving) = server(&[
+            let (local, asked) = server(&[
                 format!("https://{host}/same-origin"),
                 away,
                 format!("https://{host}/back"),
@@ -147,7 +133,7 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
             }));
             assert!(answer.is_ok(), "the scripted redirect chain must finish");
             assert_eq!(
-                serving.join().unwrap(),
+                sent(&asked, "authorization"),
                 [
                     Some((*value).to_owned()),
                     Some((*value).to_owned()),
@@ -193,7 +179,7 @@ fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
     ]);
     // the way an earthdata archive signs a person in: away to the login host and back
     let start = Url::parse("https://archive.example/granule").unwrap();
-    let (local, serving) = server(&[
+    let (local, asked) = server(&[
         "http://urs.earthdata.nasa.gov/oauth".to_owned(),
         "https://urs.earthdata.nasa.gov/oauth".to_owned(),
         "https://zenodo.org/not-the-first-origin".to_owned(),
@@ -206,7 +192,7 @@ fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
     }));
     assert!(answer.is_ok());
     assert_eq!(
-        serving.join().unwrap(),
+        sent(&asked, "authorization"),
         [None, None, Some("Basic YWRhOnB3".to_owned()), None, None],
         "the login goes over https to its host only; the token stays on its first origin"
     );
@@ -290,14 +276,14 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
         net.trust(["dv.lab".to_owned()]);
         let client = transport();
         let start = Url::parse(start).unwrap();
-        let (local, serving) = server(&[away.to_owned(), start.join("back").unwrap().to_string()]);
+        let (local, asked) = server(&[away.to_owned(), start.join("back").unwrap().to_string()]);
         let answer = block_on(net.send(&start, |request| {
             let request = request.build().unwrap();
             client.get(local.clone()).headers(request.headers().clone())
         }));
         assert!(answer.is_ok());
         assert_eq!(
-            serving.join().unwrap(),
+            sent(&asked, "authorization"),
             [Some(key.to_owned()), None, None],
             "{start}"
         );
@@ -313,7 +299,7 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
         "api.figshare.com".to_owned(),
     ]);
     let start = Url::parse("https://example.org/shared-file").unwrap();
-    let (local, serving) = server(&[
+    let (local, asked) = server(&[
         "https://zenodo.org/file".to_owned(),
         "https://api.figshare.com/file".to_owned(),
         "https://example.org/back".to_owned(),
@@ -324,7 +310,7 @@ fn a_redirect_cannot_pick_up_another_sources_credentials() {
         client.get(local.clone()).headers(request.headers().clone())
     }));
     assert!(answer.is_ok());
-    assert_eq!(serving.join().unwrap(), [None, None, None, None]);
+    assert_eq!(sent(&asked, "authorization"), [None, None, None, None]);
 }
 
 fn verification_net(credentials: Vec<Credential>) -> Net {
@@ -348,13 +334,13 @@ fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Ve
         .filter_map(|url| url.host_str().map(str::to_owned));
     net.trust(hosts);
     let client = transport();
-    let (local, serving) = server_header(hops, header);
+    let (local, asked) = server(hops);
     let answer = block_on(net.send(&start, |request| {
         let request = request.build().unwrap();
         client.get(local.clone()).headers(request.headers().clone())
     }));
     assert!(answer.is_ok(), "the local redirect chain must finish");
-    serving.join().unwrap()
+    sent(&asked, header)
 }
 
 #[test]

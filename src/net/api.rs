@@ -280,65 +280,13 @@ fn link_value(value: &str) -> Option<Cow<'_, str>> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     use super::*;
+    use crate::net::scripted::{reply, serve};
     use crate::net::{Notice, Offline, Options, Splitting};
     use crate::source::recorded::block_on;
-
-    fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-        let asked = Arc::new(Mutex::new(Vec::new()));
-        let seen = asked.clone();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            let _entered = runtime.enter();
-            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-            for response in responses {
-                let Ok(Ok((stream, _))) = runtime.block_on(tokio::time::timeout(
-                    Duration::from_secs(10),
-                    listener.accept(),
-                )) else {
-                    return;
-                };
-                let mut stream = stream.into_std().unwrap();
-                // windows hands out accepted sockets non-blocking like their listener
-                stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(30)))
-                    .unwrap();
-                let mut head = Vec::new();
-                let mut byte = [0u8; 1];
-                while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                    head.push(byte[0]);
-                }
-                seen.lock().unwrap().push(String::from_utf8(head).unwrap());
-                let _ = stream.write_all(&response);
-            }
-        });
-        (url, asked)
-    }
-
-    fn reply(status: &str, headers: &str, body: &[u8]) -> Vec<u8> {
-        let mut response = format!(
-            "HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n",
-            body.len()
-        )
-        .into_bytes();
-        response.extend_from_slice(body);
-        response
-    }
 
     fn net(url: &Url) -> Net {
         let net = Net::new(
@@ -359,10 +307,13 @@ mod tests {
     #[test]
     fn listing_redirects_resolve_next_pages_against_the_final_url() {
         let (url, asked) = serve(vec![
-            reply("302 Found", "Location: /listing/page1\r\n", b""),
+            reply("302 Found", &[("Location", "/listing/page1")], b""),
             reply(
                 "200 OK",
-                "Link: <../first>; rel=first, <page2?cursor=abc>; rel=next\r\n",
+                &[(
+                    "Link",
+                    "<../first>; rel=first, <page2?cursor=abc>; rel=next",
+                )],
                 br#"[{"path":"data.csv"}]"#,
             ),
         ]);
@@ -393,7 +344,7 @@ mod tests {
             ("410 Gone", Kind::ReferenceUnresolved),
             ("418 Teapot", Kind::NetworkStatus),
         ] {
-            let (url, asked) = serve(vec![reply(status, "", b"not json")]);
+            let (url, asked) = serve(vec![reply(status, &[], b"not json")]);
             let net = net(&url);
             let response = block_on(net.get(&url)).unwrap();
             assert_eq!(response.text(), "not json");
@@ -407,7 +358,7 @@ mod tests {
     #[test]
     fn invalid_listing_json_reports_the_source_and_masks_query_secrets() {
         for body in [b"{broken".as_slice(), b"[1,2]"] {
-            let (mut url, _) = serve(vec![reply("200 OK", "", body)]);
+            let (mut url, _) = serve(vec![reply("200 OK", &[], body)]);
             url.set_query(Some("token=private-value&view=files"));
             let response = block_on(net(&url).get(&url)).unwrap();
             let error = response
@@ -450,7 +401,7 @@ mod tests {
     fn a_broken_listing_body_is_retried_without_reusing_its_prefix() {
         let (url, asked) = serve(vec![
             b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 100\r\n\r\npartial".to_vec(),
-            reply("200 OK", "", b"[42]"),
+            reply("200 OK", &[], b"[42]"),
         ]);
         let net = net(&url);
         let response = block_on(net.get(&url)).unwrap();
@@ -462,8 +413,8 @@ mod tests {
     #[test]
     fn transient_listing_statuses_retry_before_decoding_the_body() {
         let (url, asked) = serve(vec![
-            reply("503 Unavailable", "Retry-After: 0\r\n", b"not json"),
-            reply("200 OK", "", b"[7]"),
+            reply("503 Unavailable", &[("Retry-After", "0")], b"not json"),
+            reply("200 OK", &[], b"[7]"),
         ]);
         let net = net(&url);
         let response = block_on(net.get(&url)).unwrap();
@@ -475,8 +426,8 @@ mod tests {
 
     #[test]
     fn listing_rate_limits_get_a_grace_budget_before_spending_retries() {
-        let mut responses = vec![reply("429 Too Many Requests", "Retry-After: 0\r\n", b""); 11];
-        responses.push(reply("200 OK", "", b"[]"));
+        let mut responses = vec![reply("429 Too Many Requests", &[("Retry-After", "0")], b""); 11];
+        responses.push(reply("200 OK", &[], b"[]"));
         let (url, asked) = serve(responses);
         let mut net = net(&url);
         let retries = Arc::new(Mutex::new(Vec::new()));
@@ -496,11 +447,7 @@ mod tests {
     #[test]
     fn listing_waits_beyond_the_budget_fail_without_another_request() {
         for (status, wait) in [("503 Unavailable", "61"), ("429 Too Many Requests", "121")] {
-            let (url, asked) = serve(vec![reply(
-                status,
-                &format!("Retry-After: {wait}\r\n"),
-                b"",
-            )]);
+            let (url, asked) = serve(vec![reply(status, &[("Retry-After", wait)], b"")]);
             let net = net(&url);
             let error = block_on(net.get(&url)).unwrap_err();
             assert_eq!(error.kind, Kind::NetworkRateLimited);
@@ -581,7 +528,7 @@ mod tests {
     fn pagination_reads_each_link_header_field() {
         let (url, _) = serve(vec![reply(
             "200 OK",
-            "Link: <page0>; rel=prev\r\nLink: <page2>; rel=next\r\n",
+            &[("Link", "<page0>; rel=prev"), ("Link", "<page2>; rel=next")],
             b"[]",
         )]);
         let response = block_on(net(&url).get(&url)).unwrap();

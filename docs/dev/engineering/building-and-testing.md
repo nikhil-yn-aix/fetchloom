@@ -133,7 +133,7 @@ on nfs 4.2 from a linux server that hands out delegated timestamps (RFC 9754), a
 
 ## adding coverage
 
-keep parsers and pure planning tests close to the module. inject `Api` responses, environment readers or archive limits where the code already exposes those seams. retry timing still uses a real clock and randomness; it is not a fully simulated scheduler. use a CLI scenario for interrupted replacement, locked-source recovery or anything whose contract includes on-disk leftovers.
+keep parsers and pure planning tests close to the module. inject `Api` responses, environment readers or archive limits where the code already exposes those seams. network tests under `src/net` script their answers with [scripted.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/scripted.rs), which answers each connection with the next response byte for byte and keeps each request's head. retry timing still uses a real clock and randomness; it is not a fully simulated scheduler. use a CLI scenario for interrupted replacement, locked-source recovery or anything whose contract includes on-disk leftovers.
 
 nextest, wiremock, proptest, cargo-fuzz, cargo-mutants, cargo-shear, typos, vale, zizmor and a justfile are not configured. add tooling with the job it will perform rather than treating it as an existing requirement.
 
