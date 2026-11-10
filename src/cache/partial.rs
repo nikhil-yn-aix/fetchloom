@@ -42,7 +42,35 @@ pub(crate) struct Partial {
     url: String,
     bytes: PathBuf,
     record: PathBuf,
-    lock: Option<Arc<File>>,
+    lock: Option<Arc<Claimed>>,
+}
+
+/// the locked file that keeps a download to one process, held by every clone of its claim. the
+/// last one removes it when the download left nothing to resume, while it still holds the lock,
+/// so `partial/` does not keep a file for every link ever fetched. a run that opened the name
+/// before it went locks a file with no name, which [`take_lock`] notices.
+#[derive(Debug)]
+pub(super) struct Claimed {
+    file: File,
+    path: PathBuf,
+    bytes: PathBuf,
+    record: PathBuf,
+}
+
+impl Drop for Claimed {
+    fn drop(&mut self) {
+        let gone = |path: &Path| {
+            fs::symlink_metadata(path).is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+        };
+        // a name that moved on to another run's file stays with that run
+        if gone(&self.bytes)
+            && gone(&self.record)
+            && names(&self.path, &self.file).unwrap_or(false)
+            && let Err(err) = fs::remove_file(&self.path)
+        {
+            tracing::debug!(%err, "could not remove the lock file of a finished download");
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,7 +121,7 @@ impl Cache {
         let path = partial.join(format!("{key}.lock"));
         let opened = open_unfollowed(&path, true).map_err(|err| self.explained(&partial, err))?;
         let (folder, stem, lock) = match take_lock(&path, opened) {
-            Ok(lock) => (partial, key, Some(Arc::new(lock))),
+            Ok(lock) => (partial, key, Some(lock)),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
             // without locks, a private file keeps processes apart, at the cost of resuming
             Err(TryLockError::Error(_)) => (
@@ -102,11 +130,21 @@ impl Cache {
                 None,
             ),
         };
+        let bytes = folder.join(format!("{stem}.part"));
+        let record = folder.join(format!("{stem}.json"));
+        let lock = lock.map(|file| {
+            Arc::new(Claimed {
+                file,
+                path,
+                bytes: bytes.clone(),
+                record: record.clone(),
+            })
+        });
         Ok(Claim::Owned(Partial {
             cache: self.clone(),
             url: url.to_owned(),
-            bytes: folder.join(format!("{stem}.part")),
-            record: folder.join(format!("{stem}.json")),
+            bytes,
+            record,
             lock,
         }))
     }
@@ -408,7 +446,7 @@ pub(crate) struct PartialWriter {
     file: Arc<File>,
     hasher: HashPipe,
     // the worker must stop before another writer can claim the download.
-    _lock: Option<Arc<File>>,
+    _lock: Option<Arc<Claimed>>,
     prefix: u64,
     /// the end of the prefix, not yet in the file.
     pending: Vec<u8>,

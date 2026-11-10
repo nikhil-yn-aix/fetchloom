@@ -4,7 +4,7 @@
 //! never leave a damaged object under a hash.
 
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -25,7 +25,7 @@ pub(crate) struct Finished {
     pub(super) digest: Sha256,
     pub(super) size: u64,
     pub(super) md5: Option<Md5>,
-    pub(super) lock: Option<Arc<File>>,
+    pub(super) lock: Option<Arc<super::partial::Claimed>>,
 }
 
 /// the batch a cache is in, shared by every clone. `pending` is always locked before

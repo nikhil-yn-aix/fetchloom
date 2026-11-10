@@ -37,7 +37,7 @@ fn a_failed_batch_flush_never_names_its_downloads() {
     )
     .unwrap();
     lock(&cache.deferred.pending).as_mut().unwrap().batch = Arc::new(
-        super::super::object::Batch::with_file_for_test(File::from(file)),
+        super::super::object::Batch::with_file_for_test(std::fs::File::from(file)),
     );
     let stored = finished(&cache, "https://example.org/flush-error", b"unflushed");
     assert!(cache.publish_downloads().is_err());

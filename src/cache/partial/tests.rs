@@ -183,6 +183,67 @@ fn a_published_object_can_be_read_while_its_download_is_still_claimed() {
     assert_eq!(store(&cache, b"abc").digest, stored.digest);
 }
 
+/// a download that stops partway keeps its lock file beside its bytes, which gc finds them by.
+/// once a later run finishes it and lets go of it, nothing of it stays in `partial/`, so the
+/// cache does not keep a file for every link it ever fetched.
+#[test]
+fn a_finished_download_leaves_no_lock_file() {
+    let (_dir, cache) = cache();
+    let url = "https://example.org/resumed";
+    let partial = owned(&cache, url);
+    let lock = partial.bytes.with_extension("lock");
+    let mut writer = partial
+        .writer(0, Some(6), Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.save().unwrap();
+    drop(writer);
+    drop(partial);
+    assert!(lock.is_file(), "a stopped download keeps its lock");
+    let partial = owned(&cache, url);
+    let (received, validators) = partial.resumable().unwrap();
+    let mut writer = partial
+        .writer(received, Some(6), validators, false, false)
+        .unwrap();
+    writer.write_all(b"def").unwrap();
+    writer.finish().unwrap();
+    assert!(lock.is_file(), "a download still claimed keeps its lock");
+    drop(partial);
+    let left: Vec<_> = fs::read_dir(lock.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    let again = owned(&cache, url);
+    assert!(lock.is_file(), "the next claim makes the lock file again");
+    drop(again);
+}
+
+/// the run that finishes a download removes the lock file only while the name is still its own:
+/// once another run holds a new file under that name, the name stays with it.
+#[test]
+fn a_finished_download_leaves_a_lock_file_another_run_holds() {
+    let (_dir, cache) = cache();
+    let url = "https://example.org/raced";
+    let first = owned(&cache, url);
+    let lock = first.bytes.with_extension("lock");
+    let mut writer = first
+        .writer(0, Some(3), Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(b"abc").unwrap();
+    writer.finish().unwrap();
+    fs::remove_file(&lock).unwrap();
+    // fat and exfat on windows keep a removed file's name until its last handle closes
+    if lock.exists() {
+        return;
+    }
+    let second = owned(&cache, url);
+    drop(first);
+    assert!(lock.is_file());
+    assert!(matches!(cache.claim(url).unwrap(), Claim::Busy));
+    drop(second);
+}
+
 /// a writer for a 12 byte file, for streams that each write their own part of it.
 fn split_writer(partial: &Partial) -> PartialWriter {
     partial
