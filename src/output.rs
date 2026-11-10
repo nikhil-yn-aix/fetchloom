@@ -82,9 +82,9 @@ struct Problem<'a> {
 /// the first `fetchloom` command quoted in `help`, without its backticks. an example ("as in"),
 /// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
 /// running it would act on a dataset nobody named or ask the same question again. a command
-/// that first needs a broken file deleted is not ready to run either.
+/// that first needs a broken file deleted, or a file edited by hand, is not ready to run either.
 fn fix(help: &str) -> Option<&str> {
-    const NOT_A_FIX: [&str; 7] = [
+    const NOT_A_FIX: [&str; 8] = [
         "as in",
         "such as",
         "for example",
@@ -92,6 +92,7 @@ fn fix(help: &str) -> Option<&str> {
         "did you mean",
         "own terminal, run",
         "delete it and run",
+        "by hand, then run",
     ];
     let mut before = String::new();
     for (at, part) in help.split('`').enumerate() {
@@ -1517,6 +1518,10 @@ mod tests {
             super::fix(
                 "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`"
             ),
+            None
+        );
+        assert_eq!(
+            super::fix("delete git's conflict lines by hand, then run `fetchloom lock`"),
             None
         );
     }

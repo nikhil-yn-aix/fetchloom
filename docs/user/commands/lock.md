@@ -63,3 +63,4 @@ after an upgrade, run `fetchloom sync` to place the new inputs and commit `data.
 | an explicit version did not advance | the reference still names that version | edit `ref` deliberately, then lock |
 | `--check` passes despite edited data | it checks specs, not contents | use `status`; use `cache verify` for cached objects |
 | rebuilding a broken lock changes inputs | fresh resolution can choose newer data | restore the original lock from git when those pins matter |
+| `data.toml has an unfinished git merge conflict`, or the same for `data.lock` | a git merge left both sides between its conflict lines | keep the datasets from both sides, delete the `<<<<<<<`, `=======` and `>>>>>>>` lines, then run `fetchloom lock`; [a git merge conflict](../reference/data-lock.md#a-git-merge-conflict) has the details |

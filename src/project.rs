@@ -254,7 +254,8 @@ impl Project {
                 self.unreadable(manifest::FILE, &err)
             }
         })?;
-        let manifest = Manifest::parse(&text)?;
+        let manifest = Manifest::parse(&text)
+            .map_err(|error| unmerged(manifest::FILE, &text).unwrap_or(error))?;
         Ok((text, manifest))
     }
 
@@ -269,7 +270,9 @@ impl Project {
         match fs::read_to_string(self.root.join(lock::FILE)) {
             Ok(text) => {
                 span.record("bytes", text.len());
-                Ok(Some((Lock::read(&text, &self.root)?, text)))
+                let lock = Lock::read(&text, &self.root)
+                    .map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
+                Ok(Some((lock, text)))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
@@ -727,6 +730,30 @@ impl Project {
 /// a submodule or worktree has.
 fn is_repository(folder: &Path) -> bool {
     folder.join(".git").exists()
+}
+
+/// the error for project file `name` when git left a merge it could not finish in its `text`:
+/// both sides between conflict lines at the start of a line, `<<<<<<<`, `|||||||`, `=======`
+/// and `>>>>>>>`. none when no such line is there.
+fn unmerged(name: &str, text: &str) -> Option<Error> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let line = text.lines().position(|line| {
+        line == "======="
+            || ["<<<<<<<", "|||||||", ">>>>>>>"].iter().any(|marker| {
+                line.strip_prefix(marker)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
+            })
+    })?;
+    Some(
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("{name} has an unfinished git merge conflict"),
+        )
+        .detail(format!("{name}:{}", line + 1))
+        // "by hand, then run" keeps the lock command out of the json fix: only a person can
+        // choose what each side keeps
+        .help("keep the datasets from both sides and delete git's <<<<<<<, ======= and >>>>>>> lines by hand, then run `fetchloom lock`"),
+    )
 }
 
 /// whether `path` still names the file `file` has open.
@@ -1606,6 +1633,41 @@ mod tests {
         assert_eq!(lock.kind, Kind::ProjectInvalid);
         assert!(lock.message.contains("UTF-8"));
         assert_eq!(lock.help.as_deref(), Some(lock::BROKEN));
+    }
+
+    /// git leaves both sides of a merge it could not finish in the file, between its conflict
+    /// lines. fetchloom names that, and how to finish it, rather than the TOML mistake those
+    /// lines make, in either of git's conflict styles and either line ending.
+    #[test]
+    fn an_unfinished_merge_in_data_toml_or_data_lock_says_how_to_finish_it() {
+        let both = "[datasets.core]\nref = \"zenodo:1\"\n<<<<<<< HEAD\n\n[datasets.alpha]\nref = \"zenodo:2\"\n=======\n\n[datasets.beta]\nref = \"zenodo:3\"\n>>>>>>> beta\n";
+        let base =
+            "version = 1\r\n\r\n<<<<<<< ours\r\n||||||| base\r\n=======\r\n>>>>>>> theirs\r\n";
+        let (_dir, project) = project(&[(manifest::FILE, both), (lock::FILE, base)]);
+        let help = "keep the datasets from both sides and delete git's <<<<<<<, ======= and >>>>>>> lines by hand, then run `fetchloom lock`";
+        let manifest = project.manifest().unwrap_err();
+        assert_eq!(manifest.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            manifest.message,
+            "data.toml has an unfinished git merge conflict"
+        );
+        assert_eq!(manifest.details, ["data.toml:3"]);
+        assert_eq!(manifest.help.as_deref(), Some(help));
+        let lock = project.lock_and_text().unwrap_err();
+        assert_eq!(lock.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            lock.message,
+            "data.lock has an unfinished git merge conflict"
+        );
+        assert_eq!(lock.details, ["data.lock:3"]);
+        assert_eq!(lock.help.as_deref(), Some(help));
+        fs::write(project.manifest_path(), "[datasets.x\n<<<<<<<<\n").unwrap();
+        let mistake = project.manifest().unwrap_err();
+        assert!(
+            mistake.message.starts_with("data.toml is not valid TOML"),
+            "{}",
+            mistake.message
+        );
     }
 
     #[test]

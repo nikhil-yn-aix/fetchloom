@@ -748,6 +748,39 @@ fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {
     Ok(())
 }
 
+/// a merge git could not finish in data.toml or data.lock stops a command before any request and
+/// says how to finish it, with no command offered to run for it, since only a person can choose
+/// what to keep.
+#[test]
+fn an_unfinished_merge_says_how_to_finish_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    for name in ["data.toml", "data.lock"] {
+        let path = sandbox.work().join(name);
+        let merged = fs::read_to_string(&path)?;
+        fs::write(
+            &path,
+            format!("<<<<<<< HEAD\n{merged}=======\n{merged}>>>>>>> theirs\n"),
+        )?;
+        let output = sandbox.run(&["--json", "sync"])?;
+        assert_eq!(output.status.code(), Some(50), "{name}");
+        let report = json(&output)?;
+        let error = &report["errors"][0];
+        assert_eq!(error["kind"], "project.invalid");
+        assert_eq!(
+            error["message"],
+            format!("{name} has an unfinished git merge conflict")
+        );
+        assert_eq!(error["details"], serde_json::json!([format!("{name}:1")]));
+        assert_eq!(error["fix"], serde_json::Value::Null, "{name}");
+        assert_eq!(report["work"]["requests"], 0);
+        fs::write(&path, merged)?;
+    }
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
 #[test]
 fn a_script_never_gets_the_cache_reminder_and_nothing_is_freed() -> Result {
     let sandbox = Sandbox::new()?;

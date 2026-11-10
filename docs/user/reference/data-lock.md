@@ -44,6 +44,10 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 
 a newer lock version asks you to update fetchloom. a broken or older lock must be restored from git, or deleted before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
 
+## a git merge conflict
+
+a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. keep the datasets from both sides, delete those lines, then run `fetchloom lock`, which pins any dataset data.lock still lacks. with git's `diff3` conflict style, delete the older lines between `|||||||` and `=======` as well. where both sides changed one dataset, keep one side's entry for it. the JSON error has no `fix`, since only a person can choose what each side keeps.
+
 ## big datasets
 
 a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock.
