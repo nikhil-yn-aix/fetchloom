@@ -59,7 +59,11 @@ fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
             fs::copy(object.path(), to.join(object.file_name()))?;
         }
     }
-    for record in fs::read_dir(sandbox.cache().join("unpacked"))? {
+    // a cache that unpacked no archive has no records of any
+    for record in fs::read_dir(sandbox.cache().join("unpacked"))
+        .into_iter()
+        .flatten()
+    {
         let bytes = fs::read(record?.path())?;
         let hex = sha256(&bytes);
         let to = root.join("trees").join(&hex[..2]);
@@ -197,6 +201,31 @@ fn offline_sync_reads_a_folder_mirror_from_the_settings() -> Result {
     sandbox
         .placed_filters(&stderr)?
         .bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+/// a teammate's clone of a project that imported files from someone's folder gets their bytes
+/// from a mirror, so the folder they came from is never needed.
+#[test]
+fn a_clone_gets_the_bytes_of_an_import_from_a_mirror() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS", &root)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["work"]["requests"], 0);
+    assert_eq!(
+        fs::read(folder.join("data/flowers/sepals.csv"))?,
+        b"length,width\n5.1,3.5\n"
+    );
     Ok(())
 }
 
