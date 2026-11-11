@@ -442,6 +442,50 @@ fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
 /// `--inputs` adds what a recipe is made from, so a rebuild elsewhere finds it on the mirror. a
 /// result's files are pushed as data.lock pins them, and one the cache lacks names the build
 /// that makes it, which only a person may run.
+/// a plain push sends what a sync places, so a dataset with `place = false` stays off the mirror
+/// unless a name or `--inputs` asks for it.
+#[test]
+fn a_plain_push_leaves_out_what_sync_does_not_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        crate::project::PATH,
+        vec![file(crate::project::IRIS, "\"v1\"")],
+    )?;
+    with_recipe(&sandbox, &server)?;
+    pin_clean(&sandbox, CODE, &[])?;
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        text.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
+    )?;
+    // the result as a build would leave it in the cache
+    let done = sha256(b"done");
+    let fan = sandbox.cache().join("objects").join(&done[..2]);
+    fs::create_dir_all(&fan)?;
+    fs::write(fan.join(&done[2..]), b"done")?;
+    let pushed = |mirror: &str, args: &[&str]| -> Result<Vec<String>> {
+        let root = sandbox.work().join(mirror);
+        let mut command = sandbox.command(&["--yes", "push"]);
+        ok(&command.args(args).arg("--to").arg(&root).output()?)?;
+        named(&root, "objects")
+    };
+    let iris = sha256(crate::project::IRIS);
+    assert_eq!(pushed("plain", &[])?, std::slice::from_ref(&done));
+    let mut both = vec![iris.clone(), done];
+    both.sort();
+    assert_eq!(pushed("inputs", &["--inputs"])?, both);
+    assert_eq!(pushed("named", &["iris"])?, [iris]);
+    // with no name, --inputs still sends what every recipe is made from, placed or not
+    let text = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        text.replacen("[datasets.clean]\n", "[datasets.clean]\nplace = false\n", 1),
+    )?;
+    assert_eq!(pushed("unplaced", &["--inputs"])?, both);
+    Ok(())
+}
+
 #[test]
 fn inputs_push_what_a_recipe_is_made_from() -> Result {
     let sandbox = Sandbox::new()?;

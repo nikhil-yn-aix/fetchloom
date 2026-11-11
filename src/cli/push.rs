@@ -200,11 +200,17 @@ fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     }
 }
 
-/// the datasets a push sends: those `names` gives, else every dataset sync places, which is
-/// every dataset in data.toml. with `inputs`, also what those are made from, all the way down.
+/// the datasets a push sends: those `names` gives, else every dataset sync places. with
+/// `inputs`, also what those are made from, all the way down, and with no names what every
+/// recipe is made from.
 fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> {
     let roots: Vec<&str> = if names.is_empty() {
-        manifest.datasets.keys().map(String::as_str).collect()
+        manifest
+            .datasets
+            .iter()
+            .filter(|(_, entry)| entry.place || (inputs && entry.recipe().is_some()))
+            .map(|(name, _)| name.as_str())
+            .collect()
     } else {
         names.iter().map(String::as_str).collect()
     };

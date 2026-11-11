@@ -140,4 +140,4 @@ a teammate's sync of the same commit places clean from their cache or a mirror a
   hint: `fetchloom build clean` makes it on this machine
 ```
 
-their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. the examples are stderr from one run against a server on this machine.
+their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, as a sync would; `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.

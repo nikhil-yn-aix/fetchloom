@@ -15,7 +15,7 @@ fetchloom push --to /media/usb/fetchloom --json
 fetchloom push [options] [name]...
 ```
 
-`name` is a dataset in `data.toml`; with none, every dataset `sync` places is pushed. an unknown name is a usage error, exit 2, that suggests the closest name. `--inputs` adds what the named [recipes](../recipes.md) are made from.
+`name` is a dataset in `data.toml`; with none, every dataset `sync` places is pushed, so one with `place = false` stays off the mirror unless it is named or `--inputs` adds it. an unknown name is a usage error, exit 2, that suggests the closest name. `--inputs` adds what the named [recipes](../recipes.md) are made from.
 
 | option | effect |
 |---|---|
