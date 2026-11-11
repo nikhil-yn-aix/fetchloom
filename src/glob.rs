@@ -251,6 +251,24 @@ fn literal(tokens: &[Token]) -> Option<String> {
         .collect()
 }
 
+/// `--exclude` with the pattern that leaves out exactly `path`, quoted for this system's shell.
+pub(crate) fn exclusion_flag(path: &str) -> String {
+    let pattern = escape(path);
+    // inside double quotes, bash and zsh still expand `!` from the history
+    let single =
+        pattern.contains(['\'', '"', '$', '\u{60}']) || (!cfg!(windows) && pattern.contains('!'));
+    let quoted = if single {
+        if cfg!(windows) {
+            format!("'{}'", pattern.replace('\'', "''"))
+        } else {
+            format!("'{}'", pattern.replace('\'', "'\"'\"'"))
+        }
+    } else {
+        format!("\"{pattern}\"")
+    };
+    format!("--exclude {quoted}")
+}
+
 /// a pattern that matches exactly `path`, its `[`, `*` and `?` each made a set of itself, as
 /// for the one file a pasted link names.
 pub(crate) fn escape(path: &str) -> String {

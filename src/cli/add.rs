@@ -1387,7 +1387,7 @@ async fn sync_add(
     }
     // a lock whose files cannot all land is refused before anything is written, so data.lock
     // never pins what no sync can place
-    let plan = plan::from_cache(manifest, &lock, &work.cache)?;
+    let plan = plan::from_cache_adding(manifest, &lock, &work.cache, names)?;
     let placing = work.prepare(manifest, &lock, plan, false, survey).await?;
     // every byte is in the cache now, and a stop asked meanwhile ends the add before anything in
     // the project changed

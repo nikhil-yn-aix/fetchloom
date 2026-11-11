@@ -186,6 +186,38 @@ fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result 
     Ok(())
 }
 
+/// a file beside a zip that holds one of the same name cannot land with it. the add is undone,
+/// so the help names the add's own options rather than a table of a dataset data.toml lacks.
+#[test]
+fn a_clash_beside_a_zip_names_the_options_of_the_add() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("clash")?;
+    fs::write(folder.join("notes.txt"), b"mine")?;
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    zip.start_file("notes.txt", zip::write::SimpleFileOptions::default())?;
+    std::io::Write::write_all(&mut zip, b"theirs")?;
+    fs::write(folder.join("bundle.zip"), zip.finish()?.into_inner())?;
+    let refused = sandbox.run(&["add", "../clash"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains(
+            "error: two files would land on data/clash/notes.txt\n  help: leave out the notes.txt beside bundle.zip with --exclude \"notes.txt\", or keep bundle.zip packed with --no-extract\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !sandbox.work().join("data.toml").exists(),
+        "the add is undone"
+    );
+    ok(&sandbox.run(&["add", "../clash", "--exclude", "notes.txt"])?)?;
+    assert_eq!(
+        fs::read(sandbox.work().join("data/clash/notes.txt"))?,
+        b"theirs"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_unsafe_archive_is_refused_whole() -> Result {
     let sandbox = Sandbox::new()?;

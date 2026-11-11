@@ -831,7 +831,7 @@ fn unavailable_selection(
     let flags = if entries.len() <= 5 {
         entries
             .iter()
-            .map(|entry| exclusion_flag(&entry.path))
+            .map(|entry| glob::exclusion_flag(&entry.path))
             .collect::<Vec<_>>()
             .join(" ")
     } else {
@@ -856,23 +856,6 @@ fn unavailable_selection(
     error.help(format!(
         "{change} {purpose}, or ask the owner to add {copy} such as pdf or csv"
     ))
-}
-
-fn exclusion_flag(path: &str) -> String {
-    let pattern = crate::glob::escape(path);
-    // inside double quotes, bash and zsh still expand `!` from the history
-    let single =
-        pattern.contains(['\'', '"', '$', '\u{60}']) || (!cfg!(windows) && pattern.contains('!'));
-    let quoted = if single {
-        if cfg!(windows) {
-            format!("'{}'", pattern.replace('\'', "''"))
-        } else {
-            format!("'{}'", pattern.replace('\'', "'\"'\"'"))
-        }
-    } else {
-        format!("\"{pattern}\"")
-    };
-    format!("--exclude {quoted}")
 }
 
 /// where an entry's patterns were written. `add` and `get` clear the lines of an entry they make

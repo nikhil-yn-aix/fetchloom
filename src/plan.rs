@@ -94,6 +94,31 @@ pub(crate) fn from_cache<'a>(
     plan(manifest, lock, &|archive| archive.recorded(cache))
 }
 
+/// [`from_cache`] for an add of the datasets `added`, whose patterns came from its command line,
+/// so a clash among their files names the add's options: a failed add leaves data.toml without
+/// them.
+pub(crate) fn from_cache_adding<'a>(
+    manifest: &Manifest,
+    lock: &'a Lock,
+    cache: &Cache,
+    added: &[String],
+) -> Result<Plan<'a>, Error> {
+    let patterns = |dataset: &str| {
+        if added.iter().any(|name| name == dataset) {
+            Patterns::OnCommandLine
+        } else {
+            Patterns::InDataToml
+        }
+    };
+    planned(
+        manifest,
+        &lock.datasets,
+        &lock.derived,
+        &|archive| archive.recorded(cache),
+        &patterns,
+    )
+}
+
 /// every file of `lock`'s fetched datasets as a build reads them: [`from_cache`]'s, then those of
 /// datasets `place = false` keeps out of the data folder, laid out where they would land. only
 /// the placed ones are checked for clashes, since only they reach the data folder.
@@ -141,7 +166,8 @@ pub(crate) fn foresee<'a>(
     // in data.lock's order, so a clash names its datasets as the later check does
     let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
-    planned(manifest, datasets, &[], &|archive| archive.recorded(cache)).map(drop)
+    let members = |archive: &Archive<'_>| archive.recorded(cache);
+    planned(manifest, datasets, &[], &members, &|_| Patterns::InDataToml).map(drop)
 }
 
 /// every file the lock places for the datasets data.toml lists, or the first clash: the files of
@@ -153,14 +179,18 @@ pub(crate) fn plan<'a>(
     lock: &'a Lock,
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
-    planned(manifest, &lock.datasets, &lock.derived, members)
+    let patterns = |_: &str| Patterns::InDataToml;
+    planned(manifest, &lock.datasets, &lock.derived, members, &patterns)
 }
 
+/// [`plan`] for `datasets` and `results`, telling a clash in each dataset as `patterns` says
+/// where its patterns were written.
 fn planned<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
     results: &'a [Derived],
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
+    patterns: &dyn Fn(&str) -> Patterns,
 ) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
@@ -231,7 +261,7 @@ fn planned<'a>(
                 holder: Holder::Result,
             }));
     }
-    check(&plan.targets, Patterns::InDataToml)?;
+    check_by(&plan.targets, patterns)?;
     span.record("files", plan.targets.len());
     Ok(plan)
 }
@@ -577,6 +607,11 @@ pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String
 /// path as a case-insensitive disk sees it, or a file where a folder must be. datasets may share
 /// folders, so targets of two datasets clash only where their files do.
 pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error> {
+    check_by(targets, &|_| patterns)
+}
+
+/// [`check`], with where each dataset's patterns were written as `patterns` says.
+fn check_by(targets: &[Target], patterns: &dyn Fn(&str) -> Patterns) -> Result<(), Error> {
     let mut files: HashMap<String, &Target> = HashMap::with_capacity(targets.len());
     let mut folders: HashMap<String, &Target> = HashMap::new();
     for target in targets {
@@ -585,18 +620,18 @@ pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error>
                 Kind::ProjectInvalid,
                 format!("{} is refused because {reason}", target.path),
             )
-            .help(leave_out("it", target, patterns)));
+            .help(leave_out("it", target, patterns(target.dataset))));
         }
         if let Some(reason) = name::unstorable(&target.path) {
             return Err(Error::new(
                 Kind::ProjectInvalid,
                 format!("{} cannot be stored on this machine: {reason}", target.path),
             )
-            .help(leave_out("it", target, patterns)));
+            .help(leave_out("it", target, patterns(target.dataset))));
         }
         let path_key = key(&target.path);
         if let Some(other) = files.insert(path_key.clone(), target) {
-            return Err(clash(other, target, patterns));
+            return Err(clash(other, target, targets, patterns));
         }
         let mut parent = path_key.as_str();
         while let Some((folder, _)) = parent.rsplit_once('/') {
@@ -623,13 +658,19 @@ pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error>
                     file.dataset, file.path, inside.dataset, inside.path
                 )
             };
-            return Err(Error::new(Kind::ProjectInvalid, message).help(fix(file, inside, patterns)));
+            let help = fix(file, inside, targets, patterns);
+            return Err(Error::new(Kind::ProjectInvalid, message).help(help));
         }
     }
     Ok(())
 }
 
-fn clash(first: &Target, second: &Target, patterns: Patterns) -> Error {
+fn clash(
+    first: &Target,
+    second: &Target,
+    targets: &[Target],
+    patterns: &dyn Fn(&str) -> Patterns,
+) -> Error {
     let datasets = format!("datasets {} and {}", first.dataset, second.dataset);
     let message = match (first.path == second.path, first.dataset == second.dataset) {
         (true, true) => format!("two files would land on {}", first.path),
@@ -643,20 +684,61 @@ fn clash(first: &Target, second: &Target, patterns: Patterns) -> Error {
             first.path, second.path
         ),
     };
-    Error::new(Kind::ProjectInvalid, message).help(fix(first, second, patterns))
+    Error::new(Kind::ProjectInvalid, message).help(fix(first, second, targets, patterns))
 }
 
-/// how to resolve a clash between `first` and `second`: give one of two datasets a folder of its
-/// own, or within one dataset keep an archive involved packed, or leave a file out.
-fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
+/// how to resolve a clash between `first` and `second`, two of `targets`: give one of two
+/// datasets a folder of its own, or within one dataset keep an archive involved packed, or leave
+/// a file out.
+fn fix(
+    first: &Target,
+    second: &Target,
+    targets: &[Target],
+    patterns: &dyn Fn(&str) -> Patterns,
+) -> String {
     if first.dataset != second.dataset {
         return format!(
             "give datasets.{} or datasets.{} another path in data.toml",
             first.dataset, second.dataset
         );
     }
+    let patterns = patterns(first.dataset);
     let unpacked = [first, second].into_iter().find(|target| target.unpacked());
+    let listed = [first, second]
+        .into_iter()
+        .find(|target| !target.unpacked())
+        .and_then(Target::file);
+    if let (Some(member), Some(listed)) = (unpacked, listed) {
+        return beside(member, listed, targets, patterns);
+    }
     leave_out("one of them", unpacked.unwrap_or(second), patterns)
+}
+
+/// how to resolve a clash in one dataset between `member`, a file inside one of its archives, and
+/// `listed`, a file its source lists beside that archive: leave out the listed one, or the member
+/// while its archive keeps another file, or keep the archives packed.
+fn beside(member: &Target, listed: &LockedFile, targets: &[Target], patterns: Patterns) -> String {
+    let dataset = member.dataset;
+    let archive = member.file().map_or("", |file| file.path.as_str());
+    let named = format!("the {} beside {archive}", listed.path);
+    if patterns == Patterns::OnCommandLine {
+        return format!(
+            "leave out {named} with {}, or keep {archive} packed with --no-extract",
+            glob::exclusion_flag(&listed.path)
+        );
+    }
+    let exclude = toml_edit::Value::from(glob::escape(&listed.path));
+    let packed = format!("set extract = false on datasets.{dataset} to keep its archives packed");
+    let others = targets
+        .iter()
+        .any(|target| target.holder == member.holder && target.path != member.path);
+    if others {
+        format!(
+            "leave out {named} with exclude = [{exclude}] in datasets.{dataset}, or the one inside it with exclude in [datasets.{dataset}.members.\"{archive}\"], or {packed}"
+        )
+    } else {
+        format!("leave out {named} with exclude = [{exclude}] in datasets.{dataset}, or {packed}")
+    }
 }
 
 fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
@@ -1167,27 +1249,32 @@ mod tests {
         assert_eq!(planned.unknown[0].1.path, "x.zip");
     }
 
+    /// a file beside an archive that holds one of the same name: either can be left out, the
+    /// archive's only when the members table leaves it another file, or the archive kept packed.
     #[test]
-    fn a_clash_with_an_archives_file_suggests_leaving_it_out_or_keeping_it_packed() {
-        let mut locked = lock(&[("a", &["notes.txt", "x.zip"])]);
-        locked.datasets[0].files[1].unpacks_to = Some(digest::sha256(b"tree"));
-        let members = vec![member("notes.txt")];
-        let err = plan(&manifest(ONE), &locked, &|archive| {
-            (archive.file.path == "x.zip").then(|| members.clone())
-        })
-        .unwrap_err();
-        assert!(
-            err.message
-                .contains("two files would land on data/a/notes.txt"),
-            "{}",
-            err.message
-        );
-        assert_eq!(
-            err.help.as_deref(),
-            Some(
-                "leave one of them out with exclude in [datasets.a.members.\"x.zip\"] in data.toml, or set extract = false on datasets.a to keep its archives packed"
-            )
-        );
+    fn a_clash_with_an_archives_file_suggests_leaving_either_out_or_keeping_it_packed() {
+        for (listed, members, help) in [
+            (
+                "notes.txt",
+                vec![member("notes.txt")],
+                "leave out the notes.txt beside x.zip with exclude = [\"notes.txt\"] in datasets.a, or set extract = false on datasets.a to keep its archives packed",
+            ),
+            (
+                "t/notes.txt",
+                vec![member("t/notes.txt"), member("t/more.txt")],
+                "leave out the t/notes.txt beside x.zip with exclude = [\"t/notes.txt\"] in datasets.a, or the one inside it with exclude in [datasets.a.members.\"x.zip\"], or set extract = false on datasets.a to keep its archives packed",
+            ),
+        ] {
+            let mut locked = lock(&[("a", &[listed, "x.zip"])]);
+            locked.datasets[0].files[1].unpacks_to = Some(digest::sha256(b"tree"));
+            let err = plan(&manifest(ONE), &locked, &|archive| {
+                (archive.file.path == "x.zip").then(|| members.clone())
+            })
+            .unwrap_err();
+            let clash = format!("two files would land on data/a/{listed}");
+            assert!(err.message.contains(&clash), "{}", err.message);
+            assert_eq!(err.help.as_deref(), Some(help));
+        }
     }
 
     /// a dataset data.toml makes with a recipe places nothing from a source pin data.lock still
