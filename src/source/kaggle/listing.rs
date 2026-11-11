@@ -130,15 +130,7 @@ impl Dataset {
             }
             let page: Page = crate::source::json(self, &response)?;
             if !page.error_message.is_empty() {
-                return Err(Error::new(
-                    Kind::SourceInvalid,
-                    format!("kaggle could not list {self}"),
-                )
-                .detail(format!("kaggle says: {}", page.error_message))
-                .help(format!(
-                    "run the same command again later. if it keeps happening, check the dataset at {}",
-                    self.page()
-                )));
+                return Err(self.unlisted(&page.error_message));
             }
             // each page then adds a file, so the file limit bounds the pages too
             if page.dataset_files.is_empty() && !page.next_page_token.is_empty() {
@@ -225,6 +217,35 @@ impl Dataset {
             "https://www.kaggle.com/datasets/{}/{}",
             self.owner, self.slug
         )
+    }
+
+    /// the error for a listing kaggle answered with `said` instead of files. a dataset type its
+    /// api does not serve says so on every try, so no retry helps.
+    fn unlisted(&self, said: &str) -> Error {
+        let detail = format!("kaggle says: {said}");
+        if said
+            .to_ascii_lowercase()
+            .contains("not supported through the api")
+        {
+            return Error::new(
+                Kind::ReferenceUnresolved,
+                format!(
+                    "kaggle:{}/{} cannot be fetched through kaggle's api",
+                    self.owner, self.slug
+                ),
+            )
+            .detail(detail)
+            .help(format!(
+                "open {} to see how kaggle offers it, or choose another dataset",
+                self.page()
+            ));
+        }
+        Error::new(Kind::SourceInvalid, format!("kaggle could not list {self}"))
+            .detail(detail)
+            .help(format!(
+                "run the same command again later. if it keeps happening, check the dataset at {}",
+                self.page()
+            ))
     }
 
     fn invalid(&self, reason: &str) -> Error {
@@ -506,6 +527,35 @@ mod tests {
                 .any(|line| line.contains("the files are not ready")),
             "{:?}",
             err.details
+        );
+    }
+
+    /// kaggle lists some datasets, such as epa/epa-historical-air-quality, but sends none of their
+    /// files through its api, every time: no retry can help, so the help says where else to look.
+    #[test]
+    fn a_dataset_kaggle_will_not_send_through_its_api_is_not_retried() {
+        let body = changed("kaggle/iris-files.json", |value| {
+            value["datasetFiles"] = serde_json::json!([]);
+            value["errorMessage"] = "This dataset type is not supported through the API.".into();
+        });
+        let recorded = Recorded::default()
+            .fixture(&view("uciml/iris"), "kaggle/iris-view.json")
+            .on(&files("uciml/iris", 2), 200, body);
+        let err = block_on(dataset("uciml/iris").resolve(&recorded)).unwrap_err();
+        assert_eq!(err.kind, Kind::ReferenceUnresolved);
+        assert_eq!(
+            err.message,
+            "kaggle:uciml/iris cannot be fetched through kaggle's api"
+        );
+        assert_eq!(
+            err.details,
+            ["kaggle says: This dataset type is not supported through the API."]
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "open https://www.kaggle.com/datasets/uciml/iris to see how kaggle offers it, or choose another dataset"
+            )
         );
     }
 

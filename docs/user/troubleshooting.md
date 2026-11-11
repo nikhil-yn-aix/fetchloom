@@ -45,6 +45,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `--dir` |
 | `error: data.csv already exists and holds other bytes than the link serves now` | `get -o` never replaces a file without being asked | choose another name with `-o`, or add `--force` to replace it |
 | `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
+| `error: kaggle:epa/epa-historical-air-quality cannot be fetched through kaggle's api` | kaggle lists the dataset, but its api sends none of its files, which a later try does not change | open the dataset's page to see how kaggle offers it, or choose another dataset |
 
 for a size mismatch, the full stderr answer can be:
 

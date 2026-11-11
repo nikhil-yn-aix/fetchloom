@@ -47,4 +47,6 @@ credentials stay out of the manifest, lock, logs and JSON output.
 
 ## limits
 
+kaggle's api does not send the files of every dataset it lists. for those it answers `This dataset type is not supported through the API.`, and fetchloom stops with `reference.unresolved`, exit 10, saying the dataset cannot be fetched through kaggle's api. that answer does not change on a later try; the dataset's page shows how kaggle offers it.
+
 follow [offline preparation](../concepts.md#offline) before disconnecting.
