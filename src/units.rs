@@ -20,12 +20,19 @@ pub(crate) fn size(bytes: u64) -> String {
     }
 }
 
-/// a rate in binary units per second: `84.0 MiB/s`.
+/// a rate in binary units per second: `84.0 MiB/s`, or `<1 B/s` for bytes that came slower than
+/// one a second, which is not no rate at all.
 pub(crate) fn rate(bytes: u64, elapsed: Duration) -> String {
     let millis = elapsed.as_millis().max(1);
     let per_second = u64::try_from(u128::from(bytes) * 1000 / millis).unwrap_or(u64::MAX);
+    if bytes > 0 && per_second == 0 {
+        return TRICKLE.to_owned();
+    }
     size(per_second) + "/s"
 }
+
+/// a rate above zero but below one byte a second.
+const TRICKLE: &str = "<1 B/s";
 
 /// what downloads brought, from each file's size and the bytes this run moved for it:
 /// `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the rate counts only the
@@ -60,6 +67,9 @@ pub(crate) fn speed(per_second: f64) -> String {
     } else {
         0.0
     };
+    if value > 0.0 && value < 1.0 {
+        return TRICKLE.to_owned();
+    }
     if value < 1023.5 {
         return format!("{value:.0} B/s");
     }
@@ -233,6 +243,14 @@ mod tests {
         );
         assert_eq!(speed(1_048_524.0), "1023.9 KiB/s");
         assert_eq!(speed(f64::NAN), "0 B/s");
+    }
+
+    #[test]
+    fn a_slow_trickle_is_never_told_as_no_rate() {
+        assert_eq!(rate(12, Duration::from_millis(12_050)), "<1 B/s");
+        assert_eq!(speed(0.4), "<1 B/s");
+        assert_eq!(rate(0, Duration::from_secs(12)), "0 B/s");
+        assert_eq!(speed(0.0), "0 B/s");
     }
 
     #[test]
