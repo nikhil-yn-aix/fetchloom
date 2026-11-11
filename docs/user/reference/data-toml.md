@@ -167,7 +167,7 @@ a members table changes which files land, not what data.lock pins, so editing on
 | a `select` pattern that matches no file inside its archive | the error shows a path inside the archive, or the pattern with the archive's top folder in front when that one matches |
 | patterns that leave an archive no file | to leave the whole archive out, `exclude` it in the dataset instead |
 
-an `exclude` that matches nothing is fine: the upstream may have fixed the file. the archive is still unpacked whole into the cache.
+an `exclude` that matches nothing is fine: the upstream may have fixed the file. the archive is still unpacked whole into the cache, and [`fetchloom cache gc`](../commands/cache.md#gc) frees the files no project keeps.
 
 ## encoding and validation
 

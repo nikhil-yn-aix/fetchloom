@@ -949,3 +949,35 @@ fn a_member_filter_edit_makes_no_request() -> Result {
     assert_eq!(server.requests().len(), 1);
     Ok(())
 }
+
+/// gc frees a file inside an archive that only a members table leaves out, and keeps every file
+/// the project places.
+#[test]
+fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{plain}\n[datasets.dataset.members.\"dataset.zip\"]\nexclude = [\"dataset/data/train.csv\"]\n"
+        ),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let object = |bytes: &[u8]| {
+        let hex = crate::add::sha256_hex(bytes);
+        sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..])
+    };
+    let (readme, train) = (FILES[0].1, FILES[3].1);
+    assert!(object(train).exists());
+    ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
+    assert!(!object(train).exists(), "no project places train.csv");
+    assert!(object(readme).exists(), "the project places README.md");
+    Ok(())
+}

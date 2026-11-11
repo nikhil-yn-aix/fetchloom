@@ -14,6 +14,7 @@ use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
+use crate::project::manifest::{Entry, Manifest};
 use crate::stop::Stop;
 use crate::units;
 
@@ -539,8 +540,8 @@ fn needed_with(
         stop.check()?;
         let project = Project { root };
         let manifest = project.manifest_path();
-        match fs::read(&manifest) {
-            Ok(_) => {}
+        let text = match fs::read(&manifest) {
+            Ok(text) => text,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 if collect_stale {
                     stale_projects.push(project.root);
@@ -554,7 +555,11 @@ fn needed_with(
                     &err,
                 ));
             }
-        }
+        };
+        // data.toml that does not read counts as one without members tables: more is kept
+        let kept = std::str::from_utf8(&text)
+            .ok()
+            .and_then(|text| Manifest::parse(text).ok());
         let lock = project.lock().map_err(|err| {
             // a broken lock is fixed in its own project, which is not where gc runs
             let help = match err.help.as_deref() {
@@ -573,12 +578,12 @@ fn needed_with(
             .help(help)
         })?;
         if let Some(lock) = &lock {
-            add_with_stop(&mut needed, cache, lock, stop)?;
+            add_with_stop(&mut needed, cache, lock, kept.as_ref(), stop)?;
         }
         projects.push(project.root);
     }
     if let Some(lock) = current {
-        add_with_stop(&mut needed, cache, lock, stop)?;
+        add_with_stop(&mut needed, cache, lock, None, stop)?;
     }
     Ok(Found {
         needed,
@@ -588,33 +593,44 @@ fn needed_with(
     })
 }
 
-/// adds what one lock needs. an archive needs the files it unpacked to, and its own bytes too
-/// while this machine never unpacked it or lost a file it unpacked to, since unpacking again is
-/// the only way back.
+/// adds what one lock needs. an archive needs the files it unpacked to that `manifest`'s members
+/// tables keep, and its own bytes too while this machine never unpacked it or lost such a file,
+/// since unpacking again is the only way back. without `manifest`, every file is kept.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
     lock: &Lock,
+    manifest: Option<&Manifest>,
     stop: &Stop,
 ) -> Result<(), Error> {
-    for file in lock.datasets.iter().flat_map(|dataset| &dataset.files) {
-        stop.check()?;
-        let members = file
-            .unpacks_to
-            .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
-        let Some(members) = members else {
-            needed.objects.insert(file.sha256);
-            continue;
-        };
-        needed.unpacked.insert(file.sha256);
-        let mut whole = true;
-        for member in &members {
+    for dataset in &lock.datasets {
+        let filters = manifest
+            .and_then(|manifest| manifest.datasets.get(&dataset.name))
+            .and_then(Entry::source)
+            .map(|source| &source.members);
+        for file in &dataset.files {
             stop.check()?;
-            needed.objects.insert(member.sha256);
-            whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
-        }
-        if !whole {
-            needed.objects.insert(file.sha256);
+            let members = file
+                .unpacks_to
+                .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
+            let Some(members) = members else {
+                needed.objects.insert(file.sha256);
+                continue;
+            };
+            needed.unpacked.insert(file.sha256);
+            let filter = filters.and_then(|filters| filters.get(&file.path));
+            let mut whole = true;
+            for member in members
+                .iter()
+                .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
+            {
+                stop.check()?;
+                needed.objects.insert(member.sha256);
+                whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
+            }
+            if !whole {
+                needed.objects.insert(file.sha256);
+            }
         }
     }
     stop.check()
@@ -650,13 +666,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn an_archive_stays_needed_while_a_file_it_unpacked_to_is_missing() {
-        let folder = tempfile::tempdir().unwrap();
-        let cache = Cache::open(folder.path().join("cache")).unwrap();
-        let archive = store(&cache, b"the archive itself");
-        let first = store(&cache, b"first\n");
-        let second = store(&cache, b"second\n");
+    /// a cache holding the archive set.zip, whose two files a.txt and b.txt it unpacked to, and a
+    /// lock pinning it, with the cached archive, a.txt and b.txt.
+    fn unpacked_archive(cache: &Cache) -> (Lock, [crate::cache::Stored; 3]) {
+        let archive = store(cache, b"the archive itself");
+        let first = store(cache, b"first\n");
+        let second = store(cache, b"second\n");
         let members = [("a.txt", &first), ("b.txt", &second)].map(|(path, stored)| Member {
             path: path.to_owned(),
             size: stored.size,
@@ -686,8 +701,16 @@ mod tests {
             }],
             ..Lock::default()
         };
+        (lock, [archive, first, second])
+    }
+
+    #[test]
+    fn an_archive_stays_needed_while_a_file_it_unpacked_to_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let (lock, [archive, _, second]) = unpacked_archive(&cache);
         let mut whole = Needed::default();
-        add_with_stop(&mut whole, &cache, &lock, &Stop::default()).unwrap();
+        add_with_stop(&mut whole, &cache, &lock, None, &Stop::default()).unwrap();
         assert!(whole.objects.contains(&second.digest));
         assert!(
             !whole.objects.contains(&archive.digest),
@@ -696,10 +719,41 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut missing = Needed::default();
-        add_with_stop(&mut missing, &cache, &lock, &Stop::default()).unwrap();
+        add_with_stop(&mut missing, &cache, &lock, None, &Stop::default()).unwrap();
         assert!(
             missing.objects.contains(&archive.digest),
             "unpacking it again is the only way back to b.txt"
         );
+    }
+
+    /// a file data.toml's members table leaves out is placed by no project, so gc may free it,
+    /// and its absence no longer keeps the archive. data.toml that cannot be read keeps both.
+    #[test]
+    fn an_excluded_member_neither_counts_as_needed_nor_holds_back_its_archive() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let (lock, [archive, first, second]) = unpacked_archive(&cache);
+        let manifest = Manifest::parse(
+            "[datasets.set]\nref = \"https://example.org/set.zip\"\n\n[datasets.set.members.\"set.zip\"]\nexclude = \"b.txt\"\n",
+        )
+        .unwrap();
+        let mut kept = Needed::default();
+        add_with_stop(&mut kept, &cache, &lock, Some(&manifest), &Stop::default()).unwrap();
+        assert!(kept.objects.contains(&first.digest));
+        assert!(
+            !kept.objects.contains(&second.digest),
+            "no project places it"
+        );
+
+        cache.drop_object(&second.digest).unwrap();
+        let mut freed = Needed::default();
+        add_with_stop(&mut freed, &cache, &lock, Some(&manifest), &Stop::default()).unwrap();
+        assert!(
+            !freed.objects.contains(&archive.digest),
+            "a.txt, the only file the project places, is cached"
+        );
+        let mut unread = Needed::default();
+        add_with_stop(&mut unread, &cache, &lock, None, &Stop::default()).unwrap();
+        assert!(unread.objects.contains(&archive.digest));
     }
 }

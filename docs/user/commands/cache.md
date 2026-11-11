@@ -26,7 +26,7 @@ byte totals exclude indexes and partial downloads. downloads a run stopped befor
 
 ## gc
 
-1. read registered project locks to find needed objects and unpacked members.
+1. read registered project locks to find needed objects and unpacked members. a file inside an archive that the project's [members table](../reference/data-toml.md#files-inside-archives) leaves out is not needed, and its absence no longer keeps the packed archive; a data.toml that does not read keeps every file.
 2. remove unneeded objects and unpack records once they are at least 24 hours old by modification time, not last use; `--now` removes this grace period.
 3. clean unfinished downloads nobody came back for in a day, or with `--now` every one no running fetchloom holds, old temporary files and the lock files of downloads nobody holds, and forget links whose bytes are gone, then report deleted counts and bytes.
 4. report unneeded objects kept because they are less than a day old.
