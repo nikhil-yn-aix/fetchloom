@@ -250,7 +250,14 @@ mod tests {
             let Err((_, refused)) = Joined::open(&input) else {
                 panic!("a folder opened as an archive");
             };
-            assert_eq!(refused.kind(), ErrorKind::InvalidInput, "{refused}");
+            // windows will not open a folder at all; elsewhere it opens and the check refuses it
+            assert!(
+                matches!(
+                    refused.kind(),
+                    ErrorKind::InvalidInput | ErrorKind::PermissionDenied
+                ),
+                "{refused}"
+            );
         }
     }
 
