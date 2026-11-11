@@ -107,7 +107,7 @@ fetchloom cache gc --now --dry-run
 `--dry-run` runs the same sweep with every deletion recorded instead of made, so it applies the same age rules and keeps the same files. the cache, partial downloads and project registrations stay as they are, and a cache that does not exist yet is not created. explicit `FETCHLOOM_TRACE` output is still created or truncated. stderr when one unneeded 32-byte object is in the cache, matching a test:
 
 ```text
- Would free 1 file · 32 B from the cache
+Would remove 1 file · 32 B from the cache
          Ok dry run, nothing was changed
 ```
 

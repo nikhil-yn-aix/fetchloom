@@ -334,7 +334,7 @@ fn tell_swept(
         hint_forgotten(output, &freed);
         return Ok(collected(freed, inputs));
     }
-    tell_removed(output, "Removed", "Removed", &freed);
+    tell_removed(output, "Removed", &freed);
     if !freed.not_removed.is_empty() {
         let error = with_failures(
             Error::new(
@@ -374,12 +374,11 @@ fn tell_swept(
     Ok(collected(freed, inputs))
 }
 
-/// the lines for the objects and the leftovers a sweep removed, or would remove, under `objects`
-/// and `leftovers` as their verbs.
-fn tell_removed(output: &Output, objects: &str, leftovers: &str, freed: &Freed) {
+/// the lines for the objects and the leftovers a sweep removed, or would remove, under `verb`.
+fn tell_removed(output: &Output, verb: &str, freed: &Freed) {
     if freed.removed_objects > 0 {
         output.step(
-            objects,
+            verb,
             &format!(
                 "{} · {} from the cache",
                 units::count(freed.removed_objects, "file", "files"),
@@ -389,7 +388,7 @@ fn tell_removed(output: &Output, objects: &str, leftovers: &str, freed: &Freed) 
     }
     if freed.removed_leftovers > 0 {
         output.step(
-            leftovers,
+            verb,
             &format!(
                 "{} · {} of unfinished downloads and temporary files",
                 units::count(freed.removed_leftovers, "leftover item", "leftover items"),
@@ -459,7 +458,7 @@ fn tell_dry_gc(
             root.display()
         ));
     }
-    tell_removed(output, "Would free", "Would drop", &freed);
+    tell_removed(output, "Would remove", &freed);
     for path in &remove {
         output.detail(&path.display().to_string());
     }

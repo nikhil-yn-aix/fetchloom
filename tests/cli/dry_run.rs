@@ -266,7 +266,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        " Would free 1 file · 32 B from the cache\n         Ok dry run, nothing was changed\n"
+        "Would remove 1 file · 32 B from the cache\n         Ok dry run, nothing was changed\n"
     );
     let young = text(&sandbox.run(&["cache", "gc", "-n"])?.stderr)?;
     assert_eq!(
@@ -299,6 +299,37 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
         "gc frees what it said it would"
     );
     assert!(real["result"].get("dry_run").is_none());
+    Ok(())
+}
+
+/// a gc dry run tells each thing it would free with the verb the real gc prints for it: the
+/// cached files no project needs, and an unfinished download no fetchloom holds.
+#[test]
+fn cache_gc_dry_run_tells_its_lines_as_the_real_gc_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    fs::remove_file(sandbox.work().join("data.toml"))?;
+    let key = "ab".repeat(32);
+    let partial = sandbox.cache().join("partial").join(&key[..1]);
+    fs::create_dir_all(&partial)?;
+    for (extension, bytes) in [("part", &b"sepal"[..]), ("json", b"{}"), ("lock", b"")] {
+        fs::write(partial.join(format!("{key}.{extension}")), bytes)?;
+    }
+    let told = |args: &[&str], verb: &str| -> Result<Vec<String>> {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        Ok(stderr
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix(verb))
+            .map(str::to_owned)
+            .collect())
+    };
+    let dry = told(&["cache", "gc", "--now", "--dry-run"], "Would remove ")?;
+    let real = told(&["cache", "gc", "--now"], "Removed ")?;
+    assert_eq!(dry.len(), 2, "{dry:?}");
+    assert_eq!(dry, real);
     Ok(())
 }
 
