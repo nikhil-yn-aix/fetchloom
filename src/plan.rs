@@ -62,7 +62,8 @@ pub(crate) fn from_cache<'a>(
 }
 
 /// every file the lock places for the datasets data.toml lists, or the first clash. an archive
-/// is replaced by the files `members` says it unpacked to.
+/// is replaced by the files `members` says it unpacked to. datasets may share a folder, but no
+/// two files may share a path.
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -70,23 +71,19 @@ pub(crate) fn plan<'a>(
 ) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
-    let mut folders = Vec::new();
     for dataset in &lock.datasets {
         let Some(entry) = manifest.datasets.get(&dataset.name) else {
             continue;
         };
-        let folder = folder(manifest, &dataset.name);
         expand(
             &mut plan,
             &dataset.name,
-            &folder,
+            &folder(manifest, &dataset.name),
             entry.copy,
             &dataset.files,
             members,
         );
-        folders.push((folder, dataset.name.as_str()));
     }
-    overlapping(&folders)?;
     check(&plan.targets, Patterns::InDataToml)?;
     span.record("files", plan.targets.len());
     Ok(plan)
@@ -195,47 +192,9 @@ fn key(path: &str) -> String {
     name::fold(path)
 }
 
-/// refuses two datasets whose folders are the same or one inside the other, as a
-/// case-insensitive disk sees them. each folder is folded once and checks only its own parents,
-/// so a project of many datasets costs no more than its folders' depth.
-fn overlapping(folders: &[(String, &str)]) -> Result<(), Error> {
-    let overlap = |first: usize, second: usize| {
-        let ((a, name_a), (b, name_b)) = (&folders[first], &folders[second]);
-        Error::new(
-            Kind::ProjectInvalid,
-            format!("datasets {name_a} and {name_b} would share files: {a} and {b} overlap"),
-        )
-        .help("give one of them another path in data.toml")
-    };
-    let keys: Vec<String> = folders.iter().map(|(folder, _)| key(folder)).collect();
-    let mut seen: HashMap<&str, usize> = HashMap::with_capacity(keys.len());
-    // the pair the old pairwise scan met first: the lowest earlier index, then the lowest later
-    let mut found: Option<(usize, usize)> = None;
-    let mut consider = |pair: (usize, usize)| {
-        found = Some(found.map_or(pair, |best| best.min(pair)));
-    };
-    for (index, folder) in keys.iter().enumerate() {
-        match seen.get(folder.as_str()) {
-            Some(&earlier) => consider((earlier, index)),
-            None => {
-                seen.insert(folder, index);
-            }
-        }
-    }
-    for (index, folder) in keys.iter().enumerate() {
-        let mut parent = folder.as_str();
-        while let Some((up, _)) = parent.rsplit_once('/') {
-            if let Some(&outer) = seen.get(up) {
-                consider((outer.min(index), outer.max(index)));
-            }
-            parent = up;
-        }
-    }
-    found.map_or(Ok(()), |(first, second)| Err(overlap(first, second)))
-}
-
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
-/// path as a case-insensitive disk sees it, or a file where a folder must be.
+/// path as a case-insensitive disk sees it, or a file where a folder must be. datasets may share
+/// folders, so targets of two datasets clash only where their files do.
 pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error> {
     let mut files: HashMap<String, &Target> = HashMap::with_capacity(targets.len());
     let mut folders: HashMap<String, &Target> = HashMap::new();
@@ -272,34 +231,49 @@ pub(crate) fn check(targets: &[Target], patterns: Patterns) -> Result<(), Error>
     for (folder, inside) in &folders {
         if file_keys.contains(folder) {
             let file = files[folder];
-            return Err(Error::new(
-                Kind::ProjectInvalid,
+            let message = if file.dataset == inside.dataset {
                 format!(
                     "{} is a file, but {} needs a folder there",
                     file.path, inside.path
-                ),
-            )
-            .help(fix(file, inside, patterns)));
+                )
+            } else {
+                format!(
+                    "dataset {} places a file at {}, but dataset {} needs a folder there for {}",
+                    file.dataset, file.path, inside.dataset, inside.path
+                )
+            };
+            return Err(Error::new(Kind::ProjectInvalid, message).help(fix(file, inside, patterns)));
         }
     }
     Ok(())
 }
 
 fn clash(first: &Target, second: &Target, patterns: Patterns) -> Error {
-    let message = if first.path == second.path {
-        format!("two files would land on {}", first.path)
-    } else {
-        format!(
+    let datasets = format!("datasets {} and {}", first.dataset, second.dataset);
+    let message = match (first.path == second.path, first.dataset == second.dataset) {
+        (true, true) => format!("two files would land on {}", first.path),
+        (true, false) => format!("{datasets} would both place {}", first.path),
+        (false, true) => format!(
             "{} and {} would be the same file on a disk that ignores case",
             first.path, second.path
-        )
+        ),
+        (false, false) => format!(
+            "{datasets} would place {} and {}, the same file on a disk that ignores case",
+            first.path, second.path
+        ),
     };
     Error::new(Kind::ProjectInvalid, message).help(fix(first, second, patterns))
 }
 
-/// how to resolve a clash between `first` and `second`: keep an archive involved packed, or leave
-/// a file out.
+/// how to resolve a clash between `first` and `second`: give one of two datasets a folder of its
+/// own, or within one dataset keep an archive involved packed, or leave a file out.
 fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
+    if first.dataset != second.dataset {
+        return format!(
+            "give datasets.{} or datasets.{} another path in data.toml",
+            first.dataset, second.dataset
+        );
+    }
     let unpacked = [first, second]
         .into_iter()
         .find(|target| target.locked.unpacks_to.is_some());
@@ -436,6 +410,68 @@ mod tests {
             .map(|target| target.path)
             .collect();
         assert_eq!(paths, ["data/train.csv", "data/raw/x.csv"]);
+    }
+
+    #[test]
+    fn datasets_share_a_folder_when_no_file_clashes() {
+        let shared = manifest(
+            "[datasets.a]\nref = \"w\"\npath = \"splits\"\n[datasets.b]\nref = \"x\"\npath = \"splits\"\n[datasets.c]\nref = \"y\"\npath = \"splits/raw\"\n[datasets.d]\nref = \"z\"\npath = \".\"\n",
+        );
+        let locked = lock(&[
+            ("a", &["train.csv"]),
+            ("b", &["test.csv", "raw/labels.csv"]),
+            ("c", &["one.png"]),
+            ("d", &["README"]),
+        ]);
+        let paths: Vec<String> = targets(&shared, &locked)
+            .unwrap()
+            .into_iter()
+            .map(|target| target.path)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "data/splits/train.csv",
+                "data/splits/test.csv",
+                "data/splits/raw/labels.csv",
+                "data/splits/raw/one.png",
+                "data/README"
+            ]
+        );
+    }
+
+    /// two datasets' files on one path clash even with the same bytes, since each placed file
+    /// has one dataset that owns it.
+    #[test]
+    fn a_clash_between_datasets_names_both_and_the_path() {
+        let flat = manifest(
+            "[datasets.a]\nref = \"x\"\npath = \".\"\n[datasets.b]\nref = \"y\"\npath = \".\"\n",
+        );
+        for (a, b, said) in [
+            (
+                "README",
+                "README",
+                "datasets a and b would both place data/README",
+            ),
+            (
+                "README",
+                "readme",
+                "datasets a and b would place data/README and data/readme, the same file on a disk that ignores case",
+            ),
+            (
+                "raw",
+                "raw/x.csv",
+                "dataset a places a file at data/raw, but dataset b needs a folder there for data/raw/x.csv",
+            ),
+        ] {
+            let error = targets(&flat, &lock(&[("a", &[a]), ("b", &[b])])).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(error.message, said);
+            assert_eq!(
+                error.help.as_deref(),
+                Some("give datasets.a or datasets.b another path in data.toml")
+            );
+        }
     }
 
     #[test]
@@ -601,57 +637,12 @@ mod tests {
             targets(&one, &lock(&[("a", &["x", "x/y"])])).is_err(),
             "a file where a folder must be"
         );
-        let nested =
-            manifest("[datasets.a]\nref = \"x\"\n[datasets.b]\nref = \"y\"\npath = \"A/inner\"\n");
-        assert!(
-            targets(&nested, &lock(&[("a", &["x"]), ("b", &["y"])])).is_err(),
-            "one dataset inside another"
-        );
         assert_eq!(
             targets(&one, &lock(&[("a", &["2020-01-01T10:00:00.csv"])])).is_err(),
             cfg!(windows)
         );
     }
 
-    #[test]
-    fn overlapping_folders_are_found_once_each_and_name_the_first_pair() {
-        let folders = |names: &[&'static str]| -> Vec<(String, &'static str)> {
-            names
-                .iter()
-                .map(|name| (format!("data/{name}"), *name))
-                .collect()
-        };
-        let message =
-            |names: &[&'static str]| overlapping(&folders(names)).map_err(|error| error.message);
-        assert_eq!(message(&["a", "b", "c"]), Ok(()));
-        assert_eq!(
-            message(&["a", "a-x", "ab"]),
-            Ok(()),
-            "a shared prefix is not a parent"
-        );
-        assert_eq!(
-            message(&["a", "b", "a"]),
-            Err("datasets a and a would share files: data/a and data/a overlap".to_owned())
-        );
-        assert_eq!(
-            message(&["x/y", "b", "x"]),
-            Err("datasets x/y and x would share files: data/x/y and data/x overlap".to_owned()),
-            "the earlier dataset is named first, inside or not"
-        );
-        assert!(
-            message(&["Iris", "iris"]).is_err(),
-            "a disk that ignores case"
-        );
-        assert_eq!(
-            message(&["c", "b", "c/d", "b/e"]),
-            Err("datasets c and c/d would share files: data/c and data/c/d overlap".to_owned()),
-            "the pair a scan in order meets first"
-        );
-        let many: Vec<(String, &str)> = (0..10_000)
-            .map(|index| (format!("data/f{index:05}"), "f"))
-            .collect();
-        assert!(overlapping(&many).is_ok());
-    }
     #[test]
     fn a_top_folder_is_shared_only_by_every_member() {
         let members = |paths: &[&str]| paths.iter().map(|path| member(path)).collect::<Vec<_>>();

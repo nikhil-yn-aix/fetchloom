@@ -57,6 +57,15 @@ an explicitly supplied `--as` name that is taken is refused. a name that breaks 
 
 `path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. use `path = "."` to put it at `data/train.csv`.
 
+datasets may share a folder, and one may sit in the data folder itself while others sit in folders below it, as long as no two files land on the same path. names are compared the way a disk that ignores case compares them, so `README` from one dataset and `readme` from another clash on every system, and so do two files with the same bytes. a clash names both datasets and the path:
+
+```text
+error: datasets test and train would both place data/splits/README
+  help: give datasets.test or datasets.train another path in data.toml
+```
+
+each placed file belongs to one dataset, so `remove` and sync delete only that dataset's unchanged files from a shared folder and leave the other datasets' files and your own.
+
 fetchloom takes these folders as written and never expands `~` or a variable, since data.toml comes with whatever repository you clone. a `data_dir` or `path` that starts with `~` or `$`, or names a variable such as `$SCRATCH` or `${SCRATCH}`, is refused rather than made as a folder of that name. names such as `data~old` and `price$` stay usable. on a cluster, put the cache on scratch with `FETCHLOOM_CACHE`, or the whole project there, as [clusters and shared machines](../hpc.md) shows.
 
 changing `data_dir` or a dataset's `path` moves where sync places its files. sync deletes only files it placed that are unchanged, and only inside the data folder, so a folder that still holds anything else stays, and so does the old data folder with every file in it; the sync that leaves one behind names it in a warning, as [sync](../commands/sync.md#folders-left-behind) shows.

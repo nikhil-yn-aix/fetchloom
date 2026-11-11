@@ -26,7 +26,7 @@ placement protects existing files while turning locked data and cached archive t
 
 `Plan` combines manifest folders, locked files and cached member trees. it is an in-memory destination plan; `Placing::preview` turns the actions decided from it into the lists `--dry-run` prints. unknown archive trees are returned separately so sync can unpack them before deciding destinations.
 
-a dataset consisting of one archive can drop a common top-level member folder. an archive beside other files expands beneath its own location. the resulting targets reject overlapping dataset folders, file/folder clashes and folded-name collisions.
+a dataset consisting of one archive can drop a common top-level member folder. an archive beside other files expands beneath its own location. `path = "."` puts a dataset's targets straight in the data folder. datasets may share folders, so the resulting targets reject only what files clash on: two files on one path, even with the same bytes, a file where another target needs a folder, and folded-name collisions. a clash between two datasets names both and asks for another `path`. each placed file has one owning dataset in the state, and removal and sync cleanup delete a file only when no dataset places it now, so a shared folder keeps the other datasets' files.
 
 ### choose an action
 

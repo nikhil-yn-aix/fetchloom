@@ -1011,13 +1011,13 @@ pub(crate) mod tests {
         let context = offline_context();
         let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
         let manifest = Manifest::parse(
-            "[datasets.a]\nref = \"https://example.org/a\"\npath = \"shared\"\n\n[datasets.b]\nref = \"https://example.org/b\"\npath = \"shared/inner\"\n",
+            "[datasets.a]\nref = \"https://example.org/a\"\npath = \"shared\"\n\n[datasets.b]\nref = \"https://example.org/b\"\npath = \"shared\"\n",
         )
         .unwrap();
         let a = pinned(
             "a",
             lock::spec(&manifest.datasets["a"]),
-            vec![pinned_file("a", "https://example.org/a", b"a")],
+            vec![pinned_file("README", "https://example.org/a", b"a")],
         );
         let old = Lock {
             datasets: vec![a],
@@ -1029,7 +1029,7 @@ pub(crate) mod tests {
             "b".to_owned(),
             listed(
                 "https://example.org/b",
-                vec![stated("b", "https://example.org/b", b"b")],
+                vec![stated("README", "https://example.org/b", b"b")],
             ),
         );
 
@@ -1045,7 +1045,10 @@ pub(crate) mod tests {
         ))
         .unwrap_err();
 
-        assert!(error.message.contains("would share files"), "{error:?}");
+        assert_eq!(
+            error.message, "datasets a and b would both place data/shared/README",
+            "{error:?}"
+        );
         assert_eq!(
             std::fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
             old.render(),
