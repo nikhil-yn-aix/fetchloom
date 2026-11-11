@@ -89,6 +89,21 @@ pub(crate) enum Ended {
     Low { free: u64 },
 }
 
+impl Ended {
+    /// how a step that ended so counts when `stopping` says a stop was asked by then: a failure
+    /// then most likely came from the stop, since the console's ctrl-c reaches a windows step as
+    /// it reaches fetchloom, and a scheduler may send its SIGTERM to every process of a job. a
+    /// step that exited with 0 keeps its result.
+    fn or_stopped(self, stopping: bool) -> Ended {
+        match self {
+            Ended::Exited(code) if stopping && code != 0 => Ended::Stopped,
+            #[cfg(unix)]
+            Ended::Signaled(_) if stopping => Ended::Stopped,
+            ended => ended,
+        }
+    }
+}
+
 /// a step that ran.
 #[derive(Debug)]
 pub(crate) struct Ran {
@@ -179,7 +194,7 @@ pub(crate) fn run(
         return Err(err);
     }
     Ok(Ran {
-        ended,
+        ended: ended.or_stopped(stop.is_asked()),
         tail: tail(&caught.tail),
         took: started.elapsed(),
     })
@@ -521,6 +536,22 @@ mod tests {
         assert!(due(None, start));
         assert!(!due(Some(start), start + Duration::from_millis(1999)));
         assert!(due(Some(start), start + FLOOR_EVERY));
+    }
+
+    /// a step that failed once a stop was asked counts as stopped, as the stop most likely ended
+    /// it; one that exited with 0 keeps its result, and one that failed with no stop failed.
+    #[test]
+    fn a_step_that_fails_after_a_stop_is_stopped() {
+        assert_eq!(Ended::Exited(1).or_stopped(true), Ended::Stopped);
+        assert_eq!(Ended::Exited(0).or_stopped(true), Ended::Exited(0));
+        assert_eq!(Ended::Exited(1).or_stopped(false), Ended::Exited(1));
+        let low = Ended::Low { free: 1 };
+        assert_eq!(low.or_stopped(true), low);
+        #[cfg(unix)]
+        {
+            assert_eq!(Ended::Signaled(15).or_stopped(true), Ended::Stopped);
+            assert_eq!(Ended::Signaled(9).or_stopped(false), Ended::Signaled(9));
+        }
     }
 
     /// a folder with spaces stays inside its one argument, and the step gets its variables and
