@@ -27,7 +27,7 @@ use crate::net::Net;
 use crate::output::Output;
 use crate::plan;
 use crate::project::lock::{self, Lock};
-use crate::project::manifest::{self, Manifest};
+use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::Synced;
 use crate::project::{Held, Project};
 use crate::source::{Listing, Parsed, Reference, Remote, local};
@@ -510,15 +510,15 @@ async fn import_held(
             manifest
                 .datasets
                 .get(*name)
-                .is_some_and(|entry| local::is_imported(&entry.reference))
+                .is_some_and(manifest::Entry::is_import)
         })
         .map(str::to_owned);
-    let entry = import_entry(manifest, supplied.as_deref(), args)?;
-    let walked = import::walk(&start, shown, &entry, &context.stop)?;
+    let source = import_entry(manifest, supplied.as_deref(), args)?;
+    let walked = import::walk(&start, shown, &source, &context.stop)?;
     tell_skipped(&context.output, shown, &walked.skipped);
     let pinned = supplied
         .as_ref()
-        .and_then(|name| current(old.as_ref(), name, &entry));
+        .and_then(|name| current(old.as_ref(), name, &manifest.datasets[name.as_str()]));
     if let (Some(name), Some(pinned)) = (&supplied, pinned)
         && let Some(difference) = import::first_difference(&walked.files, &pinned.files)
     {
@@ -555,13 +555,13 @@ async fn import_held(
         let work = Loop::new(context, project, net, cache).telling(&name);
         let imported = Imported {
             name: &name,
-            entry: &entry,
+            source: &source,
             files: copied.files,
         };
         return supply(&work, adding, old, imported, (shown, &told), here).await;
     }
     // the same files imported again under their own name change nothing, as the same link does
-    if args.name.is_none() && same_import(manifest, old.as_ref(), &own, &entry, &copied.files) {
+    if args.name.is_none() && same_import(manifest, old.as_ref(), &own, &source, &copied.files) {
         let work = Loop::new(context, project, net, cache).telling(&own);
         context.output.step("Imported", &format!("{own} · {told}"));
         return already_imported(&work, adding, old, &own, here).await;
@@ -575,28 +575,34 @@ async fn import_held(
     let work = Loop::new(context, project, net, cache).telling(&name);
     let imported = Imported {
         name: &name,
-        entry: &entry,
+        source: &source,
         files: copied.files,
     };
     import_new(&work, adding, old, imported, here, starting).await
 }
 
-/// files of a folder copied into the cache, pinned for the dataset `name` as data.toml's `entry`
+/// files of a folder copied into the cache, pinned for the dataset `name` as data.toml's `source`
 /// would have them.
 struct Imported<'a> {
     name: &'a str,
-    entry: &'a manifest::Entry,
+    source: &'a Source,
     files: Vec<lock::LockedFile>,
 }
 
-/// the entry an import is checked against: data.toml's for `supplied`, an import `--as` names,
+/// the source of data.toml's `entry` of `name`, which an import has and a recipe does not.
+fn import_source<'e>(entry: &'e manifest::Entry, name: &str) -> Result<&'e Source, Error> {
+    entry.source().ok_or_else(|| {
+        Error::new(
+            Kind::Usage,
+            format!("{name} is made by a recipe in data.toml, so no files are imported for it"),
+        )
+    })
+}
+
+/// the source an import is checked against: data.toml's for `supplied`, an import `--as` names,
 /// whose patterns and extract setting stay as data.toml has them, or else one made from `args`,
 /// once `--as` gives a usable name.
-fn import_entry(
-    manifest: &Manifest,
-    supplied: Option<&str>,
-    args: &Add,
-) -> Result<manifest::Entry, Error> {
+fn import_entry(manifest: &Manifest, supplied: Option<&str>, args: &Add) -> Result<Source, Error> {
     if let Some(name) = supplied {
         return supplied_entry(manifest, name, args);
     }
@@ -611,7 +617,7 @@ fn import_entry(
         &args.filter.exclude,
         !args.no_extract,
     )?;
-    Ok(Manifest::parse(&text)?.datasets["new"].clone())
+    import_source(&Manifest::parse(&text)?.datasets["new"], "new").cloned()
 }
 
 /// data.lock's pin of `name`, when `old` has one that still answers data.toml's `entry`.
@@ -624,23 +630,26 @@ fn current<'a>(
         .filter(|locked| locked.drift(entry).is_none())
 }
 
-/// whether data.toml has `name` as an import with the settings of `entry`, pinned in `old` to
+/// whether data.toml has `name` as an import with the settings of `source`, pinned in `old` to
 /// exactly the files `copied` holds.
 fn same_import(
     manifest: &Manifest,
     old: Option<&Lock>,
     name: &str,
-    entry: &manifest::Entry,
+    source: &Source,
     copied: &[lock::LockedFile],
 ) -> bool {
     let Some(existing) = manifest.datasets.get(name) else {
         return false;
     };
+    let Some(had) = existing.source() else {
+        return false;
+    };
     let pin = |file: &lock::LockedFile| (file.path.clone(), file.size, file.sha256);
-    local::is_imported(&existing.reference)
-        && existing.select == entry.select
-        && existing.exclude == entry.exclude
-        && existing.extract == entry.extract
+    local::is_imported(&had.reference)
+        && had.select == source.select
+        && had.exclude == source.exclude
+        && had.extract == source.extract
         && current(old, name, existing)
             .is_some_and(|locked| locked.files.iter().map(pin).eq(copied.iter().map(pin)))
 }
@@ -680,7 +689,11 @@ async fn import_new(
     here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
-    let Imported { name, entry, files } = imported;
+    let Imported {
+        name,
+        source,
+        files,
+    } = imported;
     let text = adding.text.as_deref().unwrap_or_default();
     let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
         globs.iter().map(|glob| glob.as_str().to_owned()).collect()
@@ -689,12 +702,12 @@ async fn import_new(
         text,
         name,
         local::IMPORTED,
-        &patterns(&entry.select),
-        &patterns(&entry.exclude),
-        entry.extract,
+        &patterns(&source.select),
+        &patterns(&source.exclude),
+        source.extract,
     )?;
     let manifest = Manifest::parse(&updated)?;
-    let pinned = import::pinned(name, &manifest.datasets[name], files);
+    let pinned = import::pinned(name, import_source(&manifest.datasets[name], name)?, files);
     let names = [name.to_owned()];
     let outcome = sync_add(
         work,
@@ -718,7 +731,7 @@ async fn import_new(
 
 /// the entry of `name`, an import in data.toml that `add <path> --as <name>` supplies. its
 /// patterns and extract setting stay as data.toml has them.
-fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<manifest::Entry, Error> {
+fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<Source, Error> {
     if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() || args.no_extract {
         return Err(Error::new(
             Kind::Usage,
@@ -728,7 +741,7 @@ fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<manifes
             "leave out --select, --exclude and --no-extract, or change datasets.{name} in data.toml"
         )));
     }
-    Ok(manifest.datasets[name].clone())
+    import_source(&manifest.datasets[name], name).cloned()
 }
 
 /// the error of a supply whose folder, `shown`, holds other files than data.lock pins for `name`,
@@ -756,16 +769,20 @@ async fn supply(
     (shown, told): (&str, &str),
     here: &Path,
 ) -> Result<Report, Error> {
-    let Imported { name, entry, files } = imported;
+    let Imported {
+        name,
+        source,
+        files,
+    } = imported;
     let manifest = &adding.manifest;
-    let given = match current(old.as_ref(), name, entry) {
+    let given = match current(old.as_ref(), name, &manifest.datasets[name]) {
         Some(pinned) => {
             if let Some(difference) = import::first_other_bytes(&files, &pinned.files) {
                 return Err(other_files(shown, name, difference));
             }
             Vec::new()
         }
-        None => vec![Given::Locked(import::pinned(name, entry, files))],
+        None => vec![Given::Locked(import::pinned(name, source, files))],
     };
     let pins = !given.is_empty();
     let output = &work.context.output;
@@ -1001,8 +1018,11 @@ fn listed_entry(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    let files = engine::filter(&parsed.reference.shown(), &entry, listing)
-        .map_err(|error| links::on_line(error, &at))?;
+    let files = match entry.source() {
+        Some(source) => engine::filter(&parsed.reference.shown(), &entry, source, listing),
+        None => Ok(listing.files.clone()),
+    }
+    .map_err(|error| links::on_line(error, &at))?;
     if let Some(sha256) = line.sha256 {
         let [file] = files.as_slice() else {
             return Err(Error::new(
@@ -1045,10 +1065,15 @@ fn same_settings(
     name: &str,
     at: &str,
 ) -> Result<(), Error> {
-    if existing.select == wanted.select
-        && existing.exclude == wanted.exclude
-        && existing.extract == wanted.extract
-    {
+    let alike = existing
+        .source()
+        .zip(wanted.source())
+        .is_some_and(|(existing, wanted)| {
+            existing.select == wanted.select
+                && existing.exclude == wanted.exclude
+                && existing.extract == wanted.extract
+        });
+    if alike {
         return Ok(());
     }
     Err(Error::new(
@@ -1255,7 +1280,9 @@ async fn resolve_add(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    engine::filter(&parsed.reference.shown(), &entry, &listing)?;
+    if let Some(source) = entry.source() {
+        engine::filter(&parsed.reference.shown(), &entry, source, &listing)?;
+    }
     Ok(Addition {
         listing,
         reference,
@@ -1563,22 +1590,24 @@ fn present(
     wanted: &manifest::Entry,
     listing: &Listing,
 ) -> Option<String> {
+    let wanted = wanted.source()?;
     let resolved = listing.resolved.to_string();
     manifest
         .datasets
         .iter()
-        .filter(|(name, entry)| {
-            entry.reference == wanted.reference
+        .filter_map(|(name, entry)| Some((name, entry.source()?)))
+        .filter(|(name, source)| {
+            source.reference == wanted.reference
                 || old.and_then(|old| old.get(name)).is_some_and(|locked| {
-                    locked.reference == entry.reference && locked.resolved == resolved
+                    locked.reference == source.reference && locked.resolved == resolved
                 })
         })
-        .min_by_key(|(_, entry)| {
+        .min_by_key(|(_, source)| {
             (
-                entry.select != wanted.select
-                    || entry.exclude != wanted.exclude
-                    || entry.extract != wanted.extract,
-                entry.reference != wanted.reference,
+                source.select != wanted.select
+                    || source.exclude != wanted.exclude
+                    || source.extract != wanted.extract,
+                source.reference != wanted.reference,
             )
         })
         .map(|(name, _)| name.clone())
@@ -1601,13 +1630,16 @@ async fn again(
         listing,
     } = *present;
     let manifest = &adding.manifest;
-    let existing = &manifest.datasets[name];
-    let differs = if existing.select != entry.select || existing.exclude != entry.exclude {
-        Some(("other patterns", "the patterns of"))
-    } else if existing.extract != entry.extract {
-        Some(("another extract setting", "extract on"))
-    } else {
-        None
+    let differs = match (manifest.datasets[name].source(), entry.source()) {
+        (Some(existing), Some(wanted))
+            if existing.select != wanted.select || existing.exclude != wanted.exclude =>
+        {
+            Some(("other patterns", "the patterns of"))
+        }
+        (Some(existing), Some(wanted)) if existing.extract != wanted.extract => {
+            Some(("another extract setting", "extract on"))
+        }
+        _ => None,
     };
     if let Some((differs, setting)) = differs {
         return Err(Error::new(
@@ -2094,7 +2126,7 @@ mod tests {
         let old = Lock {
             datasets: vec![pinned(
                 "a",
-                lock::spec(&manifest.datasets["a"]),
+                lock::spec(manifest.datasets["a"].source().unwrap()),
                 vec![pinned_file("a", "https://example.org/a", b"a")],
             )],
             ..Lock::default()

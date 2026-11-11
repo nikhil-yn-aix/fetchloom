@@ -19,7 +19,7 @@ use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
 use self::derived::Derived;
-use super::manifest::Entry;
+use super::manifest::{Entry, Source};
 use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
@@ -74,11 +74,15 @@ pub(crate) enum Drift {
 }
 
 impl Locked {
-    /// what changed in `entry` since this pin was made, or nothing when it still answers it.
+    /// what changed in `entry` since this pin was made, or nothing when it still answers it. a
+    /// dataset a recipe now makes is no longer the one fetched.
     pub(crate) fn drift(&self, entry: &Entry) -> Option<Drift> {
-        if self.spec != spec(entry) {
+        let Some(source) = entry.source() else {
+            return Some(Drift::Spec);
+        };
+        if self.spec != spec(source) {
             Some(Drift::Spec)
-        } else if self.extract != entry.extract {
+        } else if self.extract != source.extract {
             Some(Drift::Extract)
         } else {
             None
@@ -347,6 +351,16 @@ impl Lock {
         self.datasets.get(index)
     }
 
+    /// the result of the recipe named `name`, found by halving, as [`Lock::get`] finds a
+    /// fetched dataset.
+    pub(crate) fn result(&self, name: &str) -> Option<&Derived> {
+        let index = self
+            .derived
+            .binary_search_by(|derived| derived.name.as_str().cmp(name))
+            .ok()?;
+        self.derived.get(index)
+    }
+
     /// the lock's text, the same bytes for the same contents. a source of more than
     /// [`lists::INLINE`] files, and every recipe's result, names the list [`Lock::lists`] gives
     /// instead of its files.
@@ -594,9 +608,9 @@ fn project<'a>(root: Option<&'a Path>, name: &str) -> Result<&'a Path, Error> {
 
 /// the hash of everything in a data.toml entry that decides what is downloaded. `copy` and
 /// `path` only change where files go, and `extract` what they unpack to, so they are left out.
-pub(crate) fn spec(entry: &Entry) -> String {
-    let mut text = format!("ref={}\n", entry.reference);
-    for (key, globs) in [("select", &entry.select), ("exclude", &entry.exclude)] {
+pub(crate) fn spec(source: &Source) -> String {
+    let mut text = format!("ref={}\n", source.reference);
+    for (key, globs) in [("select", &source.select), ("exclude", &source.exclude)] {
         for glob in globs.iter().map(Glob::as_str) {
             let _ = writeln!(text, "{key}={glob}");
         }
@@ -1163,16 +1177,20 @@ mod tests {
                 .datasets["x"]
                 .clone()
         };
-        let plain = spec(&entry(""));
+        let plain = spec(entry("").source().unwrap());
         assert_eq!(
             plain,
-            spec(&entry("copy = true\npath = \"elsewhere\"\n")),
+            spec(
+                entry("copy = true\npath = \"elsewhere\"\n")
+                    .source()
+                    .unwrap()
+            ),
             "copy and path do not change what is downloaded"
         );
-        assert_ne!(plain, spec(&entry("select = \"*.csv\"\n")));
+        assert_ne!(plain, spec(entry("select = \"*.csv\"\n").source().unwrap()));
         assert_eq!(
             plain,
-            spec(&entry("extract = false\n")),
+            spec(entry("extract = false\n").source().unwrap()),
             "extract is compared on its own, so a switch keeps the files"
         );
         assert!(plain.starts_with("sha256:") && plain.len() == 71);
@@ -1223,7 +1241,7 @@ mod tests {
                 .clone()
         };
         let locked = Locked {
-            spec: spec(&entry("")),
+            spec: spec(entry("").source().unwrap()),
             extract: true,
             ..sample().datasets[1].clone()
         };

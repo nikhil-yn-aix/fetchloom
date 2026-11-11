@@ -1,5 +1,5 @@
 use super::*;
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{Manifest, Origin};
 use crate::source::Reference;
 use crate::source::recorded::{Recorded, block_on, fixture_bytes};
 
@@ -50,11 +50,14 @@ fn entry(select: &[&str], exclude: &[&str], cli: bool) -> Entry {
     let manifest =
         Manifest::parse(&format!("[datasets.docs]\nref = \"drive:folders/{ID}\"\n")).unwrap();
     let mut entry = manifest.datasets["docs"].clone();
-    entry.select = select
+    let Origin::Source(source) = &mut entry.origin else {
+        panic!("docs is fetched from a source");
+    };
+    source.select = select
         .iter()
         .map(|pattern| Glob::new(pattern).unwrap())
         .collect();
-    entry.exclude = exclude
+    source.exclude = exclude
         .iter()
         .map(|pattern| Glob::new(pattern).unwrap())
         .collect();
@@ -64,16 +67,21 @@ fn entry(select: &[&str], exclude: &[&str], cli: bool) -> Entry {
     entry
 }
 
+/// [`filter`] for `entry`, which is fetched from a source.
+fn filtered(name: &str, entry: &Entry, listing: &Listing) -> Result<Vec<Remote>, Error> {
+    filter(name, entry, entry.source().unwrap(), listing)
+}
+
 #[test]
 fn excluding_a_doc_keeps_the_stored_files() {
-    let kept = filter("docs", &entry(&[], &["gdown"], true), &mixed()).unwrap();
+    let kept = filtered("docs", &entry(&[], &["gdown"], true), &mixed()).unwrap();
     let paths: Vec<_> = kept.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(paths, ["gdown.pptx", "spam.txt"]);
 }
 
 #[test]
 fn selecting_a_stored_file_leaves_native_docs_out() {
-    let kept = filter("docs", &entry(&["*.pptx"], &[], true), &mixed()).unwrap();
+    let kept = filtered("docs", &entry(&["*.pptx"], &[], true), &mixed()).unwrap();
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].path, "gdown.pptx");
 }
@@ -81,7 +89,7 @@ fn selecting_a_stored_file_leaves_native_docs_out() {
 #[test]
 fn a_selected_doc_is_refused_with_its_exclusion_flag() {
     for select in [&[][..], &["gdown"][..]] {
-        let error = filter("docs", &entry(select, &[], true), &mixed()).unwrap_err();
+        let error = filtered("docs", &entry(select, &[], true), &mixed()).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert_eq!(error.details, ["gdown", REASON]);
         let help = error.help.unwrap();
@@ -92,7 +100,7 @@ fn a_selected_doc_is_refused_with_its_exclusion_flag() {
 
 #[test]
 fn an_unmatched_select_still_reports_an_example() {
-    let error = filter("docs", &entry(&["*.csv"], &[], true), &mixed()).unwrap_err();
+    let error = filtered("docs", &entry(&["*.csv"], &[], true), &mixed()).unwrap_err();
     assert_eq!(error.kind, Kind::Usage);
     assert!(error.message.contains("matched no file"));
     assert!(
@@ -105,7 +113,7 @@ fn an_unmatched_select_still_reports_an_example() {
 #[test]
 fn a_doc_only_listing_can_explain_an_unmatched_select() {
     let listing = listing(fixture_bytes("drive/folder-select-doc.html"));
-    let error = filter("docs", &entry(&["missing"], &[], true), &listing).unwrap_err();
+    let error = filtered("docs", &entry(&["missing"], &[], true), &listing).unwrap_err();
     assert_eq!(error.kind, Kind::Usage);
     assert!(error.message.contains("matched no file"));
     assert!(error.details.iter().any(|line| line.contains("gdown")));
@@ -115,7 +123,7 @@ fn a_doc_only_listing_can_explain_an_unmatched_select() {
 fn excluding_everything_keeps_the_empty_selection_error() {
     for cli in [false, true] {
         for (select, exclude) in [(&[][..], &["*"][..]), (&["gdown"][..], &["gdown"][..])] {
-            let error = filter("docs", &entry(select, exclude, cli), &mixed()).unwrap_err();
+            let error = filtered("docs", &entry(select, exclude, cli), &mixed()).unwrap_err();
             assert_eq!(
                 error.kind,
                 if cli {
@@ -132,7 +140,7 @@ fn excluding_everything_keeps_the_empty_selection_error() {
 #[test]
 fn excluding_the_only_doc_leaves_no_files() {
     let listing = listing(fixture_bytes("drive/folder-select-doc.html"));
-    let error = filter("docs", &entry(&[], &["gdown"], true), &listing).unwrap_err();
+    let error = filtered("docs", &entry(&[], &["gdown"], true), &listing).unwrap_err();
     assert_eq!(error.kind, Kind::Usage);
     assert!(error.message.contains("select and exclude leave no file"));
 }
@@ -148,12 +156,12 @@ fn nested_docs_match_their_full_paths_and_get_deeper_hints() {
         .unwrap()
         .reference;
     let listing = block_on(reference.resolve(&recorded)).unwrap();
-    let kept = filter("docs", &entry(&[], &["folder_1_1/gdown"], true), &listing).unwrap();
+    let kept = filtered("docs", &entry(&[], &["folder_1_1/gdown"], true), &listing).unwrap();
     assert_eq!(kept[0].path, "file.txt");
-    let unmatched = filter("docs", &entry(&["gdown"], &[], true), &listing).unwrap_err();
+    let unmatched = filtered("docs", &entry(&["gdown"], &[], true), &listing).unwrap_err();
     assert_eq!(unmatched.kind, Kind::Usage);
     assert!(unmatched.help.unwrap().contains("**/gdown"));
-    let refused = filter("docs", &entry(&["**/gdown"], &[], true), &listing).unwrap_err();
+    let refused = filtered("docs", &entry(&["**/gdown"], &[], true), &listing).unwrap_err();
     assert_eq!(refused.kind, Kind::SourceInvalid);
     assert!(
         refused
@@ -169,14 +177,14 @@ fn exclusion_hints_match_literal_glob_characters() {
         .unwrap()
         .replace(">gdown<", ">gdown[1]*?<");
     let listing = listing(body.into_bytes());
-    let error = filter("docs", &entry(&[], &[], true), &listing).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &listing).unwrap_err();
     assert!(
         error
             .help
             .unwrap()
             .contains("--exclude \"gdown[[]1][*][?]\"")
     );
-    let kept = filter("docs", &entry(&[], &["gdown[[]1][*][?]"], true), &listing).unwrap();
+    let kept = filtered("docs", &entry(&[], &["gdown[[]1][*][?]"], true), &listing).unwrap();
     assert_eq!(kept.len(), 2);
 }
 
@@ -200,7 +208,7 @@ fn exclusion_hints_quote_shell_characters() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">gdown&#39;s $notes&#96;extra<");
-    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
     let expected = if cfg!(windows) {
         "--exclude 'gdown''s $notes`extra'"
     } else {
@@ -211,7 +219,7 @@ fn exclusion_hints_quote_shell_characters() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html"))
         .unwrap()
         .replace(">gdown<", ">notes!v2<");
-    let error = filter("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &listing(body.into_bytes())).unwrap_err();
     let expected = if cfg!(windows) {
         "--exclude \"notes!v2\""
     } else {
@@ -225,16 +233,16 @@ fn only_unavailable_entries_left_selected_are_named() {
     let body = String::from_utf8(fixture_bytes("drive/folder-select-mixed.html")).unwrap()
         .replace("<div class=\"flip-entries\">", "<div class=\"flip-entries\"><div class=\"flip-entry\"><a href=\"https://docs.google.com/document/d/1TFYNzuZJTgNGzGmjraZ58ZVOh9_YoKeBnU-opWgXQL4/edit\"><div class=\"flip-entry-title\">notes</div></a></div>");
     let listing = listing(body.into_bytes());
-    let all = filter("docs", &entry(&[], &[], true), &listing).unwrap_err();
+    let all = filtered("docs", &entry(&[], &[], true), &listing).unwrap_err();
     let help = all.help.unwrap();
     assert!(help.contains("--exclude \"gdown\""));
     assert!(help.contains("--exclude \"notes\""));
-    let one = filter("docs", &entry(&[], &["gdown"], true), &listing).unwrap_err();
+    let one = filtered("docs", &entry(&[], &["gdown"], true), &listing).unwrap_err();
     assert_eq!(one.details.len(), 2);
     assert!(one.details[0].contains("notes"));
     assert!(!one.help.unwrap().contains("gdown"));
     assert_eq!(
-        filter("docs", &entry(&[], &["gdown", "notes"], true), &listing)
+        filtered("docs", &entry(&[], &["gdown", "notes"], true), &listing)
             .unwrap()
             .len(),
         2
@@ -243,7 +251,7 @@ fn only_unavailable_entries_left_selected_are_named() {
 
 #[test]
 fn one_doc_refusal_keeps_its_exact_flag_and_separates_the_reason() {
-    let error = filter("docs", &entry(&[], &[], true), &docs(1, true)).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &docs(1, true)).unwrap_err();
     assert_eq!(
         error.message,
         "docs has 1 selected entry that fetchloom cannot download"
@@ -259,7 +267,7 @@ fn one_doc_refusal_keeps_its_exact_flag_and_separates_the_reason() {
 
 #[test]
 fn seven_doc_refusal_keeps_every_path_and_lists_the_reason_once() {
-    let error = filter("docs", &entry(&[], &[], true), &docs(7, true)).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &docs(7, true)).unwrap_err();
     assert_eq!(
         error.message,
         "docs has 7 selected entries that fetchloom cannot download"
@@ -295,13 +303,13 @@ fn seven_doc_refusal_keeps_every_path_and_lists_the_reason_once() {
 
 #[test]
 fn five_entries_have_exact_flags_but_six_do_not() {
-    let five = filter("docs", &entry(&[], &[], true), &docs(5, true)).unwrap_err();
+    let five = filtered("docs", &entry(&[], &[], true), &docs(5, true)).unwrap_err();
     let help = five.help.unwrap();
     for name in &DOC_NAMES[..5] {
         assert!(help.contains(&format!("--exclude \"{name}\"")), "{help}");
     }
     assert_eq!(help.matches("--exclude \"").count(), 5);
-    let six = filter("docs", &entry(&[], &[], true), &docs(6, true)).unwrap_err();
+    let six = filtered("docs", &entry(&[], &[], true), &docs(6, true)).unwrap_err();
     let help = six.help.unwrap();
     assert!(!help.contains("--exclude \""));
     assert!(help.starts_with("add an --exclude for each entry above"));
@@ -313,7 +321,7 @@ fn distinct_refusal_reasons_keep_first_seen_order() {
     listing.unavailable[0].reason = "the first reason".to_owned();
     listing.unavailable[1].reason = "another reason".to_owned();
     listing.unavailable[2].reason = "the first reason".to_owned();
-    let error = filter("docs", &entry(&[], &[], true), &listing).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &listing).unwrap_err();
     assert_eq!(
         error.details,
         [
@@ -328,7 +336,7 @@ fn distinct_refusal_reasons_keep_first_seen_order() {
 
 #[test]
 fn large_doc_only_refusals_do_not_promise_other_files() {
-    let error = filter("docs", &entry(&[], &[], true), &docs(7, false)).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], true), &docs(7, false)).unwrap_err();
     assert_eq!(
         error.help.as_deref(),
         Some(
@@ -339,7 +347,7 @@ fn large_doc_only_refusals_do_not_promise_other_files() {
 
 #[test]
 fn a_selected_doc_in_data_toml_names_the_setting_to_edit() {
-    let error = filter("docs", &entry(&[], &[], false), &mixed()).unwrap_err();
+    let error = filtered("docs", &entry(&[], &[], false), &mixed()).unwrap_err();
     let help = error.help.unwrap();
     assert!(
         help.contains("exclude patterns in datasets.docs in data.toml"),

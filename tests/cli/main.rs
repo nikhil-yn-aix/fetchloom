@@ -5,6 +5,7 @@ mod archives;
 mod auth;
 mod basics;
 mod buckets;
+mod build;
 mod cache;
 mod caps;
 mod completions;

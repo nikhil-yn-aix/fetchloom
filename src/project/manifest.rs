@@ -9,6 +9,7 @@ use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlE
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::name;
+use crate::recipe::{self, Slot, Template};
 
 pub(crate) const FILE: &str = "data.toml";
 /// the data folder of a project whose data.toml names none.
@@ -17,7 +18,15 @@ pub(crate) const DATA_DIR: &str = "data";
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 6] = ["ref", "select", "exclude", "extract", "copy", "path"];
+const DATASET_KEYS: [&str; 10] = [
+    "ref", "select", "exclude", "extract", "copy", "path", "from", "run", "code", "env",
+];
+/// the keys of a dataset fetched from a source, beside `ref`.
+const SOURCE_KEYS: [&str; 3] = ["select", "exclude", "extract"];
+/// the keys of a dataset a recipe makes.
+const RECIPE_KEYS: [&str; 4] = ["from", "run", "code", "env"];
+/// how a person writes a recipe's command, for the help of a mistake in one.
+const RUN_EXAMPLE: &str = "run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]";
 
 #[derive(Clone, Debug)]
 pub(crate) struct Manifest {
@@ -28,16 +37,67 @@ pub(crate) struct Manifest {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Entry {
-    pub(crate) reference: String,
-    pub(crate) select: Vec<Glob>,
-    pub(crate) exclude: Vec<Glob>,
-    pub(crate) extract: bool,
+    /// where the dataset comes from: a source it is fetched from, or a recipe that makes it.
+    pub(crate) origin: Origin,
     pub(crate) copy: bool,
     /// where the dataset lands inside the data folder, when not under its name: a folder, or
     /// [`DATA_FOLDER_ITSELF`].
     pub(crate) path: Option<String>,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
     pub(crate) lines: BTreeMap<&'static str, String>,
+}
+
+/// where a dataset's files come from.
+#[derive(Clone, Debug)]
+pub(crate) enum Origin {
+    Source(Source),
+    Derived(Recipe),
+}
+
+/// a dataset fetched from a source.
+#[derive(Clone, Debug)]
+pub(crate) struct Source {
+    pub(crate) reference: String,
+    pub(crate) select: Vec<Glob>,
+    pub(crate) exclude: Vec<Glob>,
+    pub(crate) extract: bool,
+}
+
+/// a dataset made from other datasets by a command. only `fetchloom build` runs it.
+#[derive(Clone, Debug)]
+pub(crate) struct Recipe {
+    /// the datasets it is made from, in data.toml's order.
+    pub(crate) from: Vec<String>,
+    /// the program and its arguments, never read by a shell.
+    pub(crate) run: Vec<Template>,
+    /// files and folders of the project whose bytes enter its key, with `/` between folders.
+    pub(crate) code: Vec<String>,
+    /// variables set for the command alone.
+    pub(crate) env: BTreeMap<String, String>,
+}
+
+impl Entry {
+    /// the source the dataset is fetched from, unless a recipe makes it.
+    pub(crate) fn source(&self) -> Option<&Source> {
+        match &self.origin {
+            Origin::Source(source) => Some(source),
+            Origin::Derived(_) => None,
+        }
+    }
+
+    /// whether the dataset is an import: files from this machine, pinned by their bytes.
+    pub(crate) fn is_import(&self) -> bool {
+        self.source()
+            .is_some_and(|source| crate::source::local::is_imported(&source.reference))
+    }
+
+    /// the recipe that makes the dataset, unless it is fetched from a source.
+    pub(crate) fn recipe(&self) -> Option<&Recipe> {
+        match &self.origin {
+            Origin::Source(_) => None,
+            Origin::Derived(recipe) => Some(recipe),
+        }
+    }
 }
 
 impl Manifest {
@@ -93,8 +153,68 @@ impl Manifest {
                 datasets.insert(name.to_owned(), entry);
             }
         }
+        recipes_read_known_datasets(&datasets)?;
         Ok(Manifest { data_dir, datasets })
     }
+}
+
+/// refuses a recipe made from a dataset data.toml does not have, or recipes made from each
+/// other, which no order of steps could make.
+fn recipes_read_known_datasets(datasets: &BTreeMap<String, Entry>) -> Result<(), Error> {
+    for (name, entry) in datasets {
+        let Some(recipe) = entry.recipe() else {
+            continue;
+        };
+        for input in &recipe.from {
+            if datasets.contains_key(input) {
+                continue;
+            }
+            let error = Error::new(
+                Kind::ProjectInvalid,
+                format!("datasets.{name} is made from {input}, which data.toml does not have"),
+            );
+            let error = match entry.lines.get("from") {
+                Some(line) => error.detail(line.clone()),
+                None => error,
+            };
+            return Err(
+                match name::closest(input, datasets.keys().map(String::as_str)) {
+                    Some(best) => error.help(format!("did you mean {best}?")),
+                    None => error.help(format!(
+                        "add [datasets.{input}] to data.toml, or remove {input} from the from of datasets.{name}"
+                    )),
+                },
+            );
+        }
+    }
+    let Err(cycle) = recipe::order(datasets) else {
+        return Ok(());
+    };
+    let message = if let [only, _] = cycle.as_slice() {
+        format!("datasets.{only} is made from itself")
+    } else {
+        let mut names: Vec<&str> = cycle[..cycle.len() - 1].to_vec();
+        names.sort_unstable();
+        let names = match names.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => names.join(""),
+        };
+        format!(
+            "datasets {names} are made from each other: {}",
+            cycle.join(" \u{2192} ")
+        )
+    };
+    let error = Error::new(Kind::ProjectInvalid, message);
+    let error = match datasets
+        .get(cycle[0])
+        .and_then(|entry| entry.lines.get("from"))
+    {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    };
+    Err(error.help(
+        "a recipe can read only datasets made before it; take one of them out of the other's from",
+    ))
 }
 
 /// reads data.toml's items into types, pointing at the line of any mistake.
@@ -131,12 +251,32 @@ impl Reader<'_> {
                 lines.insert(key, self.cite(span.start));
             }
         }
+        let origin = if RECIPE_KEYS.iter().any(|key| table.contains_key(key)) {
+            Origin::Derived(self.recipe(table, name)?)
+        } else {
+            Origin::Source(self.source(table, name, item.span().or(key_span))?)
+        };
+        Ok(Entry {
+            origin,
+            copy: self.boolean(table.get("copy"), "copy", false)?,
+            path: table
+                .get("path")
+                .map(|item| self.relative(item, "path"))
+                .transpose()?,
+            lines,
+        })
+    }
+
+    /// the source of a dataset fetched from one, which `table` names with its ref.
+    fn source(
+        &self,
+        table: &dyn TableLike,
+        name: &str,
+        span: Option<Range<usize>>,
+    ) -> Result<Source, Error> {
         let Some(reference) = table.get("ref") else {
             return Err(self
-                .error(
-                    item.span().or(key_span),
-                    format!("datasets.{name} in data.toml has no ref"),
-                )
+                .error(span, format!("datasets.{name} in data.toml has no ref"))
                 .help("add a line such as ref = \"zenodo:3608990\""));
         };
         let reference = self.string(reference, "ref")?.trim().to_owned();
@@ -183,18 +323,244 @@ impl Reader<'_> {
                     .filter_map(|pattern| Glob::new(pattern).ok()),
             );
         }
-        Ok(Entry {
+        Ok(Source {
             reference,
             select,
             exclude: self.patterns(table.get("exclude"), "exclude")?,
             extract: self.boolean(table.get("extract"), "extract", true)?,
-            copy: self.boolean(table.get("copy"), "copy", false)?,
-            path: table
-                .get("path")
-                .map(|item| self.relative(item, "path"))
-                .transpose()?,
-            lines,
         })
+    }
+
+    /// the recipe of a dataset made from others, which `table` gives with from and run. the
+    /// datasets it reads are checked once every dataset is read.
+    fn recipe(&self, table: &dyn TableLike, name: &str) -> Result<Recipe, Error> {
+        let span = |key: &str| table.key(key).and_then(Key::span);
+        let first = RECIPE_KEYS
+            .into_iter()
+            .find(|key| table.contains_key(key))
+            .unwrap_or("from");
+        if table.contains_key("ref") {
+            return Err(self
+                .error(
+                    span(first),
+                    format!("datasets.{name} has both ref and {first}, but a dataset is fetched from a source or made by a recipe, not both"),
+                )
+                .help("keep ref to fetch it, or from and run to make it from other datasets"));
+        }
+        if let Some(key) = SOURCE_KEYS.into_iter().find(|key| table.contains_key(key)) {
+            return Err(self
+                .error(
+                    span(key),
+                    format!("{key} is for a dataset fetched from a source, and datasets.{name} is made by a recipe"),
+                )
+                .help(format!("remove {key}, and choose files inside the step instead")));
+        }
+        let (from, run) = match (table.get("from"), table.get("run")) {
+            (Some(from), Some(run)) => (from, run),
+            (Some(_), None) => {
+                return Err(self
+                    .error(
+                        span("from"),
+                        format!("datasets.{name} has from but no run, so nothing makes it"),
+                    )
+                    .help(format!(
+                        "add run, the program and arguments that make it, as {RUN_EXAMPLE}"
+                    )));
+            }
+            (None, _) => {
+                return Err(self
+                    .error(
+                        span(first),
+                        format!("datasets.{name} has {first} but no from, so it reads no dataset"),
+                    )
+                    .help("add from with the datasets run reads, as from = [\"raw\"]"));
+            }
+        };
+        let from = self.inputs(from, name)?;
+        let run = self.run(run, name, &from)?;
+        let code = match table.get("code") {
+            None => Vec::new(),
+            Some(item) => Self::strings(item).ok_or_else(|| {
+                self.error(
+                    item.span(),
+                    "code in data.toml must be a list of files and folders in the project"
+                        .to_owned(),
+                )
+                .help("write it as code = [\"clean.py\"]")
+            })?,
+        };
+        let code = code
+            .iter()
+            .map(|path| path.trim().trim_end_matches('/').to_owned())
+            .collect();
+        let env = match table.get("env") {
+            None => BTreeMap::new(),
+            Some(item) => self.variables(item)?,
+        };
+        Ok(Recipe {
+            from,
+            run,
+            code,
+            env,
+        })
+    }
+
+    /// a recipe's variables: a table of strings.
+    fn variables(&self, item: &Item) -> Result<BTreeMap<String, String>, Error> {
+        let table = item.as_table_like().ok_or_else(|| {
+            self.error(
+                item.span(),
+                "env in data.toml must be a table of variables".to_owned(),
+            )
+            .help("write it as env = { SEED = \"1\" }")
+        })?;
+        let mut variables = BTreeMap::new();
+        for (variable, value) in table.iter() {
+            let Some(value) = value.as_str() else {
+                return Err(self
+                    .error(
+                        value.span().or_else(|| item.span()),
+                        "every value in env must be a string in quotes".to_owned(),
+                    )
+                    .help(format!(
+                        "write it as {variable} = \"{}\"",
+                        value
+                            .as_value()
+                            .map(|value| value.to_string().trim().to_owned())
+                            .unwrap_or_default()
+                    )));
+            };
+            variables.insert(variable.to_owned(), value.to_owned());
+        }
+        Ok(variables)
+    }
+
+    /// the datasets a recipe reads: a list of names, each once.
+    fn inputs(&self, item: &Item, name: &str) -> Result<Vec<String>, Error> {
+        let names = Self::strings(item).ok_or_else(|| {
+            self.error(
+                item.span(),
+                "from in data.toml must be a list of dataset names".to_owned(),
+            )
+            .help("write it as from = [\"raw\"]")
+        })?;
+        if names.is_empty() {
+            return Err(self
+                .error(
+                    item.span(),
+                    format!("datasets.{name} is made from no dataset"),
+                )
+                .help("name the datasets run reads in from, as from = [\"raw\"]"));
+        }
+        for (index, input) in names.iter().enumerate() {
+            if input == recipe::OUT {
+                return Err(self
+                    .error(
+                        item.span(),
+                        format!("datasets.{name} is made from out, the name run keeps for the result's folder"),
+                    )
+                    .help("rename the dataset out in data.toml"));
+            }
+            if names[..index].contains(input) {
+                return Err(self
+                    .error(
+                        item.span(),
+                        format!("datasets.{name} is made from {input} twice"),
+                    )
+                    .help("name each dataset once in from"));
+            }
+        }
+        Ok(names)
+    }
+
+    /// a recipe's command: one word after another, each read by [`Template::parse`], naming the
+    /// folder of every dataset in `from` and of the result, and no other.
+    fn run(&self, item: &Item, name: &str, from: &[String]) -> Result<Vec<Template>, Error> {
+        let words = Self::strings(item).ok_or_else(|| {
+            self.error(
+                item.span(),
+                "run in data.toml must be a list of words, since no shell reads it".to_owned(),
+            )
+            .help(format!(
+                "write the program and each argument as a word of their own, as {RUN_EXAMPLE}"
+            ))
+        })?;
+        if words.is_empty() {
+            return Err(self
+                .error(
+                    item.span(),
+                    format!("run in datasets.{name} is empty, so there is no program to start"),
+                )
+                .help(format!(
+                    "write the program and each argument as a word of their own, as {RUN_EXAMPLE}"
+                )));
+        }
+        let mut run = Vec::with_capacity(words.len());
+        for word in &words {
+            let template = Template::parse(word).map_err(|reason| {
+                self.error(
+                    item.span(),
+                    format!("a word of run in datasets.{name} {reason}"),
+                )
+                .help("write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads")
+            })?;
+            run.push(template);
+        }
+        let refused = |message: String, help: String| self.error(item.span(), message).help(help);
+        if run[0].text().is_empty() {
+            return Err(refused(
+                format!("the program in run of datasets.{name} is empty"),
+                format!("make the first word the program to start, as {RUN_EXAMPLE}"),
+            ));
+        }
+        let slots: Vec<Slot> = run.iter().flat_map(Template::slots).collect();
+        for slot in &slots {
+            if let Slot::Input(input) = slot
+                && !from.iter().any(|known| known == input)
+            {
+                let names = from.iter().map(String::as_str).chain([recipe::OUT]);
+                let help = match name::closest(input, names) {
+                    Some(best) => {
+                        format!("did you mean {{{best}}}? a name in braces is one of from, or out")
+                    }
+                    None => "a name in braces is one of from, or out".to_owned(),
+                };
+                return Err(refused(
+                    format!(
+                        "run in datasets.{name} names {{{input}}}, which is not a dataset it is made from"
+                    ),
+                    help,
+                ));
+            }
+        }
+        if !slots.contains(&Slot::Out) {
+            return Err(refused(
+                format!(
+                    "run in datasets.{name} never names {{out}}, so the step has nowhere to write"
+                ),
+                "put {out} where the step takes the folder to write the result in".to_owned(),
+            ));
+        }
+        if let Some(input) = from
+            .iter()
+            .find(|input| !slots.contains(&Slot::Input(input)))
+        {
+            return Err(refused(
+                format!(
+                    "run in datasets.{name} never names {{{input}}}, so the step cannot find {input}"
+                ),
+                format!("put {{{input}}} where the step takes the folder holding {input}'s files"),
+            ));
+        }
+        Ok(run)
+    }
+
+    /// the strings of an array, or none when `item` is not an array of strings.
+    fn strings(item: &Item) -> Option<Vec<String>> {
+        item.as_array()?
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect()
     }
 
     /// refuses any key not in `known`, suggesting the closest one.
@@ -736,20 +1102,24 @@ mod tests {
         );
         assert_eq!(manifest.data_dir, "inputs");
         let eeg = &manifest.datasets["eeg"];
-        assert_eq!(eeg.reference, "osf:abc12");
+        let source = eeg.source().unwrap();
+        assert_eq!(source.reference, "osf:abc12");
         assert_eq!(
-            eeg.select.iter().map(Glob::as_str).collect::<Vec<_>>(),
+            source.select.iter().map(Glob::as_str).collect::<Vec<_>>(),
             ["**/*.edf", "participants.tsv"]
         );
-        assert_eq!(eeg.exclude.len(), 1);
-        assert!(eeg.extract && !eeg.copy && eeg.path.is_none());
+        assert_eq!(source.exclude.len(), 1);
+        assert!(source.extract && !eeg.copy && eeg.path.is_none());
         assert_eq!(
             eeg.lines["select"],
             "data.toml:6   select = [\"**/*.edf\", \"participants.tsv\"]"
         );
         let weights = &manifest.datasets["weights"];
-        assert_eq!(weights.reference, "https://example.org/w.bin");
-        assert!(!weights.extract && weights.copy);
+        assert_eq!(
+            weights.source().unwrap().reference,
+            "https://example.org/w.bin"
+        );
+        assert!(!weights.source().unwrap().extract && weights.copy);
         assert_eq!(weights.path.as_deref(), Some("models/w"));
         assert_eq!(parse("").data_dir, "data");
         assert!(parse("").datasets.is_empty());
@@ -913,6 +1283,8 @@ mod tests {
         .unwrap();
         let select = |name: &str| {
             manifest.datasets[name]
+                .source()
+                .unwrap()
                 .select
                 .iter()
                 .map(|glob| glob.as_str().to_owned())
@@ -930,6 +1302,8 @@ mod tests {
         .unwrap();
         let select = |name: &str| {
             manifest.datasets[name]
+                .source()
+                .unwrap()
                 .select
                 .iter()
                 .map(|glob| glob.as_str().to_owned())
@@ -1093,7 +1467,16 @@ mod tests {
 
     /// what data.toml states: the data folder, and each dataset's values without their lines.
     type Stated = (String, BTreeMap<String, Values>);
-    type Values = (String, Vec<String>, Vec<String>, bool, bool, Option<String>);
+    type Values = (Option<Fetched>, Option<Made>, bool, Option<String>);
+    /// a source's ref, select, exclude and extract.
+    type Fetched = (String, Vec<String>, Vec<String>, bool);
+    /// a recipe's from, run, code and env.
+    type Made = (
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+        BTreeMap<String, String>,
+    );
 
     fn patterns(globs: &[Glob]) -> Vec<String> {
         globs.iter().map(|glob| glob.as_str().to_owned()).collect()
@@ -1101,15 +1484,30 @@ mod tests {
 
     fn stated(manifest: &Manifest) -> Stated {
         let datasets = manifest.datasets.iter().map(|(dataset, entry)| {
-            let values = (
-                entry.reference.clone(),
-                patterns(&entry.select),
-                patterns(&entry.exclude),
-                entry.extract,
-                entry.copy,
-                entry.path.clone(),
-            );
-            (dataset.clone(), values)
+            let fetched = entry.source().map(|source| {
+                (
+                    source.reference.clone(),
+                    patterns(&source.select),
+                    patterns(&source.exclude),
+                    source.extract,
+                )
+            });
+            let made = entry.recipe().map(|recipe| {
+                (
+                    recipe.from.clone(),
+                    recipe
+                        .run
+                        .iter()
+                        .map(|word| word.text().to_owned())
+                        .collect(),
+                    recipe.code.clone(),
+                    recipe.env.clone(),
+                )
+            });
+            (
+                dataset.clone(),
+                (fetched, made, entry.copy, entry.path.clone()),
+            )
         });
         (manifest.data_dir.clone(), datasets.collect())
     }
@@ -1131,8 +1529,10 @@ mod tests {
             let before = stated(&manifest);
             for (dataset, entry) in &manifest.datasets {
                 assert!(name::is_dataset_name(dataset), "{dataset:?}");
-                assert!(!entry.reference.is_empty(), "{dataset:?}");
-                assert_eq!(entry.reference.trim(), entry.reference);
+                if let Some(source) = entry.source() {
+                    assert!(!source.reference.is_empty(), "{dataset:?}");
+                    assert_eq!(source.reference.trim(), source.reference);
+                }
                 if let Some(path) = entry
                     .path
                     .as_deref()
@@ -1146,19 +1546,32 @@ mod tests {
                 let mut expected = before.clone();
                 expected.1.remove(dataset);
                 let after = Manifest::parse(&removed).map(|manifest| stated(&manifest));
-                assert_eq!(after.ok(), Some(expected), "{removed:?}");
+                // a recipe cannot read a dataset data.toml no longer has
+                let read = manifest.datasets.values().any(|entry| {
+                    entry
+                        .recipe()
+                        .is_some_and(|recipe| recipe.from.contains(dataset))
+                });
+                if read {
+                    assert!(after.is_err(), "{removed:?}");
+                } else {
+                    assert_eq!(after.ok(), Some(expected), "{removed:?}");
+                }
 
                 let copy = format!("{dataset}-2");
+                let Some(source) = entry.source() else {
+                    continue;
+                };
                 if !name::is_dataset_name(&copy) || manifest.datasets.contains_key(&copy) {
                     continue;
                 }
                 let added = match with_dataset(
                     text,
                     &copy,
-                    &entry.reference,
-                    &patterns(&entry.select),
-                    &patterns(&entry.exclude),
-                    entry.extract,
+                    &source.reference,
+                    &patterns(&source.select),
+                    &patterns(&source.exclude),
+                    source.extract,
                 ) {
                     Ok(added) => added,
                     Err(err) => {
@@ -1167,13 +1580,236 @@ mod tests {
                     }
                 };
                 let mut expected = before.clone();
-                let (reference, select, exclude, extract, _, _) = before.1[dataset].clone();
-                let values = (reference, select, exclude, extract, false, None);
-                expected.1.insert(copy, values);
+                let (fetched, _, _, _) = before.1[dataset].clone();
+                expected.1.insert(copy, (fetched, None, false, None));
                 let after = Manifest::parse(&added).map(|manifest| stated(&manifest));
                 assert_eq!(after.ok(), Some(expected), "{added:?}");
             }
         });
+    }
+
+    const RAW: &str = "[datasets.raw]\nref = \"zenodo:1\"\n\n";
+    const CLEAN: &str = "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
+
+    /// a recipe makes a dataset from others with a command, so it needs both, and a dataset is
+    /// fetched from a source or made by a recipe, never both.
+    #[test]
+    fn a_recipe_needs_from_and_run_and_no_ref() {
+        let manifest = parse(&format!(
+            "{RAW}{CLEAN}code = [\"clean.py\", \"lib/\"]\nenv = {{ SEED = \"1\" }}\ncopy = true\n"
+        ));
+        let entry = &manifest.datasets["clean"];
+        let recipe = entry.recipe().unwrap();
+        assert_eq!(recipe.from, ["raw"]);
+        let words: Vec<&str> = recipe.run.iter().map(Template::text).collect();
+        assert_eq!(words, ["python3", "clean.py", "{raw}", "{out}"]);
+        assert_eq!(recipe.code, ["clean.py", "lib"]);
+        assert_eq!(
+            recipe.env,
+            BTreeMap::from([("SEED".to_owned(), "1".to_owned())])
+        );
+        assert!(entry.copy && entry.source().is_none());
+        assert!(manifest.datasets["raw"].recipe().is_none());
+        let run = "run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
+        for (table, message, help) in [
+            (
+                "from = [\"raw\"]\n".to_owned(),
+                "datasets.clean has from but no run, so nothing makes it",
+                "add run, the program and arguments that make it, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
+            ),
+            (
+                run.to_owned(),
+                "datasets.clean has run but no from, so it reads no dataset",
+                "add from with the datasets run reads, as from = [\"raw\"]",
+            ),
+            (
+                format!("ref = \"zenodo:2\"\nfrom = [\"raw\"]\n{run}"),
+                "datasets.clean has both ref and from, but a dataset is fetched from a source or made by a recipe, not both",
+                "keep ref to fetch it, or from and run to make it from other datasets",
+            ),
+            (
+                "ref = \"zenodo:2\"\nenv = { SEED = \"1\" }\n".to_owned(),
+                "datasets.clean has both ref and env, but a dataset is fetched from a source or made by a recipe, not both",
+                "keep ref to fetch it, or from and run to make it from other datasets",
+            ),
+            (
+                format!("from = [\"raw\"]\n{run}select = \"*.csv\"\n"),
+                "select is for a dataset fetched from a source, and datasets.clean is made by a recipe",
+                "remove select, and choose files inside the step instead",
+            ),
+            (
+                format!("from = [\"raw\"]\n{run}extract = false\n"),
+                "extract is for a dataset fetched from a source, and datasets.clean is made by a recipe",
+                "remove extract, and choose files inside the step instead",
+            ),
+            (
+                format!("from = []\n{run}"),
+                "datasets.clean is made from no dataset",
+                "name the datasets run reads in from, as from = [\"raw\"]",
+            ),
+            (
+                format!("from = \"raw\"\n{run}"),
+                "from in data.toml must be a list of dataset names",
+                "write it as from = [\"raw\"]",
+            ),
+            (
+                format!("from = [\"raw\", \"raw\"]\n{run}"),
+                "datasets.clean is made from raw twice",
+                "name each dataset once in from",
+            ),
+            (
+                "from = [\"raw\"]\nrun = \"python3 clean.py {raw} {out}\"\n".to_owned(),
+                "run in data.toml must be a list of words, since no shell reads it",
+                "write the program and each argument as a word of their own, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
+            ),
+            (
+                "from = [\"raw\"]\nrun = []\n".to_owned(),
+                "run in datasets.clean is empty, so there is no program to start",
+                "write the program and each argument as a word of their own, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
+            ),
+            (
+                format!("from = [\"raw\"]\n{run}code = \"clean.py\"\n"),
+                "code in data.toml must be a list of files and folders in the project",
+                "write it as code = [\"clean.py\"]",
+            ),
+            (
+                format!("from = [\"raw\"]\n{run}env = {{ SEED = 1 }}\n"),
+                "every value in env must be a string in quotes",
+                "write it as SEED = \"1\"",
+            ),
+        ] {
+            let error = fails(&format!("{RAW}[datasets.clean]\n{table}"));
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{table}");
+            assert_eq!(error.message, message, "{table}");
+            assert_eq!(error.help.as_deref(), Some(help), "{table}");
+            assert_eq!(error.details.len(), 1, "{table}: {:?}", error.details);
+            assert!(error.details[0].starts_with("data.toml:"), "{table}");
+        }
+    }
+
+    /// each word of run is text with `{name}` for the folder of a dataset it reads and `{out}`
+    /// for the result's, so a word naming anything else, or a step that cannot find an input
+    /// or write its result, is refused before anything runs.
+    #[test]
+    fn templates_name_inputs_and_out() {
+        let recipe = |run: &str| format!("{RAW}[datasets.clean]\nfrom = [\"raw\"]\nrun = {run}\n");
+        let manifest = parse(&recipe(
+            "[\"tool\", \"--in={raw}/x\", \"{{literal}}\", \"{out}\"]",
+        ));
+        assert_eq!(manifest.datasets["clean"].recipe().unwrap().run.len(), 4);
+        for (run, message, help) in [
+            (
+                "[\"python3\", \"clean.py\", \"{raw}\"]",
+                "run in datasets.clean never names {out}, so the step has nowhere to write",
+                "put {out} where the step takes the folder to write the result in",
+            ),
+            (
+                "[\"python3\", \"clean.py\", \"{out}\"]",
+                "run in datasets.clean never names {raw}, so the step cannot find raw",
+                "put {raw} where the step takes the folder holding raw's files",
+            ),
+            (
+                "[\"python3\", \"{rwa}\", \"{raw}\", \"{out}\"]",
+                "run in datasets.clean names {rwa}, which is not a dataset it is made from",
+                "did you mean {raw}? a name in braces is one of from, or out",
+            ),
+            (
+                "[\"python3\", \"{Raw}\", \"{raw}\", \"{out}\"]",
+                "run in datasets.clean names {Raw}, which is not a dataset it is made from",
+                "did you mean {raw}? a name in braces is one of from, or out",
+            ),
+            (
+                "[\"python3\", \"{raw\", \"{out}\"]",
+                "a word of run in datasets.clean has a { with no } after it",
+                "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads",
+            ),
+            (
+                "[\"\", \"{raw}\", \"{out}\"]",
+                "the program in run of datasets.clean is empty",
+                "make the first word the program to start, as run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]",
+            ),
+            (
+                "[\"python3\\n\", \"{raw}\", \"{out}\"]",
+                "a word of run in datasets.clean holds a control character",
+                "write {{ and }} for a brace of its own, and {name} for the folder of a dataset it reads",
+            ),
+        ] {
+            let error = fails(&recipe(run));
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{run}");
+            assert_eq!(error.message, message, "{run}");
+            assert_eq!(error.help.as_deref(), Some(help), "{run}");
+            assert_eq!(error.details.len(), 1, "{run}");
+            assert!(error.details[0].starts_with("data.toml:6"), "{run}");
+        }
+        let out = fails(
+            "[datasets.out]\nref = \"zenodo:1\"\n\n[datasets.clean]\nfrom = [\"out\"]\nrun = [\"tool\", \"{out}\"]\n",
+        );
+        assert_eq!(
+            out.message,
+            "datasets.clean is made from out, the name run keeps for the result's folder"
+        );
+        assert_eq!(
+            out.help.as_deref(),
+            Some("rename the dataset out in data.toml")
+        );
+    }
+
+    /// a recipe reads datasets data.toml has, and recipes cannot be made from each other, since
+    /// no order of steps could make them. a cycle names its path.
+    #[test]
+    fn from_names_exist_and_form_no_cycle() {
+        let recipe = |name: &str, from: &[&str]| {
+            let names: Vec<String> = from.iter().map(|input| format!("\"{input}\"")).collect();
+            let folders: Vec<String> = from
+                .iter()
+                .map(|input| format!("\"{{{input}}}\""))
+                .collect();
+            format!(
+                "\n[datasets.{name}]\nfrom = [{}]\nrun = [\"tool\", {}, \"{{out}}\"]\n",
+                names.join(", "),
+                folders.join(", ")
+            )
+        };
+        let chain = format!("{RAW}{}{}", recipe("b", &["a"]), recipe("a", &["raw"]));
+        assert_eq!(parse(&chain).datasets.len(), 3);
+        let typo = fails(&format!("{RAW}{}", recipe("clean", &["rwa"])));
+        assert_eq!(typo.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            typo.message,
+            "datasets.clean is made from rwa, which data.toml does not have"
+        );
+        assert_eq!(typo.help.as_deref(), Some("did you mean raw?"));
+        assert_eq!(typo.details, ["data.toml:6   from = [\"rwa\"]"]);
+        for (text, message) in [
+            (
+                format!("{RAW}{}{}", recipe("a", &["b"]), recipe("b", &["a"])),
+                "datasets a and b are made from each other: a \u{2192} b \u{2192} a",
+            ),
+            (
+                format!(
+                    "{RAW}{}{}{}",
+                    recipe("c", &["raw", "a"]),
+                    recipe("b", &["c"]),
+                    recipe("a", &["b"])
+                ),
+                "datasets a, b and c are made from each other: a \u{2192} b \u{2192} c \u{2192} a",
+            ),
+            (
+                format!("{RAW}{}", recipe("a", &["a"])),
+                "datasets.a is made from itself",
+            ),
+        ] {
+            let error = fails(&text);
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
+            assert_eq!(error.message, message, "{text}");
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "a recipe can read only datasets made before it; take one of them out of the other's from"
+                ),
+            );
+            assert_eq!(error.details.len(), 1, "{text}");
+        }
     }
 
     #[test]
@@ -1192,7 +1828,7 @@ mod tests {
             (
                 "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
                 "data.toml:3   unknown_setting = true",
-                "the keys here are ref, select, exclude, extract, copy, path",
+                "the keys here are ref, select, exclude, extract, copy, path, from, run, code, env",
             ),
         ] {
             let error = fails(text);
@@ -1356,7 +1992,7 @@ mod tests {
         )
         .unwrap();
         let manifest = parse(&added);
-        let replacement = &manifest.datasets["replace"];
+        let replacement = manifest.datasets["replace"].source().unwrap();
         assert_eq!(manifest.data_dir, "inputs");
         assert_eq!(manifest.datasets.len(), 2);
         assert_eq!(replacement.reference, "zenodo:3");
@@ -1380,12 +2016,18 @@ mod tests {
         let removed = without_dataset(text, "a").unwrap();
         let manifest = parse(&removed);
         assert_eq!(manifest.datasets.len(), 1);
-        assert_eq!(manifest.datasets["b"].reference, "zenodo:2");
+        assert_eq!(
+            manifest.datasets["b"].source().unwrap().reference,
+            "zenodo:2"
+        );
         let removed = without_dataset(&removed, "b").unwrap();
         assert_eq!(parse(&removed).datasets.len(), 0);
         let added = with_dataset("\u{feff}# notes\n", "a", "zenodo:1", &[], &[], true).unwrap();
         assert!(!added.starts_with('\u{feff}'));
         assert!(added.contains("# notes"));
-        assert_eq!(parse(&added).datasets["a"].reference, "zenodo:1");
+        assert_eq!(
+            parse(&added).datasets["a"].source().unwrap().reference,
+            "zenodo:1"
+        );
     }
 }

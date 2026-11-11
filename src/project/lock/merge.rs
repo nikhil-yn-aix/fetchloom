@@ -461,14 +461,28 @@ fn values(entry: &Entry) -> impl PartialEq {
             .map(|glob| glob.as_str().to_owned())
             .collect::<Vec<_>>()
     };
-    (
-        entry.reference.clone(),
-        patterns(&entry.select),
-        patterns(&entry.exclude),
-        entry.extract,
-        entry.copy,
-        entry.path.clone(),
-    )
+    let source = entry.source().map(|source| {
+        (
+            source.reference.clone(),
+            patterns(&source.select),
+            patterns(&source.exclude),
+            source.extract,
+        )
+    });
+    let recipe = entry.recipe().map(|recipe| {
+        let run: Vec<String> = recipe
+            .run
+            .iter()
+            .map(|word| word.text().to_owned())
+            .collect();
+        (
+            recipe.from.clone(),
+            run,
+            recipe.code.clone(),
+            recipe.env.clone(),
+        )
+    });
+    (source, recipe, entry.copy, entry.path.clone())
 }
 
 /// refuses a merged data.toml that does not say what the merge decided, which an unusual layout
@@ -534,13 +548,25 @@ fn pick_records(
 ) -> Vec<Parsed> {
     let mut kept = Vec::new();
     for (name, entry) in &merged.datasets {
-        let wanted = spec(entry);
-        let ours = answering(&locks.ours, name, &wanted);
-        let theirs = answering(&locks.theirs, name, &wanted);
+        let (ours, theirs, base) = match entry.source() {
+            Some(source) => {
+                let wanted = spec(source);
+                (
+                    answering(&locks.ours, name, &wanted),
+                    answering(&locks.theirs, name, &wanted),
+                    base_of(locks, name, find),
+                )
+            }
+            None => (
+                result(&locks.ours, name),
+                result(&locks.theirs, name),
+                base_of(locks, name, result),
+            ),
+        };
         let verdict = match (ours, theirs) {
             (Some(_), None) => Ok(Take::Side(Side::Ours)),
             (None, Some(_)) => Ok(Take::Side(Side::Theirs)),
-            _ => decide(ours, theirs, base_of(locks, name, find), alike),
+            _ => decide(ours, theirs, base, alike),
         };
         let choice = choices.get(name).copied();
         // a side chosen for data.toml brings its own pin
@@ -551,23 +577,6 @@ fn pick_records(
         if let Some(take) = take {
             kept.extend(pick(take, ours, theirs).cloned());
             decided.records.insert(name.clone(), take);
-        }
-    }
-    let names: BTreeSet<&str> = locks
-        .ours
-        .iter()
-        .chain(&locks.theirs)
-        .filter(|record| matches!(record, Parsed::Derived(..)))
-        .map(Parsed::name)
-        .filter(|name| !merged.datasets.contains_key(*name))
-        .collect();
-    for name in names {
-        let ours = result(&locks.ours, name);
-        let theirs = result(&locks.theirs, name);
-        let verdict = decide(ours, theirs, base_of(locks, name, result), alike);
-        if let Some(take) = decided.settle(name, verdict, choices.get(name).copied()) {
-            kept.extend(pick(take, ours, theirs).cloned());
-            decided.records.insert(name.to_owned(), take);
         }
     }
     kept.sort_by(|a, b| a.name().cmp(b.name()));

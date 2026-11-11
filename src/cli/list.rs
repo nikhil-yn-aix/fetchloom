@@ -22,8 +22,11 @@ pub(super) struct Report {
 #[derive(Serialize)]
 struct Listed {
     name: String,
+    /// where the dataset is fetched from, or none when a recipe makes it.
     #[serde(rename = "ref")]
-    reference: String,
+    reference: Option<String>,
+    /// the datasets a recipe makes it from, or none when it is fetched.
+    from: Option<Vec<String>>,
     /// the version data.lock pins, or none before the dataset is locked.
     resolved: Option<String>,
     files: Option<u64>,
@@ -119,35 +122,58 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
         .datasets
         .iter()
         .map(|(name, entry)| {
-            let locked = lock.get(name);
+            let locked = lock.get(name).filter(|_| entry.source().is_some());
+            let result = lock.result(name).filter(|_| entry.recipe().is_some());
+            let sizes: Option<Vec<u64>> = match (locked, result) {
+                (Some(locked), _) => Some(locked.files.iter().map(|file| file.size).collect()),
+                (None, Some(result)) => Some(result.files.iter().map(|file| file.size).collect()),
+                (None, None) => None,
+            };
             Listed {
                 name: name.clone(),
-                reference: crate::net::mask_query(&entry.reference).into_owned(),
+                reference: entry
+                    .source()
+                    .map(|source| crate::net::mask_query(&source.reference).into_owned()),
+                from: entry.recipe().map(|recipe| recipe.from.clone()),
                 resolved: locked.map(|locked| locked.resolved.clone()),
-                files: locked.map(|locked| locked.files.len() as u64),
-                bytes: locked.map(|locked| {
-                    locked
-                        .files
-                        .iter()
-                        .fold(0, |total: u64, file| total.saturating_add(file.size))
+                files: sizes.as_ref().map(|sizes| sizes.len() as u64),
+                bytes: sizes.map(|sizes| {
+                    sizes
+                        .into_iter()
+                        .fold(0, |total: u64, size| total.saturating_add(size))
                 }),
                 folder: plan::folder(manifest, name),
                 title: locked.and_then(|locked| locked.title.clone()),
                 license: locked.and_then(|locked| locked.license.clone()),
                 doi: locked.and_then(|locked| locked.doi.clone()),
                 access: locked.map(|locked| locked.access),
-                locked_files: locked.map(|locked| {
-                    locked
-                        .files
-                        .iter()
-                        .map(|file| ListedFile {
-                            path: file.path.clone(),
-                            size: file.size,
-                            sha256: file.sha256,
-                            url: super::export::link(&file.url).ok(),
-                        })
-                        .collect()
-                }),
+                locked_files: match (locked, result) {
+                    (Some(locked), _) => Some(
+                        locked
+                            .files
+                            .iter()
+                            .map(|file| ListedFile {
+                                path: file.path.clone(),
+                                size: file.size,
+                                sha256: file.sha256,
+                                url: super::export::link(&file.url).ok(),
+                            })
+                            .collect(),
+                    ),
+                    (None, Some(result)) => Some(
+                        result
+                            .files
+                            .iter()
+                            .map(|file| ListedFile {
+                                path: file.path.clone(),
+                                size: file.size,
+                                sha256: file.sha256,
+                                url: None,
+                            })
+                            .collect(),
+                    ),
+                    (None, None) => None,
+                },
             }
         })
         .collect();
@@ -193,7 +219,11 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
             };
             let mut row = vec![dataset.name.clone()];
             if with_source {
-                row.push(dataset.reference.clone());
+                row.push(match (&dataset.reference, &dataset.from) {
+                    (Some(reference), _) => reference.clone(),
+                    (None, Some(from)) => format!("made from {}", from.join(", ")),
+                    (None, None) => String::new(),
+                });
             }
             row.extend([contents, dataset.folder.clone()]);
             if licensed {
@@ -273,7 +303,8 @@ mod tests {
     fn the_license_comes_last_and_gives_way_after_the_source() {
         let listed = |name: &str, license: Option<&str>| Listed {
             name: name.to_owned(),
-            reference: format!("zenodo:{}", name.len()),
+            reference: Some(format!("zenodo:{}", name.len())),
+            from: None,
             resolved: Some(format!("zenodo:{}@1", name.len())),
             files: Some(1),
             bytes: Some(4551),

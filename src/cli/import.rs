@@ -16,7 +16,7 @@ use crate::cache::{Cache, Imported, Sealed};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::project::lock::{self, Locked, LockedFile};
-use crate::project::manifest::Entry;
+use crate::project::manifest::Source;
 use crate::source::{self, Access, local};
 use crate::stop::Stop;
 use crate::volume::is_plain;
@@ -164,7 +164,12 @@ impl Walked {
 ///
 /// a folder cannot be read, a kept name cannot be pinned on every machine, a select pattern keeps
 /// nothing, more files are kept than one dataset may list, or a stop is asked.
-pub(super) fn walk(start: &Path, shown: &str, entry: &Entry, stop: &Stop) -> Result<Walked, Error> {
+pub(super) fn walk(
+    start: &Path,
+    shown: &str,
+    source: &Source,
+    stop: &Stop,
+) -> Result<Walked, Error> {
     let found = std::fs::metadata(start)
         .map_err(|err| Error::io(format_args!("could not read {shown}"), &err))?;
     let mut walked = Walked {
@@ -253,17 +258,17 @@ pub(super) fn walk(start: &Path, shown: &str, entry: &Entry, stop: &Stop) -> Res
         .help("name a folder or a file, as in `fetchloom add ./flowers`"));
     }
     walked.skipped.sort_unstable();
-    kept(&mut walked, entry, shown)?;
+    kept(&mut walked, source, shown)?;
     walked.files.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     checked_names(&walked.files, shown)?;
     Ok(walked)
 }
 
-/// keeps the files `entry`'s patterns select and do not exclude. a select pattern that keeps
+/// keeps the files `source`'s patterns select and do not exclude. a select pattern that keeps
 /// nothing is a mistake worth stopping for.
-fn kept(walked: &mut Walked, entry: &Entry, shown: &str) -> Result<(), Error> {
+fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> {
     let matches = |globs: &[Glob], path: &str| globs.iter().any(|glob| glob.matches(path));
-    if let Some(glob) = entry
+    if let Some(glob) = source
         .select
         .iter()
         .find(|glob| !walked.files.iter().any(|file| glob.matches(&file.path)))
@@ -275,8 +280,8 @@ fn kept(walked: &mut Walked, entry: &Entry, shown: &str) -> Result<(), Error> {
         .help("check the pattern against the paths below the folder, such as \"**/*.csv\""));
     }
     walked.files.retain(|file| {
-        (entry.select.is_empty() || matches(&entry.select, &file.path))
-            && !matches(&entry.exclude, &file.path)
+        (source.select.is_empty() || matches(&source.select, &file.path))
+            && !matches(&source.exclude, &file.path)
     });
     if walked.files.is_empty() {
         return Err(Error::new(
@@ -623,14 +628,15 @@ impl Beneath {
     }
 }
 
-/// the pin of `files`, imported for the dataset `name` as data.toml's `entry` gives it. it names
-/// no source: relocking learns what its archives unpack to, and stamps when it was pinned.
-pub(super) fn pinned(name: &str, entry: &Entry, files: Vec<LockedFile>) -> Locked {
+/// the pin of `files`, imported for the dataset `name` as data.toml's `source` gives it. it names
+/// no source to fetch from: relocking learns what its archives unpack to, and stamps when it was
+/// pinned.
+pub(super) fn pinned(name: &str, source: &Source, files: Vec<LockedFile>) -> Locked {
     Locked {
         name: name.to_owned(),
         reference: local::IMPORTED.to_owned(),
-        spec: lock::spec(entry),
-        extract: entry.extract,
+        spec: lock::spec(source),
+        extract: source.extract,
         resolved: local::IMPORTED.to_owned(),
         title: None,
         license: None,
@@ -688,7 +694,7 @@ mod tests {
     use super::*;
     use crate::project::manifest::Manifest;
 
-    fn entry(select: &[&str], exclude: &[&str]) -> Entry {
+    fn entry(select: &[&str], exclude: &[&str]) -> Source {
         let quoted = |patterns: &[&str]| {
             patterns
                 .iter()
@@ -701,7 +707,10 @@ mod tests {
             quoted(select),
             quoted(exclude)
         );
-        Manifest::parse(&text).unwrap().datasets["flowers"].clone()
+        Manifest::parse(&text).unwrap().datasets["flowers"]
+            .source()
+            .unwrap()
+            .clone()
     }
 
     fn paths(walked: &Walked) -> Vec<&str> {

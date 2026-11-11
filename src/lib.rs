@@ -17,6 +17,7 @@ mod output;
 mod place;
 mod plan;
 mod project;
+mod recipe;
 mod settings;
 mod source;
 mod space;

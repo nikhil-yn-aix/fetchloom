@@ -276,9 +276,9 @@ fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
     (table, part, part_text)
 }
 
-/// a recipe's result pinned in data.lock, which only `fetchloom build` makes, stays as it is when
-/// another command writes data.lock, and a list that does not hold it is refused with advice that
-/// works.
+/// a recipe's result pinned in data.lock, which only `fetchloom build` makes, stays as it is
+/// while data.toml has the recipe, when another command writes data.lock, and a list that does
+/// not hold it is refused with advice that works.
 #[test]
 fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -288,6 +288,12 @@ fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
     )?;
     sandbox.allow(&server.url);
     assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
+    let manifest = sandbox.work().join("data.toml");
+    let recipe = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\n";
+    fs::write(
+        &manifest,
+        format!("{}{recipe}", fs::read_to_string(&manifest)?),
+    )?;
     let (table, part, part_text) = result("clean", &[("iris.csv", b"abc")]);
     let lock = sandbox.work().join("data.lock");
     fs::create_dir(sandbox.work().join("data.lock.d"))?;

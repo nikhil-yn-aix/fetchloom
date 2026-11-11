@@ -22,7 +22,7 @@ fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
     Locked {
         name: name.to_owned(),
         reference: reference.to_owned(),
-        spec: spec(entry),
+        spec: spec(entry.source().unwrap()),
         extract: true,
         resolved: reference.to_owned(),
         title: None,
@@ -376,7 +376,9 @@ fn recipe_results_merge_by_name() {
             name: "core".to_owned(),
             content: digest::sha256(b"core"),
         }],
-        run: vec!["python3".to_owned(), "clean.py".to_owned()],
+        run: ["python3", "clean.py", "{core}", "{out}"]
+            .map(str::to_owned)
+            .to_vec(),
         code: Vec::new(),
         env: BTreeMap::new(),
         key: digest::sha256(b"key"),
@@ -393,8 +395,9 @@ fn recipe_results_merge_by_name() {
     for (part, text) in with_result.lists() {
         fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
     }
-    let text = toml(&[("core", "zenodo:3")]);
-    let manifest = sides(text.clone(), text, None);
+    let recipe = "\n[datasets.clean]\nfrom = [\"core\"]\nrun = [\"python3\", \"clean.py\", \"{core}\", \"{out}\"]\n";
+    let text = format!("{}{recipe}", toml(&[("core", "zenodo:3")]));
+    let manifest = sides(text.clone(), text.clone(), None);
     let added = sides(
         with_result.render(),
         lock(vec![core.clone()]),
@@ -404,9 +407,25 @@ fn recipe_results_merge_by_name() {
     let merged = merge(&manifest, Some(&added), &choices, root.path()).unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     assert_eq!(merged.summary.from_ours, ["clean"]);
+    // the one result data.toml's recipe has is its pin, whatever the base was
     let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
-    let error = merge(&manifest, Some(&unknown), &choices, root.path()).unwrap_err();
+    let merged = merge(&manifest, Some(&unknown), &choices, root.path()).unwrap();
+    assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
+    let rebuilt = Lock {
+        datasets: vec![core.clone()],
+        derived: vec![Derived {
+            key: digest::sha256(b"another key"),
+            ..clean.clone()
+        }],
+    };
+    let both = sides(with_result.render(), rebuilt.render(), None);
+    let error = merge(&manifest, Some(&both), &choices, root.path()).unwrap_err();
     assert_eq!(error.message, "the merge needs a choice for clean");
+    // a result goes with its recipe, as a fetched dataset's pin goes with its entry
+    let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
+    let merged = merge(&dropped, Some(&added), &choices, root.path()).unwrap();
+    assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
+    assert_eq!(merged.lock.unwrap().derived, []);
 }
 
 #[test]

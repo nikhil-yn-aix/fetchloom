@@ -26,8 +26,9 @@ use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
+use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
-use crate::project::manifest::{Entry, Manifest};
+use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
 use crate::source::{self, Listing, Reference, local};
 use crate::units;
@@ -239,7 +240,8 @@ impl<'a> Loop<'a> {
             kept,
             mut drafts,
             mut pinned,
-            mut others,
+            others,
+            results,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -276,7 +278,7 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             locked
         }));
-        let (lock, kept) = settled(&mut others, kept, drafted);
+        let (lock, kept) = settled(&others, kept, drafted, results);
         Ok((
             lock,
             Before {
@@ -302,7 +304,8 @@ impl<'a> Loop<'a> {
             kept,
             mut drafts,
             pinned,
-            mut others,
+            others,
+            results,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -331,7 +334,7 @@ impl<'a> Loop<'a> {
             locked.timestamp.clone_from(&now);
             drafted.push(locked);
         }
-        let (lock, kept) = settled(&mut others, kept, drafted);
+        let (lock, kept) = settled(&others, kept, drafted, results);
         let before = Before {
             existed,
             others,
@@ -380,32 +383,49 @@ impl<'a> Loop<'a> {
             match manifest.datasets.get(&locked.name) {
                 // an import has no newer version anywhere, so even an upgrade keeps it
                 Some(entry)
-                    if !upgrade.includes(&locked.name) || local::is_imported(&entry.reference) =>
+                    if !upgrade.includes(&locked.name)
+                        || entry
+                            .source()
+                            .is_some_and(|source| local::is_imported(&source.reference)) =>
                 {
-                    match locked.drift(entry) {
-                        None => kept.push(locked),
+                    match (entry.source(), locked.drift(entry)) {
+                        (_, None) => kept.push(locked),
                         // an import's files stand as data.lock pins them, so a switch only
                         // learns what its archives unpack to
-                        Some(Drift::Extract) if local::is_imported(&entry.reference) => {
-                            whole.push(draft::switched_import(entry, &locked));
+                        (Some(source), Some(Drift::Extract))
+                            if local::is_imported(&source.reference) =>
+                        {
+                            whole.push(draft::switched_import(source, &locked));
                             others.push(locked);
                         }
-                        Some(Drift::Extract) => {
-                            drafts.push((locked.name.clone(), Draft::switched(entry, &locked)?));
+                        (Some(source), Some(Drift::Extract)) => {
+                            let draft = Draft::switched(entry, source, &locked)?;
+                            drafts.push((locked.name.clone(), draft));
                             others.push(locked);
                         }
-                        Some(Drift::Spec) => others.push(locked),
+                        _ => others.push(locked),
                     }
                 }
                 _ => others.push(locked),
             }
         }
+        // only `fetchloom build` pins a recipe's result, so one stays while data.toml has the
+        // recipe, and otherwise goes as a dropped dataset does
+        let (results, dropped) = old.derived.into_iter().partition(|result| {
+            manifest
+                .datasets
+                .get(&result.name)
+                .is_some_and(|entry| entry.recipe().is_some())
+        });
         let others = Lock {
             datasets: others,
-            derived: old.derived,
+            derived: dropped,
         };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
+            let Some(source) = entry.source() else {
+                continue;
+            };
             let is_kept = kept
                 .binary_search_by(|locked| locked.name.as_str().cmp(name))
                 .is_ok();
@@ -417,14 +437,14 @@ impl<'a> Loop<'a> {
             {
                 asks.push((
                     name.clone(),
-                    pinned(entry, others.get(name), upgrade.includes(name)),
+                    pinned(source, others.get(name), upgrade.includes(name)),
                 ));
             }
         }
         // an import names no source to list it again, so the run stops before it asks anyone
         if let Some((name, _)) = asks
             .iter()
-            .find(|(name, _)| local::is_imported(&manifest.datasets[name].reference))
+            .find(|(name, _)| manifest.datasets[name].is_import())
         {
             let error = if others.get(name).is_some() {
                 local::changed(name)
@@ -435,9 +455,14 @@ impl<'a> Loop<'a> {
         }
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
+            let entry = &manifest.datasets[&name];
+            let Some(source) = entry.source() else {
+                continue;
+            };
             let draft = Draft::new(
                 &name,
-                &manifest.datasets[&name],
+                entry,
+                source,
                 listing,
                 others.get(&name),
                 upgrade.includes(&name),
@@ -451,6 +476,7 @@ impl<'a> Loop<'a> {
             drafts: drafts.into_iter().map(|(_, draft)| draft).collect(),
             pinned: whole,
             others,
+            results,
         })
     }
 
@@ -609,6 +635,7 @@ impl<'a> Loop<'a> {
                 ));
             }
             let entry = &manifest.datasets[&name];
+            let select = entry.source().map_or(&[][..], |source| &source.select);
             let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             // the line itself may hold a secret, so only its place is shown
             parsed
@@ -619,7 +646,7 @@ impl<'a> Loop<'a> {
                 asked.push(parsed.reference.to_string());
             }
             let net = self.net.clone();
-            let folders = crate::glob::folders(&entry.select);
+            let folders = crate::glob::folders(select);
             tasks.spawn(async move {
                 let listing = parsed.reference.resolve_in(&*net, folders.as_deref()).await;
                 (name, listing)
@@ -965,15 +992,21 @@ struct Drafted {
     /// whole pins of imports, given or with `extract` switched, whose archives may still need
     /// unpacking.
     pinned: Vec<Locked>,
-    /// the entries of data.lock not kept: those to replace or drop, and the results of recipes,
-    /// which [`settled`] moves into the new lock.
+    /// the entries of data.lock not kept: those to replace or drop.
     others: Lock,
+    /// the results of the recipes data.toml has, which [`settled`] moves into the new lock.
+    results: Vec<Derived>,
 }
 
-/// the lock of `kept` and `drafted` entries, by name, and for each of its datasets whether it
-/// was kept, with the results of recipes moved from `others`. a pin dates from when its data
-/// last changed, so resolving the same data again leaves data.lock as it was.
-fn settled(others: &mut Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
+/// the lock of `kept` and `drafted` entries and the `results` of recipes, by name, and for each
+/// of its datasets whether it was kept. a pin dates from when its data last changed, so
+/// resolving the same data again leaves data.lock as it was.
+fn settled(
+    others: &Lock,
+    kept: Vec<Locked>,
+    drafted: Vec<Locked>,
+    results: Vec<Derived>,
+) -> (Lock, Vec<bool>) {
     let mut datasets: Vec<(Locked, bool)> = kept.into_iter().map(|locked| (locked, true)).collect();
     datasets.extend(drafted.into_iter().map(|mut locked| {
         if let Some(before) = others.get(&locked.name)
@@ -986,14 +1019,13 @@ fn settled(others: &mut Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock,
     }));
     datasets.sort_by(|a, b| a.0.name.cmp(&b.0.name));
     let (datasets, kept): (Vec<Locked>, _) = datasets.into_iter().unzip();
-    // only `fetchloom build` changes a recipe's result, so it stays unless a source took its name
-    let mut derived = std::mem::take(&mut others.derived);
-    derived.retain(|result| {
-        datasets
-            .binary_search_by(|dataset| dataset.name.cmp(&result.name))
-            .is_err()
-    });
-    (Lock { datasets, derived }, kept)
+    (
+        Lock {
+            datasets,
+            derived: results,
+        },
+        kept,
+    )
 }
 
 /// data.lock as it was before relocking, beside the new lock. entries relocking kept as they
@@ -1001,7 +1033,8 @@ fn settled(others: &mut Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock,
 pub(super) struct Before {
     /// whether there was a data.lock.
     existed: bool,
-    /// the old entries relocking did not keep: those it replaced or dropped.
+    /// the old entries relocking did not keep: those it replaced or dropped, and the results of
+    /// recipes data.toml no longer has.
     others: Lock,
     /// for each dataset of the new lock, in its order, whether it was kept from the old one.
     kept: Vec<bool>,
@@ -1037,6 +1070,7 @@ impl Before {
                 .iter()
                 .all(|dataset| self.get(lock, &dataset.name) == Some(dataset))
             && self.dropped(lock).next().is_none()
+            && self.others.derived.is_empty()
     }
 
     /// the old datasets `lock` no longer has.
@@ -1085,6 +1119,13 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
         })
         .map(|dataset| dataset.name.clone())
         .chain(before.dropped(lock).map(|dataset| dataset.name.clone()))
+        .chain(
+            before
+                .others
+                .derived
+                .iter()
+                .map(|result| result.name.clone()),
+        )
         .collect();
     names.sort();
     names
@@ -1162,11 +1203,12 @@ fn lock_lines(
             ),
         ));
     }
-    for dataset in before.dropped(lock) {
-        lines.push((
-            verbs.dropped,
-            format!("{} from {}", dataset.name, lock::FILE),
-        ));
+    let dropped = before
+        .dropped(lock)
+        .map(|dataset| &dataset.name)
+        .chain(before.others.derived.iter().map(|result| &result.name));
+    for name in dropped {
+        lines.push((verbs.dropped, format!("{name} from {}", lock::FILE)));
     }
     lines
 }
@@ -1234,12 +1276,12 @@ pub(super) fn resolves_locally(reference: &Reference) -> bool {
 /// what to resolve for a dataset whose entry changed. a changed filter resolves the version
 /// already locked, so tidying data.toml never moves data. a new ref, or an upgrade, asks for the
 /// newest.
-fn pinned(entry: &Entry, previous: Option<&Locked>, upgrading: bool) -> String {
+fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String {
     match previous {
-        Some(locked) if !upgrading && locked.reference == entry.reference => {
+        Some(locked) if !upgrading && locked.reference == source.reference => {
             locked.resolved.clone()
         }
-        _ => entry.reference.clone(),
+        _ => source.reference.clone(),
     }
 }
 
@@ -1530,7 +1572,7 @@ mod tests {
     fn filter_changes_keep_the_locked_revision_unless_upgrading() {
         let manifest =
             Manifest::parse("[datasets.set]\nref = 'zenodo:1'\nselect = '*.csv'\n").unwrap();
-        let entry = &manifest.datasets["set"];
+        let entry = manifest.datasets["set"].source().unwrap();
         let before = locked("set");
         assert_eq!(pinned(entry, Some(&before), false), "zenodo:2");
         assert_eq!(pinned(entry, Some(&before), true), "zenodo:1");
@@ -1755,7 +1797,11 @@ mod tests {
         };
         let old = Lock {
             datasets: vec![
-                pinned("a", lock::spec(&manifest.datasets["a"]), file("a")),
+                pinned(
+                    "a",
+                    lock::spec(manifest.datasets["a"].source().unwrap()),
+                    file("a"),
+                ),
                 pinned("b", "sha256:an older entry".to_owned(), file("b")),
                 pinned("c", "sha256:a dropped entry".to_owned(), file("c")),
             ],
@@ -1831,6 +1877,71 @@ mod tests {
                 .is_some()
         );
         assert_eq!(project.lock().unwrap(), Some(Lock::default()));
+    }
+
+    /// a recipe has no source to resolve: relocking keeps its result while data.toml has the
+    /// recipe, offline and asking nothing, and drops the result with the recipe.
+    #[test]
+    fn relocking_keeps_a_recipe_result_only_while_data_toml_has_the_recipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let source = "[datasets.raw]\nref = 'zenodo:1'\n";
+        let recipe =
+            "[datasets.clean]\nfrom = ['raw']\nrun = ['python3', 'clean.py', '{raw}', '{out}']\n";
+        let both = Manifest::parse(&format!("{source}{recipe}")).unwrap();
+        let mut raw = locked("raw");
+        raw.spec = lock::spec(both.datasets["raw"].source().unwrap());
+        let files = vec![crate::cache::Member {
+            path: "clean.csv".to_owned(),
+            size: 1,
+            sha256: digest::sha256(b"c"),
+        }];
+        let result = Derived {
+            name: "clean".to_owned(),
+            from: vec![lock::derived::Input {
+                name: "raw".to_owned(),
+                content: digest::sha256(b"raw"),
+            }],
+            run: ["python3", "clean.py", "{raw}", "{out}"]
+                .map(str::to_owned)
+                .to_vec(),
+            code: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            key: digest::sha256(b"key"),
+            timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            tree: crate::cache::tree_hash(&files),
+            files,
+        };
+        let old = Lock {
+            datasets: vec![raw],
+            derived: vec![result],
+        };
+        let relock = |manifest: &Manifest| {
+            block_on(runner.relock(manifest, Some(old.clone()), &Upgrade::Nothing, Vec::new()))
+                .unwrap()
+        };
+        let (kept, before) = relock(&both);
+        assert_eq!(kept, old);
+        assert!(before.holds(&kept));
+        let (dropped, before) = relock(&Manifest::parse(source).unwrap());
+        assert_eq!(dropped.datasets, old.datasets);
+        assert_eq!(dropped.derived, []);
+        assert!(!before.holds(&dropped));
+        assert_eq!(repinned(&before, &dropped), ["clean"]);
+        let told = lock_lines(
+            &context.output,
+            &before,
+            &dropped,
+            Verbs::DONE,
+            None,
+            &HashSet::new(),
+        );
+        assert_eq!(told, [("Removed", "clean from data.lock".to_owned())]);
     }
 
     #[test]
@@ -1983,14 +2094,15 @@ mod tests {
             datasets: vec![locked("a"), locked("b"), locked("c")],
             ..Lock::default()
         };
-        let mut others = Lock {
+        let others = Lock {
             datasets: vec![locked("b"), locked("c")],
             ..Lock::default()
         };
         let (lock, kept) = settled(
-            &mut others,
+            &others,
             vec![locked("a")],
             vec![changed.clone(), locked("d")],
+            Vec::new(),
         );
         assert_eq!(
             lock.datasets
@@ -2017,12 +2129,13 @@ mod tests {
         );
         assert!(!before.holds(&lock));
         let (same, kept) = settled(
-            &mut Lock {
+            &Lock {
                 datasets: vec![locked("b")],
                 ..Lock::default()
             },
             vec![locked("a")],
             vec![locked("b")],
+            Vec::new(),
         );
         let unchanged = Before {
             existed: true,

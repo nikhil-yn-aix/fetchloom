@@ -6,7 +6,7 @@ use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known
 use super::sync::disk::Survey;
 use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::project::lock;
 use crate::project::manifest::{self, Manifest};
 
@@ -20,10 +20,23 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     };
     let (text, manifest) = project.manifest()?;
     known(&manifest, &args.name, "remove")?;
+    if let Some((reader, _)) = manifest.datasets.iter().find(|(_, entry)| {
+        entry
+            .recipe()
+            .is_some_and(|recipe| recipe.from.contains(&args.name))
+    }) {
+        return Err(
+            Error::new(Kind::Usage, format!("{reader} is made from {}", args.name)).help(format!(
+                "remove {reader} first, or take {} out of its from in data.toml",
+                args.name
+            )),
+        );
+    }
     let updated = manifest::without_dataset(&text, &args.name)?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
     lock.datasets.retain(|dataset| dataset.name != args.name);
+    lock.derived.retain(|result| result.name != args.name);
     let cache = if dry_run {
         peek_cache()?
     } else {

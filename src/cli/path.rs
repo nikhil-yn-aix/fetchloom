@@ -297,7 +297,7 @@ mod tests {
         let lock = Lock {
             datasets: vec![pinned(
                 "a",
-                lock::spec(&manifest.datasets["a"]),
+                lock::spec(manifest.datasets["a"].source().unwrap()),
                 vec![lock::LockedFile {
                     path: "x".to_owned(),
                     size: 4,

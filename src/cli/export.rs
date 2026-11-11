@@ -138,7 +138,8 @@ fn inventory(
         refused: Vec::new(),
     };
     for (name, entry) in &manifest.datasets {
-        if !wanted(name) {
+        // a recipe's result is not placed yet, so there is nothing of it to export
+        if !wanted(name) || entry.recipe().is_some() {
             continue;
         }
         let stale = match lock.get(name).map(|locked| locked.drift(entry)) {

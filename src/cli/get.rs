@@ -1160,7 +1160,10 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
     )?)?;
     let mut entry = alone.datasets["get"].clone();
     entry.lines.clear();
-    engine::filter(&parsed.reference.shown(), &entry, listing)
+    match entry.source() {
+        Some(source) => engine::filter(&parsed.reference.shown(), &entry, source, listing),
+        None => Ok(listing.files.clone()),
+    }
 }
 
 /// the names to call a folder after: a file its source wrapped in a zip by its listed name, so

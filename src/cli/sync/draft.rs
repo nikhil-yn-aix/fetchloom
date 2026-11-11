@@ -15,7 +15,7 @@ use crate::name;
 use crate::net::{Expect, Fetch, Fetched};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
-use crate::project::manifest::Entry;
+use crate::project::manifest::{Entry, Source};
 use crate::source::{self, Access, Listing, Remote};
 use crate::units;
 
@@ -69,6 +69,7 @@ impl Draft {
     pub(super) fn new(
         name: &str,
         entry: &Entry,
+        source: &Source,
         listing: Listing,
         previous: Option<&Locked>,
         upgrading: bool,
@@ -87,7 +88,7 @@ impl Draft {
                 .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
             by_url.entry(link).or_default().push(file);
         }
-        let files = filter(name, entry, &listing)?
+        let files = filter(name, entry, source, &listing)?
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
@@ -114,7 +115,7 @@ impl Draft {
                 // the name says archive. an upgrade pins what this machine's unpacking recorded
                 // for them instead, so a tree another version of fetchloom pinned can be
                 // replaced without downloading again
-                let unpacks = entry.extract && archive::by_name(&path) == Some(Packed::Archive);
+                let unpacks = source.extract && archive::by_name(&path) == Some(Packed::Archive);
                 let unpacks_to = earlier
                     .filter(|file| unpacks && known == Some((file.sha256, file.size)))
                     .and_then(|file| {
@@ -144,9 +145,9 @@ impl Draft {
             .collect();
         Ok(Draft {
             name: name.to_owned(),
-            reference: entry.reference.clone(),
-            spec: lock::spec(entry),
-            extract: entry.extract,
+            reference: source.reference.clone(),
+            spec: lock::spec(source),
+            extract: source.extract,
             patterns: written(entry),
             resolved: listing.resolved.to_string(),
             title: listing.title,
@@ -161,7 +162,11 @@ impl Draft {
     /// a dataset whose entry changed only in `extract`, from the files data.lock pins, so it
     /// needs no listing. what each archive unpacks to is learned again as for any draft: from
     /// this machine's record of it, or from its bytes, downloaded only when the cache lacks them.
-    pub(super) fn switched(entry: &Entry, locked: &Locked) -> Result<Draft, Error> {
+    pub(super) fn switched(
+        entry: &Entry,
+        source: &Source,
+        locked: &Locked,
+    ) -> Result<Draft, Error> {
         let files = locked
             .files
             .iter()
@@ -186,9 +191,9 @@ impl Draft {
             .collect::<Result<_, Error>>()?;
         Ok(Draft {
             name: locked.name.clone(),
-            reference: entry.reference.clone(),
-            spec: lock::spec(entry),
-            extract: entry.extract,
+            reference: source.reference.clone(),
+            spec: lock::spec(source),
+            extract: source.extract,
             patterns: written(entry),
             resolved: locked.resolved.clone(),
             title: locked.title.clone(),
@@ -456,11 +461,11 @@ impl Draft {
     }
 }
 
-/// the pin of `locked`, an import, once data.toml switched its `extract` to `entry`'s: the same
+/// the pin of `locked`, an import, once data.toml switched its `extract` to `source`'s: the same
 /// files, with what each archive unpacks to left to learn again.
-pub(super) fn switched_import(entry: &Entry, locked: &Locked) -> Locked {
+pub(super) fn switched_import(source: &Source, locked: &Locked) -> Locked {
     let mut switched = locked.clone();
-    switched.extract = entry.extract;
+    switched.extract = source.extract;
     for file in &mut switched.files {
         file.unpacks_to = None;
     }
@@ -557,16 +562,17 @@ fn carried<'a>(
 pub(in crate::cli) fn filter(
     name: &str,
     entry: &Entry,
+    source: &Source,
     listing: &Listing,
 ) -> Result<Vec<Remote>, Error> {
-    for glob in &entry.select {
+    for glob in &source.select {
         if !listing.paths().any(|path| glob.matches(path)) {
             return Err(unmatched(name, entry, glob, listing));
         }
     }
     let selected = |path: &str| {
-        (entry.select.is_empty() || entry.select.iter().any(|glob| glob.matches(path)))
-            && !entry.exclude.iter().any(|glob| glob.matches(path))
+        (source.select.is_empty() || source.select.iter().any(|glob| glob.matches(path)))
+            && !source.exclude.iter().any(|glob| glob.matches(path))
     };
     let unavailable: Vec<_> = listing
         .unavailable
@@ -798,13 +804,31 @@ mod tests {
             }],
         };
         let entry = &manifest.datasets["set"];
-        let kept = Draft::new("set", entry, listing(), Some(&locked), false, &cache).unwrap();
+        let kept = Draft::new(
+            "set",
+            entry,
+            entry.source().unwrap(),
+            listing(),
+            Some(&locked),
+            false,
+            &cache,
+        )
+        .unwrap();
         assert_eq!(
             kept.files[0].unpacks_to,
             Some(stale),
             "a relock keeps the pin"
         );
-        let upgraded = Draft::new("set", entry, listing(), Some(&locked), true, &cache).unwrap();
+        let upgraded = Draft::new(
+            "set",
+            entry,
+            entry.source().unwrap(),
+            listing(),
+            Some(&locked),
+            true,
+            &cache,
+        )
+        .unwrap();
         assert_eq!(
             upgraded.files[0].unpacks_to,
             Some(recorded),
@@ -846,8 +870,8 @@ mod tests {
         };
         let locked = Locked {
             name: "set".to_owned(),
-            reference: packed.reference.clone(),
-            spec: lock::spec(&packed),
+            reference: packed.source().unwrap().reference.clone(),
+            spec: lock::spec(packed.source().unwrap()),
             extract: false,
             resolved: "https://example.org/set.zip".to_owned(),
             title: Some("set".to_owned()),
@@ -861,7 +885,7 @@ mod tests {
             ],
         };
         let unpacking = entry("");
-        let mut draft = Draft::switched(&unpacking, &locked).unwrap();
+        let mut draft = Draft::switched(&unpacking, unpacking.source().unwrap(), &locked).unwrap();
         assert!(draft.jobs(&cache).is_empty());
         assert!(draft.unknown_archives(&cache).is_empty());
         let unpacked = draft.finish("2026-02-02T00:00:00Z").unwrap();
@@ -877,7 +901,7 @@ mod tests {
             locked,
             "every other field is as data.lock had it"
         );
-        let repacked = Draft::switched(&packed, &unpacked)
+        let repacked = Draft::switched(&packed, packed.source().unwrap(), &unpacked)
             .unwrap()
             .finish(&locked.timestamp)
             .unwrap();
@@ -885,7 +909,7 @@ mod tests {
 
         let mut broken = locked.clone();
         broken.files[1].url = "not a link".to_owned();
-        let Err(error) = Draft::switched(&unpacking, &broken) else {
+        let Err(error) = Draft::switched(&unpacking, unpacking.source().unwrap(), &broken) else {
             panic!("a broken link drafts nothing");
         };
         assert_eq!(error.kind, Kind::ProjectInvalid);
@@ -951,6 +975,7 @@ mod tests {
             let draft = Draft::new(
                 "w",
                 entry,
+                entry.source().unwrap(),
                 listing(),
                 Some(&locked(before)),
                 upgrading,
@@ -1050,8 +1075,16 @@ mod tests {
         };
         let entry = &manifest.datasets["d"];
         for upgrading in [true, false] {
-            let draft =
-                Draft::new("d", entry, listing(), Some(&locked), upgrading, &cache).unwrap();
+            let draft = Draft::new(
+                "d",
+                entry,
+                entry.source().unwrap(),
+                listing(),
+                Some(&locked),
+                upgrading,
+                &cache,
+            )
+            .unwrap();
             assert_eq!(draft.files[0].known, None, "upgrading {upgrading}");
             let jobs = draft.jobs(&cache);
             assert_eq!(jobs.len(), 1, "upgrading {upgrading}");
@@ -1120,6 +1153,7 @@ mod tests {
                 let draft = Draft::new(
                     "d",
                     &manifest.datasets["d"],
+                    manifest.datasets["d"].source().unwrap(),
                     listing,
                     None,
                     upgrading,
@@ -1160,6 +1194,7 @@ mod tests {
         let mut draft = Draft::new(
             "sample",
             &manifest.datasets["sample"],
+            manifest.datasets["sample"].source().unwrap(),
             listing,
             None,
             false,
@@ -1231,7 +1266,19 @@ mod tests {
         let entry = &manifest.datasets["raw"];
         let link = Url::parse("https://lab-raw.s3.amazonaws.com/raw/a.csv").unwrap();
         let bucket = || listing("s3://lab-raw/raw/", &link, None);
-        let mut draft = Draft::new("raw", entry, bucket(), None, false, &cache).unwrap();
+        let raw = |listing: Listing, previous: Option<&Locked>| {
+            Draft::new(
+                "raw",
+                entry,
+                entry.source().unwrap(),
+                listing,
+                previous,
+                false,
+                &cache,
+            )
+            .unwrap()
+        };
+        let mut draft = raw(bucket(), None);
         assert_eq!(draft.jobs(&cache).len(), 1);
         draft.learn(0, &fetched("v+1/2"), &cache);
         let locked = draft.finish(now).unwrap();
@@ -1239,7 +1286,7 @@ mod tests {
             locked.files[0].url,
             "https://lab-raw.s3.amazonaws.com/raw/a.csv?versionId=v%2B1%2F2"
         );
-        let again = Draft::new("raw", entry, bucket(), Some(&locked), false, &cache).unwrap();
+        let again = raw(bucket(), Some(&locked));
         assert!(again.jobs(&cache).is_empty());
         assert_eq!(again.finish(now).unwrap().files[0].url, locked.files[0].url);
 
@@ -1249,8 +1296,7 @@ mod tests {
             version: Some("v2".to_owned()),
         };
         cache.save_stated_md5(&md5, link.as_str(), &stated).unwrap();
-        let known = listing("s3://lab-raw/raw/", &link, Some(md5));
-        let draft = Draft::new("raw", entry, known, None, false, &cache).unwrap();
+        let draft = raw(listing("s3://lab-raw/raw/", &link, Some(md5)), None);
         assert!(draft.jobs(&cache).is_empty());
         assert_eq!(
             draft.finish(now).unwrap().files[0].url,
@@ -1261,8 +1307,16 @@ mod tests {
         let manifest =
             Manifest::parse("[datasets.a]\nref = \"https://example.org/a.csv\"\n").unwrap();
         let listed = listing("https://example.org/a.csv", &plain, None);
-        let mut draft =
-            Draft::new("a", &manifest.datasets["a"], listed, None, false, &cache).unwrap();
+        let mut draft = Draft::new(
+            "a",
+            &manifest.datasets["a"],
+            manifest.datasets["a"].source().unwrap(),
+            listed,
+            None,
+            false,
+            &cache,
+        )
+        .unwrap();
         draft.learn(0, &fetched("v3"), &cache);
         assert_eq!(draft.finish(now).unwrap().files[0].url, plain.as_str());
     }
@@ -1334,7 +1388,16 @@ mod tests {
         .unwrap();
         let entry = &manifest.datasets["titanic"];
 
-        let mut draft = Draft::new("titanic", entry, titanic(), None, false, &cache).unwrap();
+        let mut draft = Draft::new(
+            "titanic",
+            entry,
+            entry.source().unwrap(),
+            titanic(),
+            None,
+            false,
+            &cache,
+        )
+        .unwrap();
         let jobs = draft.jobs(&cache);
         let labels: Vec<&str> = jobs.iter().map(|(_, job)| job.label.as_str()).collect();
         assert_eq!(labels, ["titanic/test.csv", "titanic/train.csv"]);
@@ -1396,7 +1459,16 @@ mod tests {
         // download and pin the same
         cache.drop_object(&wrapped.digest).unwrap();
         assert_eq!(placed(&cache, &locked.files), expected);
-        let again = Draft::new("titanic", entry, titanic(), Some(&locked), false, &cache).unwrap();
+        let again = Draft::new(
+            "titanic",
+            entry,
+            entry.source().unwrap(),
+            titanic(),
+            Some(&locked),
+            false,
+            &cache,
+        )
+        .unwrap();
         assert_eq!(again.jobs(&cache).len(), 0, "nothing to download");
         assert_eq!(
             again.finish("2026-11-01T00:00:00Z").unwrap().files,

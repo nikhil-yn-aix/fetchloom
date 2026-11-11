@@ -441,7 +441,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         Some(names) => {
             for name in &names {
                 known(&manifest, name, "lock --upgrade")?;
-                if local::is_imported(&manifest.datasets[name].reference) {
+                if manifest.datasets[name].is_import() {
                     return Err(local::no_newer(name));
                 }
             }
@@ -493,7 +493,7 @@ fn tell_imports_kept(output: &Output, manifest: &Manifest) {
     let imported: Vec<&str> = manifest
         .datasets
         .iter()
-        .filter(|(_, entry)| local::is_imported(&entry.reference))
+        .filter(|(_, entry)| entry.is_import())
         .map(|(name, _)| name.as_str())
         .collect();
     let names = match imported.as_slice() {
@@ -1179,7 +1179,7 @@ pub(crate) mod tests {
         .unwrap();
         let a = pinned(
             "a",
-            lock::spec(&manifest.datasets["a"]),
+            lock::spec(manifest.datasets["a"].source().unwrap()),
             vec![pinned_file("README", "https://example.org/a", b"a")],
         );
         let old = Lock {
@@ -1232,7 +1232,7 @@ pub(crate) mod tests {
         .unwrap();
         let b = pinned(
             "b",
-            lock::spec(&manifest.datasets["b"]),
+            lock::spec(manifest.datasets["b"].source().unwrap()),
             vec![pinned_file("README", "https://example.org/b", b"b")],
         );
         let old = Lock {
