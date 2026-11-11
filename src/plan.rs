@@ -448,9 +448,19 @@ pub(crate) struct Unreached {
     pub(crate) paths: Vec<String>,
 }
 
+/// the exclude patterns of each dataset a run listed again that match no file its source
+/// listed. data.lock keeps no file an exclude left out, so only a listing tells this.
+pub(crate) type Unlisted = HashMap<String, Vec<String>>;
+
 /// each exclude pattern of a dataset that matches a planned file inside an archive by the
-/// file's path below the dataset's folder, the path a person sees.
-pub(crate) fn unreached(manifest: &Manifest, targets: &[Target]) -> Vec<Unreached> {
+/// file's path below the dataset's folder, the path a person sees, and matched no file the
+/// dataset's source listed, as `unlisted` says. a pattern that left out a listed file did its
+/// job, as `train.csv` beside `train.csv.zip` does, so a dataset `unlisted` lacks has none.
+pub(crate) fn unreached(
+    manifest: &Manifest,
+    targets: &[Target],
+    unlisted: &Unlisted,
+) -> Vec<Unreached> {
     let mut found: Vec<Unreached> = Vec::new();
     let mut by_dataset: HashMap<&str, Option<(String, glob::Set)>> = HashMap::new();
     let inside_archives = targets.iter().filter_map(|target| {
@@ -464,9 +474,15 @@ pub(crate) fn unreached(manifest: &Manifest, targets: &[Target]) -> Vec<Unreache
             .entry(target.dataset)
             .or_insert_with(|| {
                 let source = manifest.datasets.get(target.dataset)?.source()?;
+                let missed = unlisted.get(target.dataset)?;
+                let excluded: Vec<Glob> = source
+                    .exclude
+                    .iter()
+                    .filter(|glob| missed.iter().any(|pattern| pattern == glob.as_str()))
+                    .cloned()
+                    .collect();
                 let inside = format!("{}/", folder(manifest, target.dataset));
-                (!source.exclude.is_empty())
-                    .then(|| (inside, glob::Set::new(source.exclude.clone())))
+                (!excluded.is_empty()).then(|| (inside, glob::Set::new(excluded)))
             })
             .as_ref()
         else {
@@ -1075,7 +1091,8 @@ mod tests {
 
     /// a dataset exclude chooses among the files its source lists, so one written against a
     /// file inside an archive leaves it where it is; it is found by the path the file lands at
-    /// below the dataset's folder, which is what a person writes.
+    /// below the dataset's folder, which is what a person writes. one that left out a file the
+    /// listing named, as `images/x.png` here, did its job.
     #[test]
     fn an_exclude_naming_files_inside_an_archive_is_found() {
         let (manifest, locked) = pinned(
@@ -1092,29 +1109,38 @@ mod tests {
             (archive == "pets.zip").then(|| members.iter().map(|path| member(path)).collect())
         };
         let planned = plan(&manifest, &locked, &|archive| paths(&archive.file.path)).unwrap();
+        let missed = vec!["labels.txt".to_owned(), "images/*.jpg".to_owned()];
+        let unlisted = Unlisted::from([("a".to_owned(), missed)]);
         assert_eq!(
-            unreached(&manifest, &planned.targets),
-            [
-                Unreached {
-                    dataset: "a".to_owned(),
-                    pattern: "images/x.png".to_owned(),
-                    archives: vec!["pets.zip".to_owned()],
-                    paths: vec!["data/a/images/x.png".to_owned()],
-                },
-                Unreached {
-                    dataset: "a".to_owned(),
-                    pattern: "images/*.jpg".to_owned(),
-                    archives: vec!["pets.zip".to_owned()],
-                    paths: vec![
-                        "data/a/images/y.jpg".to_owned(),
-                        "data/a/images/z.jpg".to_owned()
-                    ],
-                },
-            ]
+            unreached(&manifest, &planned.targets, &unlisted),
+            [Unreached {
+                dataset: "a".to_owned(),
+                pattern: "images/*.jpg".to_owned(),
+                archives: vec!["pets.zip".to_owned()],
+                paths: vec![
+                    "data/a/images/y.jpg".to_owned(),
+                    "data/a/images/z.jpg".to_owned()
+                ],
+            },]
         );
         let (plain, locked) = pinned(ONE, &[("a", &["pets.zip"])]);
         let planned = plan(&plain, &locked, &|archive| paths(&archive.file.path)).unwrap();
-        assert_eq!(unreached(&plain, &planned.targets), []);
+        assert_eq!(unreached(&plain, &planned.targets, &unlisted), []);
+    }
+
+    /// data.lock keeps no file an exclude left out, so a plan of it alone cannot tell an exclude
+    /// that left out a listed `train.csv` beside `train.csv.zip` from one that missed.
+    #[test]
+    fn a_lock_alone_never_calls_an_exclude_unreached() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}exclude = [\"train.csv\"]\n"),
+            &[("a", &["test.csv", "train.csv.zip"])],
+        );
+        let planned = plan(&manifest, &locked, &|archive| {
+            (archive.file.path == "train.csv.zip").then(|| vec![member("train.csv")])
+        })
+        .unwrap();
+        assert_eq!(unreached(&manifest, &planned.targets, &Unlisted::new()), []);
     }
 
     #[test]

@@ -49,8 +49,6 @@ stderr in a fresh clone whose cache holds neither the recipe `clean`'s result no
   hint: `fetchloom build clean` makes it on this machine
 ```
 
-an `exclude` in a dataset that names a file inside an archive leaves the file where it is, since a dataset's patterns choose among the files its source lists. status then adds a hint naming the [`fetchloom drop`](drop.md) that leaves the file out, as in `hint: exclude "data/train.csv" in datasets.dataset names a file inside dataset.zip, which exclude does not reach; run \`fetchloom drop data/dataset/data/train.csv\``. status shows it when it plans, as it does after data.toml or the data folder changed, and sync warns the same way.
-
 ## categories
 
 | JSON field | difference |

@@ -99,9 +99,6 @@ pub(super) struct Status {
     /// `fetchloom build` brings in line.
     #[serde(skip)]
     building: BTreeMap<String, String>,
-    /// exclude patterns that name files inside an archive, which they leave where they are.
-    #[serde(skip)]
-    unreached: Vec<plan::Unreached>,
     /// the fetched datasets each of `unbuilt` is made from that the cache lacks files of, which
     /// building it reads first.
     #[serde(skip)]
@@ -199,10 +196,6 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         output.hint(
             "`fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are",
         );
-    }
-    for found in &status.unreached {
-        let (said, help) = place::unreached_said(found);
-        output.hint(&format!("{said}; {help}"));
     }
     Ok(status)
 }
@@ -386,7 +379,6 @@ fn check(
         }
     }
     unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
-    status.unreached = plan::unreached(&manifest, &planned.targets);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)

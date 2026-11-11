@@ -50,7 +50,7 @@ a file of `train.zip` stays left out of `train.zip` alone: in a dataset where `t
 
 commit `data.toml`, and `data.lock` when the drop changed it; the closing `next:` line names them at a terminal. a teammate's next `fetchloom sync` deletes the file from their data folder too, and downloads nothing. the archive stays in the cache whole until [`cache gc`](cache.md#gc) frees what no project keeps.
 
-an `exclude` written by hand in a dataset does not reach a file inside an archive. sync warns about one that names such a file and gives the drop command that leaves it out:
+an `exclude` written by hand in a dataset does not reach a file inside an archive. the sync that lists the dataset's source again, as the first one after the exclude is written, warns about one that names such a file and matches no file the source lists, and gives the drop command that leaves it out:
 
 ```text
 warning: exclude "data/train.csv" in datasets.dataset names a file inside dataset.zip, which exclude does not reach

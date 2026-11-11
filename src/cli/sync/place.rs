@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
-pub(crate) use self::tell::{tell_preview, unreached_said};
+pub(crate) use self::tell::tell_preview;
 use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
@@ -105,7 +105,12 @@ impl Placement {
     /// notes what a placing tells beside its counts: the files it places that the state records
     /// as placed, which someone deleted or moved while data.lock still pins them, with those of
     /// them drop would refuse, and the excludes of datasets in `scope` that name files inside an
-    /// archive. `unknown` are the archives whose files are not planned yet.
+    /// archive and matched no listed file, as `unlisted` says. `unknown` are the archives whose
+    /// files are not planned yet.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is a part of the placing it notes what to tell of"
+    )]
     fn notice(
         &mut self,
         manifest: &Manifest,
@@ -114,6 +119,7 @@ impl Placement {
         survey: &Survey,
         scope: &Scope,
         unknown: &[(&str, &LockedFile)],
+        unlisted: &plan::Unlisted,
     ) {
         self.put_back = targets
             .iter()
@@ -146,7 +152,7 @@ impl Placement {
                 Some((target.path.clone(), why))
             })
             .collect();
-        self.unreached = plan::unreached(manifest, targets)
+        self.unreached = plan::unreached(manifest, targets, unlisted)
             .into_iter()
             .filter(|found| scope.includes(&found.dataset))
             .collect();
@@ -353,6 +359,9 @@ pub(crate) struct Placing<'a> {
     scope: Scope,
     /// the recipes whose results it leaves out, as [`Placing::leave_out`] says.
     unbuilt: Vec<String>,
+    /// the exclude patterns of each dataset the run listed that matched no listed file, as
+    /// [`Placing::listed`] gives them.
+    unlisted: plan::Unlisted,
 }
 
 impl<'a> Placing<'a> {
@@ -426,7 +435,15 @@ impl<'a> Placing<'a> {
             survey,
             scope: scope.clone(),
             unbuilt: Vec::new(),
+            unlisted: plan::Unlisted::new(),
         })
+    }
+
+    /// the exclude patterns of each dataset the run listed that matched no file its source
+    /// listed. without them, as from data.lock alone, no exclude is told as one that names
+    /// files inside an archive, since data.lock keeps no file an exclude left out.
+    pub(crate) fn listed(&mut self, unlisted: plan::Unlisted) {
+        self.unlisted = unlisted;
     }
 
     /// what the data folder held when this placing was decided, to decide again from.
@@ -662,6 +679,7 @@ impl<'a> Placing<'a> {
             &self.survey,
             &self.scope,
             &self.unknown,
+            &self.unlisted,
         );
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
@@ -816,6 +834,7 @@ impl<'a> Placing<'a> {
             unknown,
             scope,
             unbuilt,
+            unlisted,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement {
@@ -843,7 +862,9 @@ impl<'a> Placing<'a> {
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
-        placement.notice(manifest, &targets, &actions, &survey, &scope, &unknown);
+        placement.notice(
+            manifest, &targets, &actions, &survey, &scope, &unknown, &unlisted,
+        );
         let settled = settle(
             project,
             &mut placer,
@@ -1993,6 +2014,7 @@ mod tests {
             survey: surveyed(&project),
             scope: Scope::All,
             unbuilt: Vec::new(),
+            unlisted: plan::Unlisted::new(),
         };
 
         placing
@@ -2183,6 +2205,7 @@ mod tests {
             survey,
             scope: Scope::All,
             unbuilt: Vec::new(),
+            unlisted: plan::Unlisted::new(),
         };
         placing
             .apply(
@@ -2251,6 +2274,7 @@ mod tests {
                 survey: surveyed(&project),
                 scope: Scope::All,
                 unbuilt: Vec::new(),
+                unlisted: plan::Unlisted::new(),
             };
 
             let placed = placing.apply(
@@ -2323,6 +2347,7 @@ mod tests {
                 survey,
                 scope: Scope::All,
                 unbuilt: Vec::new(),
+                unlisted: plan::Unlisted::new(),
             };
 
             let placed = placing.apply(
@@ -2398,6 +2423,7 @@ mod tests {
             survey,
             scope: Scope::All,
             unbuilt: Vec::new(),
+            unlisted: plan::Unlisted::new(),
         };
 
         placing
@@ -2514,6 +2540,7 @@ mod tests {
             survey: surveyed(&project),
             scope: Scope::All,
             unbuilt: Vec::new(),
+            unlisted: plan::Unlisted::new(),
         };
         let holding: Vec<String> = placing
             .holding()

@@ -9,7 +9,7 @@ pub(super) mod unpack;
 
 use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime};
 
 use tokio::task::JoinSet;
@@ -103,6 +103,9 @@ pub(super) struct Loop<'a> {
     unpacked: Mutex<Vec<Sha256>>,
     /// the archives this run said stay packed, by dataset and path, so each is told once.
     told_packed: Mutex<HashSet<(String, String)>>,
+    /// the exclude patterns of each dataset this run listed that matched no file its source
+    /// listed, for placing's warning about those that name files inside an archive.
+    unlisted: Mutex<plan::Unlisted>,
     /// the dataset the command's last line tells about, so its lock and placement lines stay out.
     told: Option<String>,
     /// the datasets this run works on.
@@ -132,6 +135,7 @@ impl<'a> Loop<'a> {
             cache,
             unpacked: Mutex::default(),
             told_packed: Mutex::default(),
+            unlisted: Mutex::default(),
             told: None,
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
@@ -194,6 +198,7 @@ impl<'a> Loop<'a> {
         }
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
+        placing.listed(self.unlisted());
         self.ask_room(lock, &placing)?;
         let unknown = archives::of(lock, placing.unknown());
         if !unknown.is_empty() {
@@ -211,6 +216,7 @@ impl<'a> Loop<'a> {
                 &self.scope,
                 survey,
             )?;
+            placing.listed(self.unlisted());
         }
         let folder = DataFolder::found(self.project, manifest, placing.holding());
         fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
@@ -271,6 +277,23 @@ impl<'a> Loop<'a> {
         );
         placing.leave_out(&unbuilt);
         Ok(())
+    }
+
+    /// keeps the exclude patterns of `name` that match no path `listing` names, for placing.
+    fn note_unlisted(&self, name: &str, source: &Source, listing: &Listing) {
+        self.unlisted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_owned(), draft::unlisted(source, listing));
+    }
+
+    /// the exclude patterns of each dataset this run listed that matched no file its source
+    /// listed.
+    fn unlisted(&self) -> plan::Unlisted {
+        self.unlisted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// warns about each recipe in the run's scope whose result `lock` does not pin as building it
@@ -609,6 +632,7 @@ impl<'a> Loop<'a> {
             let Some(source) = entry.source() else {
                 continue;
             };
+            self.note_unlisted(&name, source, &listing);
             let draft = Draft::new(
                 &name,
                 entry,
@@ -751,6 +775,7 @@ impl<'a> Loop<'a> {
             &self.scope,
             survey,
         )?;
+        placing.listed(self.unlisted());
         // what the data folder holds a sync takes from there; only that sync hashes it
         let held: HashSet<Sha256> = placing
             .holding()

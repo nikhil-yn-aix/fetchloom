@@ -1250,8 +1250,9 @@ fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
 }
 
 /// the walkthrough: an exclude written against a file inside the zip, as the data folder shows
-/// it, matches no file the source lists, so the file stays. status hints and sync warns, each
-/// naming the drop that leaves it out.
+/// it, matches no file the source lists, so the file stays. the sync that lists the source again
+/// warns, naming the drop that leaves it out; status reads data.lock alone, which keeps no file
+/// an exclude left out, so it cannot tell and says nothing.
 #[test]
 fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1268,10 +1269,7 @@ fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
     let said = "exclude \"data/train.csv\" in datasets.dataset names a file inside dataset.zip, which exclude does not reach";
     let help = "run `fetchloom drop data/dataset/data/train.csv`";
     let status = text(&sandbox.run(&["status"])?.stderr)?;
-    assert!(
-        status.contains(&format!("  hint: {said}; {help}\n")),
-        "{status}"
-    );
+    assert!(!status.contains("does not reach"), "{status}");
     let synced = sandbox.run(&["sync"])?;
     ok(&synced)?;
     let stderr = text(&synced.stderr)?;

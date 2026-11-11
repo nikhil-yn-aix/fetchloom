@@ -2321,3 +2321,61 @@ fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Res
     assert_eq!(server.requests().len(), 1, "the add alone downloaded");
     Ok(())
 }
+
+/// kaggle serves `train.csv` beside `train.csv.zip`, a zip of it. the exclude the clash's help
+/// gives leaves out the listed train.csv, so the zip's lands, and no later run calls that
+/// exclude one that missed or offers the drop, which would leave out the wanted file too.
+#[cfg(debug_assertions)]
+#[test]
+fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> Result {
+    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::support::Routes;
+
+    let sandbox = Sandbox::new()?;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    zip.start_file("train.csv", zip::write::SimpleFileOptions::default())?;
+    std::io::Write::write_all(&mut zip, b"id,y\n1,0\n")?;
+    let zipped = zip.finish()?.into_inner();
+    let objects: [(&str, &[u8]); 3] = [
+        ("kag/test.csv", b"id\n3\n"),
+        ("kag/train.csv", b"id,y\n9,9\n"),
+        ("kag/train.csv.zip", &zipped),
+    ];
+    let base = "/kag-bucket.s3.amazonaws.com/";
+    let mut routes = vec![(s3_listing(base, "kag/", None), s3_page(&objects, None))];
+    for (key, body) in objects {
+        let etag = format!("\"{}\"", md5(body));
+        routes.push((format!("{base}{key}"), file(body, &etag)));
+    }
+    let routes = Routes::start(routes)?;
+    let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .output()?;
+        let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+        Ok((output.status.code(), said))
+    };
+    let (code, said) = run(&["add", "s3://kag-bucket/kag/"])?;
+    assert_eq!(code, Some(50), "{said}");
+    assert!(said.contains("--exclude \"train.csv\""), "{said}");
+    let train = sandbox.work().join("data/kag/train.csv");
+    let test = sandbox.work().join("data/kag/test.csv");
+    let (code, said) = run(&["add", "s3://kag-bucket/kag/", "--exclude", "train.csv"])?;
+    assert_eq!(code, Some(0), "{said}");
+    assert!(!said.contains("does not reach"), "{said}");
+    assert_eq!(fs::read(&train)?, b"id,y\n1,0\n", "the zip's train.csv");
+    // a missing file makes status and sync plan, rather than find the project settled
+    delete(&test)?;
+    for args in [&["status"][..], &["sync"], &["status"]] {
+        let (code, said) = run(args)?;
+        assert_eq!(code, Some(0), "{args:?}: {said}");
+        assert!(
+            !said.contains("does not reach") && !said.contains("drop data/kag/train.csv"),
+            "{args:?}: {said}"
+        );
+    }
+    assert_eq!(fs::read(&train)?, b"id,y\n1,0\n");
+    assert_eq!(fs::read(&test)?, b"id\n3\n", "sync put it back");
+    Ok(())
+}

@@ -138,7 +138,7 @@ fn warn_unreached(output: &Output, unreached: &[plan::Unreached]) {
 
 /// what a dataset exclude that names files inside an archive leaves undone, and the drop that
 /// does it.
-pub(crate) fn unreached_said(found: &plan::Unreached) -> (String, String) {
+fn unreached_said(found: &plan::Unreached) -> (String, String) {
     let inside = match found.archives.as_slice() {
         [one] => one
             .rsplit_once('/')

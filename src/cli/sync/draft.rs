@@ -751,6 +751,17 @@ fn carried<'a>(
     })
 }
 
+/// the exclude patterns of `source` that match no path `listing` names, before select chooses,
+/// which leave out no file it lists.
+pub(super) fn unlisted(source: &Source, listing: &Listing) -> Vec<String> {
+    source
+        .exclude
+        .iter()
+        .filter(|glob| !listing.paths().any(|path| glob.matches(path)))
+        .map(|glob| glob.as_str().to_owned())
+        .collect()
+}
+
 /// the files `select` keeps and `exclude` leaves. a select pattern that matches nothing is a
 /// mistake worth stopping for, with real paths to compare against.
 pub(in crate::cli) fn filter(
