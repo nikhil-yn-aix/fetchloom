@@ -240,13 +240,23 @@ fn ready_path(
         .iter()
         .filter(|target| target.dataset == name)
         .all(|target| {
-            !doubted.contains(&target.path)
-                && survey.state.files.get(&target.path).is_some_and(|placed| {
+            let placed = survey.state.files.get(&target.path);
+            let ready = !doubted.contains(&target.path)
+                && placed.is_some_and(|placed| {
                     placed.sha256 == target.sha256
                         && survey.disk.get(&target.path) == Some(&placed.look)
                         && !survey.edited.contains(&target.path)
                         && (!target.copy || placed.writable)
-                })
+                });
+            if !ready {
+                tracing::debug!(
+                    path = %target.path,
+                    recorded = ?placed.map(|placed| placed.look),
+                    found = ?survey.disk.get(&target.path),
+                    "not ready, so path syncs"
+                );
+            }
+            ready
         });
     Ok(ready.then_some(answer))
 }

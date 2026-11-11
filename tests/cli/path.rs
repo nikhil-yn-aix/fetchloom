@@ -163,17 +163,18 @@ fn ready_paths_read_and_plan_once() -> Result {
     let trace = sandbox.work().join("path.trace.json");
     for target in ["iris", "iris/iris.csv"] {
         let output = sandbox
-            .command(&["--offline", "path", target])
+            .command(&["-vv", "--offline", "path", target])
             .env("FETCHLOOM_TRACE", &trace)
             .output()?;
-        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let stderr = text(&output.stderr)?;
+        assert!(output.status.success(), "{stderr}");
         let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
         for name in ["read_manifest", "read_lock", "plan", "open_cache", "scan"] {
             let calls = events
                 .iter()
                 .filter(|event| event["ph"] == "B" && event["name"] == name)
                 .count();
-            assert_eq!(calls, 1, "{target}: {name}");
+            assert_eq!(calls, 1, "{target}: {name}\n{stderr}");
         }
     }
     assert_eq!(server.requests().len(), 1);
