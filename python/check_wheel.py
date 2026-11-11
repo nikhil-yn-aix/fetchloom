@@ -28,6 +28,11 @@ def inspect_wheel(wheel, version, binary):
         require(hashlib.sha256(packed.read(programs[0])).hexdigest() == digest(binary), "wheel rebuilt or omitted the checked executable")
 
 
+def copy_helper_tests(destination):
+    for name in ['test_helper.py', 'wheel_scripts.py']:
+        shutil.copyfile(ROOT / 'python' / name, destination / name)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('wheel', type=Path)
@@ -63,7 +68,7 @@ def main():
         subprocess.run([str(python), '-I', str(ROOT / 'python/ci_journey.py'), '--binary', str(program),
                         '--helper', '--version', args.version, '--commit', args.commit, '--report', str(report)],
                        cwd=tests, env=env, check=True)
-        shutil.copyfile(ROOT / 'python/test_helper.py', tests / 'test_helper.py')
+        copy_helper_tests(tests)
         subprocess.run([str(python), '-I', '-m', 'unittest', 'discover', '-s', str(tests), '-p', 'test_helper.py'],
                        cwd=tests, env=env, check=True)
     document = json.loads(report.read_text(encoding='utf-8'))

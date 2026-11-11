@@ -5,6 +5,8 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -158,3 +160,20 @@ class WheelEnvironmentTests(unittest.TestCase):
             prefix = Path(run.call_args.args[0][-1])
             self.assertFalse(prefix.is_relative_to(root / 'target'))
             self.assertEqual((cached / 'old-install').read_text(encoding='utf-8'), 'previous revision')
+
+
+class WheelTestIsolationTests(unittest.TestCase):
+    def test_isolated_helper_tests_get_support_but_not_the_source_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            check_wheel.copy_helper_tests(root)
+            self.assertFalse((root / 'fetchloom').exists())
+            self.assertTrue((root / 'test_helper.py').is_file())
+            program = (
+                'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); '
+                'import wheel_scripts; '
+                'assert Path(wheel_scripts.__file__).resolve().parent == Path(sys.argv[1]).resolve()'
+            )
+            result = subprocess.run([sys.executable, '-I', '-c', program, directory], cwd=directory,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
