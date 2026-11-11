@@ -92,7 +92,7 @@ on macos, each archive member gets plain `fsync` while its original writer is op
 
 ### url identities
 
-URL records and partial checkpoints serialize the original URL as `sha256:<digest>`, while their live structs keep the URL needed for requests and deferred publication. lookup requires the matching fingerprint, rejects records copied from another URL, and restores the original string only in memory. reads do not alter validators, prefix hashes or range hashes. see the [cache-folder reference](../../user/reference/cache-folder.md#url-and-partial-records).
+URL records and partial checkpoints serialize the original URL as `sha256:<digest>`, while their live structs keep the URL needed for requests and deferred publication. `cli/get/remembered.rs` keys a URL record by a `get`'s reference and patterns instead, naming the one file it kept, so an offline `get` can do without the listing. lookup requires the matching fingerprint, rejects records copied from another URL, and restores the original string only in memory. reads do not alter validators, prefix hashes or range hashes. see the [cache-folder reference](../../user/reference/cache-folder.md#url-and-partial-records).
 
 ### partial ownership and checkpoints
 

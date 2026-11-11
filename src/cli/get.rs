@@ -6,6 +6,7 @@
 
 mod file;
 mod folder;
+mod remembered;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -152,6 +153,8 @@ struct Wanted {
     extract: bool,
     /// the hash `--sha256` or the link's line asks the one file to have.
     expected: Option<Expected>,
+    /// what the link is remembered by, when only its source can list it.
+    key: Option<String>,
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
@@ -300,21 +303,44 @@ async fn one_link(
     let parsed = Reference::parse(&link)?;
     engine::tell_raw(&context.output, &link, &parsed.reference);
     let cache = open_cache()?;
-    net.trust(parsed.reference.written_host());
-    let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
-    let listing =
-        engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
-    engine::tell_resolved(&context.output, &listing);
-    if let Some(path) = &args.output {
-        let (file, done) = file::one(context, net, &cache, args, path, &parsed, &listing).await?;
-        context.output.answer(&file.display().to_string());
-        tell_next(context, args, &link);
-        return Ok(Report {
-            file: Some(file),
-            folder: Some(done.folder.clone()),
-            files: done.files.clone(),
-            items: vec![Item::done(&link, &done)],
+    let key = remembered::key(args, &parsed);
+    // offline, what the link kept last time stands in for a listing only its source can give
+    let offline = key.as_deref().filter(|_| context.offline.enabled());
+    if let (Some(path), Some(key)) = (&args.output, offline)
+        && let Some((file, done)) =
+            file::again_offline(context, net, &cache, args, path, &parsed, key).await?
+    {
+        return Ok(wrote(context, args, &link, file, &done));
+    }
+    let remembered = offline
+        .and_then(|key| cache.url_record(key))
+        .and_then(|kept| {
+            remembered::listing(&parsed, &kept, asked.expected.as_ref().map(|e| e.sha256))
         });
+    let listing = if let Some(listing) = remembered {
+        listing
+    } else {
+        net.trust(parsed.reference.written_host());
+        let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
+        let listing = engine::resolve(&context.output, &parsed.reference, net, folders.as_deref())
+            .await
+            .map_err(|error| unlisted_offline(context.offline, error))?;
+        engine::tell_resolved(&context.output, &listing);
+        listing
+    };
+    if let Some(path) = &args.output {
+        let (file, done) = file::one(
+            context,
+            net,
+            &cache,
+            args,
+            path,
+            &parsed,
+            &listing,
+            key.as_deref(),
+        )
+        .await?;
+        return Ok(wrote(context, args, &link, file, &done));
     }
     let mut wanted = prepare(
         &cache,
@@ -352,6 +378,30 @@ async fn one_link(
     })
 }
 
+/// tells the file `-o` wrote and what to do next, and reports it.
+fn wrote(context: &Context, args: &Get, link: &str, file: PathBuf, done: &Done) -> Report {
+    context.output.answer(&file.display().to_string());
+    tell_next(context, args, link);
+    Report {
+        file: Some(file),
+        folder: Some(done.folder.clone()),
+        files: done.files.clone(),
+        items: vec![Item::done(link, done)],
+    }
+}
+
+/// a source's refusal to list a link offline, with what works offline for get, which keeps no
+/// project. `offline` says what turned offline mode on, so the help says how to turn it off.
+fn unlisted_offline(offline: net::Offline, error: Error) -> Error {
+    if error.kind != Kind::OfflineMissing {
+        return error;
+    }
+    error.help(format!(
+        "{}. after that, a link that keeps one file works offline too",
+        offline.retry()
+    ))
+}
+
 /// several links in one run: resolved together, their files downloaded together within the
 /// network's limits, then each placed in a folder of its own. a link that fails is told and
 /// kept in the report while the others go on.
@@ -364,7 +414,7 @@ async fn many(
     let cache = open_cache()?;
     let links: Vec<String> = asked.iter().map(|asked| asked.link.clone()).collect();
     let links = links.as_slice();
-    let resolved = resolve_all(context, net, args, links).await?;
+    let resolved = resolve_all(context, net, &cache, args, links).await?;
     let mut wanted = Vec::with_capacity(links.len());
     for ((link, asked), resolved) in links.iter().zip(asked).zip(resolved) {
         let prepared = resolved.and_then(|found| {
@@ -456,6 +506,7 @@ async fn many(
 async fn resolve_all(
     context: &Context,
     net: &Arc<Net>,
+    cache: &Cache,
     args: &Get,
     links: &[String],
 ) -> Result<Vec<Result<(Parsed, Listing), Error>>, Error> {
@@ -472,6 +523,15 @@ async fn resolve_all(
             }
         };
         engine::tell_raw(&context.output, link, &parsed.reference);
+        // offline, what the link kept last time stands in for a listing only its source can give
+        if let Some(listing) = remembered::key(args, &parsed)
+            .filter(|_| context.offline.enabled())
+            .and_then(|key| cache.url_record(&key))
+            .and_then(|kept| remembered::listing(&parsed, &kept, None))
+        {
+            results[index] = Some(Ok((parsed, listing)));
+            continue;
+        }
         // a list comes from a file anyone could have written, as data.toml does
         if index < args.links.len() {
             net.trust(parsed.reference.written_host());
@@ -481,8 +541,13 @@ async fn resolve_all(
         }
         let net = net.clone();
         let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
+        let offline = context.offline;
         tasks.spawn(async move {
-            let listing = parsed.reference.resolve_in(&*net, folders.as_deref()).await;
+            let listing = parsed
+                .reference
+                .resolve_in(&*net, folders.as_deref())
+                .await
+                .map_err(|error| unlisted_offline(offline, error));
             (index, listing.map(|listing| (parsed, listing)))
         });
     }
@@ -563,6 +628,7 @@ fn prepare(
         .collect();
     vet(cache, &files, &names, extract)?;
     Ok(Wanted {
+        key: remembered::key(args, &parsed),
         parsed,
         listing,
         files,
@@ -680,6 +746,7 @@ async fn finish(
         parent,
         extract,
         expected,
+        key,
         ..
     } = wanted;
     let paths: Vec<String> = files
@@ -735,6 +802,9 @@ async fn finish(
     check(&folder, Some(&placed))?;
     let outcomes = put_all(context, cache, &folder, &planned.targets, chosen.is_some())?;
     unpacking::drop_archives(cache, &unpacked.archives, None);
+    if let (Some(key), [remote], [fetched]) = (&key, files.as_slice(), fetched.as_slice()) {
+        remembered::keep(cache, key, &remote.path, fetched.digest, fetched.size);
+    }
     let folder = std::path::absolute(&folder).unwrap_or(folder);
     let origins: HashMap<&str, Origin> = locked
         .iter()

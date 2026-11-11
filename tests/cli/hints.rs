@@ -167,26 +167,14 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
             &["get", "zenodo:1"][..],
             sandbox.work(),
             "looking up zenodo:1 needs the internet",
-            Some("in a project prepared online, fetchloom sync --offline works without it"),
         ),
         (
             &["get", server.url.as_str()],
             sandbox.work(),
             "a new link must be downloaded once to learn its SHA-256",
-            None,
         ),
-        (
-            &["sync"],
-            unresolved,
-            "needs a new entry in data.lock",
-            None,
-        ),
-        (
-            &["sync"],
-            locked,
-            "data.lock names is not in the cache",
-            None,
-        ),
+        (&["sync"], unresolved, "needs a new entry in data.lock"),
+        (&["sync"], locked, "data.lock names is not in the cache"),
     ];
     for (flag, environment, expected) in [
         (
@@ -202,7 +190,7 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
         ),
         (true, Some("0"), "run it again without --offline"),
     ] {
-        for (args, folder, message, listing_help) in &cases {
+        for (args, folder, message) in &cases {
             let mut command = sandbox.command_in(folder, args);
             command.arg("--json").env("FETCHLOOM_CACHE", &cache);
             if flag {
@@ -229,7 +217,7 @@ fn offline_hints_distinguish_listings_from_cached_downloads() -> Result {
             );
             let help = error["help"].as_str().ok_or("missing help")?;
             assert!(
-                help.starts_with(listing_help.unwrap_or(expected)),
+                help.starts_with(expected),
                 "{args:?}, flag={flag}, environment={environment:?}: {help}"
             );
             assert_eq!(document["work"]["requests"], 0);

@@ -1180,3 +1180,79 @@ fn switching_extract_needs_no_listing() -> Result {
     assert_anonymous(&routes);
     Ok(())
 }
+
+/// a link a source has to list, as a hugging face link does, with one file kept from it.
+const LISTED: [&str; 3] = [
+    "https://s3.amazonaws.com/openneuro.org/ds000001/",
+    "--select",
+    "participants.tsv",
+];
+
+/// offline, the file `get -o` wrote from a listed link stays while it holds what the link gave
+/// last time, though nothing can list the link and those bytes left the cache for the file.
+#[test]
+fn get_output_of_a_listed_link_runs_again_offline() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let get = [&["get"][..], &LISTED, &["-o", "p.tsv"]].concat();
+    let online = command(&sandbox, &routes, &get).output()?;
+    assert_eq!(online.status.code(), Some(0), "{}", text(&online.stderr)?);
+    let asked = routes.requests().len();
+    let offline = command(&sandbox, &routes, &[&["--offline"][..], &get].concat()).output()?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok p.tsv already holds what the link served last time"),
+        "{stderr}"
+    );
+    assert_eq!(routes.requests().len(), asked, "offline asks nothing");
+    assert_eq!(fs::read(sandbox.work().join("p.tsv"))?, PARTICIPANTS);
+    Ok(())
+}
+
+/// offline, `--sha256` alone decides about the file at `-o`, so a listed link needs no earlier
+/// run.
+#[test]
+fn get_output_of_a_listed_link_with_its_sha256_needs_nothing_offline() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    fs::write(sandbox.work().join("p.tsv"), PARTICIPANTS)?;
+    let sha256 = Sha256::digest(PARTICIPANTS)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    let get = [
+        &["--offline", "get"][..],
+        &LISTED,
+        &["-o", "p.tsv", "--sha256", &sha256],
+    ]
+    .concat();
+    let output = command(&sandbox, &routes, &get).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok p.tsv already holds what --sha256 names"),
+        "{stderr}"
+    );
+    assert_eq!(routes.requests(), Vec::<String>::new());
+    Ok(())
+}
+
+/// offline, a folder `get` filled from one file of a listed link is checked again from the cache.
+#[test]
+fn get_folder_of_a_listed_link_runs_again_offline() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let get = [&["get"][..], &LISTED, &["--dir", "d"]].concat();
+    let online = command(&sandbox, &routes, &get).output()?;
+    assert_eq!(online.status.code(), Some(0), "{}", text(&online.stderr)?);
+    let asked = routes.requests().len();
+    let offline = command(&sandbox, &routes, &[&["--offline"][..], &get].concat()).output()?;
+    let stderr = text(&offline.stderr)?;
+    assert_eq!(offline.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("is already up to date"), "{stderr}");
+    assert_eq!(routes.requests().len(), asked, "offline asks nothing");
+    Ok(())
+}

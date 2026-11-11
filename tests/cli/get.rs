@@ -1172,14 +1172,12 @@ fn offline_identifiers_explain_why_lookup_needs_the_internet() -> Result {
         );
         assert!(
             stderr.contains(
-                "in a project prepared online, fetchloom sync --offline works without it"
+                "help: run it again without --offline. after that, a link that keeps one file works offline too"
             ),
             "{stderr}"
         );
-        assert!(
-            !stderr.contains("run it again without --offline"),
-            "{stderr}"
-        );
+        assert!(!stderr.contains("project"), "{stderr}");
+        assert!(!stderr.contains("to pin it"), "{stderr}");
     }
     Ok(())
 }

@@ -168,7 +168,12 @@ struct Destination {
 }
 
 /// fetches the one file `listing` keeps and writes it at `path`, unless a file there holds its
-/// bytes already. returns the file's absolute path and what it holds.
+/// bytes already. returns the file's absolute path and what it holds. `key` remembers what the
+/// link kept, for a link only its source can list.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's context and the link, as get resolved it"
+)]
 pub(super) async fn one(
     context: &Context,
     net: &Arc<Net>,
@@ -177,11 +182,72 @@ pub(super) async fn one(
     path: &Path,
     parsed: &Parsed,
     listing: &Listing,
+    key: Option<&str>,
 ) -> Result<(PathBuf, Done), Error> {
     let remote = only(selected(args, parsed, listing)?, parsed, listing)?;
+    put(context, net, cache, args, path, parsed, &remote, None, key).await
+}
+
+/// `-o` offline for a link only its source can list: the file the link kept the last time this
+/// machine fetched it, `kept`, stands in for the listing, as do the bytes `--sha256` names. none
+/// when neither says what the file holds.
+pub(super) async fn again_offline(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    args: &Get,
+    path: &Path,
+    parsed: &Parsed,
+    key: &str,
+) -> Result<Option<(PathBuf, Done)>, Error> {
+    let kept = cache.url_record(key);
+    let name = kept
+        .as_ref()
+        .and_then(|kept| kept.name.clone())
+        .or_else(|| parsed.file.clone())
+        .or_else(|| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+    let Some(remote) = super::remembered::file(parsed, name, kept.as_ref(), args.sha256) else {
+        return Ok(None);
+    };
+    put(
+        context,
+        net,
+        cache,
+        args,
+        path,
+        parsed,
+        &remote,
+        kept.as_ref(),
+        Some(key),
+    )
+    .await
+    .map(Some)
+}
+
+/// writes `remote` at `path` as [`one`] does. `last` is what the link kept last time, which
+/// decides offline where its listing cannot.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's context and the file, as get resolved it"
+)]
+async fn put(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    args: &Get,
+    path: &Path,
+    parsed: &Parsed,
+    remote: &Remote,
+    last: Option<&UrlRecord>,
+    key: Option<&str>,
+) -> Result<(PathBuf, Done), Error> {
     let expected = args.sha256.map(Expected::flag);
     if let Some(expected) = &expected {
-        one_file(std::slice::from_ref(&remote), expected, parsed)?;
+        one_file(std::slice::from_ref(remote), expected, parsed)?;
     }
     let shown = path.display().to_string();
     let destination = Destination {
@@ -189,24 +255,29 @@ pub(super) async fn one(
             .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
         shown,
     };
-    let known = match decided_early(context, cache, &remote, args, &destination)? {
-        Early::Kept(kept) => return Ok(kept),
-        Early::Download(known) => known,
+    let done = match decided_early(context, cache, remote, args, &destination, last)? {
+        Early::Kept(kept) => kept,
+        Early::Download(known) => {
+            let fetched = download(context, net, cache, remote, known.held).await?;
+            if let Some(expected) = &expected {
+                matches_sha256(&remote.path, &fetched.digest, expected)?;
+            }
+            refuse_zipped(cache, remote, &fetched.digest)?;
+            settle(
+                context,
+                cache,
+                remote,
+                &fetched,
+                args.force,
+                &destination,
+                known,
+            )?
+        }
     };
-    let fetched = download(context, net, cache, &remote, known.held).await?;
-    if let Some(expected) = &expected {
-        matches_sha256(&remote.path, &fetched.digest, expected)?;
+    if let (Some(key), [got]) = (key, done.1.files.as_slice()) {
+        super::remembered::keep(cache, key, &remote.path, got.sha256, got.size);
     }
-    refuse_zipped(cache, &remote, &fetched.digest)?;
-    settle(
-        context,
-        cache,
-        &remote,
-        &fetched,
-        args.force,
-        &destination,
-        known,
-    )
+    Ok(done)
 }
 
 /// what a run decided before downloading: the file there kept, or what it learned for the
@@ -228,19 +299,22 @@ struct Known {
 
 /// what a hash known before downloading decides about a file already at the path, with no
 /// request, or what the run learned for the download, as when the path is free or the file must
-/// go. a link whose source states no hash stands for the bytes it served last time: offline they
-/// decide, and online the server is asked whether they changed.
+/// go. `last`, what the link kept last time, decides offline in place of its listing. a link
+/// whose source states no hash stands for the bytes it served last time: offline they decide,
+/// and online the server is asked whether they changed.
 fn decided_early(
     context: &Context,
     cache: &Cache,
     remote: &Remote,
     args: &Get,
     destination: &Destination,
+    last: Option<&UrlRecord>,
 ) -> Result<Early, Error> {
-    let (digest, wanted) = match (args.sha256, stated(cache, remote)) {
-        (Some(named), _) => (named, Wanted::Named),
-        (None, Some(stated)) => (stated, Wanted::Stated),
-        (None, None) => {
+    let (digest, wanted) = match (args.sha256, last, stated(cache, remote)) {
+        (Some(named), _, _) => (named, Wanted::Named),
+        (None, Some(last), _) => (last.sha256, Wanted::Recorded),
+        (None, None, Some(stated)) => (stated, Wanted::Stated),
+        (None, None, None) => {
             let Some(record) = recorded(cache, remote) else {
                 return Ok(Early::Download(Known::default()));
             };

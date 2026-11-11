@@ -58,14 +58,14 @@ each step of a [recipe](../recipes.md) runs in a `.build` folder under `tmp/`, w
 
 ## URL and partial records
 
-`urls/` records are JSON written for revalidated, unpinned URLs. gc removes a record once neither its object nor the record of what it unpacked to is left:
+`urls/` records are JSON written for revalidated, unpinned URLs, and for each link a `get` kept one file from when only its site can list it, keyed by the link and the patterns that chose the file, with the file's path in `name`, so an offline `get` can do without the listing. gc removes a record once neither its object nor the record of what it unpacked to is left:
 
 | field | value |
 |---|---|
 | `url` | `sha256:` followed by the SHA-256 of the original URL's UTF-8 bytes; the same digest names the file |
 | `sha256` | full object hash |
 | `size` | total bytes |
-| `name` | server-supplied file name, or null |
+| `name` | server-supplied file name, or null; for a link a `get` kept one file from, that file's path in the listing |
 | `validators.etag` | `ETag` string, or null |
 | `validators.last_modified` | `Last-Modified` string, or null |
 | `validators.date` | response `Date` string, or null; required in every record |
