@@ -952,6 +952,12 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
         ],
     )?;
     let listing = s3_listing(base, "data/", None);
+    // the sizes are under test, not the disk: FAT32 refuses each file before anything asks
+    let command = |sandbox: &Sandbox, routes: &Routes, args: &[&str]| {
+        let mut command = command(sandbox, routes, args);
+        command.env("FETCHLOOM_TEST_FILESYSTEM", "ext4");
+        command
+    };
 
     let got = command(
         &sandbox,
