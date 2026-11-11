@@ -112,15 +112,28 @@ impl Sandbox {
         Ok(links)
     }
 
-    /// `name` for a snapshot that says how files were placed, or its variant for a drive that
-    /// makes neither link, where every file is copied.
-    pub(crate) fn placed_story(&self, name: &str) -> Result<String> {
+    /// [`Sandbox::filters`] for `story`, output that tells how files were placed. a drive that
+    /// makes neither link copies every file and says why; there that wording becomes the linking
+    /// one, so one snapshot holds both. a story there that names no copy is an error.
+    pub(crate) fn placed_filters(&self, story: &str) -> Result<insta::Settings> {
+        let mut settings = self.filters();
         let links = self.links()?;
-        Ok(if links.reflink || links.hardlink {
-            name.to_owned()
-        } else {
-            format!("{name}_on_a_drive_without_links")
-        })
+        if !links.reflink && !links.hardlink {
+            if !story.contains("cannot link files") {
+                return Err(
+                    format!("this drive cannot link files, yet nothing says so:\n{story}").into(),
+                );
+            }
+            settings.add_filter(
+                r" · copied, \d+ B\n  hint: the drive holding \S+ cannot link files, so the file was copied",
+                " · linked to the cache",
+            );
+            settings.add_filter(
+                r"warning: the drive holding \S+ cannot link files, so files were copied\n",
+                "",
+            );
+        }
+        Ok(settings)
     }
 
     /// waits until a file written in the sandbox now carries a later time than `time`. a
