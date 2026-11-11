@@ -786,6 +786,7 @@ dependencies = [
  "console",
  "fastrand",
  "flate2",
+ "hmac",
  "http",
  "httpdate",
  "hyper-util",

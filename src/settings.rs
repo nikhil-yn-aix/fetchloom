@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
+use crate::source::Bucket;
 use crate::units;
 
 /// reads one environment variable, so tests can give each run its own.
@@ -38,7 +39,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 12] = [
+const KEYS: [(&str, &str); 13] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -51,10 +52,11 @@ const KEYS: [(&str, &str); 12] = [
     ("archive_size", "FETCHLOOM_ARCHIVE_SIZE"),
     ("archive_ratio", "FETCHLOOM_ARCHIVE_RATIO"),
     ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
+    ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 1] = ["allowed_origins"];
+const LISTS: [&str; 2] = ["allowed_origins", "s3_buckets"];
 
 /// where a setting's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -259,6 +261,9 @@ pub(crate) struct Settings {
     /// the origins, such as `http://lab.local:8080`, that may be on this machine or its network
     /// though only data.toml or data.lock names them.
     pub(crate) allowed_origins: Set<Vec<url::Origin>>,
+    /// the S3 buckets a request may be signed for with this machine's AWS keys, after S3 refused
+    /// it without one.
+    pub(crate) s3_buckets: Set<Vec<Bucket>>,
 }
 
 impl Settings {
@@ -285,6 +290,7 @@ impl Settings {
             archive_size: Set::default(crate::archive::Limits::default().bytes),
             archive_ratio: Set::default(crate::archive::Limits::default().ratio),
             allowed_origins: Set::default(Vec::new()),
+            s3_buckets: Set::default(Vec::new()),
             memory,
         }
     }
@@ -327,6 +333,7 @@ impl Settings {
                 defaults.archive_ratio,
             )?,
             allowed_origins: origins(&given, "allowed_origins")?,
+            s3_buckets: buckets(&given, "s3_buckets")?,
             memory,
             file,
         })
@@ -498,6 +505,41 @@ fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error>
     }
     Ok(Set {
         value: origins,
+        origin,
+    })
+}
+
+/// the buckets `key` lists, separated by commas: an AWS bucket as `s3://name`, or a bare name,
+/// and one at another S3 service as `s3:https://host:port/name`. none when it is unset or empty.
+fn buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<Bucket>>, Error> {
+    let Some((text, origin, named)) = given.get(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let mut buckets = Vec::new();
+    for entry in text
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(bucket) = Bucket::parse(entry) else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{}\", which is not a bucket such as s3://lab-data or s3:https://minio.lab:9000/scans",
+                    Bucket::shown(entry)
+                ),
+            )
+            .help(format!(
+                "{} to sign for none, or list buckets as s3://name, or as s3:https://host:port/name at another S3 service, separated by commas",
+                undo(origin, key)
+            )));
+        };
+        if !buckets.contains(&bucket) {
+            buckets.push(bucket);
+        }
+    }
+    Ok(Set {
+        value: buckets,
         origin,
     })
 }
@@ -877,5 +919,73 @@ mod tests {
             "{}",
             elsewhere.message
         );
+    }
+
+    #[test]
+    fn s3_buckets_name_aws_buckets_or_buckets_at_another_service() {
+        let shown = |settings: &Settings| -> Vec<String> {
+            settings
+                .s3_buckets
+                .value
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(read(&[], None).unwrap().s3_buckets, Set::default(vec![]));
+        let set = read(
+            &[(
+                "FETCHLOOM_S3_BUCKETS",
+                " lab-raw, s3://lab.data/ ,s3:https://MINIO.lab:9000/scans/,s3:http://10.0.0.5:80/old-scans,",
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            shown(&set),
+            [
+                "s3://lab-raw",
+                "s3://lab.data",
+                "s3:https://minio.lab:9000/scans",
+                "s3:http://10.0.0.5/old-scans"
+            ]
+        );
+        assert_eq!(set.s3_buckets.origin, Origin::Environment);
+        let file = file("s3_buckets = [\"s3://lab-raw\"]\n").unwrap();
+        let set = Settings::read(&env(&[]), file, machine(None)).unwrap();
+        assert_eq!(shown(&set), ["s3://lab-raw"]);
+        assert_eq!(set.s3_buckets.origin, Origin::File);
+        for (entry, said) in [
+            ("s3://Lab-Raw", "s3://Lab-Raw"),
+            ("gs://lab-raw", "gs://lab-raw"),
+            ("s3://lab-raw/prefix/", "s3://lab-raw/prefix/"),
+            (
+                "s3:https://minio.lab/scans/raw",
+                "s3:https://minio.lab/scans/raw",
+            ),
+            (
+                "s3:https://minio.lab/scans?x=1",
+                "s3:https://minio.lab/scans?x=1",
+            ),
+            ("s3:ftp://minio.lab/scans", "s3:ftp://minio.lab/scans"),
+            (
+                "s3:https://ada:hunter2@minio.lab/scans",
+                "s3:https://***@minio.lab/scans",
+            ),
+        ] {
+            let error = read(&[("FETCHLOOM_S3_BUCKETS", entry)], None).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{entry}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "FETCHLOOM_S3_BUCKETS holds \"{said}\", which is not a bucket such as s3://lab-data or s3:https://minio.lab:9000/scans"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "unset FETCHLOOM_S3_BUCKETS to sign for none, or list buckets as s3://name, or as s3:https://host:port/name at another S3 service, separated by commas"
+                )
+            );
+        }
     }
 }

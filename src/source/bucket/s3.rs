@@ -3,13 +3,14 @@
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Object, Prefix, is_region, object_url, query, s3_host, xml};
+use super::{Keyed, Object, Prefix, is_region, object_url, query, s3_host, xml};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
 
 /// where a bucket's requests go: the bucket's own host, or for a name with dots, which the
-/// service's wildcard certificate does not cover, a path on the service's host.
+/// service's wildcard certificate does not cover, a path on the service's host. a bucket at
+/// another service is always a path on its host, as those services serve every bucket.
 struct Endpoint {
     base: Url,
 }
@@ -21,7 +22,9 @@ impl Endpoint {
             None => "s3.amazonaws.com".to_owned(),
         };
         let bucket = &prefix.bucket;
-        let base = if bucket.contains('.') {
+        let base = if let Some(origin) = &prefix.endpoint {
+            format!("{}/{bucket}/", origin.ascii_serialization())
+        } else if bucket.contains('.') {
             format!("https://{service}/{bucket}/")
         } else {
             format!("https://{bucket}.{service}/")
@@ -48,6 +51,8 @@ impl Endpoint {
 pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>, Error> {
     let mut endpoint = Endpoint::new(prefix, None)?;
     let mut moved = false;
+    // whether the endpoint names the bucket's region, which a signed request must name too
+    let mut regional = false;
     let mut token: Option<String> = None;
     let mut pages = super::Pages::default();
     let mut objects = Vec::new();
@@ -60,10 +65,12 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             let said = document.as_ref().ok();
             if matches!(response.status, 301 | 400)
                 && !moved
+                && prefix.endpoint.is_none()
                 && let Some(region) = region(&response, said)
             {
                 endpoint = Endpoint::new(prefix, Some(&region))?;
                 moved = true;
+                regional = true;
                 continue;
             }
             if response.status == 301 {
@@ -77,15 +84,36 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             }
             let code = said.and_then(|said| said.text_of("Code"));
             let message = said.and_then(|said| said.text_of("Message"));
-            return Err(prefix.refused(&response, code, message));
+            let named = said.and_then(|said| said.text_of("Region"));
+            return Err(prefix.refused(&response, code, message, named));
         }
         let page = document.map_err(|reason| prefix.invalid(&reason))?;
         if page.name != "ListBucketResult" {
             return Err(prefix.invalid(&format!("the answer is <{}>", page.name)));
         }
+        let signed = match &response.keyed {
+            Some(Keyed::Signed { region, .. }) => Some(region.as_str()),
+            _ => None,
+        };
+        // a signed listing names where the bucket is, so its links can carry the region a
+        // later run signs them for
+        if let Some(region) = signed
+            && !regional
+            && prefix.endpoint.is_none()
+            && is_region(region)
+        {
+            endpoint = Endpoint::new(prefix, Some(region))?;
+            regional = true;
+        }
         let escaped = page.text_of("EncodingType") == Some("url");
         for contents in page.children("Contents") {
-            objects.push(object(prefix, &endpoint, contents, escaped)?);
+            objects.push(object(
+                prefix,
+                &endpoint,
+                contents,
+                escaped,
+                signed.is_some(),
+            )?);
             if objects.len() > crate::source::most_files() {
                 return Err(prefix.too_many());
             }
@@ -120,11 +148,15 @@ fn region(response: &Response, said: Option<&xml::Element>) -> Option<String> {
         .filter(|region| is_region(region))
 }
 
+/// an object of the listing. its `ETag` stands for an MD5 only on AWS and in an unsigned listing,
+/// since a bucket that needs a key may encrypt with keys of its own, whose `ETag`s are no MD5, and
+/// other services promise nothing about theirs.
 fn object(
     prefix: &Prefix,
     endpoint: &Endpoint,
     contents: &xml::Element,
     escaped: bool,
+    signed: bool,
 ) -> Result<Object, Error> {
     let raw = contents
         .text_of("Key")
@@ -145,7 +177,7 @@ fn object(
         .ok_or_else(|| prefix.invalid(&format!("the size of \"{key}\" is not a number")))?;
     let mut url = object_url(&endpoint.base, &key);
     // s3 reserves the exact key soap on a bucket host for its legacy SOAP endpoint.
-    if key == "soap" && !prefix.bucket.contains('.') {
+    if key == "soap" && prefix.endpoint.is_none() && !prefix.bucket.contains('.') {
         let service = endpoint
             .base
             .host_str()
@@ -155,11 +187,16 @@ fn object(
             .map_err(|_| prefix.invalid("the bucket makes no valid link"))?;
         url.set_path(&format!("/{}/soap", prefix.bucket));
     }
+    let md5 = if prefix.endpoint.is_none() && !signed {
+        contents.text_of("ETag").and_then(etag_md5)
+    } else {
+        None
+    };
     Ok(Object {
-        url,
-        md5: contents.text_of("ETag").and_then(etag_md5),
         key,
         size,
+        md5,
+        url,
     })
 }
 

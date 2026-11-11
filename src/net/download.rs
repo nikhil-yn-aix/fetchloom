@@ -655,7 +655,8 @@ impl Net {
     }
 
     /// the answer itself when it brings the file. otherwise what it means instead: the URL a
-    /// page's handler says the file is at, or an expired link to try again or a refusal.
+    /// page's handler says the file is at, an expired link to try again, or a refusal, which for
+    /// an S3 bucket says whether a key went with the request.
     async fn instead(
         &self,
         from: &Url,
@@ -663,6 +664,11 @@ impl Net {
         response: reqwest::Response,
     ) -> Result<Result<reqwest::Response, Url>, Failure> {
         let status = response.status();
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && let Some(keyed) = response.extensions().get::<crate::source::Keyed>()
+        {
+            return Err(Failure::Final(keyed.refusal(from)));
+        }
         if let Some(divert) = fetch.divert
             && is_page(status, response.headers())
         {

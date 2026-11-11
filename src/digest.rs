@@ -83,7 +83,8 @@ fn from_hex<const N: usize>(text: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// lowercase hex digits for `bytes`.
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {

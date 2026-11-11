@@ -131,6 +131,58 @@ fn references_read_back_as_written() {
 }
 
 #[test]
+fn endpoint_references_read_back_as_written() {
+    for (text, canonical) in [
+        (
+            "s3:https://minio.lab.example:9000/scans/raw/",
+            "s3:https://minio.lab.example:9000/scans/raw/",
+        ),
+        (
+            "S3:HTTPS://MINIO.lab.example:9000/scans",
+            "s3:https://minio.lab.example:9000/scans/",
+        ),
+        (
+            "s3:https://ceph.lab.example:443/scans/a b+c/",
+            "s3:https://ceph.lab.example/scans/a b+c/",
+        ),
+        (
+            "s3:http://10.0.0.5/old-scans/",
+            "s3:http://10.0.0.5/old-scans/",
+        ),
+        (
+            "s3:https://[::1]:9000/scans/one.csv",
+            "s3:https://[::1]:9000/scans/one.csv",
+        ),
+    ] {
+        let parsed = Reference::parse(text).unwrap();
+        assert!(matches!(parsed.reference, Reference::Bucket(_)), "{text}");
+        assert_eq!(parsed.reference.to_string(), canonical, "{text}");
+        assert_eq!(reference(canonical), parsed.reference, "{canonical}");
+    }
+}
+
+#[test]
+fn an_endpoint_reference_is_a_plain_origin_and_a_bucket() {
+    for text in [
+        "s3:https://ada:hunter2@minio.lab.example/scans/",
+        "s3:https://minio.lab.example/scans/?versions",
+        "s3:https://minio.lab.example/scans/#raw",
+        "s3:https://minio.lab.example/",
+        "s3:https://minio.lab.example",
+        "s3:https://minio.lab.example/Scans/",
+        "s3:ftp://minio.lab.example/scans/",
+        "s3:https:///scans/",
+        "s3:https://minio.lab.example/scans/../raw/",
+        "gs:https://storage.lab.example/scans/",
+    ] {
+        let error = Reference::parse(text).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceInvalid, "{text}");
+        assert!(!error.message.contains("hunter2"), "{}", error.message);
+        assert!(error.help.unwrap().contains("://"), "{text}");
+    }
+}
+
+#[test]
 fn single_objects_and_other_storage_links_stay_plain_links() {
     for text in [
         "https://openneuro.org.s3.amazonaws.com/ds000001/participants.tsv",
@@ -354,28 +406,213 @@ fn a_redirect_without_a_region_or_a_second_one_fails() {
     );
 }
 
+/// S3 refusing a listing, as S3 words it.
+const DENIED: &[u8] = b"<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";
+
 #[test]
-fn a_refused_listing_means_the_bucket_is_not_public() {
-    let url = listing_url("https://aws.s3.amazonaws.com/", "");
+fn a_refused_s3_listing_says_whether_a_key_went_with_it_and_what_to_do() {
+    let url = listing_url("https://lab-raw.s3.amazonaws.com/", "raw/");
+    let bucket = Bucket::parse("s3://lab-raw").unwrap();
+    let unlisted = (
+        "s3://lab-raw/raw/ is private: S3 refused to list it without a key",
+        "if you trust s3://lab-raw with your AWS keys, add it to s3_buckets in the settings file or FETCHLOOM_S3_BUCKETS",
+    );
+    for (keyed, (message, help)) in [
+        (None, unlisted),
+        (
+            Some(Keyed::Unsigned {
+                bucket: bucket.clone(),
+                listed: false,
+            }),
+            unlisted,
+        ),
+        (
+            Some(Keyed::Unsigned {
+                bucket: bucket.clone(),
+                listed: true,
+            }),
+            (
+                "s3://lab-raw/raw/ is private: S3 refused to list it without a key, and no AWS keys were found",
+                "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile in ~/.aws/credentials",
+            ),
+        ),
+        (
+            Some(Keyed::Signed {
+                bucket: bucket.clone(),
+                key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
+                region: "us-east-1".to_owned(),
+            }),
+            (
+                "S3 refused the AWS key \u{2026}WXYZ from AWS_ACCESS_KEY_ID for s3://lab-raw/raw/",
+                "ask the bucket's owner to let that key list and read it, or set AWS_PROFILE to a profile whose key can",
+            ),
+        ),
+    ] {
+        let mut recorded = Recorded::default().on(&url, 403, DENIED);
+        if let Some(keyed) = keyed {
+            recorded = recorded.keyed(&url, keyed);
+        }
+        let error = resolve("s3://lab-raw/raw/", &recorded).unwrap_err();
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), Some(help));
+        assert_eq!(
+            error.details,
+            ["lab-raw.s3.amazonaws.com said AccessDenied: Access Denied"]
+        );
+    }
+    // fetchloom never agrees to pay for a bucket's requests, with a key or without one
     let recorded = Recorded::default().on(&url, 403, fixture_bytes("bucket/denied.xml"));
-    let error = resolve("s3://aws/", &recorded).unwrap_err();
+    let error = resolve("s3://lab-raw/raw/", &recorded).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert_eq!(
         error.message,
-        "s3://aws/ is not a public bucket: S3 refused to list it"
+        "s3://lab-raw/raw/ bills the reader for each request, and fetchloom never agrees to pay"
     );
-    assert_eq!(error.help.as_deref(), Some(PRIVATE));
-    assert!(
-        error.details[0].contains("AccessDenied"),
-        "{:?}",
-        error.details
+    assert_eq!(
+        error.help.as_deref(),
+        Some("use the AWS CLI with --request-payer requester for this bucket")
     );
-    assert!(
-        error.details[0].contains("Requester Pays"),
-        "{:?}",
-        error.details
-    );
+}
 
+#[test]
+fn a_refused_download_says_whether_a_key_went_with_it_and_what_to_do() {
+    let aws = Bucket::parse("s3://lab-raw").unwrap();
+    let lab = Bucket::parse("s3:https://minio.lab.example:9000/scans").unwrap();
+    let object =
+        Url::parse("https://lab-raw.s3.eu-west-1.amazonaws.com/raw/a.csv?versionId=v1").unwrap();
+    let scan = Url::parse("https://minio.lab.example:9000/scans/raw/a.csv").unwrap();
+    for (keyed, url, message, help) in [
+        (
+            Keyed::Unsigned {
+                bucket: aws.clone(),
+                listed: false,
+            },
+            &object,
+            "S3 refused https://lab-raw.s3.eu-west-1.amazonaws.com/raw/a.csv?versionId=v1 without a key",
+            "if you trust s3://lab-raw with your AWS keys, add it to s3_buckets in the settings file or FETCHLOOM_S3_BUCKETS",
+        ),
+        (
+            Keyed::Unsigned {
+                bucket: lab.clone(),
+                listed: true,
+            },
+            &scan,
+            "minio.lab.example:9000 refused https://minio.lab.example:9000/scans/raw/a.csv without a key, and no AWS settings send keys to https://minio.lab.example:9000",
+            "put endpoint_url = https://minio.lab.example:9000 in a profile in ~/.aws/config, with its keys in ~/.aws/credentials, or set AWS_ENDPOINT_URL_S3=https://minio.lab.example:9000 with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY",
+        ),
+        (
+            Keyed::Signed {
+                bucket: aws,
+                key: "\u{2026}WXYZ from profile lab in /home/ada/.aws/credentials".to_owned(),
+                region: "eu-west-1".to_owned(),
+            },
+            &object,
+            "S3 refused the AWS key \u{2026}WXYZ from profile lab in /home/ada/.aws/credentials for https://lab-raw.s3.eu-west-1.amazonaws.com/raw/a.csv?versionId=v1",
+            "ask the owner of s3://lab-raw to let that key read it, or set AWS_PROFILE to a profile whose key can",
+        ),
+    ] {
+        let error = keyed.refusal(url);
+        assert_eq!(error.kind, Kind::AuthRequired);
+        assert_eq!(error.message, message);
+        assert_eq!(error.help.as_deref(), Some(help));
+    }
+}
+
+#[test]
+fn a_refused_endpoint_listing_names_the_service_and_the_settings_it_needs() {
+    let url = "https://minio.lab.example:9000/scans/?list-type=2&prefix=raw%2F&encoding-type=url";
+    let reference = "s3:https://minio.lab.example:9000/scans/raw/";
+    let bucket = Bucket::parse("s3:https://minio.lab.example:9000/scans").unwrap();
+    let recorded = Recorded::default().on(url, 403, DENIED).keyed(
+        url,
+        Keyed::Unsigned {
+            bucket,
+            listed: true,
+        },
+    );
+    let error = resolve(reference, &recorded).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "s3:https://minio.lab.example:9000/scans/raw/ is private: minio.lab.example:9000 refused to list it without a key, and no AWS settings send keys to https://minio.lab.example:9000"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "put endpoint_url = https://minio.lab.example:9000 in a profile in ~/.aws/config, with its keys in ~/.aws/credentials, or set AWS_ENDPOINT_URL_S3=https://minio.lab.example:9000 with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+        )
+    );
+    // a signature for another region than the service's is refused, and it says which one
+    let malformed = b"<Error><Code>AuthorizationHeaderMalformed</Code><Message>the region 'us-east-1' is wrong; expecting 'eu-1'</Message><Region>eu-1</Region></Error>";
+    let recorded = Recorded::default().on(url, 400, malformed.to_vec());
+    let error = resolve(reference, &recorded).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.message,
+        "minio.lab.example:9000 wants the requests for s3:https://minio.lab.example:9000/scans/raw/ signed for the region eu-1"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "set region = eu-1 in the AWS profile for https://minio.lab.example:9000, or AWS_REGION=eu-1"
+        )
+    );
+    assert_eq!(recorded.asked(), [url]);
+}
+
+#[test]
+fn an_endpoint_bucket_is_listed_by_path_and_states_no_md5() {
+    let url = "https://minio.lab.example:9000/scans/?list-type=2&prefix=raw%2F&encoding-type=url";
+    let body = page(
+        true,
+        &[
+            ("raw%2Fa.csv", "\"1beeac62f1ded905f45c6d6d20a4688b\""),
+            ("raw%2Fsoap", "\"x\""),
+        ],
+    );
+    let recorded = Recorded::default().on(url, 200, body);
+    let listing = resolve("s3:https://minio.lab.example:9000/scans/raw/", &recorded).unwrap();
+    assert_eq!(
+        listing.resolved.to_string(),
+        "s3:https://minio.lab.example:9000/scans/raw/"
+    );
+    let links: Vec<_> = listing.files.iter().map(|file| file.url.as_str()).collect();
+    assert_eq!(
+        links,
+        [
+            "https://minio.lab.example:9000/scans/raw/a.csv",
+            "https://minio.lab.example:9000/scans/raw/soap"
+        ]
+    );
+    assert!(listing.files.iter().all(|file| file.md5.is_none()));
+}
+
+#[test]
+fn a_signed_listing_states_no_md5_and_links_objects_in_the_region_it_was_signed_for() {
+    let global = listing_url("https://lab-raw.s3.amazonaws.com/", "raw/");
+    let body = page(
+        true,
+        &[("raw%2Fa.csv", "\"1beeac62f1ded905f45c6d6d20a4688b\"")],
+    );
+    let recorded = Recorded::default().on(&global, 200, body).keyed(
+        &global,
+        Keyed::Signed {
+            bucket: Bucket::parse("s3://lab-raw").unwrap(),
+            key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
+            region: "eu-west-1".to_owned(),
+        },
+    );
+    let listing = resolve("s3://lab-raw/raw/", &recorded).unwrap();
+    assert_eq!(
+        listing.files[0].url.as_str(),
+        "https://lab-raw.s3.eu-west-1.amazonaws.com/raw/a.csv"
+    );
+    assert_eq!(listing.files[0].md5, None);
+}
+
+#[test]
+fn a_refused_cloud_storage_listing_means_the_bucket_is_not_public() {
     let url = STATES
         .replace("cloud-samples-data", "test")
         .replace("bigquery%2Fus-states%2F", "x%2F");

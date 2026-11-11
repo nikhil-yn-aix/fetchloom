@@ -32,6 +32,8 @@ pub(crate) struct Response {
     /// the `x-amz-bucket-region` header, which names where an S3 bucket lives when a request
     /// reached the wrong region.
     pub(crate) region: Option<String>,
+    /// how a request for an S3 bucket went out: signed with a key or not, and why.
+    pub(crate) keyed: Option<crate::source::Keyed>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -117,6 +119,7 @@ impl Net {
             .filter_map(next_link)
             .find_map(|link| response.url().join(&link).ok());
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
+        let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
         let final_url = response.url().clone();
         let mut body = Vec::new();
         loop {
@@ -160,6 +163,7 @@ impl Net {
             url: final_url,
             next,
             region,
+            keyed,
             body,
         })
     }

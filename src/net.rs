@@ -11,6 +11,7 @@ mod rate;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod roots;
 mod shown;
+pub(crate) mod sign;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -181,6 +182,8 @@ pub(crate) struct Net {
     offline: Offline,
     typed: address::Typed,
     credentials: Vec<Key>,
+    /// which requests to S3 buckets go signed, and with which keys.
+    signing: crate::source::Signing,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -340,6 +343,7 @@ impl Net {
             offline: options.offline,
             typed: address::Typed::default(),
             credentials,
+            signing: crate::source::Signing::default(),
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
@@ -386,6 +390,12 @@ impl Net {
         }
     }
 
+    /// signs requests for the S3 buckets `signing` lists, once S3 refused them without a key.
+    pub(crate) fn with_signing(mut self, signing: crate::source::Signing) -> Net {
+        self.signing = signing;
+        self
+    }
+
     /// the hosts a credential goes to, for tests.
     #[cfg(test)]
     pub(crate) fn credential_hosts(&self) -> Vec<&str> {
@@ -403,7 +413,9 @@ impl Net {
     /// hop is checked the way its connection will be made before it is sent, and waits while its
     /// host's rate limit is used up. a credential goes only to its own host, and never once a
     /// redirect has left the first one, except a saved login, which answers its own host on any
-    /// hop as curl's does.
+    /// hop as curl's does. a request for an S3 bucket that `s3_buckets` lists goes again once,
+    /// signed, when S3 refuses it without a key, and signed from the start once it did; a
+    /// redirect never carries the signature on.
     async fn send(
         &self,
         url: &Url,
@@ -439,6 +451,8 @@ impl Net {
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
+        // the bucket is judged on the link as written, before a test server stands in for it
+        let bucket = self.signing.locate(url);
         #[cfg(debug_assertions)]
         let local = api::test_bucket(url);
         #[cfg(debug_assertions)]
@@ -461,7 +475,20 @@ impl Net {
                 .map_err(|reason| refused(&hop, reason))?;
             first_origin &= hop.origin() == url.origin();
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
-            let request = shape(self.request(client, &hop, first_origin));
+            // a signature goes with the first request alone, never after a redirect
+            let located = bucket.as_ref().filter(|_| redirects == 0);
+            let signer = located.and_then(|located| self.signing.signer(located));
+            let request = match &signer {
+                Some(signer) => {
+                    tracing::debug!(host = host(&hop), "signing the request with an AWS key");
+                    signed(
+                        shape(client.get(hop.clone())),
+                        signer.headers(&hop, SystemTime::now()),
+                    )
+                    .map_err(Failure::Final)?
+                }
+                None => shape(self.request(client, &hop, first_origin)),
+            };
             let mut response = tokio::select! {
                 sent = tokio::time::timeout(self.connect + self.idle, request.send()) => match sent {
                     Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (self.connect + self.idle).as_secs()))),
@@ -472,6 +499,32 @@ impl Net {
             };
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, Instant::now());
+            if let Some(located) = located
+                && signer.is_none()
+                && matches!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                )
+            {
+                let region = response
+                    .headers()
+                    .get("x-amz-bucket-region")
+                    .and_then(|value| value.to_str().ok());
+                if self
+                    .signing
+                    .refused(located, region)
+                    .map_err(Failure::Final)?
+                {
+                    tracing::debug!(url = %Shown(&hop), "S3 refused the request without a key, so it goes again signed");
+                    Work::add(&self.work.requests, 1);
+                    continue;
+                }
+            }
+            if let Some(located) = located {
+                response
+                    .extensions_mut()
+                    .insert(located.keyed(signer.as_ref()));
+            }
             let Some(next) = redirect_target(&hop, &response) else {
                 if let Some(name) = name {
                     response.extensions_mut().insert(RedirectName(name));
@@ -593,6 +646,26 @@ impl Net {
             .or_insert_with(|| Arc::new(Semaphore::new(self.host_jobs)))
             .clone()
     }
+}
+
+/// `request` with the headers that sign it. the authorization and the session token are kept
+/// out of logs as secrets are.
+fn signed(
+    mut request: reqwest::RequestBuilder,
+    headers: Vec<(&'static str, String)>,
+) -> Result<reqwest::RequestBuilder, Error> {
+    for (name, value) in headers {
+        let Ok(mut value) = HeaderValue::from_str(&value) else {
+            return Err(Error::new(
+                Kind::AuthRequired,
+                "an AWS key or session token holds a character no request header can carry, such as a line break",
+            )
+            .help("check the AWS keys in the environment or the profile"));
+        };
+        value.set_sensitive(matches!(name, "authorization" | "x-amz-security-token"));
+        request = request.header(name, value);
+    }
+    Ok(request)
 }
 
 /// a redirect may name the download even when the final storage response does not.

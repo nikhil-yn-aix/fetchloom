@@ -2,6 +2,7 @@
 //! and how a person gets one. a key is kept where the source's own tools keep it, so one key
 //! works in fetchloom and in them, and a person never makes a second.
 
+pub(crate) mod aws;
 pub(crate) mod netrc;
 pub(crate) mod store;
 

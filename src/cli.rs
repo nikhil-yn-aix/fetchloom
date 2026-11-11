@@ -161,9 +161,14 @@ impl Context {
             credentials,
             split: self.split,
         };
+        let signing = crate::source::Signing::new(
+            self.settings.s3_buckets.value.clone(),
+            Arc::new(crate::auth::env),
+        );
         Net::new(options, self.work.clone(), self.stop.clone(), notify)
             .with_rate(self.rate.clone())
             .with_allowed_origins(&self.settings.allowed_origins.value)
+            .with_signing(signing)
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value)

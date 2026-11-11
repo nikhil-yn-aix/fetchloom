@@ -16,6 +16,7 @@ research code can outlive the dataset version it used. keep input identities bes
 | route DOIs through the registered handle URL | DOI prefixes and landing-page redirects do not reliably identify the repository | [source routing](architecture/sources.md#parse-before-resolving) |
 | support shared-link sources alongside repositories | research inputs also arrive through hugging face, kaggle, drive and dropbox | [source behavior](../user/sources/README.md) |
 | use reqwest, tokio and rustls | reuse HTTP/2, system proxies and TLS verification while retaining explicit redirect checks | [network](architecture/network.md) |
+| sign S3 requests in the crate, on `hmac` and `sha2` | a GET needs about a hundred lines of AWS signature version 4, checked against AWS's published examples; the AWS SDK and the other signing crates bring their own HTTP stacks, many more crates or licenses outside deny.toml | [network](architecture/network.md#trust-boundaries) |
 | keep disk writes and hashing off async workers | overlap byte processing without blocking request scheduling; bound queues to control retained work | [download pipeline](architecture/network.md#download-pipeline) |
 
 ## project inputs
@@ -51,6 +52,7 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 | flush copied payloads before sync writes state | state must not vouch for bytes still pending write-back; linux batching avoids one flush per small copy | [copy durability](architecture/placing.md#copy-durability) |
 | leave checkpoint and lookup indexes as unflushed hints | losing a hint costs resumption or revalidation, while payload identity remains checked | [cache checkpoints](architecture/cache.md#partial-ownership-and-checkpoints) |
 | give the other catalogs 10 s once one search catalog has answered | one failing catalog held the dataset picker for 76 s while the others had answered; a slow network still gets unlimited time for the first answer | [search](../user/commands/search.md) |
+| ask S3 without a key first, and sign only for buckets `s3_buckets` lists | a public bucket never sees a key, and a cloned data.toml cannot make fetchloom present a key to a bucket of its choosing; a bucket's owner can log the key id of any signed request | [private S3 buckets](../user/sources/buckets.md#private-s3-buckets) |
 | limit silence instead of total download time | a large transfer that keeps producing bytes can finish | [request policy](architecture/network.md#request-policy) |
 | begin adaptive downloads with one stream and split after it proves slow | extra connections slowed fast transfers and helped constrained ones | [network measurements](performance/measurements.md#network) |
 | fetch file bodies over several connections per host | one connection queued every body behind the slowest on lossy links: far s2 took 0.288 and poor s2 0.424 of the time; lan and home stayed flat | [measurements](performance/measurements.md#ab-passes-on-the-linux-lab-2026-11) |

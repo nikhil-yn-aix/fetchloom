@@ -460,3 +460,222 @@ fn osf_exceptions_keep_their_own_scheme_host_and_port_boundaries() {
         );
     }
 }
+
+/// AWS keys in a test's own environment, with `more` settings beside them.
+fn aws_keys(
+    more: Vec<(&'static str, String)>,
+) -> impl Fn(&str) -> Option<OsString> + Send + Sync + 'static {
+    let mut pairs = vec![
+        ("AWS_ACCESS_KEY_ID", "AKIAEXAMPLEWXYZ".to_owned()),
+        ("AWS_SECRET_ACCESS_KEY", "do-not-send".to_owned()),
+        ("AWS_SESSION_TOKEN", "session-of-the-test".to_owned()),
+    ];
+    pairs.extend(more);
+    move |name| {
+        pairs
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| OsString::from(value))
+    }
+}
+
+/// a network that signs for the `listed` buckets with the keys `var` finds.
+fn signing_net(
+    listed: &[&str],
+    var: impl Fn(&str) -> Option<OsString> + Send + Sync + 'static,
+) -> Net {
+    let listed = listed
+        .iter()
+        .map(|text| crate::source::Bucket::parse(text).unwrap())
+        .collect();
+    Net::new(
+        Options {
+            offline: crate::net::Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: crate::net::Splitting::WhenSlow,
+        },
+        Arc::default(),
+        Arc::default(),
+        Arc::new(|_| {}),
+    )
+    .with_signing(crate::source::Signing::new(listed, Arc::new(var)))
+}
+
+/// checks a request head's signature as S3 does: the canonical request rebuilt from what
+/// arrived, signed with `secret` for the scope its authorization names.
+fn verify(base: &Url, head: &str, secret: &str) {
+    let mut lines = head.lines();
+    let target = lines.next().unwrap().split(' ').nth(1).unwrap();
+    let url = base.join(target).unwrap();
+    let headers: Vec<(String, String)> = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+        .collect();
+    let header = |name: &str| {
+        headers.iter().find(|(key, _)| key == name).map_or_else(
+            || panic!("no {name} in {head}"),
+            |(_, value)| value.as_str(),
+        )
+    };
+    let authorization = header("authorization");
+    let (credential, rest) = authorization
+        .strip_prefix("AWS4-HMAC-SHA256 Credential=")
+        .and_then(|rest| rest.split_once(", SignedHeaders="))
+        .unwrap();
+    let (names, _) = rest.split_once(", Signature=").unwrap();
+    let scope: Vec<&str> = credential.split('/').collect();
+    assert!(names.split(';').any(|name| name == "host"), "{head}");
+    assert!(
+        headers
+            .iter()
+            .filter(|(name, _)| name.starts_with("x-amz-"))
+            .all(|(name, _)| names.split(';').any(|signed| signed == name)),
+        "every x-amz- header is signed: {head}"
+    );
+    let signed: Vec<(&str, &str)> = names.split(';').map(|name| (name, header(name))).collect();
+    let keys = crate::net::sign::Keys {
+        id: scope[0].to_owned(),
+        secret: secret.to_owned(),
+        token: None,
+    };
+    let expected = crate::net::sign::authorization(
+        &keys,
+        &crate::net::sign::Scope {
+            time: header("x-amz-date"),
+            region: scope[2],
+            service: scope[3],
+        },
+        &crate::net::sign::Request {
+            method: "GET",
+            url: &url,
+            headers: &signed,
+            payload: header("x-amz-content-sha256"),
+        },
+    );
+    assert_eq!(authorization, expected, "{head}");
+}
+
+#[test]
+fn a_listed_bucket_refused_without_a_key_is_asked_again_once_signed() {
+    let (base, asked) = serve(vec![
+        reply(
+            "403 Forbidden",
+            &[("x-amz-bucket-region", "eu-west-1")],
+            b"<Error><Code>AccessDenied</Code></Error>",
+        ),
+        reply("200 OK", &[], b"<ListBucketResult/>"),
+        reply("200 OK", &[], b"object"),
+    ]);
+    let origin = base.origin().ascii_serialization();
+    let net = signing_net(
+        &[&format!("s3:{origin}/lab-raw")],
+        aws_keys(vec![("AWS_ENDPOINT_URL_S3", origin.clone())]),
+    );
+    net.typed(&base);
+    let listing = base
+        .join("lab-raw/?list-type=2&prefix=raw%2F&encoding-type=url")
+        .unwrap();
+    let response = block_on(net.get(&listing)).unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.keyed,
+        Some(crate::source::Keyed::Signed {
+            bucket: crate::source::Bucket::parse(&format!("s3:{origin}/lab-raw")).unwrap(),
+            key: "\u{2026}WXYZ from AWS_ACCESS_KEY_ID".to_owned(),
+            region: "eu-west-1".to_owned(),
+        })
+    );
+    // the bucket's later requests go signed from the start
+    let object = base
+        .join("lab-raw/raw/a%20b+c.csv?versionId=v%2B1")
+        .unwrap();
+    assert_eq!(block_on(net.get(&object)).unwrap().status, 200);
+    let authorizations = sent(&asked, "authorization");
+    assert_eq!(authorizations[0], None);
+    let heads = asked.lock().unwrap().clone();
+    assert_eq!(heads.len(), 3);
+    for head in &heads[1..] {
+        verify(&base, head, "do-not-send");
+        assert!(
+            head.contains("x-amz-security-token: session-of-the-test"),
+            "{head}"
+        );
+        assert!(!head.contains("do-not-send"), "{head}");
+    }
+    assert_eq!(net.work.counts().requests, 3);
+}
+
+#[test]
+fn only_a_listed_buckets_requests_are_signed_and_never_a_presigned_link() {
+    for (start, listed) in [
+        ("https://other-lab.s3.amazonaws.com/a.csv", "s3://lab-raw"),
+        (
+            "https://lab-raw.s3.amazonaws.com/a.csv?X-Amz-Credential=x&X-Amz-Signature=abc",
+            "s3://lab-raw",
+        ),
+        ("https://minio.lab.example/scans/a.csv", "s3://scans"),
+    ] {
+        let net = signing_net(
+            &[listed],
+            aws_keys(vec![(
+                "AWS_ENDPOINT_URL_S3",
+                "https://minio.lab.example".to_owned(),
+            )]),
+        );
+        let (local, asked) = serve(vec![reply("403 Forbidden", &[], b"")]);
+        let client = transport();
+        let start = Url::parse(start).unwrap();
+        let Ok(answer) = block_on(net.send(&start, |request| {
+            let request = request.build().unwrap();
+            client.get(local.clone()).headers(request.headers().clone())
+        })) else {
+            panic!("{start} was not answered");
+        };
+        assert_eq!(answer.status(), 403, "{start}");
+        assert_eq!(sent(&asked, "authorization"), [None], "{start}");
+        let keyed = answer.extensions().get::<crate::source::Keyed>();
+        if start.host_str() == Some("other-lab.s3.amazonaws.com") {
+            assert_eq!(
+                keyed,
+                Some(&crate::source::Keyed::Unsigned {
+                    bucket: crate::source::Bucket::parse("s3://other-lab").unwrap(),
+                    listed: false,
+                })
+            );
+        } else {
+            assert_eq!(keyed, None, "{start}");
+        }
+    }
+}
+
+#[test]
+fn a_signature_never_follows_a_redirect() {
+    let net = signing_net(
+        &["s3:https://minio.lab.example/scans"],
+        aws_keys(vec![(
+            "AWS_ENDPOINT_URL_S3",
+            "https://minio.lab.example".to_owned(),
+        )]),
+    );
+    let (local, asked) = serve(vec![
+        reply("403 Forbidden", &[], b""),
+        reply("302 Found", &[("Location", "/scans/moved.csv")], b""),
+        reply("200 OK", &[], b""),
+    ]);
+    let client = transport();
+    let start = Url::parse("https://minio.lab.example/scans/a.csv").unwrap();
+    let Ok(answer) = block_on(net.send(&start, |request| {
+        let request = request.build().unwrap();
+        client.get(local.clone()).headers(request.headers().clone())
+    })) else {
+        panic!("the redirect chain was not answered");
+    };
+    assert_eq!(answer.status(), 200);
+    let authorizations = sent(&asked, "authorization");
+    assert_eq!(authorizations.len(), 3);
+    assert_eq!(authorizations[0], None);
+    assert!(authorizations[1].is_some());
+    assert_eq!(authorizations[2], None);
+    assert_eq!(sent(&asked, "x-amz-security-token")[2], None);
+}

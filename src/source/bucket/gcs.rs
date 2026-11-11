@@ -57,7 +57,7 @@ pub(super) async fn list(prefix: &Prefix, api: &impl Api) -> Result<Vec<Object>,
             let error = said.as_ref().map(|said| &said["error"]);
             let code = error.and_then(|error| error["errors"][0]["reason"].as_str());
             let message = error.and_then(|error| error["message"].as_str());
-            return Err(prefix.refused(&response, code, message));
+            return Err(prefix.refused(&response, code, message, None));
         }
         let page: Page = response.json()?;
         for item in page.items {

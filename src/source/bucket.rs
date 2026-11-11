@@ -1,23 +1,28 @@
-//! public cloud object storage: an S3 or google cloud storage bucket, or a prefix inside one,
-//! listed anonymously over HTTPS. no credential is ever sent to these hosts.
+//! cloud object storage: an S3 or google cloud storage bucket, or a prefix inside one, or a
+//! bucket at another service that speaks S3's API. listings and downloads go without a key, and
+//! only an S3 bucket the `s3_buckets` setting lists is asked again with one, as
+//! [`signing`] decides.
 
 mod gcs;
 mod s3;
+mod signing;
 mod xml;
 
 use std::fmt;
 
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use percent_encoding::{percent_decode_str, utf8_percent_encode};
 use url::Url;
 
+pub(crate) use self::signing::{Keyed, Signing};
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
+use crate::net::sign::UNRESERVED;
 use crate::net::{self, Api, Response};
 
-/// the help for a bucket that refuses anonymous reads.
+/// the help for a cloud storage bucket that refuses anonymous reads.
 const PRIVATE: &str =
-    "fetchloom reads public buckets only; use the provider's tools for private data";
+    "fetchloom reads public cloud storage buckets only; use google's tools for private data";
 
 /// the longest key S3 and cloud storage accept, in bytes.
 const LONGEST_KEY: usize = 1024;
@@ -41,14 +46,6 @@ impl Pages {
         Ok(())
     }
 }
-
-/// what stays unescaped in a query value or path segment: the unreserved characters, as both
-/// services sign and decode them. S3 reads a `+` in a path as a space, so it is escaped too.
-const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
 
 /// which object store a bucket lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,8 +82,140 @@ impl Store {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Prefix {
     store: Store,
+    /// for a bucket at another service that speaks S3's API, where it is.
+    endpoint: Option<url::Origin>,
     bucket: String,
     key: String,
+}
+
+/// an S3 bucket as the `s3_buckets` setting names it: one on AWS, or one at another service that
+/// speaks S3's API, known by its origin.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Bucket {
+    endpoint: Option<url::Origin>,
+    name: String,
+}
+
+impl Bucket {
+    /// reads `s3://name`, or a bare name, for a bucket on AWS, and `s3:https://host:port/name`
+    /// for one at another service, each with or without a final `/`.
+    pub(crate) fn parse(text: &str) -> Option<Bucket> {
+        let text = text.trim();
+        let text = text.strip_suffix('/').unwrap_or(text);
+        let (endpoint, name) = match text.split_once(':') {
+            None => (None, text),
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
+                if let Some(name) = rest.strip_prefix("//") {
+                    (None, name)
+                } else {
+                    let (origin, name) = endpoint(rest)?;
+                    (Some(origin), name)
+                }
+            }
+            Some(_) => return None,
+        };
+        is_bucket(Store::S3, name).then(|| Bucket {
+            endpoint,
+            name: name.to_owned(),
+        })
+    }
+
+    /// the service that holds the bucket, as messages name it: S3, or the host of another.
+    fn service(&self) -> String {
+        let Some(origin) = &self.endpoint else {
+            return "S3".to_owned();
+        };
+        let origin = origin.ascii_serialization();
+        origin
+            .split_once("://")
+            .map_or_else(|| origin.clone(), |(_, host)| host.to_owned())
+    }
+
+    /// what was missing when no keys were found to sign for the bucket.
+    fn keyless(&self) -> String {
+        match &self.endpoint {
+            Some(origin) => format!(
+                "no AWS settings send keys to {}",
+                origin.ascii_serialization()
+            ),
+            None => "no AWS keys were found".to_owned(),
+        }
+    }
+
+    /// how to give fetchloom keys for the bucket.
+    fn keys_help(&self) -> String {
+        match &self.endpoint {
+            Some(origin) => {
+                let origin = origin.ascii_serialization();
+                format!(
+                    "put endpoint_url = {origin} in a profile in ~/.aws/config, with its keys in ~/.aws/credentials, or set AWS_ENDPOINT_URL_S3={origin} with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+                )
+            }
+            None => "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile in ~/.aws/credentials".to_owned(),
+        }
+    }
+
+    /// how to let fetchloom sign for the bucket.
+    fn listing_help(&self) -> String {
+        format!(
+            "if you trust {self} with your AWS keys, add it to s3_buckets in the settings file or FETCHLOOM_S3_BUCKETS"
+        )
+    }
+
+    /// `text` as a message may repeat it, with any login in it masked.
+    pub(crate) fn shown(text: &str) -> String {
+        match text.split_once(':') {
+            Some((scheme, rest)) if scheme.eq_ignore_ascii_case("s3") => {
+                format!("{scheme}:{}", net::mask_query(rest))
+            }
+            _ => net::mask_query(text).into_owned(),
+        }
+    }
+}
+
+impl Keyed {
+    /// the error for a download S3 refused, as this says the request for it went.
+    pub(crate) fn refusal(&self, url: &Url) -> Error {
+        let shown = net::Shown(url);
+        match self {
+            Keyed::Signed { bucket, key, .. } => Error::new(
+                Kind::AuthRequired,
+                format!("{} refused the AWS key {key} for {shown}", bucket.service()),
+            )
+            .help(format!(
+                "ask the owner of {bucket} to let that key read it, or set AWS_PROFILE to a profile whose key can"
+            )),
+            Keyed::Unsigned {
+                bucket,
+                listed: true,
+            } => Error::new(
+                Kind::AuthRequired,
+                format!(
+                    "{} refused {shown} without a key, and {}",
+                    bucket.service(),
+                    bucket.keyless()
+                ),
+            )
+            .help(bucket.keys_help()),
+            Keyed::Unsigned {
+                bucket,
+                listed: false,
+            } => Error::new(
+                Kind::AuthRequired,
+                format!("{} refused {shown} without a key", bucket.service()),
+            )
+            .help(bucket.listing_help()),
+        }
+    }
+}
+
+impl fmt::Display for Bucket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.endpoint {
+            Some(endpoint) => write!(f, "s3:{}/{}", endpoint.ascii_serialization(), self.name),
+            None => write!(f, "s3://{}", self.name),
+        }
+    }
 }
 
 /// an object a bucket listed, before its key becomes a dataset path.
@@ -98,22 +227,58 @@ struct Object {
 }
 
 impl Prefix {
-    /// reads the part after `s3:` or `gs:`, such as `//openneuro.org/ds000001/`.
+    /// reads the part after `s3:` or `gs:`, such as `//openneuro.org/ds000001/`, or for a
+    /// bucket at another service, `https://minio.lab.example:9000/scans/raw/`.
     pub(super) fn parse(store: Store, text: &str) -> Result<Prefix, Error> {
-        let bad = || malformed(&format!("{}:{text}", store.scheme()), store.example());
-        let rest = text.trim().strip_prefix("//").ok_or_else(bad)?;
-        let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
-        Prefix::new(store, bucket, key).ok_or_else(bad)
+        let text = text.trim();
+        if let Some(rest) = text.strip_prefix("//") {
+            let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
+            return Prefix::new(store, None, bucket, key)
+                .ok_or_else(|| malformed(&format!("{}:{text}", store.scheme()), store.example()));
+        }
+        let bad = || {
+            malformed(
+                &format!("{}:{}", store.scheme(), net::mask_query(text)),
+                "s3:https://minio.lab.example:9000/scans/raw/, for a bucket at another service that speaks S3's API",
+            )
+        };
+        if store != Store::S3 {
+            return Err(malformed(
+                &format!("{}:{text}", store.scheme()),
+                store.example(),
+            ));
+        }
+        let (origin, path) = endpoint(text).ok_or_else(bad)?;
+        let (bucket, key) = path.split_once('/').unwrap_or((path, ""));
+        Prefix::new(store, Some(origin), bucket, key).ok_or_else(bad)
     }
 
-    fn new(store: Store, bucket: &str, key: &str) -> Option<Prefix> {
+    fn new(store: Store, endpoint: Option<url::Origin>, bucket: &str, key: &str) -> Option<Prefix> {
         let usable_key =
             key.len() <= LONGEST_KEY && !key.chars().any(char::is_control) && !dotted(key);
         (is_bucket(store, bucket) && usable_key).then(|| Prefix {
             store,
+            endpoint,
             bucket: bucket.to_owned(),
             key: key.to_owned(),
         })
+    }
+
+    /// the bucket, as the `s3_buckets` setting names it.
+    pub(crate) fn bucket(&self) -> Bucket {
+        Bucket {
+            endpoint: self.endpoint.clone(),
+            name: self.bucket.clone(),
+        }
+    }
+
+    /// the host of the service a person names by writing this prefix, when it is not AWS or
+    /// google's. such a host may be on a private network.
+    pub(super) fn written_host(&self) -> Option<String> {
+        match self.endpoint.as_ref()? {
+            url::Origin::Tuple(_, host, _) => Some(host.to_string()),
+            url::Origin::Opaque(_) => None,
+        }
     }
 
     /// a pasted HTTPS link to a bucket or a folder in one, ending in `/`. a link to a single
@@ -143,7 +308,7 @@ impl Prefix {
         if !(key.is_empty() || key.ends_with('/')) {
             return None;
         }
-        Prefix::new(store, &bucket, key)
+        Prefix::new(store, None, &bucket, key)
     }
 
     /// lists every object under the prefix, then names each by its key below the prefix.
@@ -243,9 +408,15 @@ impl Prefix {
         .help("this usually means the service changed. please report it at https://github.com/nikhil-yn-aix/fetchloom/issues")
     }
 
-    /// the error for an answer other than a listing. `code` and `message` are what the service
-    /// said, when it said anything.
-    fn refused(&self, response: &Response, code: Option<&str>, message: Option<&str>) -> Error {
+    /// the error for an answer other than a listing. `code`, `message` and `region` are what the
+    /// service said, when it said them.
+    fn refused(
+        &self,
+        response: &Response,
+        code: Option<&str>,
+        message: Option<&str>,
+        region: Option<&str>,
+    ) -> Error {
         let host = net::host(&response.url);
         let said = match (code, message) {
             (Some(code), Some(message)) => Some(format!("{host} said {code}: {message}")),
@@ -255,6 +426,14 @@ impl Prefix {
         let requester_pays =
             message.is_some_and(|message| message.to_ascii_lowercase().contains("requester pays"));
         let error = match response.status {
+            400 | 401 | 403 if requester_pays && self.store == Store::S3 => Error::new(
+                Kind::AuthRequired,
+                format!(
+                    "{self} bills the reader for each request, and fetchloom never agrees to pay"
+                ),
+            )
+            .help("use the AWS CLI with --request-payer requester for this bucket"),
+            401 | 403 if self.store == Store::S3 => self.private(response.keyed.as_ref()),
             401 | 403 => Error::new(
                 Kind::AuthRequired,
                 format!(
@@ -268,6 +447,28 @@ impl Prefix {
                 format!("{self} bills the reader for each request, which needs an account"),
             )
             .help(PRIVATE),
+            400 if code == Some("AuthorizationHeaderMalformed")
+                && let Some(region) = region =>
+            {
+                let bucket = self.bucket();
+                let help = match &bucket.endpoint {
+                    Some(origin) => format!(
+                        "set region = {region} in the AWS profile for {}, or AWS_REGION={region}",
+                        origin.ascii_serialization()
+                    ),
+                    None => {
+                        format!("set AWS_REGION={region}, or region = {region} in your AWS profile")
+                    }
+                };
+                Error::new(
+                    Kind::AuthRequired,
+                    format!(
+                        "{} wants the requests for {self} signed for the region {region}",
+                        bucket.service()
+                    ),
+                )
+                .help(help)
+            }
             404 | 410 => Error::new(
                 Kind::ReferenceUnresolved,
                 format!("the bucket {} does not exist", self.bucket),
@@ -285,12 +486,69 @@ impl Prefix {
             None => error,
         }
     }
+
+    /// the error for an S3 listing refused, as `keyed` says it went: without a key, as for a
+    /// bucket `s3_buckets` does not list, or signed with one.
+    fn private(&self, keyed: Option<&Keyed>) -> Error {
+        let bucket = self.bucket();
+        let service = bucket.service();
+        match keyed {
+            Some(Keyed::Signed { key, .. }) => Error::new(
+                Kind::AuthRequired,
+                format!("{service} refused the AWS key {key} for {self}"),
+            )
+            .help("ask the bucket's owner to let that key list and read it, or set AWS_PROFILE to a profile whose key can"),
+            Some(Keyed::Unsigned { listed: true, .. }) => Error::new(
+                Kind::AuthRequired,
+                format!(
+                    "{self} is private: {service} refused to list it without a key, and {}",
+                    bucket.keyless()
+                ),
+            )
+            .help(bucket.keys_help()),
+            _ => Error::new(
+                Kind::AuthRequired,
+                format!("{self} is private: {service} refused to list it without a key"),
+            )
+            .help(bucket.listing_help()),
+        }
+    }
 }
 
 impl fmt::Display for Prefix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}://{}/{}", self.store.scheme(), self.bucket, self.key)
+        match &self.endpoint {
+            Some(endpoint) => write!(
+                f,
+                "{}:{}/{}/{}",
+                self.store.scheme(),
+                endpoint.ascii_serialization(),
+                self.bucket,
+                self.key
+            ),
+            None => write!(f, "{}://{}/{}", self.store.scheme(), self.bucket, self.key),
+        }
     }
+}
+
+/// reads `https://host[:port]/rest` as the origin of a service that speaks S3's API and the path
+/// after it. none for a login, a query, a fragment or anything but a plain web origin.
+fn endpoint(text: &str) -> Option<(url::Origin, &str)> {
+    let (scheme, rest) = text.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") || text.contains(['?', '#']) {
+        return None;
+    }
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.is_empty() {
+        return None;
+    }
+    let url = Url::parse(&format!("{scheme}://{authority}/")).ok()?;
+    let plain = url.host_str().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/";
+    plain.then(|| (url.origin(), path))
 }
 
 /// whether `name` follows the bucket naming rules: lowercase letters, digits, `-` and `.`, and

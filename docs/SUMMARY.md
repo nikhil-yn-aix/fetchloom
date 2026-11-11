@@ -32,7 +32,7 @@
     - [kaggle](user/sources/kaggle.md)
     - [google drive](user/sources/google-drive.md)
     - [dropbox](user/sources/dropbox.md)
-    - [public cloud buckets](user/sources/buckets.md)
+    - [cloud buckets](user/sources/buckets.md)
   - [data.toml](user/reference/data-toml.md)
   - [data.lock](user/reference/data-lock.md)
   - [JSON output](user/reference/json-output.md)

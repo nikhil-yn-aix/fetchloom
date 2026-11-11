@@ -4,11 +4,14 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Output};
 
+use hmac::{Hmac, KeyInit, Mac};
 use md5::Digest as _;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, percent_encode};
+use sha2::Sha256;
 
-use crate::support::{Part, Result, Routes, Sandbox, delete, file, json, reply, text};
+use crate::support::{Part, Result, Routes, Sandbox, Server, delete, file, json, reply, text};
 
 const PARTICIPANTS: &[u8] = b"participant_id\tsex\nsub-01\tF\n";
 const SCAN: &[u8] = b"onset\tduration\n0\t1\n";
@@ -134,6 +137,7 @@ fn openneuro() -> Result<Routes> {
     ])
 }
 
+/// a public bucket never sees a key, even one `s3_buckets` lists while keys are set.
 #[test]
 fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
     let sandbox = Sandbox::new()?;
@@ -143,6 +147,7 @@ fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
         &routes,
         &["add", "s3://openneuro.org/ds000001/", "--exclude", "README"],
     )
+    .env("FETCHLOOM_S3_BUCKETS", "s3://openneuro.org")
     .output()?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
@@ -433,36 +438,443 @@ fn missing_gcs_generations_are_refused_before_downloads() -> Result {
     Ok(())
 }
 
+/// S3 refusing a request without a key, as S3 words it.
+const DENIED: &[u8] = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";
+/// the secret beside the keys signed tests set, which no request, file or output may hold.
+const SECRET: &str = "secret-that-never-leaves-this-machine";
+/// a session token, lowercase like the heads the test server keeps.
+const SESSION: &str = "session-sent-with-each-signed-request";
+
+fn refusal() -> Vec<Part> {
+    reply(
+        "403 Forbidden",
+        &[
+            ("Content-Type", "application/xml"),
+            ("Content-Length", &DENIED.len().to_string()),
+        ],
+        DENIED,
+    )
+}
+
+/// what escapes in a signed path or query: everything but the unreserved characters.
+const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+fn escaped(text: &str) -> String {
+    let bytes: Vec<u8> = percent_decode_str(text).collect();
+    percent_encode(&bytes, UNRESERVED).to_string()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+fn mac(key: &[u8], text: &str) -> Result<Vec<u8>> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key).map_err(|_| "no key")?;
+    mac.update(text.as_bytes());
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+/// checks a request as S3 checks its signature, rebuilding the canonical request from what
+/// arrived and signing it with `secret`, and returns the key id and region it was signed with.
+/// the test servers keep heads in lowercase, so signed tests use lowercase keys and sessions,
+/// and the date's `t` and `z` are read back in uppercase.
+fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
+    let mut lines = head.lines();
+    let target = lines
+        .next()
+        .and_then(|line| line.split(' ').nth(1))
+        .ok_or("no request line")?;
+    let headers: Vec<(&str, &str)> = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(name, value)| (name.trim(), value.trim()))
+        .collect();
+    let header = |name: &str| -> Result<String> {
+        let value = headers
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| (*value).to_owned())
+            .ok_or_else(|| format!("no {name} in {head}"))?;
+        Ok(if name == "x-amz-date" {
+            value.to_ascii_uppercase()
+        } else {
+            value
+        })
+    };
+    let authorization = header("authorization")?;
+    let rest = authorization
+        .strip_prefix("aws4-hmac-sha256 credential=")
+        .ok_or("not a signature")?;
+    let (credential, rest) = rest
+        .split_once(", signedheaders=")
+        .ok_or("no signed headers")?;
+    let (names, signature) = rest.split_once(", signature=").ok_or("no signature")?;
+    let scope: Vec<&str> = credential.splitn(2, '/').collect();
+    let (key, scope) = (scope[0], scope.get(1).ok_or("no scope")?);
+    let parts: Vec<&str> = scope.split('/').collect();
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let path: Vec<String> = path.split('/').map(escaped).collect();
+    let mut pairs: Vec<(String, String)> = query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (escaped(name), escaped(value))
+        })
+        .collect();
+    pairs.sort();
+    let query: Vec<String> = pairs
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect();
+    let mut canonical = format!("GET\n{}\n{}\n", path.join("/"), query.join("&"));
+    for name in names.split(';') {
+        let _ = writeln!(canonical, "{name}:{}", header(name)?);
+    }
+    let _ = write!(canonical, "\n{names}\n{}", header("x-amz-content-sha256")?);
+    let date = header("x-amz-date")?;
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{date}\n{}\n{}",
+        scope,
+        hex(&Sha256::digest(canonical.as_bytes()))
+    );
+    let mut signing = format!("AWS4{secret}").into_bytes();
+    for part in &parts {
+        signing = mac(&signing, part)?;
+    }
+    let expected = hex(&mac(&signing, &to_sign)?);
+    if expected != signature {
+        return Err(format!("the signature does not match:\n{canonical}\n{head}").into());
+    }
+    Ok((key.to_owned(), parts[1].to_owned()))
+}
+
+/// a command for a bucket test that keeps the keys it is given, with the signed tests' secret.
+fn keyed_command(sandbox: &Sandbox, routes: &str, args: &[&str]) -> Command {
+    let mut command = sandbox.command(args);
+    command
+        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("AWS_ACCESS_KEY_ID", "akiaenvironmentkey")
+        .env("AWS_SECRET_ACCESS_KEY", SECRET)
+        .env("AWS_SESSION_TOKEN", SESSION);
+    command
+}
+
+/// every file a project and the cache kept, which no secret may reach.
+fn kept_files(folder: &std::path::Path, found: &mut Vec<(String, Vec<u8>)>) -> Result {
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            kept_files(&path, found)?;
+        } else {
+            found.push((path.display().to_string(), fs::read(&path)?));
+        }
+    }
+    Ok(())
+}
+
+fn assert_no_secret(surfaces: &[(String, Vec<u8>)]) {
+    for (name, bytes) in surfaces {
+        let text = String::from_utf8_lossy(bytes);
+        for secret in [SECRET, SESSION] {
+            assert!(!text.contains(secret), "{name} holds {secret}: {text}");
+        }
+    }
+}
+
+/// a teammate's `sync --locked` of the project in the work folder, with keys in an AWS profile
+/// and a cache of their own.
+fn teammate_sync(sandbox: &Sandbox, routes: &str) -> Result<(std::path::PathBuf, Output)> {
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let credentials = sandbox.folder("aws")?.join("credentials");
+    fs::write(
+        &credentials,
+        "[lab]\naws_access_key_id = akiateammatekey\naws_secret_access_key = teammate-secret\n",
+    )?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_TEST_BUCKETS", routes)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("AWS_PROFILE", "lab")
+        .env("AWS_SHARED_CREDENTIALS_FILE", &credentials)
+        .output()?;
+    Ok((clone, output))
+}
+
+/// a private bucket the person lists: the listing is asked without a key, refused, and asked
+/// again signed; the object is signed from the start; a teammate's sync signs with a profile
+/// after one refusal; and no secret reaches a file or an output.
 #[test]
-fn a_private_bucket_is_refused_with_auth_required() -> Result {
+fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
     let sandbox = Sandbox::new()?;
-    let denied = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>";
+    let object = (
+        "/private-lab.s3.us-east-1.amazonaws.com/raw/a.csv",
+        PARTICIPANTS,
+    );
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            file(PARTICIPANTS, "\"v1\""),
+            refusal(),
+            file(PARTICIPANTS, "\"v1\""),
+        ],
+    )?;
+    let url = server.url.clone();
+    let output = keyed_command(
+        &sandbox,
+        &url,
+        &["-vv", "add", "s3://private-lab/raw/", "--as", "raw"],
+    )
+    .env("FETCHLOOM_S3_BUCKETS", "s3://private-lab")
+    .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    assert!(
+        heads[0].starts_with("get /private-lab.s3.amazonaws.com/?list-type=2&prefix=raw%2f"),
+        "{}",
+        heads[0]
+    );
+    for head in &heads[1..] {
+        let (key, region) = signed_with(head, SECRET)?;
+        assert_eq!(
+            (key.as_str(), region.as_str()),
+            ("akiaenvironmentkey", "us-east-1")
+        );
+        assert!(
+            head.contains(&format!("x-amz-security-token: {SESSION}")),
+            "{head}"
+        );
+    }
+    assert!(
+        heads[2].starts_with(&format!("get {}", object.0)),
+        "{}",
+        heads[2]
+    );
+    let work = sandbox.work();
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("url = \"https://private-lab.s3.us-east-1.amazonaws.com/raw/a.csv\""),
+        "{lock}"
+    );
+    assert!(
+        !lock.contains("md5"),
+        "a signed listing states no md5: {lock}"
+    );
+    assert_eq!(
+        fs::read(work.join("data").join("raw").join("a.csv"))?,
+        PARTICIPANTS
+    );
+    let mut surfaces = vec![
+        ("stdout".to_owned(), output.stdout),
+        ("stderr".to_owned(), output.stderr),
+    ];
+    kept_files(&work, &mut surfaces)?;
+    kept_files(&sandbox.cache(), &mut surfaces)?;
+    let (clone, synced) = teammate_sync(&sandbox, &url)?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let heads = server.requests();
+    assert_eq!(heads.len(), 5, "{heads:?}");
+    assert!(!heads[3].contains("authorization"), "{}", heads[3]);
+    assert!(
+        heads[4].starts_with(&format!("get {} ", object.0)),
+        "{}",
+        heads[4]
+    );
+    assert_eq!(
+        signed_with(&heads[4], "teammate-secret")?.0,
+        "akiateammatekey"
+    );
+    assert_eq!(fs::read(clone.join("data/raw/a.csv"))?, PARTICIPANTS);
+    surfaces.push(("sync json".to_owned(), synced.stdout));
+    assert_no_secret(&surfaces);
+    for head in &heads {
+        assert!(
+            !head.contains(SECRET) && !head.contains("teammate-secret"),
+            "{head}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_listed_bucket_without_keys_says_which_keys_to_set() -> Result {
+    let sandbox = Sandbox::new()?;
     let routes = Routes::start(vec![(
         s3_listing("/private-lab.s3.amazonaws.com/", "", None),
-        reply(
-            "403 Forbidden",
-            &[("Content-Type", "application/xml")],
-            denied,
-        ),
+        refusal(),
     )])?;
-    let output = command(&sandbox, &routes, &["--json", "add", "s3://private-lab/"]).output()?;
+    let output = sandbox
+        .command(&["--json", "add", "s3://private-lab/"])
+        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .output()?;
     assert_eq!(output.status.code(), Some(40));
     let document = json(&output)?;
     let error = &document["errors"][0];
     assert_eq!(error["kind"], "auth.required", "{document}");
     assert_eq!(
         error["message"],
-        "s3://private-lab/ is not a public bucket: S3 refused to list it"
+        "s3://private-lab/ is private: S3 refused to list it without a key, and no AWS keys were found"
     );
-    assert!(
-        error["help"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("reads public buckets only"),
-        "{document}"
+    assert_eq!(
+        error["help"],
+        "set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_PROFILE to a profile in ~/.aws/credentials"
+    );
+    assert_eq!(routes.targets().len(), 1);
+    assert_anonymous(&routes);
+    Ok(())
+}
+
+#[test]
+fn a_bucket_nobody_listed_never_gets_a_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(
+        s3_listing("/private-lab.s3.amazonaws.com/", "", None),
+        refusal(),
+    )])?;
+    let output = command(&sandbox, &routes, &["--json", "add", "s3://private-lab/"])
+        .env("FETCHLOOM_S3_BUCKETS", "s3://another-lab")
+        .output()?;
+    assert_eq!(output.status.code(), Some(40));
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "auth.required", "{document}");
+    assert_eq!(
+        error["message"],
+        "s3://private-lab/ is private: S3 refused to list it without a key"
+    );
+    assert_eq!(
+        error["help"],
+        "if you trust s3://private-lab with your AWS keys, add it to s3_buckets in the settings file or FETCHLOOM_S3_BUCKETS"
     );
     assert!(!sandbox.work().join("data.toml").exists());
+    assert_eq!(routes.targets().len(), 1);
     assert_anonymous(&routes);
+    Ok(())
+}
+
+/// a cloned data.toml naming a bucket at a server on this machine reaches it only as an allowed
+/// origin, and never with a key unless the person lists the bucket and their AWS settings send
+/// keys to that server.
+#[test]
+fn a_cloned_project_cannot_aim_keys_at_a_server_of_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![(s3_listing("/scans/", "raw/", None), refusal())])?;
+    let reference = format!("s3:{}/scans/raw/", routes.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.raw]\nref = \"{reference}\"\n"),
+    )?;
+    let run = |listed: &str| {
+        command(&sandbox, &routes, &["--json", "sync"])
+            .env("FETCHLOOM_S3_BUCKETS", listed)
+            .output()
+    };
+    let refused = run("")?;
+    assert_eq!(
+        refused.status.code(),
+        Some(20),
+        "{}",
+        text(&refused.stdout)?
+    );
+    assert_eq!(json(&refused)?["errors"][0]["kind"], "network.refused");
+    assert_eq!(routes.targets().len(), 0);
+    sandbox.allow(&routes.url);
+    let unlisted = json(&run("")?)?;
+    assert_eq!(unlisted["errors"][0]["kind"], "auth.required", "{unlisted}");
+    assert_eq!(
+        unlisted["errors"][0]["message"],
+        format!(
+            "{reference} is private: {} refused to list it without a key",
+            routes.url.trim_start_matches("http://")
+        )
+    );
+    let unbound = json(&run(&format!("s3:{}/scans", routes.url))?)?;
+    assert_eq!(
+        unbound["errors"][0]["message"],
+        format!(
+            "{reference} is private: {} refused to list it without a key, and no AWS settings send keys to {}",
+            routes.url.trim_start_matches("http://"),
+            routes.url
+        ),
+        "{unbound}"
+    );
+    assert_eq!(routes.targets().len(), 2);
+    assert_anonymous(&routes);
+    Ok(())
+}
+
+/// a bucket at another service, typed on the command line, may be on this machine, and takes
+/// the keys of the AWS profile whose `endpoint_url` names it.
+#[test]
+fn an_endpoint_bucket_signs_with_the_profile_that_names_its_endpoint() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            refusal(),
+            s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
+            file(PARTICIPANTS, "\"v1\""),
+        ],
+    )?;
+    let endpoint = server.url.trim_end_matches('/').to_owned();
+    let folder = sandbox.folder("aws")?;
+    fs::write(
+        folder.join("config"),
+        format!("[profile lab]\nendpoint_url = {endpoint}\nregion = lab-1\n"),
+    )?;
+    fs::write(
+        folder.join("credentials"),
+        "[default]\naws_access_key_id = akiaawskey\naws_secret_access_key = aws-secret\n[lab]\naws_access_key_id = akialabkey\naws_secret_access_key = lab-secret\n",
+    )?;
+    let reference = format!("s3:{endpoint}/scans/raw/");
+    let output = sandbox
+        .command(&["add", &reference, "--as", "raw"])
+        .env("FETCHLOOM_S3_BUCKETS", format!("s3:{endpoint}/scans"))
+        .env("AWS_CONFIG_FILE", folder.join("config"))
+        .env("AWS_SHARED_CREDENTIALS_FILE", folder.join("credentials"))
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    assert!(
+        heads[0].starts_with("get /scans/?list-type=2&prefix=raw%2f"),
+        "{}",
+        heads[0]
+    );
+    for head in &heads[1..] {
+        assert_eq!(
+            signed_with(head, "lab-secret")?,
+            ("akialabkey".to_owned(), "lab-1".to_owned())
+        );
+    }
+    let work = sandbox.work();
+    assert!(
+        fs::read_to_string(work.join("data.toml"))?.contains(&format!("ref = \"{reference}\"")),
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!("url = \"{endpoint}/scans/raw/a.csv\"")),
+        "{lock}"
+    );
+    assert!(!lock.contains("md5"), "{lock}");
+    assert_eq!(fs::read(work.join("data/raw/a.csv"))?, PARTICIPANTS);
     Ok(())
 }
 

@@ -26,6 +26,8 @@ use std::path::PathBuf;
 use tracing::Instrument as _;
 use url::Url;
 
+pub(crate) use bucket::{Bucket, Keyed, Signing};
+
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
@@ -267,6 +269,7 @@ impl Reference {
         match self {
             Reference::Url(url) => url.host_str().map(str::to_owned),
             Reference::Dataverse(dataset) => Some(dataset.host_name().to_owned()),
+            Reference::Bucket(prefix) => prefix.written_host(),
             _ => None,
         }
     }
@@ -1066,6 +1069,7 @@ mod tests {
                 url: url.clone(),
                 next: None,
                 region: None,
+                keyed: None,
                 body: b"not json".to_vec(),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

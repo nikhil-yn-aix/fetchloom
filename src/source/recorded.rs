@@ -26,6 +26,7 @@ impl Recorded {
             url: parsed.clone(),
             next: None,
             region: None,
+            keyed: None,
             body: body.into(),
         };
         self.answers.insert(parsed.to_string(), response);
@@ -40,6 +41,17 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before its region"));
         answer.region = Some(region.to_owned());
+        self
+    }
+
+    /// says how the request for `url` went out to its S3 bucket, signed or not.
+    pub(crate) fn keyed(mut self, url: &str, keyed: crate::source::Keyed) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before how it went out"));
+        answer.keyed = Some(keyed);
         self
     }
 

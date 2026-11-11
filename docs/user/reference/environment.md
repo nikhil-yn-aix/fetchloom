@@ -8,7 +8,7 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings, and the allowed origins, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings, the allowed origins and the S3 buckets your keys may sign for, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 | variable | effect |
 |---|---|
@@ -25,6 +25,7 @@ $env:FETCHLOOM_RATE = '2.5M'
 | `FETCHLOOM_ARCHIVE_SIZE` | a size such as `16T`, with the units of `FETCHLOOM_RATE`; the most bytes one archive may unpack to. unset or empty means 16 TiB |
 | `FETCHLOOM_ARCHIVE_RATIO` | integer from 1 to 1,000,000,000; the most bytes one archive may unpack to for each compressed byte read, counted once 4 MiB are out. unset or empty means 1000, which nearly all zip data stays under while compression bombs pass it. these three guard against archives built to fill a disk, so only this environment and the settings file move them, never `data.toml`. an archive past one stops with `source.invalid`, exit 10, naming it |
 | `FETCHLOOM_ALLOWED_ORIGINS` | origins on this machine or its network that a host written in data.toml, data.lock or a `get -i` list may reach, separated by commas, such as `http://lab.local:8080,http://10.0.0.5:9000`. each is a scheme, a host and a port when it is not the usual one, without a path; another port or scheme on that host stays refused. unset or empty allows none. such a host on a private, loopback or link-local address is otherwise refused with `network.refused`, exit 20, before any request, since a cloned project could point it at your network; a link typed on the command line may reach one for that run |
+| `FETCHLOOM_S3_BUCKETS` | the private S3 buckets your [AWS keys](#aws-keys) may sign requests for, separated by commas: `s3://<bucket>`, or the bare name, for a bucket on AWS, and `s3:https://<host>[:<port>]/<bucket>` for one at another service that speaks S3's API, such as `s3://lab-raw,s3:https://minio.lab.example:9000/scans`. unset or empty signs for none. a request for a listed bucket goes without a key first and is signed once S3 refuses it; a bucket not listed never gets a key, whatever data.toml names. see [private S3 buckets](../sources/buckets.md#private-s3-buckets) |
 | `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
@@ -77,9 +78,10 @@ timeout = 120
 ask_above = "50G"
 memory = "8G"
 allowed_origins = ["http://lab.local:8080"]
+s3_buckets = ["s3://lab-raw"]
 ```
 
-the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size`, `archive_ratio` and `allowed_origins`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes; `allowed_origins` also takes a list of text. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
+the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size`, `archive_ratio`, `allowed_origins` and `s3_buckets`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes; `allowed_origins` and `s3_buckets` also take a list of text. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
 
 each value comes from the first of these that sets it: its variable, the settings file, this machine, fetchloom's default. so `FETCHLOOM_JOBS=4 fetchloom sync` changes one run without editing the file. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from. the other variables on this page have no key in the file.
 
@@ -102,4 +104,20 @@ fetchloom reads each source's key where the source's own tools keep it, so a key
 
 a key goes over https only, to its own host on port 443, and never after a redirect leaves that host. a dataverse key saved for an installation on another port, as `--host dv.example.edu:8443`, goes to that port only. a `.netrc` login also answers on later hops to its own host, as curl sends it, and an osf key also reaches `osf.io` and `files.osf.io`, where osf's downloads go. no key appears in `data.toml`, `data.lock`, logs or `--json` output. recognized credential fields in URL queries and fragments are masked in output and refused in project references. a key holding a character no header can carry, such as a line break, is left out of every request; [`fetchloom auth`](../commands/auth.md#status) warns about it.
 
-AWS and google cloud credentials, such as `AWS_ACCESS_KEY_ID`, `~/.aws` and `GOOGLE_APPLICATION_CREDENTIALS`, are not read. [public buckets](../sources/buckets.md) are listed and downloaded anonymously.
+### AWS keys
+
+AWS keys sign requests only for the S3 buckets `s3_buckets` lists, and only after S3 refused a request without a key; [private S3 buckets](../sources/buckets.md#private-s3-buckets) explains the order. they are read where the AWS tools keep them:
+
+| variable | effect |
+|---|---|
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | a key and its secret, which come before any profile; one without the other fails with `auth.required` |
+| `AWS_SESSION_TOKEN` | the session of temporary keys, sent with them |
+| `AWS_PROFILE` | the profile to read, `default` when unset; one neither file has fails with `usage` |
+| `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE` | the credentials and config files, `~/.aws/credentials` and `~/.aws/config` when unset |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | the region to sign for when neither the host nor S3 names one, before the profile's `region` |
+| `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` | the S3-compatible service the keys above sign for, instead of AWS; a profile's `endpoint_url` does the same |
+| `AWS_IGNORE_CONFIGURED_ENDPOINT_URLS` | `true` ignores the endpoint settings |
+
+a profile that gets its keys by a role, IAM identity center, a web identity token or `credential_process` is refused; the help names the `aws configure export-credentials` command that puts its keys in the environment instead. the secret itself is never sent, and no key appears in `data.toml`, `data.lock`, logs or `--json` output.
+
+google cloud credentials, such as `GOOGLE_APPLICATION_CREDENTIALS`, are not read; [cloud storage buckets](../sources/buckets.md) are listed and downloaded anonymously.

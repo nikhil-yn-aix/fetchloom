@@ -161,6 +161,23 @@ fn rows(context: &Context) -> Vec<Shown> {
         origin: settings.allowed_origins.origin,
         variable: crate::settings::variable("allowed_origins"),
     });
+    let buckets: Vec<String> = settings
+        .s3_buckets
+        .value
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    shown.push(Shown {
+        name: "s3_buckets",
+        said: if buckets.is_empty() {
+            "none".to_owned()
+        } else {
+            buckets.join(", ")
+        },
+        value: json!(buckets),
+        origin: settings.s3_buckets.origin,
+        variable: crate::settings::variable("s3_buckets"),
+    });
     shown.extend(variables(context));
     shown
 }
