@@ -46,8 +46,7 @@ pub(crate) struct Usage {
     /// of `copies`, the files placed as hardlinks, whose link a copy of the project broke.
     pub(crate) unlinked_copies: u64,
     /// of `copies`, the clones, which share their blocks with the cache's copy until either
-    /// changes.
-    #[serde(skip)]
+    /// changes, so `copies - cloned` is what takes room twice.
     pub(crate) cloned: u64,
     /// how many projects hold copies.
     #[serde(skip)]
@@ -336,13 +335,35 @@ mod tests {
             &[
                 ("data/set/held.csv", Method::Copy, b"held here\n", false),
                 ("data/set/gone.csv", Method::Copy, b"gone\n", false),
-                ("data/set/cloned.csv", Method::Reflink, b"cloned\n", false),
             ],
-            &[b"held here\n", b"cloned\n"],
+            &[b"held here\n"],
         );
-        assert_eq!(usage.copies, 10 + 7);
-        assert_eq!(usage.cloned, 7);
+        assert_eq!(usage.copies, 10);
         assert_eq!(usage.unlinked_copies, 0);
+    }
+
+    /// a clone shares its blocks with the cache's copy, so json tells it apart from a copy that
+    /// takes room twice.
+    #[test]
+    fn a_clone_counts_in_copies_and_in_cloned() {
+        let (_folder, usage) = report(
+            &[("data/set/cloned.csv", Method::Reflink, b"cloned\n", false)],
+            &[b"cloned\n"],
+        );
+        let result = serde_json::to_value(&usage).unwrap();
+        assert_eq!(result["copies"], 7, "{result}");
+        assert_eq!(result["cloned"], 7, "{result}");
+    }
+
+    #[test]
+    fn a_plain_copy_counts_only_in_copies() {
+        let (_folder, usage) = report(
+            &[("data/set/copied.csv", Method::Copy, b"copied\n", false)],
+            &[b"copied\n"],
+        );
+        let result = serde_json::to_value(&usage).unwrap();
+        assert_eq!(result["copies"], 7, "{result}");
+        assert_eq!(result["cloned"], 0, "{result}");
     }
 
     #[test]

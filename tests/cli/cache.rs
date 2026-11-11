@@ -214,6 +214,8 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     } else {
         (0, IRIS.len() + PENGUINS.len())
     };
+    // where the drive clones, every file of its own is a clone
+    let cloned = if links.reflink { copies } else { 0 };
     let report = json(&sandbox.run(&["--json", "cache"])?)?;
     let result = &report["result"];
     assert_eq!(result["needed"], IRIS.len() + PENGUINS.len(), "{report}");
@@ -221,6 +223,7 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     assert_eq!(result["unneeded"], WINE.len() + NOTES.len(), "{report}");
     assert_eq!(result["freeable"], 0, "{report}");
     assert_eq!(result["copies"], copies, "{report}");
+    assert_eq!(result["cloned"], cloned, "{report}");
     assert_eq!(result["unlinked_copies"], 0, "{report}");
     assert_eq!(result["inputs_only"], serde_json::Value::Null, "{report}");
     let story = text(&sandbox.run(&["cache"])?.stderr)?;
