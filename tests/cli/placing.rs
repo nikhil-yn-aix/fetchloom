@@ -1620,7 +1620,7 @@ fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     for line in [
         "      Extra data/penguins/notes.txt\n",
         "      Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
-        "  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n",
+        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n",
     ] {
         assert!(told.contains(line), "{line:?} in\n{told}");
     }
@@ -2671,8 +2671,9 @@ fn sync_fetches_nothing_for_a_pinned_unplaced_dataset() -> Result {
     Ok(())
 }
 
-/// status tells a dataset with `place = false` apart from a difference, and lists what sync
-/// placed of it before as a file the next sync removes, until a sync retires it.
+/// status tells a dataset with `place = false` apart from a difference. until a sync retires what
+/// sync placed of it before, its line says the sync removes those files, apart from notes of the
+/// person's own, which sync keeps, and the hint says what the sync does.
 #[test]
 fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2680,17 +2681,24 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
     let added = sandbox.run(&["add", "../flowers"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let notes = sandbox
+        .work()
+        .join("data")
+        .join("flowers")
+        .join("notes.txt");
+    fs::write(&notes, b"mine\n")?;
     unplace(&sandbox, "flowers")?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let told = text(&output.stderr)?;
     for line in [
-        " Not placed flowers · place = false in data.toml\n",
-        "      Extra data/flowers/petals.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
-        "hint: `fetchloom sync` places missing or updated files",
+        " Not placed flowers · place = false in data.toml, so `fetchloom sync` removes its file from data/flowers\n",
+        "      Extra data/flowers/notes.txt\n",
+        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n",
     ] {
         assert!(told.contains(line), "{line:?} in\n{told}");
     }
+    assert!(!told.contains("petals.csv"), "{told}");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
         document["result"]["unplaced"],
@@ -2698,6 +2706,8 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     );
     let synced = sandbox.run(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(&notes)?, b"mine\n");
+    fs::remove_file(&notes)?;
     let told = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(
         told.contains(" Not placed flowers · place = false in data.toml\n"),

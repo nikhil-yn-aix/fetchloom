@@ -110,6 +110,10 @@ pub(super) struct Status {
     /// build takes into the cache from the data folder when it lacks them.
     #[serde(skip)]
     holding: HashSet<Sha256>,
+    /// of `unneeded`, the files of each dataset of `unplaced`, which an earlier sync placed and the
+    /// next one retires, told in its line rather than one by one, with its folder.
+    #[serde(skip)]
+    retiring: BTreeMap<String, (String, Vec<String>)>,
 }
 
 /// the rebuild a build kept of a recipe, files that differ from what data.lock pins for the
@@ -154,9 +158,17 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
                 super::project::UNPINNED
             ));
         } else if status.needs_sync() {
-            output.hint(
-                "`fetchloom sync` places missing or updated files and reports any conflicts it keeps",
-            );
+            output.hint(match (status.places(), status.unneeded.is_empty()) {
+                (false, false) => {
+                    "`fetchloom sync` removes the files fetchloom placed that no dataset needs now"
+                }
+                (true, false) => {
+                    "`fetchloom sync` places missing or updated files, removes those no dataset needs now and reports any conflicts it keeps"
+                }
+                (_, true) => {
+                    "`fetchloom sync` places missing or updated files and reports any conflicts it keeps"
+                }
+            });
         }
         if !status.hashed_only.is_empty() {
             output.hint(
@@ -361,6 +373,18 @@ fn check(
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned);
+    for path in &status.unneeded {
+        if let Some(placed) = survey.state.files.get(path)
+            && status.unplaced.contains(&placed.dataset)
+        {
+            let folder = || plan::folder(&manifest, &placed.dataset);
+            let (_, paths) = status
+                .retiring
+                .entry(placed.dataset.clone())
+                .or_insert_with(|| (folder(), Vec::new()));
+            paths.push(path.clone());
+        }
+    }
     unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
     status.unreached = plan::unreached(&manifest, &planned.targets);
     let listed: HashSet<&String> = status.damaged.iter().collect();
@@ -681,8 +705,12 @@ impl Status {
     }
 
     fn needs_sync(&self) -> bool {
-        !self.unneeded.is_empty()
-            || !self.removed.is_empty()
+        !self.unneeded.is_empty() || self.places()
+    }
+
+    /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
+    fn places(&self) -> bool {
+        !self.removed.is_empty()
             || self
                 .unlocked
                 .iter()
@@ -699,15 +727,37 @@ impl Status {
     }
 }
 
-/// a line for each difference, at most `SHOWN` of each kind, after a faint line for each
-/// dataset with `place = false`, which is no difference.
-fn list(output: &Output, status: &Status) {
+/// a line for each dataset with `place = false`: faint, as no difference, once no file an earlier
+/// sync placed of it is left, and saying the next sync removes them while some are.
+fn tell_unplaced(output: &Output, status: &Status) {
     for name in &status.unplaced {
-        output.faint_step(
+        let Some((folder, paths)) = status.retiring.get(name) else {
+            output.faint_step(
+                "Not placed",
+                &format!("{name} · place = false in data.toml"),
+            );
+            continue;
+        };
+        let files = match paths.len() {
+            1 => "its file".to_owned(),
+            count => format!("its {count} files"),
+        };
+        output.mark(
             "Not placed",
-            &format!("{name} · place = false in data.toml"),
+            &format!(
+                "{name} · place = false in data.toml, so `fetchloom sync` removes {files} from {folder}"
+            ),
         );
+        for path in paths {
+            output.detail(path);
+        }
     }
+}
+
+/// a line for each difference, at most `SHOWN` of each kind, after the lines of the datasets with
+/// `place = false`.
+fn list(output: &Output, status: &Status) {
+    tell_unplaced(output, status);
     let unpinned = if status.lockless {
         "data.lock does not exist"
     } else {
@@ -726,8 +776,17 @@ fn list(output: &Output, status: &Status) {
     for kept in &status.candidates {
         tell_kept(output, kept);
     }
+    let retiring: HashSet<&String> = status
+        .retiring
+        .values()
+        .flat_map(|(_, paths)| paths)
+        .collect();
     for (verb, paths, said) in status.lists() {
-        for path in paths.iter().take(SHOWN) {
+        let paths: Vec<&String> = paths
+            .iter()
+            .filter(|path| !retiring.contains(path))
+            .collect();
+        for path in paths.iter().copied().take(SHOWN) {
             if let Some(said) = said {
                 output.mark(verb, &format!("{path} · {said}"));
             } else if status.shared.contains(path) {
