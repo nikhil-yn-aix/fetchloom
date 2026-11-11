@@ -132,6 +132,10 @@ impl Sandbox {
                 r"warning: the drive holding \S+ cannot link files, so files were copied\n",
                 "",
             );
+            settings.add_filter(
+                r"(Placed \S+ · \d+ files?) copied, \d+ B",
+                "${1} linked to the cache",
+            );
         }
         Ok(settings)
     }
