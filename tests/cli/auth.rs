@@ -4,7 +4,7 @@
 use std::io::Write as _;
 use std::process::{Command, Output, Stdio};
 
-use crate::support::{Result, Routes, Sandbox, Server, json, reply, text};
+use crate::support::{Result, Routes, Sandbox, Server, json, reply, text, workspace};
 
 /// runs `command` with `input` on stdin.
 fn with_stdin(mut command: Command, input: &str) -> Result<Output> {
@@ -383,9 +383,7 @@ const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags";
 /// dataset before its terms are accepted, and to a model link whose name a dataset has.
 fn hub() -> Result<Routes> {
     let answer = |status: &str, fixture: &str| -> Result<_> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/sources/hf")
-            .join(fixture);
+        let path = workspace().join("tests/fixtures/sources/hf").join(fixture);
         let body = std::fs::read(path)?;
         let length = body.len().to_string();
         let head = [
