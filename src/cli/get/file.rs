@@ -335,7 +335,7 @@ fn decided_early(
             let got = got(destination, remote, digest, size, Origin::Cache, None);
             Ok(Early::Kept(kept(context, wanted, destination, got)))
         }
-        Step::Refuse => Err(refused(&destination.shown, &found, wanted)),
+        Step::Refuse => Err(refused(&destination.shown, &found, wanted, &digest)),
         Step::Write | Step::Replace => Ok(Early::Download(Known {
             found: Some(found),
             held: None,
@@ -445,7 +445,12 @@ fn settle(
         )
     };
     if step == Step::Refuse {
-        return Err(refused(&destination.shown, &found, Wanted::Served));
+        return Err(refused(
+            &destination.shown,
+            &found,
+            Wanted::Served,
+            &fetched.digest,
+        ));
     }
     if step == Step::Keep {
         if one_off(context, cache, &fetched.digest) {
@@ -589,7 +594,24 @@ fn kept(context: &Context, wanted: Wanted, destination: &Destination, got: Got) 
     written(destination, got)
 }
 
-fn refused(shown: &str, existing: &Existing, wanted: Wanted) -> Error {
+/// refuses the file at the path, which holds other bytes than `wanted` says, `digest`, or no
+/// file fetchloom can read.
+fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) -> Error {
+    if let (Wanted::Named, Existing::Holds(found)) = (wanted, existing) {
+        // a person typed the hash, so it is as likely to be wrong as the file
+        return Error::new(
+            Kind::LocalNotEmpty,
+            format!(
+                "{shown} already exists, and its bytes are not the ones --sha256 names: the hash or the file may be wrong"
+            ),
+        )
+        .detail(format!(
+            "--sha256 names {}, {shown} holds {}",
+            digest.hex(),
+            found.hex()
+        ))
+        .help("check the hash first. if it is right, choose another name with -o, or add --force to replace the file");
+    }
     let what = match existing {
         Existing::Other => "is no file fetchloom can read".to_owned(),
         Existing::Missing | Existing::Holds(_) => {

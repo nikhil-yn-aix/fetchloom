@@ -149,7 +149,7 @@ a list always runs as several links, even when it holds one, so `--dir` names th
 
 ## checking a hash
 
-`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the expected and received hashes, each cut to its first 12 digits, or to just past the first digit where the two differ, so hashes that differ late still read apart; `--json` gives both whole.
+`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download, and so does a file already at the `-o` path that holds other bytes: its error says the hash or the file may be wrong, and shows both hashes, since a hash typed or copied by hand is as likely to be off as the file. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the expected and received hashes, each cut to its first 12 digits, or to just past the first digit where the two differ, so hashes that differ late still read apart; `--json` gives both whole.
 
 ## existing folders
 
@@ -178,3 +178,4 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
 | `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
 | `data.csv already exists and holds other bytes than the link serves now` | `-o` never replaces a file without being asked | choose another name with `-o`, or add `--force` |
+| `data.csv already exists, and its bytes are not the ones --sha256 names` | the hash or the file is not the one you meant | check the hash; if it is right, choose another name with `-o`, or add `--force` |

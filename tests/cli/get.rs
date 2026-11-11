@@ -336,6 +336,45 @@ fn output_with_a_known_sha256_decides_about_a_file_there_before_any_request() ->
     Ok(())
 }
 
+/// a hash that names other bytes than the file already there says the two disagree, since
+/// either may be wrong, and leads with checking the hash rather than with `--force`.
+#[test]
+fn output_with_another_sha256_than_its_file_says_either_may_be_wrong() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    fs::write(sandbox.work().join("data.csv"), IRIS)?;
+    let wrong = "0".repeat(64);
+    let output = sandbox.run(&[
+        "--json",
+        "get",
+        &server.url,
+        "-o",
+        "data.csv",
+        "--sha256",
+        &wrong,
+    ])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "data.csv already exists, and its bytes are not the ones --sha256 names: the hash or the file may be wrong"
+    );
+    assert_eq!(
+        error["details"][0],
+        format!("--sha256 names {wrong}, data.csv holds {IRIS_SHA256}")
+    );
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.starts_with("check the hash")),
+        "{error}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    assert_eq!(server.requests(), Vec::<String>::new());
+    Ok(())
+}
+
 /// a rerun in a notebook finds its file where the last run put it, holding what the link serves,
 /// and leaves it as it is.
 #[test]
