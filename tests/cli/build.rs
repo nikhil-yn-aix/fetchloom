@@ -1659,6 +1659,48 @@ fn prepare_fetches_inputs_so_an_offline_build_makes_no_requests() -> Result {
     Ok(())
 }
 
+/// a build of a step data.lock pins, whose result the cache holds, reads nothing, so `--prepare`
+/// fetches nothing for it, while a check runs every step, so `--prepare --check` fetches what it
+/// reads, and a check without the network then makes no request.
+#[test]
+fn prepare_check_fetches_what_a_check_reads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    crate::support::delete(&object(&sandbox, IRIS))?;
+    let prepared = build(&sandbox, &["--json", "build", "--prepare"])?;
+    assert_eq!(
+        prepared.status.code(),
+        Some(0),
+        "{}",
+        text(&prepared.stdout)?
+    );
+    assert_eq!(
+        json(&prepared)?["result"]["steps"][0]["action"],
+        "up_to_date"
+    );
+    assert_eq!(server.requests().len(), 1, "a build of clean reads nothing");
+    let prepared = build(&sandbox, &["--json", "build", "--prepare", "--check"])?;
+    assert_eq!(
+        prepared.status.code(),
+        Some(0),
+        "{}",
+        text(&prepared.stdout)?
+    );
+    assert_eq!(json(&prepared)?["result"]["steps"][0]["action"], "prepared");
+    assert_eq!(server.requests().len(), 2, "a check of clean reads iris");
+    let checked = build(&sandbox, &["--json", "--offline", "build", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stdout)?);
+    assert_eq!(json(&checked)?["work"]["requests"], 0);
+    assert_eq!(
+        runs(&sandbox.work())?,
+        2,
+        "only the build and the check ran"
+    );
+    Ok(())
+}
+
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
 /// `--accept` refuses it and changes nothing.
 #[test]
