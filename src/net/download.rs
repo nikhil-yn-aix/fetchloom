@@ -162,6 +162,9 @@ pub(crate) enum Event {
     WebPage {
         name: Option<String>,
     },
+    /// the server compressed the bytes on their way, as `Content-Encoding` names, lowercased.
+    /// fetchloom keeps them as sent, since a hash published for the file matches those.
+    Encoded(String),
     Bytes(u64),
 }
 
@@ -323,7 +326,7 @@ impl Reach {
                 self.held.fetch_add(*bytes, Ordering::Relaxed);
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
-            Event::Waiting | Event::Kept(_) | Event::WebPage { .. } => {}
+            Event::Waiting | Event::Kept(_) | Event::WebPage { .. } | Event::Encoded(_) => {}
         }
     }
 
@@ -1108,6 +1111,9 @@ fn describe_response(
     }
     if headers::is_html(response.headers()) {
         on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
+    }
+    if let Some(encoding) = headers::encoding(response.headers()) {
+        on(Event::Encoded(encoding)).map_err(Failure::Final)?;
     }
     Ok(name)
 }

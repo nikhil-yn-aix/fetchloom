@@ -418,6 +418,47 @@ fn a_folder_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     Ok(())
 }
 
+/// a server that compresses a file on its way, as `Content-Encoding: gzip` says, leaves gzip
+/// bytes under the file's own name: they are kept as sent, which a published hash matches, and a
+/// warning says so once. a name that says gzip already needs no warning.
+#[test]
+fn bytes_a_server_compressed_on_their_way_are_kept_with_a_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let sent = b"\x1f\x8b\x08\x00 gzip as the server sent it";
+    let compressed = || {
+        reply(
+            "200 OK",
+            &[
+                ("Content-Length", &sent.len().to_string()),
+                ("Content-Encoding", "gzip"),
+            ],
+            sent,
+        )
+    };
+    for (path, warned) in [("/iris.csv", true), ("/iris.csv.gz", false)] {
+        let server = Server::start(path, vec![compressed()])?;
+        let output = sandbox.run(&["get", &server.url, "-o", "kept"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert_eq!(fs::read(sandbox.work().join("kept"))?, sent, "{path}");
+        assert_eq!(
+            stderr.matches("warning:").count(),
+            usize::from(warned),
+            "{stderr}"
+        );
+        if warned {
+            assert!(
+                stderr.contains(
+                    "warning: iris.csv came compressed with gzip, as the server sent it with Content-Encoding: gzip, and fetchloom keeps the bytes as sent\n  help: decompress it with `gzip -dc`, or read it as gzip, as pandas does with compression=\"gzip\""
+                ),
+                "{stderr}"
+            );
+        }
+        fs::remove_file(sandbox.work().join("kept"))?;
+    }
+    Ok(())
+}
+
 /// offline, the bytes a link served last time stand for what it serves, so a notebook run again
 /// without a network keeps its file.
 #[test]

@@ -91,6 +91,7 @@ fetchloom places nothing it cannot check, so the clone stays without the file. t
 | plain-word add or get refuses to guess | no interactive dataset choice is possible | choose a returned canonical id; `--yes` never selects one |
 | an option is rejected before a command | command-specific options belong after that command | use `fetchloom add --as flowers zenodo:3608990`, not `fetchloom --as flowers add zenodo:3608990` |
 | a download warns that it is a web page | the URL may name a page rather than data | find the source's download or raw link |
+| a download warns that it came compressed with gzip | the server compressed the file on its way, with `Content-Encoding`, and fetchloom keeps the bytes as sent, which is what a published SHA-256 matches | decompress it with `gzip -dc`, or read it as gzip, as pandas does with `compression="gzip"` |
 
 to make iris writable, edit its existing entry in `data.toml` and sync:
 

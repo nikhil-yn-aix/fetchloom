@@ -39,6 +39,17 @@ pub(super) fn is_html(headers: &HeaderMap) -> bool {
         })
 }
 
+/// how the server compressed the body on its way, lowercased, unless it says it did not.
+pub(super) fn encoding(headers: &HeaderMap) -> Option<String> {
+    let value = headers
+        .get(header::CONTENT_ENCODING)?
+        .to_str()
+        .ok()?
+        .trim()
+        .to_ascii_lowercase();
+    (!value.is_empty() && value != "identity").then_some(value)
+}
+
 /// a strong `ETag`, else a modification date whose saved response clock is a minute later.
 /// RFC 9110 section 13.1.5 allows no weak date; the minute allows for clock uncertainty.
 pub(super) fn if_range(validators: &Validators) -> Option<&str> {

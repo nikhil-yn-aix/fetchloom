@@ -234,6 +234,8 @@ struct Watch<'a> {
     counted: AtomicU64,
     /// plain lines while another fetchloom downloads the file, where no bar says so.
     waiting: std::sync::Mutex<Option<Ticker>>,
+    /// whether the warning about bytes the server compressed on their way was told.
+    encoded: AtomicBool,
 }
 
 impl<'a> Watch<'a> {
@@ -258,6 +260,7 @@ impl<'a> Watch<'a> {
             position,
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
+            encoded: AtomicBool::new(false),
         }
     }
 
@@ -378,6 +381,14 @@ impl<'a> Watch<'a> {
                     self.output.warn_with(&format!("{name} came back as a web page, not a data file. the link may open a page instead of downloading"), "look for a download or raw link");
                 }
             }
+            Event::Encoded(ref encoding) => {
+                if !compressed_by_name(label, encoding)
+                    && !self.encoded.swap(true, Ordering::Relaxed)
+                {
+                    let (said, help) = encoded(label, encoding);
+                    self.output.warn_with(&said, &help);
+                }
+            }
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);
                 self.count(self.position.fetch_add(bytes, Ordering::Relaxed) + bytes);
@@ -391,6 +402,36 @@ impl<'a> Watch<'a> {
         }
         Ok(())
     }
+}
+
+/// whether the name of the file at `path` already says its bytes are compressed with
+/// `encoding`, as `data.csv.gz` does for gzip, so the server's label changes nothing a reader
+/// expects.
+fn compressed_by_name(path: &str, encoding: &str) -> bool {
+    let name = path.to_ascii_lowercase();
+    let endings: &[&str] = match encoding {
+        "gzip" | "x-gzip" => &[".gz", ".tgz"],
+        "br" => &[".br"],
+        "zstd" => &[".zst", ".tzst"],
+        "compress" | "x-compress" => &[".z"],
+        "deflate" => &[".zz"],
+        _ => &[],
+    };
+    endings.iter().any(|ending| name.ends_with(ending))
+}
+
+/// the warning for the file at `path`, whose bytes the server compressed with `encoding` on
+/// their way, and what to do about it.
+fn encoded(path: &str, encoding: &str) -> (String, String) {
+    let said = format!(
+        "{path} came compressed with {encoding}, as the server sent it with Content-Encoding: {encoding}, and fetchloom keeps the bytes as sent"
+    );
+    let help = if matches!(encoding, "gzip" | "x-gzip") {
+        "decompress it with `gzip -dc`, or read it as gzip, as pandas does with compression=\"gzip\"".to_owned()
+    } else {
+        format!("decompress it with a tool for {encoding} before reading it")
+    };
+    (said, help)
 }
 
 /// downloads every job within the network's limits and returns what each fetched, in the jobs'
