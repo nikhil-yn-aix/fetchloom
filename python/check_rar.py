@@ -41,14 +41,14 @@ def check(binary, version, commit):
                     invocation = ['sh', str(script)]
                 require(len(commands) == 1, f'no unique extraction command: {warnings}')
                 script.write_text(prefix + commands[0] + suffix, encoding='utf-8')
+                print('executing:', commands[0], flush=True)
                 completed = subprocess.run(invocation, cwd=project, env=journey.env,
                                            capture_output=True, text=True, timeout=60)
                 require(completed.returncode == 0, completed.stdout + completed.stderr)
-                unpacked = project / (Path(name).stem + '-unpacked')
+                unpacked = project / 'data/sample' / (Path(name).stem + '-unpacked')
                 actual = {path.relative_to(unpacked).as_posix(): digest(path)
                           for path in unpacked.rglob('*') if path.is_file()}
-                require(actual == expected, f'printed command unpacked different bytes or layout: {actual}')
-                print('executed:', commands[0])
+                require(actual == expected, f'printed command unpacked different bytes or layout: {actual}\n{completed.stdout}{completed.stderr}')
                 cases.append({'command': commands[0], 'files': actual})
     return {'ok': True, 'version': version, 'commit': commit, 'binary_sha256': digest(binary), 'cases': cases}
 

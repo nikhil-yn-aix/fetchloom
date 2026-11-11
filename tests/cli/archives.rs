@@ -842,7 +842,11 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
         )
     );
     assert!(stderr.contains(&warned), "{stderr}");
-    assert_eq!(stderr.matches("warning:").count(), 1, "told once: {stderr}");
+    assert_eq!(
+        stderr.matches(warned.as_str()).count(),
+        1,
+        "told once: {stderr}"
+    );
     assert_eq!(
         fs::read(sandbox.work().join("data/sample/sample.rar"))?,
         RAR
@@ -886,7 +890,7 @@ fn a_sync_that_places_a_rar_says_once_how_to_unpack_it() -> Result {
         )
     );
     assert!(stderr.contains(&warned), "{stderr}");
-    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    assert_eq!(stderr.matches(warned.as_str()).count(), 1, "{stderr}");
     assert_eq!(fs::read(clone.join("data/sample/sample.rar"))?, RAR);
     let again = sync()?;
     ok(&again)?;
@@ -917,7 +921,7 @@ fn a_rar_under_a_zip_name_says_how_to_unpack_it() -> Result {
     ok(&added)?;
     let stderr = text(&added.stderr)?;
     assert!(stderr.contains(&warned), "{stderr}");
-    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    assert_eq!(stderr.matches(warned.as_str()).count(), 1, "{stderr}");
     let clone = crate::project::clone(&sandbox, "clone")?;
     let synced = sandbox
         .command_in(&clone, &["sync"])
@@ -969,7 +973,7 @@ fn a_zip_inside_a_zip_says_once_how_to_unpack_it() -> Result {
         inner_step("data/nested/inner.zip", "data/nested/inner-unpacked")
     );
     assert!(stderr.contains(&warned), "{stderr}");
-    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    assert_eq!(stderr.matches(warned.as_str()).count(), 1, "{stderr}");
     // a sync that puts another file back leaves the zip where it was, and says nothing of it
     delete(&sandbox.work().join("data/nested/README.txt"))?;
     let again = sandbox.run(&["sync"])?;

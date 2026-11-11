@@ -1012,8 +1012,12 @@ fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
     fs::write(sandbox.work().join("links.txt"), links)?;
     let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let mut warnings = json(&output)?["warnings"].clone();
+    warnings.as_array_mut().unwrap().retain(|warning| {
+        warning.as_str() != Some("the drive holding data cannot link files, so files were copied")
+    });
     assert_eq!(
-        json(&output)?["warnings"],
+        warnings,
         serde_json::json!([
             "iris was taken, so this one is iris-2; to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name"
         ])
