@@ -449,6 +449,26 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
+    /// those of `paths`, paths in the project, where applying this placing puts a file of its
+    /// own: placed, put back or replaced, never one it adopts or keeps.
+    pub(crate) fn puts<'p>(&self, paths: &HashSet<&'p str>) -> HashSet<&'p str> {
+        self.targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(_, action)| {
+                matches!(
+                    action,
+                    Action::Place
+                        | Action::Replace
+                        | Action::Overwrite(_)
+                        | Action::Unblock(_)
+                        | Action::Freed(_)
+                )
+            })
+            .filter_map(|(target, _)| paths.get(target.path.as_str()).copied())
+            .collect()
+    }
+
     /// the files already at their places with the bytes data.lock pins there, by the state or by
     /// hashing, whose bytes a file placing places or replaces needs too: where the cache can take
     /// those bytes from when it lacks them. a file of a dataset the run leaves alone is left out.

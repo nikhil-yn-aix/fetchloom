@@ -13,6 +13,7 @@ use tokio::task::JoinSet;
 use super::super::Context;
 use super::super::cache::needed_by_all;
 use super::draft::{self, Draft, Unit, Why};
+use super::place::Placing;
 use super::{Loop, job};
 use crate::archive::{self, System, Unpacked, parts};
 use crate::cache::{Cache, parts_key};
@@ -283,10 +284,54 @@ impl Loop<'_> {
         Ok(())
     }
 
+    /// the archives of `lock`'s datasets in the run that stay packed and that `placing` puts in
+    /// the data folder, each with its dataset and why.
+    pub(super) fn packed_in<'l>(
+        &self,
+        manifest: &Manifest,
+        lock: &'l Lock,
+        placing: &Placing<'_>,
+    ) -> Vec<(&'l str, &'l str, Why)> {
+        let mut packed = Vec::new();
+        for locked in lock
+            .datasets
+            .iter()
+            .filter(|locked| self.scope.includes(&locked.name))
+        {
+            let paths = locked.files.iter().map(|file| file.path.as_str());
+            for (at, why) in draft::archives(paths, locked.extract).packed {
+                packed.push((locked.name.as_str(), locked.files[at].path.as_str(), why));
+            }
+        }
+        if packed.is_empty() {
+            return packed;
+        }
+        let places: Vec<String> = packed
+            .iter()
+            .map(|(dataset, path, _)| format!("{}/{path}", plan::folder(manifest, dataset)))
+            .collect();
+        let put = placing.puts(&places.iter().map(String::as_str).collect());
+        packed
+            .into_iter()
+            .zip(&places)
+            .filter(|(_, place)| put.contains(place.as_str()))
+            .map(|(packed, _)| packed)
+            .collect()
+    }
+
     /// says that the archive at `path` in `dataset` stays packed and why, with how a person
     /// unpacks it beside the archive, inside the data folder `manifest` sets, as typed where
-    /// fetchloom runs. git ignores the data folder, so what they unpack stays out of git.
-    fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
+    /// fetchloom runs. git ignores the data folder, so what they unpack stays out of git. a run
+    /// tells each archive once.
+    pub(super) fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
+        let first = self
+            .told_packed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((dataset.to_owned(), path.to_owned()));
+        if !first {
+            return;
+        }
         let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
         let up = crate::cli::up_to(&self.project.root, &here);
         let placed = format!("{up}{}/{path}", plan::folder(manifest, dataset));

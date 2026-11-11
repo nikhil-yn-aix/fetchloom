@@ -1445,7 +1445,7 @@ async fn sync_add(
         // a stop while files are placed fails the placement, which takes back the files it
         // placed for the new dataset, so the add is undone whole. once every file is in, the
         // add is complete, and a later stop finds it so
-        let placement = work.apply(placing, synced)?;
+        let placement = work.apply(manifest, &lock, placing, synced)?;
         work.context.stop.finish();
         Ok(Outcome {
             lock_changed: written.is_some(),

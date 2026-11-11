@@ -761,6 +761,7 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
         )
     );
     assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(stderr.matches("warning:").count(), 1, "told once: {stderr}");
     assert_eq!(
         fs::read(sandbox.work().join("data/sample/sample.rar"))?,
         RAR
@@ -770,6 +771,46 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
     fs::write(unpacked.join("clip.avi"), b"frames")?;
     ok(&sandbox.run(&["sync"])?)?;
     assert_eq!(fs::read(unpacked.join("clip.avi"))?, b"frames");
+    Ok(())
+}
+
+/// a teammate's clone gets the rar packed too, so its first sync says how to unpack it, and a
+/// later sync, with the rar in place, says nothing more.
+#[test]
+fn a_sync_that_places_a_rar_says_once_how_to_unpack_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/sample.rar",
+        vec![file(RAR, "\"r1\""), file(RAR, "\"r1\"")],
+    )?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let cold = sandbox.folder("cold")?;
+    let sync = || {
+        sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cold)
+            .output()
+    };
+    let first = sync()?;
+    ok(&first)?;
+    let stderr = text(&first.stderr)?;
+    let warned = format!(
+        "warning: sample/sample.rar stays packed, since fetchloom does not unpack rar\n  help: {}\n",
+        next_step_into(
+            "data/sample/sample.rar",
+            "data/sample/sample-unpacked",
+            "extract = false"
+        )
+    );
+    assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    assert_eq!(fs::read(clone.join("data/sample/sample.rar"))?, RAR);
+    let again = sync()?;
+    ok(&again)?;
+    let stderr = text(&again.stderr)?;
+    assert!(!stderr.contains("warning:"), "{stderr}");
     Ok(())
 }
 

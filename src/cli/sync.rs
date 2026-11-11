@@ -101,6 +101,8 @@ pub(super) struct Loop<'a> {
     pub(super) cache: Cache,
     /// archives this run unpacked, whose own bytes the cache may drop once their files are in.
     unpacked: Mutex<Vec<Sha256>>,
+    /// the archives this run said stay packed, by dataset and path, so each is told once.
+    told_packed: Mutex<HashSet<(String, String)>>,
     /// the dataset the command's last line tells about, so its lock and placement lines stay out.
     told: Option<String>,
     /// the datasets this run works on.
@@ -129,6 +131,7 @@ impl<'a> Loop<'a> {
             net,
             cache,
             unpacked: Mutex::default(),
+            told_packed: Mutex::default(),
             told: None,
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
@@ -173,7 +176,7 @@ impl<'a> Loop<'a> {
             .prepare(manifest, lock, plan, force, survey)
             .await
             .map_err(|error| self.before_placing(error))?;
-        self.apply(placing, synced)
+        self.apply(manifest, lock, placing, synced)
     }
 
     /// puts in the cache every byte placing `plan` needs, downloading and unpacking what it
@@ -365,20 +368,29 @@ impl<'a> Loop<'a> {
         self.unpack_locked(manifest, &sources, &unpacking).await
     }
 
-    /// places what [`Loop::prepare`] readied, and records `synced` in the state.
+    /// places what [`Loop::prepare`] readied for `lock`, records `synced` in the state, and says
+    /// how to unpack each archive it put in the data folder packed, as a clone's first sync puts
+    /// a rar there.
     pub(super) fn apply(
         &self,
+        manifest: &Manifest,
+        lock: &Lock,
         placing: Placing<'_>,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
-        placing.apply(
+        let packed = self.packed_in(manifest, lock, &placing);
+        let placement = placing.apply(
             &self.context.output,
             &self.context.work,
             &self.cache,
             synced,
             self.told.as_deref(),
             &self.context.stop,
-        )
+        )?;
+        for (dataset, path, why) in packed {
+            self.tell_packed(manifest, dataset, path, &why);
+        }
+        Ok(placement)
     }
 
     /// the lock data.toml asks for, beside data.lock as it was. datasets of the run's scope
