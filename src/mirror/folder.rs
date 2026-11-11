@@ -1046,8 +1046,12 @@ pub(crate) mod tests {
             Between::Kill => return true,
             _ => {}
         }
-        for entry in fs::read_dir(root.join(TMP)).unwrap() {
-            let path = entry.unwrap().path();
+        // listed first: fat and exfat list a file made during the walk, here the swapped copy
+        let paths: Vec<PathBuf> = fs::read_dir(root.join(TMP))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        for path in paths {
             let mut bytes = fs::read(&path).unwrap();
             match between {
                 Between::Alter => bytes[0] ^= 1,
