@@ -486,10 +486,15 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
     for kept in &placement.kept {
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
-            Reason::Changed => (
-                format!("{} has changed, so it stays", kept.path),
-                format!("`{force}` replaces it"),
-            ),
+            Reason::Changed => match kept.dataset.as_deref() {
+                Some(dataset) if !readers(manifest, dataset).is_empty() => {
+                    not_read(manifest, &kept.path, dataset)
+                }
+                _ => (
+                    format!("{} has changed, so it stays", kept.path),
+                    format!("`{force}` replaces it"),
+                ),
+            },
             Reason::Shared => (
                 format!(
                     "{} was edited, and the file is shared with other projects, so they see the edit too. it stays",
@@ -514,6 +519,44 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         };
         output.warn_with(&message, &help);
     }
+}
+
+/// the recipes that read `dataset`.
+fn readers<'m>(manifest: &'m Manifest, dataset: &str) -> Vec<&'m str> {
+    manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| {
+            entry
+                .recipe()
+                .is_some_and(|recipe| recipe.from.iter().any(|from| from == dataset))
+        })
+        .map(|(name, _)| name.as_str())
+        .collect()
+}
+
+/// the warning for an edit at `path` of `dataset`, which recipes read: a step reads the bytes
+/// data.lock pins, so the edit reaches no result, and replacing it would undo the fix.
+fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) {
+    let recipes = readers(manifest, dataset);
+    let (them, either, verb) = match recipes.split_last() {
+        Some((last, [])) => ((*last).to_owned(), (*last).to_owned(), "reads"),
+        Some((last, rest)) => (
+            format!("{} and {last}", rest.join(", ")),
+            format!("{} or {last}", rest.join(", ")),
+            "read",
+        ),
+        None => (String::new(), String::new(), "reads"),
+    };
+    (
+        format!(
+            "{path} has changed, so it stays, but {them} {verb} the bytes data.lock pins for {dataset}, not this edit"
+        ),
+        format!(
+            "to build from the fix, make it in a step of {either}, or copy the file out of {}/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for {either} to read",
+            manifest.data_dir
+        ),
+    )
 }
 
 /// the command that replaces what a sync of `scope` kept: with the names of a sync of named

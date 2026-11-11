@@ -82,6 +82,18 @@ warning: data/penguins/penguins.csv has changed, so it stays
 
 the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in a drop.
 
+a [recipe](recipes.md) never reads the edit either: its step reads the bytes data.lock pins, from the cache. so when a recipe reads the dataset, `build` and `sync` say that instead of offering `--force`, which would replace your fix. stderr from a project where the recipe `mc` reads `m`, a table with `copy = true` whose missing value was filled in by hand:
+
+```text
+$ fetchloom build mc
+ Up to date mc
+warning: data/m/measure.csv has changed, so it stays, but mc reads the bytes data.lock pins for m, not this edit
+  help: to build from the fix, make it in a step of mc, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for mc to read
+         Ok every recipe is built as data.lock pins it
+```
+
+a fix in a step runs for everyone who builds. a fixed copy added as a dataset of its own, as `fetchloom add ./fixes/measure.csv --as m_fixed`, is pinned like any other, and `from = ["m_fixed"]` in the recipe reads it.
+
 ## reorganizing
 
 `path` in data.toml chooses each dataset's folder below the data folder. datasets may share one, and `path = "."` puts a dataset's files in the data folder itself, for scripts that read `data/train.csv`. `--select` and `--exclude` choose which source files a dataset keeps, and a members table chooses files inside an archive. [data.toml](reference/data-toml.md) has the rules.

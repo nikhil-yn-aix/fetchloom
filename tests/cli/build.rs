@@ -891,6 +891,39 @@ fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     Ok(())
 }
 
+/// a step reads the bytes data.lock pins, never an edit in the data folder: a build that keeps an
+/// edit of a dataset a recipe reads says that the step reads the pinned bytes, naming the file
+/// and how to build from the fix, and never offers `sync --force`, which would undo the fix.
+#[test]
+fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("[datasets.iris]\n", "[datasets.iris]\ncopy = true\n"),
+    )?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let edited = sandbox.work().join("data").join("iris").join("iris.csv");
+    crate::support::edit(&edited, b"sepal_length,species\n5.2,setosa\n")?;
+    let output = build(&sandbox, &["build"])?;
+    let told = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains(
+            "warning: data/iris/iris.csv has changed, so it stays, but clean reads the bytes data.lock pins for iris, not this edit\n  help: to build from the fix, make it in a step of clean, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for clean to read\n"
+        ),
+        "{told}"
+    );
+    assert!(!told.contains("--force"), "{told}");
+    assert_eq!(fs::read(&edited)?, b"sepal_length,species\n5.2,setosa\n");
+    let made = sandbox.work().join("data").join("clean").join("iris.csv");
+    assert_eq!(fs::read(made)?, IRIS);
+    Ok(())
+}
+
 /// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
 /// its list and the data folder byte for byte as they were.
 #[test]

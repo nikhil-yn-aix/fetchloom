@@ -146,6 +146,9 @@ pub(crate) struct Kept {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) blocker: Option<Blocker>,
+    /// the dataset that places the file, when a target names it.
+    #[serde(skip)]
+    pub(crate) dataset: Option<String>,
 }
 
 impl Kept {
@@ -154,6 +157,15 @@ impl Kept {
             path,
             reason,
             blocker: None,
+            dataset: None,
+        }
+    }
+
+    /// the file of `target`, left as it is for `reason`.
+    fn of(target: &Target, reason: Reason) -> Kept {
+        Kept {
+            dataset: Some(target.dataset.to_owned()),
+            ..Kept::new(target.path.clone(), reason)
         }
     }
 }
@@ -598,7 +610,7 @@ impl<'a> Placing<'a> {
                     }
                 }
                 Action::Leave(reason) => {
-                    placement.kept.push(Kept::new(target.path.clone(), *reason));
+                    placement.kept.push(Kept::of(target, *reason));
                 }
                 Action::Blocked(blocker) => placement.kept.push(Kept {
                     blocker: Some(blocker.clone()),
@@ -1185,7 +1197,7 @@ fn settle<'t, 'a>(
                 placement.unchanged += 1;
                 adopted = true;
             }
-            Action::Leave(reason) => placement.kept.push(Kept::new(target.path.clone(), reason)),
+            Action::Leave(reason) => placement.kept.push(Kept::of(target, reason)),
             Action::Replace | Action::Overwrite(_) => {
                 let destination = project.root.join(&target.path);
                 match now(&destination) {
@@ -1195,7 +1207,7 @@ fn settle<'t, 'a>(
                         } else {
                             Reason::Foreign
                         };
-                        placement.kept.push(Kept::new(target.path.clone(), reason));
+                        placement.kept.push(Kept::of(target, reason));
                         continue;
                     }
                     Some(_) => {

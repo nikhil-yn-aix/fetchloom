@@ -97,6 +97,13 @@ read the command before you build: a recipe in a repository you cloned runs as y
 
 the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, and writes its result into `{out}`, plain files whose names every system can store. the copy comes from the cache, never from the data folder, where you may have changed a file. a file the cache lacks is copied in first: from the data folder where it holds the pinned bytes, as in a project [moved to another machine](commands/cache.md#moving-a-project-to-another-machine), else fetched, so a dataset imported from a folder needs `fetchloom add <folder> --as <name>` on a machine whose cache and data folder lack it. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned. [build](commands/build.md) has the details, the errors and the JSON.
 
+an edit of a placed file, as [`copy = true`](raw-data.md#editing-raw-files) allows, never reaches a step, and `build` says so, naming the file:
+
+```text
+warning: data/m/measure.csv has changed, so it stays, but mc reads the bytes data.lock pins for m, not this edit
+  help: to build from the fix, make it in a step of mc, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for mc to read
+```
+
 `fetchloom build --check` runs every step again from the inputs `data.lock` pins and compares what each makes with `data.lock`, file by file, without changing it or the data folder:
 
 ```text
