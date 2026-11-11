@@ -386,6 +386,20 @@ pub(super) mod tests {
         );
     }
 
+    /// a zip lists its files at its end, so one cut short is told in those words rather than in
+    /// the decoder's.
+    #[test]
+    fn a_zip_cut_short_says_so() {
+        let zip = zip_of(FILES);
+        let err = Scratch::new().refuse(Format::Zip, &zip[..zip.len() / 2]);
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert_eq!(
+            err.message,
+            "the archive is cut short: a zip lists its files at its end, and that list is missing"
+        );
+        assert!(err.help.unwrap().contains("fixed copy"));
+    }
+
     #[test]
     fn a_dropbox_zip_ignores_its_root_directory_entry() {
         let mut bytes = zip_of(&[

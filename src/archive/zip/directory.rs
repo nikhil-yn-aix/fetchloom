@@ -4,8 +4,8 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use crate::archive::guard::Guard;
 use crate::archive::names::LONGEST_PATH;
-use crate::archive::refused;
 use crate::archive::tar::unreadable_stream;
+use crate::archive::{cut_short, refused};
 use crate::error::Error;
 
 const METADATA: u64 = 256 << 20;
@@ -39,7 +39,12 @@ fn check_with(
         remaining: budget,
         budget,
     };
-    for at in (0..length.saturating_sub(21)).rev() {
+    let ends = 0..length.saturating_sub(21);
+    // every whole zip ends with its end record within the tail, as its comment is short
+    if !ends.clone().any(|at| tail[at..at + 4] == *b"PK\x05\x06") {
+        return Err(cut_short());
+    }
+    for at in ends.rev() {
         if tail[at..at + 4] != *b"PK\x05\x06" {
             continue;
         }

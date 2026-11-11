@@ -935,7 +935,7 @@ mod tests {
         ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
-        assert!(error.message.contains("damaged"), "{}", error.message);
+        assert!(error.message.contains("cut short"), "{}", error.message);
         assert!(runner.cache.changed().is_empty());
         assert_eq!(context.work.counts().requests, 0);
     }

@@ -438,8 +438,18 @@ fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
         Some(path) => format!("the archive is damaged at \"{path}\": {err}"),
         None => format!("the archive is damaged: {err}"),
     };
-    Error::new(Kind::SourceInvalid, message)
-        .help("ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract")
+    Error::new(Kind::SourceInvalid, message).help(DAMAGED_HELP)
+}
+
+const DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract";
+
+/// a zip whose end, which lists its files, is missing, as a download cut short leaves one.
+fn cut_short() -> Error {
+    Error::new(
+        Kind::SourceInvalid,
+        "the archive is cut short: a zip lists its files at its end, and that list is missing",
+    )
+    .help(DAMAGED_HELP)
 }
 
 fn not_written(path: &str, err: &io::Error) -> Error {
