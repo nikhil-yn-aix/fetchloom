@@ -31,6 +31,8 @@ struct Serving {
     whole_for_parts: bool,
     /// bytes a second for each connection.
     rate: u64,
+    /// the `x-amz-version-id` every answer gives, as an S3 bucket that keeps versions does.
+    version: Option<&'static str>,
 }
 
 const SERVING: Serving = Serving {
@@ -39,6 +41,7 @@ const SERVING: Serving = Serving {
     ranges: true,
     whole_for_parts: false,
     rate: 2 * MIB,
+    version: None,
 };
 
 /// how far the first answer goes, when ranges get the whole file, before it waits for one such
@@ -221,6 +224,9 @@ fn respond(stream: &mut TcpStream, head: &str, site: &Site, index: usize) {
     if let Some(etag) = etag {
         write!(text, "ETag: {etag}\r\n").unwrap();
     }
+    if let Some(version) = serving.version {
+        write!(text, "x-amz-version-id: {version}\r\n").unwrap();
+    }
     text.push_str("\r\n");
     if stream.write_all(text.as_bytes()).is_err() {
         return;
@@ -318,11 +324,16 @@ fn parts(server: &Server) -> Vec<String> {
 #[test]
 fn a_large_file_arrives_over_several_streams_and_hashes_as_one() {
     let body = body(8 * MIB);
-    let server = serve(body.clone(), SERVING);
+    let serving = Serving {
+        version: Some("v1"),
+        ..SERVING
+    };
+    let server = serve(body.clone(), serving);
     let net = net(&server.url, 8);
     let (_folder, cache) = cache();
     let fetched = download(&net, &cache, &server.url, Expect::default());
     assert_eq!(fetched.digest, sha256(&body));
+    assert_eq!(fetched.version.as_deref(), Some("v1"));
     assert_eq!(fs::read(cache.object_path(&fetched.digest)).unwrap(), *body);
     assert!(server.most() >= 2, "{} streams at once", server.most());
     let parts = parts(&server);

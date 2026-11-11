@@ -88,14 +88,14 @@ impl Fetch {
     /// cache holds them.
     pub(crate) fn cached(&self, cache: &Cache) -> Option<Fetched> {
         let expect = &self.expect;
-        let (digest, size) = match (expect.sha256, expect.md5) {
-            (Some(digest), _) => (digest, expect.size),
+        let (digest, size, version) = match (expect.sha256, expect.md5) {
+            (Some(digest), _) => (digest, expect.size, None),
             (None, Some(md5)) => {
-                let (digest, size) = cache.stated_md5(&md5, self.url.as_str())?;
-                if expect.size.is_some_and(|expected| expected != size) {
+                let stated = cache.stated(&md5, self.url.as_str())?;
+                if expect.size.is_some_and(|expected| expected != stated.size) {
                     return None;
                 }
-                (digest, Some(size))
+                (stated.digest, Some(stated.size), stated.version)
             }
             (None, None) => return None,
         };
@@ -111,6 +111,7 @@ impl Fetch {
             moved: 0,
             name: None,
             origin: Origin::Cache,
+            version,
         })
     }
 
@@ -168,6 +169,8 @@ pub(crate) struct Fetched {
     /// the file name the server gave, when it gave one.
     pub(crate) name: Option<String>,
     pub(crate) origin: Origin,
+    /// the S3 version the bytes were, when their bucket keeps versions.
+    pub(crate) version: Option<String>,
 }
 
 enum Answer {
@@ -331,7 +334,42 @@ impl Net {
         self.typed
             .check(&fetch.from)
             .map_err(|reason| failure::refused(&fetch.from, &reason))?;
-        self.claim_and_download(fetch, cache, known, on).await
+        let refused = match self.claim_and_download(fetch, cache, known, on).await {
+            Err(error)
+                if fetch.expect.sha256.is_some()
+                    && matches!(error.kind, Kind::AuthRequired | Kind::ReferenceUnresolved) =>
+            {
+                error
+            }
+            done => return done,
+        };
+        // a pinned S3 version that is gone, or that the key may not read, may still be the
+        // object there now, and the pinned hash decides whether it is
+        let Some((current, version)) = crate::source::unversioned(&fetch.from) else {
+            return Err(refused);
+        };
+        tracing::debug!(%refused, "the pinned version cannot be read, so the object there now is asked for");
+        let now = Fetch {
+            url: fetch.url.clone(),
+            from: current,
+            divert: fetch.divert,
+            expired: fetch.expired,
+            expect: fetch.expect,
+            revalidate: false,
+            unpack: fetch.unpack,
+        };
+        self.claim_and_download(&now, cache, None, on)
+            .await
+            .map_err(|error| {
+                if error.kind == Kind::IntegrityMismatch {
+                    error.detail(format!(
+                        "its pinned version {version} could not be read: {}",
+                        refused.message
+                    ))
+                } else {
+                    refused
+                }
+            })
     }
 
     async fn claim_and_download(
@@ -551,7 +589,7 @@ impl Net {
             Ok(response) => response,
             Err(next) => return Ok(Answer::Divert(next)),
         };
-        let validators = headers::validators(&head);
+        let validators = answered(&head, status, earlier.as_ref());
         if status == StatusCode::NOT_MODIFIED && earlier.is_none() && known.is_some() {
             return Ok(Answer::NotModified);
         }
@@ -931,9 +969,14 @@ impl Net {
         }
         // these records only spare later downloads, so failing to write one costs nothing more.
         // only an MD5 these bytes were hashed to may stand for them, and only for this link
+        let version = validators.version.clone();
+        let stated = crate::cache::Stated {
+            digest: stored.digest,
+            size: stored.size,
+            version: version.clone(),
+        };
         if let Some(md5) = stored.md5.filter(|got| fetch.expect.md5 == Some(*got))
-            && let Err(err) =
-                cache.save_stated_md5(&md5, fetch.url.as_str(), &stored.digest, stored.size)
+            && let Err(err) = cache.save_stated_md5(&md5, fetch.url.as_str(), &stated)
         {
             tracing::debug!(%err, "could not record the stated md5");
         }
@@ -955,6 +998,7 @@ impl Net {
             moved,
             name,
             origin: Origin::Network,
+            version,
         }
     }
 }
@@ -992,6 +1036,23 @@ fn describe_response(
         on(Event::WebPage { name: name.clone() }).map_err(Failure::Final)?;
     }
     Ok(name)
+}
+
+/// how an answer identified its bytes. a range continuing kept bytes is the S3 version the
+/// answer that sent them named, whether or not this one names it again.
+fn answered(
+    head: &header::HeaderMap,
+    status: StatusCode,
+    earlier: Option<&(u64, Validators)>,
+) -> Validators {
+    let mut validators = headers::validators(head);
+    if status == StatusCode::PARTIAL_CONTENT
+        && validators.version.is_none()
+        && let Some((_, kept)) = earlier
+    {
+        validators.version.clone_from(&kept.version);
+    }
+    validators
 }
 
 /// accepts a full body or a range that continues the same representation at the saved offset.
@@ -1149,6 +1210,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
         moved: 0,
         name: record.name,
         origin,
+        version: record.validators.version,
     }
 }
 

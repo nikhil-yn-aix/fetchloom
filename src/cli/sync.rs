@@ -1432,7 +1432,15 @@ mod tests {
         });
         assert!(!in_cache(&cache, &md5_only));
         cache
-            .save_stated_md5(&md5, url.as_str(), &stored.digest, 4)
+            .save_stated_md5(
+                &md5,
+                url.as_str(),
+                &crate::cache::Stated {
+                    digest: stored.digest,
+                    size: 4,
+                    version: None,
+                },
+            )
             .unwrap();
         assert!(in_cache(&cache, &md5_only));
         assert!(!in_cache_where(&cache, &md5_only, |digest| *digest != stored.digest));

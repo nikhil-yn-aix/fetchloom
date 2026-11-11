@@ -33,12 +33,16 @@ pub(super) struct Draft {
     license: Option<String>,
     doi: Option<String>,
     access: Access,
+    /// whether file links pin the object version their bytes were, as S3's do.
+    versions: bool,
     files: Vec<DraftFile>,
 }
 
 struct DraftFile {
     remote: Remote,
     path: String,
+    /// the S3 version the bytes were, once known, which the file's link in data.lock pins.
+    version: Option<String>,
     /// the hash and size, once known: stated by the source, carried over from data.lock, or
     /// learned from the bytes.
     known: Option<(Sha256, u64)>,
@@ -71,10 +75,17 @@ impl Draft {
         cache: &Cache,
     ) -> Result<Draft, Error> {
         // the files data.lock pins by their link, so a dataset of many files is not searched
-        // once for each
-        let mut by_url: HashMap<&str, Vec<&LockedFile>> = HashMap::new();
+        // once for each. a link pinned to an object version is found by the link without it,
+        // as the listing gives it
+        let versions = listing.resolved.keeps_versions();
+        let mut by_url: HashMap<String, Vec<&LockedFile>> = HashMap::new();
         for file in previous.iter().flat_map(|locked| &locked.files) {
-            by_url.entry(file.url.as_str()).or_default().push(file);
+            let link = Url::parse(&file.url)
+                .ok()
+                .filter(|_| versions)
+                .and_then(|url| source::unversioned(&url))
+                .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
+            by_url.entry(link).or_default().push(file);
         }
         let files = filter(name, entry, &listing)?
             .into_iter()
@@ -83,12 +94,19 @@ impl Draft {
                 let found = carried(&by_url, &remote);
                 let earlier = found.filter(|_| pinned || !upgrading);
                 let was = found.filter(|_| earlier.is_none()).cloned();
+                let stated = match (remote.sha256, remote.size) {
+                    (Some(_), Some(_)) => None,
+                    _ if earlier.is_some() => None,
+                    _ => stated(cache, &remote),
+                };
                 let known = match (remote.sha256, remote.size) {
                     (Some(sha256), Some(size)) => Some((sha256, size)),
                     _ => earlier
                         .map(|file| (file.sha256, file.size))
-                        .or_else(|| stated(cache, &remote)),
+                        .or_else(|| stated.as_ref().map(|stated| (stated.digest, stated.size))),
                 };
+                // a carried pin keeps its link as data.lock has it, version and all
+                let version = stated.and_then(|stated| stated.version);
                 // carried over, a file keeps the path data.lock gave it: a name its server gave,
                 // or the zip its source wrapped it in
                 let path = earlier.map_or_else(|| remote.path.clone(), |file| file.path.clone());
@@ -107,9 +125,17 @@ impl Draft {
                         };
                         recorded.or(file.unpacks_to)
                     });
+                let remote = match earlier {
+                    Some(file) if versions => Remote {
+                        url: Url::parse(&file.url).unwrap_or(remote.url),
+                        ..remote
+                    },
+                    _ => remote,
+                };
                 DraftFile {
                     remote,
                     path,
+                    version,
                     known,
                     unpacks_to,
                     was,
@@ -127,6 +153,7 @@ impl Draft {
             license: listing.license,
             doi: listing.doi,
             access: listing.access,
+            versions,
             files,
         })
     }
@@ -150,6 +177,7 @@ impl Draft {
                 Ok(DraftFile {
                     remote,
                     path: file.path.clone(),
+                    version: None,
                     known: Some((file.sha256, file.size)),
                     unpacks_to: None,
                     was: None,
@@ -167,6 +195,7 @@ impl Draft {
             license: locked.license.clone(),
             doi: locked.doi.clone(),
             access: locked.access,
+            versions: false,
             files,
         })
     }
@@ -226,6 +255,7 @@ impl Draft {
     pub(super) fn learn(&mut self, index: usize, fetched: &Fetched, cache: &Cache) {
         let file = &mut self.files[index];
         file.known = Some((fetched.digest, fetched.size));
+        file.version.clone_from(&fetched.version);
         if file.remote.named_by_server
             && let Some(given) = fetched.name.as_deref().and_then(name::sanitize)
         {
@@ -372,17 +402,22 @@ impl Draft {
     /// read, as when a source wrapped a file in a zip named like another file it lists.
     pub(super) fn finish(self, now: &str) -> Result<Locked, Error> {
         let patterns = self.patterns;
+        let versions = self.versions;
         let mut files: Vec<LockedFile> = self
             .files
             .into_iter()
             .filter_map(|file| {
                 let (sha256, size) = file.known?;
+                let url = match file.version.as_deref().filter(|_| versions) {
+                    Some(version) => source::with_version(&file.remote.url, version),
+                    None => file.remote.url,
+                };
                 Some(LockedFile {
                     path: file.path,
                     size,
                     sha256,
                     md5: file.remote.md5,
-                    url: file.remote.url.to_string(),
+                    url: url.to_string(),
                     unpacks_to: file.unpacks_to,
                 })
             })
@@ -451,17 +486,17 @@ fn renamed_by_download(file: &DraftFile) -> bool {
             || (source::may_wrap(&file.remote.url) && archive::by_name(&file.path).is_none()))
 }
 
-/// the hash and size of the bytes an earlier download of this link proved match the MD5 its
-/// source states.
-fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
-    let (sha256, size) = cache.stated_md5(&remote.md5?, remote.url.as_str())?;
-    if remote.sha256.is_some_and(|stated| stated != sha256) {
+/// the bytes an earlier download of this link proved match the MD5 its source states, and the
+/// S3 version they were.
+fn stated(cache: &Cache, remote: &Remote) -> Option<crate::cache::Stated> {
+    let stated = cache.stated(&remote.md5?, remote.url.as_str())?;
+    if remote.sha256.is_some_and(|sha256| sha256 != stated.digest) {
         return None;
     }
     remote
         .size
-        .is_none_or(|stated| stated == size)
-        .then_some((sha256, size))
+        .is_none_or(|size| size == stated.size)
+        .then_some(stated)
 }
 
 /// the file data.lock already pins for this remote file, when it is the same file: the same
@@ -469,7 +504,7 @@ fn stated(cache: &Cache, remote: &Remote) -> Option<(Sha256, u64)> {
 /// a listed size says nothing about the zip. a pin made without an MD5 says nothing of whether
 /// its bytes have the one the source now states, unless the source states their SHA-256 too.
 fn carried<'a>(
-    by_url: &HashMap<&str, Vec<&'a LockedFile>>,
+    by_url: &HashMap<String, Vec<&'a LockedFile>>,
     remote: &Remote,
 ) -> Option<&'a LockedFile> {
     let candidates = by_url.get(remote.url.as_str())?;
@@ -925,7 +960,7 @@ mod tests {
             url: url.clone(),
             named_by_server: false,
         };
-        let by_url = HashMap::from([(locked.files[0].url.as_str(), vec![&locked.files[0]])]);
+        let by_url = HashMap::from([(locked.files[0].url.clone(), vec![&locked.files[0]])]);
         assert!(carried(&by_url, &remote("900150983cd24fb0d6963f7d28e17f72")).is_some());
         assert!(
             carried(&by_url, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
@@ -989,7 +1024,7 @@ mod tests {
             assert_eq!(jobs.len(), 1, "upgrading {upgrading}");
             assert_eq!(jobs[0].1.fetch.expect.md5, stated);
         }
-        let by_url = HashMap::from([(locked.files[0].url.as_str(), vec![&locked.files[0]])]);
+        let by_url = HashMap::from([(locked.files[0].url.clone(), vec![&locked.files[0]])]);
         let mut remote = listing().files.remove(0);
         assert!(carried(&by_url, &remote).is_none());
         remote.sha256 = Some(locked.files[0].sha256);
@@ -1026,7 +1061,15 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         cache
-            .save_stated_md5(&md5, remote.url.as_str(), &previous, size)
+            .save_stated_md5(
+                &md5,
+                remote.url.as_str(),
+                &crate::cache::Stated {
+                    digest: previous,
+                    size,
+                    version: None,
+                },
+            )
             .unwrap();
         let manifest = Manifest::parse("[datasets.d]\nref = \"osf:ezcuj\"\n").unwrap();
         let changed = digest::sha256(b"changed bytes");
@@ -1102,6 +1145,7 @@ mod tests {
                 moved: stored.size,
                 name: Some("other.txt".to_owned()),
                 origin: crate::net::Origin::Network,
+                version: None,
             },
             &cache,
         );
@@ -1110,6 +1154,84 @@ mod tests {
         assert_eq!(locked.files[0].path, "file.txt");
         assert_eq!(locked.files[0].size, 4);
         assert_eq!(locked.files[0].sha256, stored.digest);
+    }
+
+    /// an S3 object is pinned at the version its bytes were: learned from its download, or from
+    /// what an earlier download of the link recorded, and kept by a later lock, which finds the
+    /// pin by the link the listing gives. a plain link keeps its link whatever its server says.
+    #[test]
+    fn an_s3_object_is_pinned_at_the_version_its_bytes_were() {
+        use md5::Digest as _;
+
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let stored = store(&cache, b"a,b\n");
+        let md5 = Md5::from_hex(&digest::hex(&md5::Md5::digest(b"a,b\n"))).unwrap();
+        let now = "2026-11-11T00:00:00Z";
+        let fetched = |version: &str| Fetched {
+            digest: stored.digest,
+            size: stored.size,
+            moved: stored.size,
+            name: None,
+            origin: crate::net::Origin::Network,
+            version: Some(version.to_owned()),
+        };
+        let listing = |reference: &str, link: &Url, md5: Option<Md5>| Listing {
+            within: Vec::new(),
+            access: Access::Unknown,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            resolved: Reference::parse(reference).unwrap().reference,
+            title: None,
+            license: None,
+            doi: None,
+            files: vec![Remote {
+                path: "a.csv".to_owned(),
+                size: Some(stored.size),
+                sha256: None,
+                md5,
+                url: link.clone(),
+                named_by_server: false,
+            }],
+        };
+        let manifest = Manifest::parse("[datasets.raw]\nref = \"s3://lab-raw/raw/\"\n").unwrap();
+        let entry = &manifest.datasets["raw"];
+        let link = Url::parse("https://lab-raw.s3.amazonaws.com/raw/a.csv").unwrap();
+        let bucket = || listing("s3://lab-raw/raw/", &link, None);
+        let mut draft = Draft::new("raw", entry, bucket(), None, false, &cache).unwrap();
+        assert_eq!(draft.jobs(&cache).len(), 1);
+        draft.learn(0, &fetched("v+1/2"), &cache);
+        let locked = draft.finish(now).unwrap();
+        assert_eq!(
+            locked.files[0].url,
+            "https://lab-raw.s3.amazonaws.com/raw/a.csv?versionId=v%2B1%2F2"
+        );
+        let again = Draft::new("raw", entry, bucket(), Some(&locked), false, &cache).unwrap();
+        assert!(again.jobs(&cache).is_empty());
+        assert_eq!(again.finish(now).unwrap().files[0].url, locked.files[0].url);
+
+        let stated = crate::cache::Stated {
+            digest: stored.digest,
+            size: stored.size,
+            version: Some("v2".to_owned()),
+        };
+        cache.save_stated_md5(&md5, link.as_str(), &stated).unwrap();
+        let known = listing("s3://lab-raw/raw/", &link, Some(md5));
+        let draft = Draft::new("raw", entry, known, None, false, &cache).unwrap();
+        assert!(draft.jobs(&cache).is_empty());
+        assert_eq!(
+            draft.finish(now).unwrap().files[0].url,
+            "https://lab-raw.s3.amazonaws.com/raw/a.csv?versionId=v2"
+        );
+
+        let plain = Url::parse("https://example.org/a.csv").unwrap();
+        let manifest =
+            Manifest::parse("[datasets.a]\nref = \"https://example.org/a.csv\"\n").unwrap();
+        let listed = listing("https://example.org/a.csv", &plain, None);
+        let mut draft =
+            Draft::new("a", &manifest.datasets["a"], listed, None, false, &cache).unwrap();
+        draft.learn(0, &fetched("v3"), &cache);
+        assert_eq!(draft.finish(now).unwrap().files[0].url, plain.as_str());
     }
 
     /// what kaggle's zip of train.csv in `kaggle/train.csv.zip` holds.
@@ -1198,6 +1320,7 @@ mod tests {
                 moved: stored.size,
                 name: None,
                 origin: crate::net::Origin::Network,
+                version: None,
             };
             draft.learn(index, &fetched, &cache);
         }

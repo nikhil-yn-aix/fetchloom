@@ -77,6 +77,8 @@ resumption rehashes saved bytes and needs version proof before joining them to a
 
 unpinned `get` revalidates URL records with conditional requests. project pins can reuse checked objects without that request. MD5 is computed only when a source requires it and no pinned SHA-256 already identifies the bytes.
 
+validators also keep the `x-amz-version-id` an S3 bucket names for the bytes, never `null`. a range continuing kept bytes keeps the version of the answer that sent them, a split keeps its first answer's, and URL and stated-MD5 records keep it, so `Fetched.version` is the same whether the bytes came over the network or from the cache. a pinned download of a link whose `versionId` is refused or gone asks for the object without it once, and the pinned SHA-256 decides; other bytes are `integrity.mismatch` with the version's refusal as a detail.
+
 ### request policy
 
 the bounded download queue takes one job from each initial hostname in turn, retaining order within a host and returning results in input order. a grouped slow host cannot fill the waiting task queue before another host is admitted. host grouping uses the initial request destination, not the cache identity or a redirect destination; ports of one hostname share a group.

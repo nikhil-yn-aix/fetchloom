@@ -264,6 +264,11 @@ impl Prefix {
         })
     }
 
+    /// whether the links of this listing may pin object versions, as S3's do.
+    pub(super) fn keeps_versions(&self) -> bool {
+        self.store == Store::S3
+    }
+
     /// the bucket, as the `s3_buckets` setting names it.
     pub(crate) fn bucket(&self) -> Bucket {
         Bucket {
@@ -529,6 +534,34 @@ impl fmt::Display for Prefix {
             None => write!(f, "{}://{}/{}", self.store.scheme(), self.bucket, self.key),
         }
     }
+}
+
+/// `url` pinned to the S3 object version `version`.
+pub(crate) fn with_version(url: &Url, version: &str) -> Url {
+    let mut pinned = url.clone();
+    let pair = query(&[("versionId", version)]);
+    let joined = match url.query().filter(|query| !query.is_empty()) {
+        Some(query) => format!("{query}&{pair}"),
+        None => pair,
+    };
+    pinned.set_query(Some(&joined));
+    pinned
+}
+
+/// `url` without the S3 object version it pins, and that version, when it pins one.
+pub(crate) fn unversioned(url: &Url) -> Option<(Url, String)> {
+    let pairs: Vec<&str> = url.query()?.split('&').collect();
+    let value = pairs
+        .iter()
+        .find_map(|pair| pair.strip_prefix("versionId="))?;
+    let version = percent_decode_str(value).decode_utf8().ok()?.into_owned();
+    let kept: Vec<&str> = pairs
+        .into_iter()
+        .filter(|pair| !pair.starts_with("versionId="))
+        .collect();
+    let mut current = url.clone();
+    current.set_query((!kept.is_empty()).then(|| kept.join("&")).as_deref());
+    Some((current, version))
 }
 
 /// reads `https://host[:port]/rest` as the origin of a service that speaks S3's API and the path

@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use tracing::Instrument as _;
 use url::Url;
 
-pub(crate) use bucket::{Bucket, Keyed, Signing};
+pub(crate) use bucket::{Bucket, Keyed, Signing, unversioned, with_version};
 
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -272,6 +272,12 @@ impl Reference {
             Reference::Bucket(prefix) => prefix.written_host(),
             _ => None,
         }
+    }
+
+    /// whether the links of this dataset's files may pin the object version their bytes were,
+    /// as S3's may.
+    pub(crate) fn keeps_versions(&self) -> bool {
+        matches!(self, Reference::Bucket(prefix) if prefix.keeps_versions())
     }
 
     /// the reference as messages and logs show it, a secret in a link masked.

@@ -42,13 +42,13 @@ zero-byte objects whose keys end in `/` mark folders and are skipped. a nonempty
 
 | store | `resolved` | file `url` | `md5` |
 |---|---|---|---|
-| S3 | the `s3://` reference | the object's HTTPS URL on the endpoint that listed it, on its region's endpoint after a signed listing | the ETag, when it holds no `-` and the listing went without a key |
-| another S3 service | the `s3:https://` reference | the object's link on that service, `https://<host>[:<port>]/<bucket>/<key>` | none |
+| S3 | the `s3://` reference | the object's HTTPS URL on the endpoint that listed it, on its region's endpoint after a signed listing, with `?versionId=<id>` when the bucket keeps versions | the ETag, when it holds no `-` and the listing went without a key |
+| another S3 service | the `s3:https://` reference | the object's link on that service, `https://<host>[:<port>]/<bucket>/<key>`, with `?versionId=<id>` when the bucket keeps versions | none |
 | cloud storage | the `gs://` reference | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` | the listed `md5Hash` |
 
 an ETag with a `-` belongs to an object uploaded in parts and is not an MD5 of its bytes, so such files are pinned by SHA-256 and size alone. a bucket that needs a key may encrypt objects with keys of its own, whose ETags are no MD5 either, and other services promise nothing about theirs, so those files are pinned the same way. a stated MD5 is checked against the downloaded bytes.
 
-ListObjectsV2 states no object versions, so an S3 URL serves whatever the key holds now; sync refuses bytes that differ from the locked SHA-256. `lock --upgrade` lists the prefix again.
+an S3 bucket that keeps versions names the version of each object it sends, and the lock URL pins it, so `sync` gets the same bytes after someone replaces the object. the version is kept when the bytes come from the cache instead, through what an earlier download of that link recorded. a pinned version that is gone, or that the key may not read, is fetched from the object there now, and the locked SHA-256 decides: the same bytes are used, other bytes fail with `integrity.mismatch`, exit 30, saying the version could not be read. a bucket that keeps no versions serves whatever the key holds now; sync refuses bytes that differ from the locked SHA-256. `lock --upgrade` lists the prefix again.
 
 a cloud storage URL keeps the object's generation. a listing with a missing, empty or nonnumeric generation fails with `source.invalid`; fetchloom does not replace it with an unversioned URL. object names in generation errors have control characters escaped. when someone replaces the object, that URL still names the old bytes while the bucket keeps old generations, and fails to download when it does not.
 

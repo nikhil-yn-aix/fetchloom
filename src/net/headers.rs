@@ -81,7 +81,17 @@ pub(super) fn validators(headers: &HeaderMap) -> Validators {
         etag: text(header::ETAG),
         last_modified: text(header::LAST_MODIFIED),
         date: text(header::DATE),
+        version: text(header::HeaderName::from_static("x-amz-version-id"))
+            .filter(|version| is_version(version)),
     }
+}
+
+/// whether `text` can name an S3 object version in a link: 1 to 1,024 printable characters
+/// without spaces. `null` is what S3 says for an object stored before its bucket kept versions.
+fn is_version(text: &str) -> bool {
+    (1..=1024).contains(&text.len())
+        && text != "null"
+        && text.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
 /// the first byte of a `Content-Range: bytes 100-199/200` answer.
@@ -235,6 +245,20 @@ mod tests {
     }
 
     #[test]
+    fn an_s3_version_is_kept_with_the_validators_and_null_is_none() {
+        let name = header::HeaderName::from_static("x-amz-version-id");
+        let version = |value: &str| validators(&headers(&[(name.clone(), value)])).version;
+        assert_eq!(
+            version("3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY+MTRCxf3vjVBH40Nr8X8gdRQBpUMLUo").as_deref(),
+            Some("3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY+MTRCxf3vjVBH40Nr8X8gdRQBpUMLUo")
+        );
+        assert_eq!(version("null"), None);
+        assert_eq!(version("a b"), None);
+        assert_eq!(version(&"v".repeat(1025)), None);
+        assert_eq!(validators(&HeaderMap::new()).version, None);
+    }
+
+    #[test]
     fn plain_and_quoted_names() {
         assert_eq!(
             disposition("attachment; filename=\"iris.csv\"").as_deref(),
@@ -308,6 +332,7 @@ mod tests {
                 etag: etag.map(str::to_owned),
                 last_modified: last_modified.map(str::to_owned),
                 date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
+                version: None,
             };
             assert_eq!(if_range(&validators), sent, "{validators:?}");
         }

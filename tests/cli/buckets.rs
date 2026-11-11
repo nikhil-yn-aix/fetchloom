@@ -483,14 +483,15 @@ fn mac(key: &[u8], text: &str) -> Result<Vec<u8>> {
 
 /// checks a request as S3 checks its signature, rebuilding the canonical request from what
 /// arrived and signing it with `secret`, and returns the key id and region it was signed with.
-/// the test servers keep heads in lowercase, so signed tests use lowercase keys and sessions,
-/// and the date's `t` and `z` are read back in uppercase.
+/// the test servers keep heads in lowercase, so signed tests use lowercase keys, sessions and
+/// versions, and the date's `t` and `z` and the `versionId` name are read back as sent.
 fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
     let mut lines = head.lines();
     let target = lines
         .next()
         .and_then(|line| line.split(' ').nth(1))
-        .ok_or("no request line")?;
+        .ok_or("no request line")?
+        .replace("versionid=", "versionId=");
     let headers: Vec<(&str, &str)> = lines
         .filter_map(|line| line.split_once(':'))
         .map(|(name, value)| (name.trim(), value.trim()))
@@ -518,7 +519,7 @@ fn signed_with(head: &str, secret: &str) -> Result<(String, String)> {
     let scope: Vec<&str> = credential.splitn(2, '/').collect();
     let (key, scope) = (scope[0], scope.get(1).ok_or("no scope")?);
     let parts: Vec<&str> = scope.split('/').collect();
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
     let path: Vec<String> = path.split('/').map(escaped).collect();
     let mut pairs: Vec<(String, String)> = query
         .split('&')
@@ -588,6 +589,19 @@ fn assert_no_secret(surfaces: &[(String, Vec<u8>)]) {
     }
 }
 
+/// the object of a bucket that keeps versions, at its version `3hl4kqtjlcpx+r/1`.
+fn versioned() -> Vec<Part> {
+    reply(
+        "200 OK",
+        &[
+            ("Content-Length", &PARTICIPANTS.len().to_string()),
+            ("ETag", "\"v1\""),
+            ("x-amz-version-id", "3hl4kqtjlcpx+r/1"),
+        ],
+        PARTICIPANTS,
+    )
+}
+
 /// a teammate's `sync --locked` of the project in the work folder, with keys in an AWS profile
 /// and a cache of their own.
 fn teammate_sync(sandbox: &Sandbox, routes: &str) -> Result<(std::path::PathBuf, Output)> {
@@ -612,8 +626,8 @@ fn teammate_sync(sandbox: &Sandbox, routes: &str) -> Result<(std::path::PathBuf,
 }
 
 /// a private bucket the person lists: the listing is asked without a key, refused, and asked
-/// again signed; the object is signed from the start; a teammate's sync signs with a profile
-/// after one refusal; and no secret reaches a file or an output.
+/// again signed; the object is signed from the start and pinned at its version; a teammate's
+/// sync signs with a profile after one refusal; and no secret reaches a file or an output.
 #[test]
 fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
     let sandbox = Sandbox::new()?;
@@ -626,9 +640,9 @@ fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
         vec![
             refusal(),
             s3_page(&[("raw/a.csv", PARTICIPANTS)], None),
-            file(PARTICIPANTS, "\"v1\""),
+            versioned(),
             refusal(),
-            file(PARTICIPANTS, "\"v1\""),
+            versioned(),
         ],
     )?;
     let url = server.url.clone();
@@ -668,7 +682,9 @@ fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
     let work = sandbox.work();
     let lock = fs::read_to_string(work.join("data.lock"))?;
     assert!(
-        lock.contains("url = \"https://private-lab.s3.us-east-1.amazonaws.com/raw/a.csv\""),
+        lock.contains(
+            "url = \"https://private-lab.s3.us-east-1.amazonaws.com/raw/a.csv?versionId=3hl4kqtjlcpx%2Br%2F1\""
+        ),
         "{lock}"
     );
     assert!(
@@ -691,7 +707,7 @@ fn a_listed_private_bucket_is_listed_and_downloaded_with_a_key() -> Result {
     assert_eq!(heads.len(), 5, "{heads:?}");
     assert!(!heads[3].contains("authorization"), "{}", heads[3]);
     assert!(
-        heads[4].starts_with(&format!("get {} ", object.0)),
+        heads[4].starts_with(&format!("get {}?versionid=3hl4kqtjlcpx%2br%2f1 ", object.0)),
         "{}",
         heads[4]
     );

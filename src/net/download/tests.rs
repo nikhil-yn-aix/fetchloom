@@ -82,7 +82,15 @@ async fn an_uncontended_claim_rechecks_bytes_published_after_the_cache_miss() {
 
         crate::cache::tests::store(&cache, bytes);
         cache
-            .save_stated_md5(&md5, url.as_str(), &digest, 4)
+            .save_stated_md5(
+                &md5,
+                url.as_str(),
+                &crate::cache::Stated {
+                    digest,
+                    size: 4,
+                    version: None,
+                },
+            )
             .unwrap();
         // publication wins before the first claim attempt, so no contention was observed.
         let fetched = tokio::select! {
@@ -947,4 +955,103 @@ fn a_checksum_restart_reacquires_released_download_slots() {
         b"bbbbbbbb"
     );
     assert_eq!(asked.lock().unwrap().len(), 2);
+}
+
+/// the S3 version a bucket names for the bytes comes with them: from a whole answer, from a
+/// resume whose range does not name it again, and from the record of a link asked again when
+/// the server says nothing changed.
+#[test]
+fn an_s3_version_comes_with_the_bytes_however_they_arrive() {
+    let version = ("x-amz-version-id", "3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY");
+    let (url, _) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\""), version], b"abcdefgh"),
+        reply("304 Not Modified", &[("ETag", "\"e1\"")], b""),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let asking = net(&url);
+    let fetch = Fetch {
+        revalidate: true,
+        ..Fetch::new(url.clone())
+    };
+    let fetched = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.version.as_deref(), Some(version.1));
+    let again = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(again.origin, Origin::NotModified);
+    assert_eq!(again.version.as_deref(), Some(version.1));
+
+    let cut = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 8\r\nETag: \"e1\"\r\n{}: {}\r\n\r\nabcd",
+        version.0, version.1
+    );
+    let (url, _) = serve(vec![
+        cut.into_bytes(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"e1\"")],
+            b"efgh",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetched =
+        block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.version.as_deref(), Some(version.1));
+    assert_eq!(fetched.size, 8);
+}
+
+/// a pinned S3 version that can no longer be read, refused or gone, is fetched from the object
+/// there now, and its pinned hash decides: the same bytes are taken, other bytes are a mismatch
+/// that says the version could not be read. a file nothing pins keeps the refusal.
+#[test]
+fn an_unreadable_pinned_version_comes_from_the_object_there_now() {
+    for (status, now, kind) in [
+        ("403 Forbidden", b"abcd".as_slice(), None),
+        ("404 Not Found", b"abcd", None),
+        ("403 Forbidden", b"wxyz", Some(Kind::IntegrityMismatch)),
+    ] {
+        let (url, asked) = serve(vec![reply(status, &[], b""), reply("200 OK", &[], now)]);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let versioned = url.join("raw/a.csv?versionId=v%2B1").unwrap();
+        let fetch = Fetch {
+            expect: Expect {
+                sha256: Some(crate::digest::sha256(b"abcd")),
+                md5: None,
+                size: Some(4),
+            },
+            ..Fetch::new(versioned.clone())
+        };
+        let result = block_on(net(&url).download(&fetch, &cache, &|_| Ok(())));
+        assert_eq!(
+            lines(&asked),
+            [
+                "GET /raw/a.csv?versionId=v%2B1 HTTP/1.1",
+                "GET /raw/a.csv HTTP/1.1"
+            ],
+            "{status}"
+        );
+        match kind {
+            None => assert_eq!(result.unwrap().digest, crate::digest::sha256(b"abcd")),
+            Some(kind) => {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, kind);
+                assert!(
+                    error
+                        .details
+                        .iter()
+                        .any(|detail| detail.contains("its pinned version v+1 could not be read")),
+                    "{:?}",
+                    error.details
+                );
+            }
+        }
+    }
+    let (url, asked) = serve(vec![reply("403 Forbidden", &[], b"")]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch::new(url.join("raw/a.csv?versionId=v1").unwrap());
+    let error = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(asked.lock().unwrap().len(), 1);
 }

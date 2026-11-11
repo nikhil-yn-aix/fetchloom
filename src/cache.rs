@@ -78,6 +78,18 @@ pub(crate) struct Validators {
     pub(crate) last_modified: Option<String>,
     #[serde(deserialize_with = "Deserialize::deserialize")]
     pub(crate) date: Option<String>,
+    /// the version an S3 bucket that keeps versions named for the bytes, `x-amz-version-id`.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub(crate) version: Option<String>,
+}
+
+/// the bytes a link served when they matched the MD5 its source states, and the S3 version they
+/// were, when its bucket keeps versions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Stated {
+    pub(crate) digest: Sha256,
+    pub(crate) size: u64,
+    pub(crate) version: Option<String>,
 }
 
 /// what a URL served the last time it was downloaded.
@@ -368,24 +380,36 @@ impl Cache {
     /// the object holding the bytes `url` served when an earlier download hashed them to this
     /// MD5. another link stating the same MD5 may serve other bytes, since MD5 collides.
     pub(crate) fn stated_md5(&self, md5: &Md5, url: &str) -> Option<(Sha256, u64)> {
-        let text = fs::read_to_string(self.stated_path(md5, url)).ok()?;
-        let (digest, size) = text.trim().split_once(' ')?;
-        Some((Sha256::from_hex(digest)?, size.parse().ok()?))
+        self.stated(md5, url)
+            .map(|stated| (stated.digest, stated.size))
     }
 
-    pub(crate) fn save_stated_md5(
-        &self,
-        md5: &Md5,
-        url: &str,
-        digest: &Sha256,
-        size: u64,
-    ) -> io::Result<()> {
+    /// [`Cache::stated_md5`], with the S3 version the bytes were.
+    pub(crate) fn stated(&self, md5: &Md5, url: &str) -> Option<Stated> {
+        let text = fs::read_to_string(self.stated_path(md5, url)).ok()?;
+        let mut words = text.split_whitespace();
+        Some(Stated {
+            digest: Sha256::from_hex(words.next()?)?,
+            size: words.next()?.parse().ok()?,
+            version: words.next().map(str::to_owned),
+        })
+    }
+
+    pub(crate) fn save_stated_md5(&self, md5: &Md5, url: &str, stated: &Stated) -> io::Result<()> {
         let path = self.stated_path(md5, url);
         real_folder(&self.root.join("stated").join("md5"), FolderUse::Cache)?;
         if let Some(parent) = path.parent() {
             real_folder(parent, FolderUse::Cache)?;
         }
-        self.write_hint(&path, format!("{digest} {size}\n").as_bytes())
+        let line = match stated {
+            Stated {
+                digest,
+                size,
+                version: Some(version),
+            } => format!("{digest} {size} {version}\n"),
+            Stated { digest, size, .. } => format!("{digest} {size}\n"),
+        };
+        self.write_hint(&path, line.as_bytes())
     }
 
     fn url_record_path(&self, url: &str) -> PathBuf {
@@ -1558,6 +1582,7 @@ pub(crate) mod tests {
                 etag: Some("\"x\"".to_owned()),
                 last_modified: Some("Tue, 01 Oct 2024 10:00:00 GMT".to_owned()),
                 date: Some("Tue, 01 Oct 2024 10:01:00 GMT".to_owned()),
+                version: Some("3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY".to_owned()),
             },
         };
         cache.save_url_record(&record).unwrap();
@@ -1572,8 +1597,15 @@ pub(crate) mod tests {
         let md5 = Md5::from_hex("900150983cd24fb0d6963f7d28e17f72").unwrap();
         let url = "https://example.org/abc";
         assert_eq!(cache.stated_md5(&md5, url), None);
-        cache.save_stated_md5(&md5, url, &stored.digest, 3).unwrap();
-        assert_eq!(cache.stated_md5(&md5, url), Some((stored.digest, 3)));
+        for version in [None, Some("3HL4kqtJlcpXroDTDmJ+rmSpXd3dIbrHY")] {
+            let stated = Stated {
+                digest: stored.digest,
+                size: 3,
+                version: version.map(str::to_owned),
+            };
+            cache.save_stated_md5(&md5, url, &stated).unwrap();
+            assert_eq!(cache.stated(&md5, url), Some(stated));
+        }
         assert_eq!(cache.stated_md5(&md5, "https://example.org/other"), None);
     }
 
