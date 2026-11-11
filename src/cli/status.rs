@@ -96,6 +96,10 @@ pub(super) struct Status {
     /// which `sync` removes.
     #[serde(skip)]
     retiring: bool,
+    /// the objects of the files in place with the bytes data.lock pins there, which a sync or a
+    /// build takes into the cache from the data folder when it lacks them.
+    #[serde(skip)]
+    holding: HashSet<Sha256>,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -283,8 +287,9 @@ fn check(
 }
 
 /// moves to `unbuilt` each recipe whose result sync would leave out: one with a missing or
-/// outdated file whose bytes neither the cache, a folder mirror nor a download of the same sync
-/// gives. a web mirror may hold them, and only a sync asks it, so with one set nothing moves.
+/// outdated file whose bytes neither the cache, another file in place in the data folder, a
+/// folder mirror nor a download of the same sync gives. a web mirror may hold them, and only a
+/// sync asks it, so with one set nothing moves.
 fn unbuilt_here(
     status: &mut Status,
     manifest: &Manifest,
@@ -325,6 +330,7 @@ fn unbuilt_here(
         .filter(|target| {
             target.holder == plan::Holder::Result
                 && !fetched.contains(&target.sha256)
+                && !status.holding.contains(&target.sha256)
                 && cache.find(&target.sha256, Some(target.size)).is_none()
                 && !folders
                     .iter()
@@ -358,7 +364,7 @@ fn unbuilt_here(
             .filter(|input| {
                 lock.get(input)
                     .filter(|_| manifest.datasets[*input].source().is_some())
-                    .is_some_and(|locked| !held(cache, locked))
+                    .is_some_and(|locked| !held(cache, &status.holding, locked))
             })
             .cloned()
             .collect();
@@ -377,11 +383,13 @@ fn mirrored(root: &std::path::Path, sha256: &Sha256, size: u64) -> bool {
         .is_ok_and(|found| found.is_file() && found.len() == size)
 }
 
-/// whether the cache holds every file a build reads of the fetched dataset `locked`: each file,
-/// an archive standing for the files it unpacked to.
-fn held(cache: &Cache, locked: &Locked) -> bool {
+/// whether this machine holds every file a build reads of the fetched dataset `locked`: each
+/// file in the cache or in place in the data folder, as `holding` says, an archive standing for
+/// the files the cache records it unpacked to.
+fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked) -> bool {
     locked.files.iter().all(|file| {
         cache.find(&file.sha256, Some(file.size)).is_some()
+            || (file.unpacks_to.is_none() && holding.contains(&file.sha256))
             || file
                 .unpacks_to
                 .is_some_and(|tree| cache.holds_unpacked(&file.sha256, Some(&tree)))
@@ -428,6 +436,7 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
             {
                 if record.sha256 == target.sha256 {
                     if place::fits(target, record, survey) {
+                        status.holding.insert(target.sha256);
                         continue;
                     }
                     if !target.copy {
@@ -439,6 +448,7 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
             // sync takes a changed file that holds the locked bytes as placed
             (Some(seen), Some(_)) if place::holds_target(target, seen, &file) => {
                 if !target.copy || place::now_writable(&file) {
+                    status.holding.insert(target.sha256);
                     continue;
                 }
                 &mut status.outdated

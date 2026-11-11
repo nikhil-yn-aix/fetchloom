@@ -719,17 +719,24 @@ impl<'a> Loop<'a> {
             &self.scope,
             survey,
         )?;
+        // what the data folder holds a sync takes from there; only that sync hashes it
+        let held: HashSet<Sha256> = placing
+            .holding()
+            .into_iter()
+            .map(|(digest, _)| digest)
+            .collect();
         // a dry run asks no mirror, so only with none could a result come from nowhere else
         if self.context.mirrors.mirrors.list.is_empty() {
             self.settle_unbuilt(&mut placing, |digest, size| {
-                !damaged.contains(digest) && self.cache.find(digest, Some(size)).is_some()
+                held.contains(digest)
+                    || (!damaged.contains(digest) && self.cache.find(digest, Some(size)).is_some())
             })?;
         }
         let mut unpack = Vec::new();
         let wanted = placing
             .unknown()
             .into_iter()
-            .chain(placing.missing_as_is(&self.cache, damaged)?)
+            .chain(placing.missing_as_is(&self.cache, damaged, &held)?)
             .collect();
         for (dataset, archive) in archives::of(lock, wanted) {
             if archive.file.unpacks_to.is_some() {
@@ -951,7 +958,8 @@ impl<'a> Loop<'a> {
             return Ok(());
         }
         let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
-        let missing = archives::of(lock, placing.missing_as_is(&self.cache, &HashSet::new())?);
+        let none = HashSet::new();
+        let missing = archives::of(lock, placing.missing_as_is(&self.cache, &none, &none)?);
         let unknown = archives::of(lock, placing.unknown());
         let files = |archives: &[(String, Archive<'_>)]| -> Vec<(String, LockedFile)> {
             archives

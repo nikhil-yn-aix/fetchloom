@@ -215,7 +215,8 @@ fn an_edit_of_the_same_size_is_never_taken() -> Result {
 }
 
 /// a file the cache lacks whose bytes the data folder holds at another path is placed from
-/// there, before any mirror is asked, so a result needs no build.
+/// there, before any mirror is asked, so a result needs no build: status lists it as missing
+/// rather than unbuilt, a dry run would place it, and sync places it.
 #[test]
 fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     let sandbox = Sandbox::new()?;
@@ -238,6 +239,15 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
         json(&output)
     };
+    let status = run(&["--json", "status"])?;
+    assert_eq!(
+        status["result"]["missing"],
+        serde_json::json!(["inputs/clean/iris.csv"])
+    );
+    assert_eq!(status["result"]["unbuilt"], serde_json::json!([]));
+    let dry = run(&["--json", "--offline", "sync", "--dry-run"])?;
+    assert_eq!(dry["result"]["placement"]["placed"], 1, "{dry}");
+    assert_eq!(dry["result"]["changes"]["download"], serde_json::json!([]));
     let synced = run(&["--json", "--offline", "sync"])?;
     assert_eq!(synced["result"]["placement"]["placed"], 1, "{synced}");
     assert_eq!(synced["work"]["data_folder_objects"], 1, "{synced}");
