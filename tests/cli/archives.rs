@@ -26,7 +26,7 @@ const FILES: [(&str, &[u8]); 5] = [
 ];
 
 fn fixture(name: &str) -> Result<Vec<u8>> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = crate::support::workspace()
         .join("tests/fixtures/archives")
         .join(name);
     Ok(fs::read(path)?)

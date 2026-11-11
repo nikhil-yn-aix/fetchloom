@@ -37,4 +37,4 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 
 fetchloom depends on web APIs it does not control. the [live checks](ci.md#live-source-checks) exercise the configured public services each monday; they do not cover every adapter. a removed source can still leave usable cached bytes when the manifest and lock remain unchanged.
 
-dependabot updates github actions monthly. crates are updated by hand, through the full test gate and `cargo deny` under the [dependency policy](ci.md#checks-within-the-job).
+dependabot updates github actions monthly. crates are updated by hand, through the full test gate and `cargo deny` under the [dependency policy](ci.md#native-tests).

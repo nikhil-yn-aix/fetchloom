@@ -52,4 +52,5 @@ jobs:
       - name: publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --locked
+        # crates.io still uses the scoped token until its trusted publisher is configured.
+        run: cargo publish --locked # zizmor: ignore[use-trusted-publishing]

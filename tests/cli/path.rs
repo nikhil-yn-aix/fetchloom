@@ -44,7 +44,7 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
 #[test]
 fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    let zip = crate::support::workspace()
         .join("tests")
         .join("fixtures")
         .join("archives")

@@ -54,7 +54,7 @@ fn cli() -> Result<Cli> {
 }
 
 fn repository() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    crate::support::workspace().to_path_buf()
 }
 
 fn markdown(folder: &Path, found: &mut Vec<PathBuf>) -> Result {

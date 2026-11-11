@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::future::{Future, ready};
-use std::path::Path;
 use std::sync::Mutex;
 
 use url::Url;
@@ -102,7 +101,7 @@ impl Api for Recorded {
 
 /// the bytes of a file under `tests/fixtures/sources`.
 pub(crate) fn fixture_bytes(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let path = crate::test_paths::workspace()
         .join("tests")
         .join("fixtures")
         .join("sources")

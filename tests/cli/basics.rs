@@ -235,7 +235,7 @@ fn get_has_its_own_help() -> Result {
 #[test]
 fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
     let scope = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        crate::support::workspace()
             .join("docs")
             .join("user/commands/README.md"),
     )?;
@@ -345,10 +345,8 @@ fn welcome() -> Result {
 
 #[test]
 fn the_readme_quick_start_is_the_first_run() -> Result {
-    let readme = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
-    )?
-    .replace("\r\n", "\n");
+    let readme = std::fs::read_to_string(crate::support::workspace().join("README.md"))?
+        .replace("\r\n", "\n");
     let (_, start) = readme
         .split_once("## quick start\n")
         .ok_or("README.md has no quick start")?;

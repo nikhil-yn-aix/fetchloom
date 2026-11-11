@@ -11,6 +11,7 @@ on:
       - 'llms.txt'
       - 'skills/**'
       - '.github/workflows/pages.yml'
+      - 'python/build_site.py'
   release:
     types: [published]
   workflow_dispatch:
@@ -24,11 +25,10 @@ concurrency:
 env:
   MDBOOK_VERSION: 0.5.4
   MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
-  SITE_URL: https://nikhil-yn-aix.github.io/fetchloom/
 
 jobs:
   pages:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
       name: github-pages
@@ -52,44 +52,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/mdbook"
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/mdbook" mdbook
           echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
-      - name: build the docs
-        run: mdbook build
-      - name: add the agent files
-        run: |
-          cp -R skills site/skills
-          python3 - <<'EOF'
-          import os, pathlib, re
-
-          site = pathlib.Path('site')
-          site_url = os.environ['SITE_URL']
-          blob = 'https://github.com/nikhil-yn-aix/fetchloom/blob/main/'
-
-          # llms.txt links are relative to the repository root; point them at the site or github
-          def relink(m):
-              label, url = m.group(1), m.group(2)
-              if re.match(r'[a-z]+:', url):
-                  return m.group(0)
-              path, sep, fragment = url.partition('#')
-              if path.startswith('docs/') and path.endswith('.md'):
-                  url = path[len('docs/'):-len('.md')] + '.html' + sep + fragment
-              elif not path.startswith('skills/'):
-                  url = blob + url
-              return f'[{label}]({url})'
-
-          llms = re.sub(r'\[([^\]]*)\]\(([^)\s]+)\)', relink, pathlib.Path('llms.txt').read_text(encoding='utf-8'))
-          llms = llms.rstrip('\n') + '\n\n## optional\n\n- [full user guide](llms-full.txt): every user guide page in one file\n'
-          (site / 'llms.txt').write_text(llms, encoding='utf-8')
-
-          pages = re.findall(r'\]\((user/[^)\s]+\.md)\)', pathlib.Path('docs/SUMMARY.md').read_text(encoding='utf-8'))
-          if not pages:
-              raise SystemExit('docs/SUMMARY.md lists no user guide pages')
-          parts = [f'# fetchloom user guide\n\nevery page of the fetchloom user guide in reading order, from {site_url}user/README.html\n']
-          for page in pages:
-              body = pathlib.Path('docs', page).read_text(encoding='utf-8').strip()
-              parts.append(f'---\n\nsource: {site_url}{page[:-len(".md")]}.html\n\n{body}\n')
-          (site / 'llms-full.txt').write_text('\n'.join(parts), encoding='utf-8')
-          print(f'llms-full.txt has {len(pages)} pages')
-          EOF
+      - name: build the docs and agent exports
+        run: python3 python/build_site.py
       - name: find the latest published release
         id: release
         env:

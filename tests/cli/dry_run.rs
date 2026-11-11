@@ -417,8 +417,7 @@ fn a_dry_run_leaves_an_empty_cache_folder_empty() -> Result {
 #[test]
 fn sync_dry_run_on_a_settled_project_needs_no_cache() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip =
-        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"))?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let server = Server::start("/files/dataset.zip", vec![file(&zip, "\"z1\"")])?;
     added(&sandbox, &server)?;
     let settled = sandbox.run(&["sync"])?;

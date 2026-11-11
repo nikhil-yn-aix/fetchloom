@@ -4,32 +4,134 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+  INSTA_UPDATE: 'no'
+  INSTA_FORCE_PASS: '0'
 
 jobs:
-  # the one check branch protection requires, so it names no platform and passes only when
-  # every platform did
   ci:
-    needs: [test, musl]
+    needs: [quality, docs, test, windows, windows-fs, snapshots, musl]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - run: |
-          test "${{ needs.test.result }}" = success
-          test "${{ needs.musl.result }}" = success
+      - name: require every prerequisite
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          for name, result in results.items():
+              print(f"{name}: {result['result']}")
+          if not results or any(result['result'] != 'success' for result in results.values()):
+              raise SystemExit('every required job must succeed')
+          PY
 
-  # the linux release ships static musl binaries that use mimalloc, while the test job builds
-  # for glibc. this builds each shipped target the way release.yml does and runs it
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-targets: false
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        if: always()
+        with:
+          tool: cargo-deny@0.20.2,zizmor@1.32.0,cargo-machete@0.9.2,typos-cli@1.52.2,shellcheck@0.11.0
+      - name: fmt
+        if: always()
+        run: cargo fmt --all -- --check
+      - name: cargo-deny
+        if: always()
+        run: cargo deny --locked check advisories licenses bans sources
+      - name: zizmor
+        if: always()
+        run: zizmor --offline --strict-collection .github
+      - name: machete
+        if: always()
+        run: |
+          cargo machete --with-metadata
+          git diff --exit-code -- Cargo.lock
+      - name: typos
+        if: always()
+        run: typos
+      - name: shellcheck
+        if: always()
+        run: shellcheck -s dash install.sh
+      - name: PSScriptAnalyzer
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer | Where-Object Version -EQ '1.25.0')) {
+            Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force -Repository PSGallery
+          }
+          Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0
+          # the installer targets 5.1+, where Write-Host is redirectable progress, not pipeline data.
+          $issues = @(Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error -ExcludeRule PSAvoidUsingWriteHost)
+          $issues | Format-Table -AutoSize
+          if ($issues.Count) { throw "PSScriptAnalyzer found $($issues.Count) issues" }
+      - name: benchmark harness tests
+        if: always()
+        run: python3 -m unittest discover -s bench
+
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MDBOOK_VERSION: 0.5.4
+      MDBOOK_SHA256: 3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: python documentation tests
+        run: |
+          python3 -m unittest discover -s python -p test_docs.py
+          python3 -m unittest discover -s python -p test_site.py
+          python3 -m unittest discover -s python -p test_ci.py
+          python3 -m unittest discover -s python -p test_snapshots.py
+      - name: install mdbook
+        if: always()
+        run: |
+          archive="mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/$archive"
+          echo "$MDBOOK_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP/mdbook" mdbook
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        if: always()
+        with:
+          tool: lychee@0.24.2
+      - name: build the site and agent exports
+        if: always()
+        run: python3 python/build_site.py --dest-dir site/fetchloom
+      - name: check rendered links and anchors
+        if: always()
+        run: |
+          test -s site/fetchloom/index.html
+          lychee --offline --include-fragments=anchor-only --no-ignore --root-dir "$GITHUB_WORKSPACE/site" 'site/fetchloom/**/*.html'
+
   musl:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -38,7 +140,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
@@ -49,7 +151,8 @@ jobs:
       - run: rustup toolchain install
       - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      # the cc crate builds zstd, liblzma, ring and mimalloc with musl-gcc for the musl target
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: install the musl C compiler
         run: |
           sudo apt-get update -qq
@@ -60,140 +163,202 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           said=$(target/${{ matrix.target }}/release/fetchloom --version)
           echo "fetchloom --version: $said"
-          if [ "$said" != "fetchloom $version" ]; then
-            echo "::error::fetchloom --version printed $said"
-            exit 1
-          fi
+          test "$said" = "fetchloom $version"
 
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
-    # the filesystem runs skip the tests that never touch a disk: parsers, sources, the network
-    # and output
-    env:
-      DISKLESS: '--skip source:: --skip net:: --skip glob:: --skip name:: --skip output:: --skip units:: --skip digest:: --skip error:: --skip basics:: --skip hints:: --skip progress:: --skip proxy:: --skip secrets:: --skip split:: --skip search:: --skip caps::'
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, ubuntu-24.04-arm, windows-11-arm, macos-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-11-arm, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # installs the version and components rust-toolchain.toml pins
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo fmt --check
-        if: matrix.os == 'ubuntu-latest'
-      # advisories, licenses, duplicate crates and sources, as deny.toml sets them. it reads the
-      # lock file, which every platform shares, so x86_64 linux alone runs it
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
-        if: matrix.os == 'ubuntu-latest'
         with:
-          tool: cargo-deny@0.20.2
-      - run: cargo deny --locked check advisories licenses bans sources
-        if: matrix.os == 'ubuntu-latest'
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
       - run: cargo clippy --all-targets --locked -- -D warnings
-      # code that only tests and debug builds use would be dead in the shipped binary
       - run: cargo clippy --release --locked -- -D warnings
-        if: matrix.os == 'ubuntu-latest'
-      # the x86_64 macos release is otherwise first compiled when a tag runs release.yml. checking
-      # it here also builds its C dependencies for that target
+        if: matrix.os == 'ubuntu-24.04'
       - name: cargo check for x86_64 macos
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-15'
         env:
           MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
           rustup target add x86_64-apple-darwin
           cargo check --locked --release --target x86_64-apple-darwin
-      - run: cargo test --locked
-      # a build script that finds a library through pkg-config links it, and homebrew's copy is
-      # missing on a user's mac. the test build links what the release links, so check it here
+      - run: cargo build --locked --example recipe_step
+      - name: record cargo test selections
+        run: python3 python/ci_tests.py record
+      - name: nextest
+        run: python3 python/ci_tests.py run native
+      - name: doctests
+        run: cargo test --locked --doc
+      - name: rustdoc
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
       - name: check that the macos build links only system libraries
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-15'
         run: |
           libraries=$(otool -L target/debug/fetchloom | tail -n +2)
           echo "$libraries"
           if echo "$libraries" | grep -vqE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
-            echo "::error::fetchloom links libraries macos does not ship"
+            echo '::error::fetchloom links libraries macos does not ship'
             exit 1
           fi
       - run: python3 -m unittest discover -s python
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'macos-latest'
-      - run: python -m unittest discover -s python
-        if: matrix.os == 'windows-latest'
-      # the benchmark harness and its charts need only the standard library
-      - name: benchmark harness checks
-        if: matrix.os == 'ubuntu-latest'
-        run: python3 -m unittest discover -s bench
-      # the default disks never show some paths: refs clones blocks, which ntfs never does, while
-      # exfat and fat32 hold research data on many drives, have no links and refuse to delete a
-      # read-only file the way ntfs allows. tests run again with their folders on each, except
-      # those DISKLESS skips. windows runners are admin, which diskpart needs
-      - name: cargo test on refs, exfat and fat32
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          $failed = @()
-          foreach ($volume in @(@('refs', 'R'), @('exfat', 'X'), @('fat32', 'Y'))) {
-            $fs, $letter = $volume
-            $vhd = "$env:RUNNER_TEMP\$fs.vhdx"
-            $script = "$env:RUNNER_TEMP\$fs.txt"
-            Set-Content $script -Encoding ascii -Value @(
-              "create vdisk file=`"$vhd`" maximum=4096 type=expandable"
-              "select vdisk file=`"$vhd`""
-              "attach vdisk"
-              "create partition primary"
-              "format fs=$fs quick label=$fs"
-              "assign letter=$letter"
-            )
-            diskpart /s $script
-            if ($LASTEXITCODE) { throw "diskpart could not make the $fs volume" }
-            New-Item -ItemType Directory "${letter}:\tmp" | Out-Null
-            $env:TMP = "${letter}:\tmp"
-            $env:TEMP = $env:TMP
-            Write-Output "::group::cargo test on $fs"
-            cargo test --locked --no-fail-fast -- ($env:DISKLESS -split ' ')
-            if ($LASTEXITCODE) { $failed += $fs }
-            Write-Output "::endgroup::"
-          }
-          if ($failed) { throw "tests failed on $($failed -join ', ')" }
-      # btrfs and xfs clone blocks, a path ext4 never takes
-      - name: cargo test on btrfs and xfs
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04' || matrix.os == 'macos-15'
+      - name: tests on btrfs and xfs
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq btrfs-progs xfsprogs > /dev/null
+          trap 'for fs in btrfs xfs; do sudo umount "/mnt/fetchloom-$fs" 2>/dev/null || true; done' EXIT
           failed=""
           for fs in btrfs xfs; do
             image="$RUNNER_TEMP/$fs.img"
             truncate -s 4G "$image"
             "mkfs.$fs" -q "$image"
-            sudo mkdir -p "/mnt/$fs"
-            sudo mount -o loop "$image" "/mnt/$fs"
-            sudo chown "$(id -u):$(id -g)" "/mnt/$fs"
-            echo "::group::cargo test on $fs"
-            TMPDIR="/mnt/$fs" cargo test --locked --no-fail-fast -- $DISKLESS || failed="$failed $fs"
-            echo "::endgroup::"
+            sudo mkdir -p "/mnt/fetchloom-$fs"
+            sudo mount -o loop "$image" "/mnt/fetchloom-$fs"
+            sudo chown "$(id -u):$(id -g)" "/mnt/fetchloom-$fs"
+            test "$(findmnt -no FSTYPE "/mnt/fetchloom-$fs")" = "$fs"
+            TMPDIR="/mnt/fetchloom-$fs" python3 python/ci_tests.py run "$fs" --disk || failed="$failed $fs"
+            sudo umount "/mnt/fetchloom-$fs"
+            rm "$image"
           done
-          if [ -n "$failed" ]; then echo "tests failed on$failed"; exit 1; fi
-      # a fat drive that root mounted for every user refuses chmod to everyone else, as shared
-      # drives can. a writable copy needs no chmod, so placing one must still work there
-      - name: cargo test on a drive that refuses chmod
-        if: matrix.os == 'ubuntu-latest'
+          test -z "$failed"
+      - name: writable copy on a chmod-refusing drive
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get install -y -qq dosfstools > /dev/null
           truncate -s 64M "$RUNNER_TEMP/fat.img"
           mkfs.vfat "$RUNNER_TEMP/fat.img" > /dev/null
-          sudo mkdir -p /mnt/fat
-          sudo mount -o loop,umask=000 "$RUNNER_TEMP/fat.img" /mnt/fat
-          FETCHLOOM_TEST_NOOP_CHMOD=/mnt/fat cargo test --locked --lib place::tests::a_writable_copy_works_where_the_mount_refuses_chmod -- --exact
-      # apfs keeps a name in the unicode composition it was given, while hfs+, on many older
-      # external drives, lists every name decomposed. both see the two compositions as one name
-      - name: cargo test on hfs+
-        if: matrix.os == 'macos-latest'
+          sudo mkdir -p /mnt/fetchloom-fat
+          sudo mount -o loop,umask=000 "$RUNNER_TEMP/fat.img" /mnt/fetchloom-fat
+          trap 'sudo umount /mnt/fetchloom-fat' EXIT
+          test "$(findmnt -no FSTYPE /mnt/fetchloom-fat)" = vfat
+          FETCHLOOM_TEST_NOOP_CHMOD=/mnt/fetchloom-fat python3 python/ci_tests.py run chmod --chmod
+      - name: tests on hfs+
+        if: matrix.os == 'macos-15'
         run: |
-          hdiutil create -quiet -size 4g -fs HFS+ -volname hfs "$RUNNER_TEMP/hfs.dmg"
+          hdiutil create -quiet -size 4g -fs HFS+ -volname fetchloom "$RUNNER_TEMP/hfs.dmg"
           hdiutil attach -quiet -nobrowse -mountpoint "$RUNNER_TEMP/hfs" "$RUNNER_TEMP/hfs.dmg"
-          TMPDIR="$RUNNER_TEMP/hfs" cargo test --locked --no-fail-fast -- $DISKLESS
+          trap 'hdiutil detach "$RUNNER_TEMP/hfs" || hdiutil detach -force "$RUNNER_TEMP/hfs"' EXIT
+          diskutil info "$RUNNER_TEMP/hfs"
+          TMPDIR="$RUNNER_TEMP/hfs" python3 python/ci_tests.py run hfs --disk
+      - name: keep test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-${{ matrix.os }}-${{ github.run_attempt }}
+          path: target/ci/
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows:
+    name: windows-2025
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: test
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo build --locked --example recipe_step
+      - name: record cargo test selections
+        run: python python/ci_tests.py record
+      - name: nextest
+        run: python python/ci_tests.py run native
+      - name: doctests
+        run: cargo test --locked --doc
+      - run: python -m unittest discover -s python
+      - name: archive the windows test build
+        run: cargo nextest archive --locked --tests --profile ci --archive-file target/ci/windows-tests.tar.zst
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-test-build
+          path: |
+            target/ci/windows-tests.tar.zst
+            target/ci/selection.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: keep test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-windows-2025-${{ github.run_attempt }}
+          path: |
+            target/ci/native/
+            target/ci/selection.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  snapshots:
+    needs: [test, windows, windows-fs]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tests-*
+          path: target/ci-reports
+      - name: reject unreferenced snapshots
+        run: python3 python/check_snapshots.py target/ci-reports
+
+  windows-fs:
+    name: windows ${{ matrix.filesystem }}
+    needs: windows
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        filesystem: [refs, exfat, fat32]
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-test-build
+          path: source/target/ci
+      - name: run the selected tests on the volume
+        shell: pwsh
+        run: .github/scripts/windows-filesystem.ps1 -FileSystem ${{ matrix.filesystem }}
+      - name: keep test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tests-windows-${{ matrix.filesystem }}-${{ github.run_attempt }}
+          path: source/target/ci/${{ matrix.filesystem }}/
+          if-no-files-found: warn
+          retention-days: 7

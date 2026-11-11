@@ -1,87 +1,80 @@
 # CI
 
-CI checks the same crate across processor architectures and filesystems that expose different storage behavior.
+CI checks native behavior and filesystem paths before merge; release packaging remains a separate workflow.
 
-## triggers and permissions
+## triggers and the required check
 
-[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. it has read-only repository permission. concurrency is grouped by ref, with older in-progress runs cancelled. the matrix does not fail fast, so another platform can still report its result. the summary job `ci` has `needs: [test, musl]` and `if: always()`. it passes only when both results are `success`, so failed, cancelled or skipped prerequisites cannot appear green. require the single `ci` check in branch protection rather than individual platform names.
+[ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
-## test job
+the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-fs, snapshots, musl]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
 
-one `test` job expands to five required runners, each with a 45-minute timeout. every runner installs the pinned rust toolchain, restores the rust cache, runs clippy with warnings denied and runs all rust tests.
+## native tests
 
-| runner | architecture | why it runs |
-|---|---|---|
-| `ubuntu-latest` | x86_64 linux | default linux behavior, shared formatting and dependency checks, python helper and extra linux filesystems |
-| `windows-latest` | x86_64 windows | windows handles, permissions, path behavior and extra windows filesystems |
-| `ubuntu-24.04-arm` | arm64 linux | native arm64 compilation and behavior before shipping its linux release |
-| `windows-11-arm` | arm64 windows | native arm64 windows behavior before shipping its release |
-| `macos-latest` | arm64 macos | apfs clones, a disk that ignores case and unicode composition, the python helper and an extra hfs+ run |
+| runner | coverage |
+|---|---|
+| `ubuntu-24.04` | x86_64 linux, rustdoc, python tests, btrfs, xfs and a chmod-refusing FAT mount |
+| `ubuntu-24.04-arm` | native arm64 linux |
+| `windows-2025` | native x86_64 windows on NTFS; produces the test archive for the three extra volumes |
+| `windows-11-arm` | native arm64 windows |
+| `macos-15` | native arm64 macos on APFS, python tests and HFS+ |
 
-## checks within the job
+all five install the toolchain pinned in rust-toolchain.toml and run clippy with warnings denied. linux x86_64 also runs `cargo clippy --release --locked -- -D warnings` and `RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps`. the mac still checks the intel release target with `cargo check --locked --release --target x86_64-apple-darwin` and deployment target 11.0: that is compilation, not intel execution. it also checks the debug executable's system-library linkage. these checks stay until artifact journeys replace them.
 
-| check | runner | purpose |
-|---|---|---|
-| `cargo fmt --check` | x86_64 linux | one formatting result for platform-independent source |
-| `cargo clippy --all-targets --locked -- -D warnings` | all five | every target and test must satisfy configured lints |
-| `cargo clippy --release --locked -- -D warnings` | x86_64 linux | release-only code and items used only by debug builds must satisfy the lints |
-| `cargo check --locked --release --target x86_64-apple-darwin` | macos | the x86_64 macos release target, C dependencies included, which the arm64 runner otherwise never compiles; `MACOSX_DEPLOYMENT_TARGET` is 11.0 as in the release |
-| `cargo test --locked` | all five | unit, CLI, documentation and short fuzz tests |
-| `otool -L target/debug/fetchloom` | macos | the build links only libraries under `/usr/lib` and `/System/Library`, as the release check demands, so a C library a build script found in homebrew fails a pull request instead of a release |
-| `cargo deny --locked check advisories licenses bans sources` | x86_64 linux | one policy check for the shared lockfile; CI installs cargo-deny 0.20.2 |
-| `python3 -m unittest discover -s python` | x86_64 linux, x86_64 windows and macos | subprocess-wrapper arguments and report handling |
-| `python3 -m unittest discover -s bench` | x86_64 linux | benchmark harness: fixtures, runs, live comparison and report rendering |
-| disk-touching tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
-| disk-touching tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
-| a writable copy onto a fat drive that refuses chmod | x86_64 linux | a copy that needs no permission change still works where only root may change permissions |
-| disk-touching tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
+nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero properties. [.config/nextest.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.config/nextest.toml) sets four concurrent tests, one retry and `flaky-result = "fail"`. a test that passes only on retry still fails CI. a slow test is reported after 30 seconds; six periods terminate a hung test as failure. this is a hang guard, not a wall-clock performance assertion. `cargo test --locked --doc` runs doctests separately on every native runner.
 
-[deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. three advisories are ignored, each with its reason: zvariant, zvariant_derive and zbus_names were folded into zbus 6, which keyring's linux secret service store does not use yet. they are notices that the crates moved, not flaws, and go once keyring moves.
+`INSTA_UPDATE=no` forbids snapshot updates. insta 1.49.0 records the snapshot paths each run references through `INSTA_SNAPSHOT_REFERENCES_FILE`; the runner converts them to repository-relative reports. the `snapshots` job checks their union against every tracked `.snap` file and rejects unused, unknown or pending snapshots. it needs all native and filesystem jobs: a reflink-only snapshot is legitimately unused on ext4, but must be exercised on a cloning filesystem. this check adds no second test run. review snapshots locally as [building and testing](building-and-testing.md#update-snapshots) describes; CI never accepts them.
 
-## musl job
+`cargo test` still works locally. the recipe step is built before CI starts tests; a test reuses it without invoking cargo. a local cargo test still asks cargo to refresh it once, so edits to the example are not hidden by a stale executable. test executable and fixture paths prefer Cargo's runtime paths, so an archived build can run from a different checkout directory. no test changes the process environment.
 
-the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static binaries that use mimalloc in place of musl's allocator for every allocation, libc's own too, while the `test` job builds for glibc. the `musl` job builds each of those targets on its own architecture, `x86_64-unknown-linux-musl` on `ubuntu-latest` and `aarch64-unknown-linux-musl` on `ubuntu-24.04-arm`, the way [release.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/release.yml) does: it installs musl-tools for the C dependencies and runs `cargo build --locked --release` for the target. its runs are named after the targets and do not fail fast. it then checks that the binary's `--version` prints `fetchloom` and the Cargo version. it has a 45-minute timeout and restores the rust cache. it does not run the tests or the release workflow's linkage checks.
+## selected-test proof and reports
+
+[python/ci_tests.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_tests.py) compares Cargo's test-binary inventory with nextest's. it asks those libtest binaries for their ordinary and ignored test IDs, both with and without the old filesystem `--skip` arguments. before each nextest run, its selected nonignored IDs must equal that recorded selection and must not be empty. the chmod case has its own exact selection. doctests remain separate from this comparison.
+
+reports under `target/ci` contain the selections and each run's JUnit XML. failures and retry output remain in JUnit; slowest cases also appear in the step summary. reports upload even after a failure, with OS, filesystem and run attempt in their artifact names, and remain for seven days. a successful test run without a JUnit report or with different executed IDs fails the job.
 
 ## filesystem runs
 
-each filesystem run skips the test modules that the `DISKLESS` value in ci.yml names, whose tests never touch a disk: parsers, sources, the network and output. `--skip` matches any part of a test's path, so a new module that touches the disk needs a name that contains none of them.
+every native runner executes the full ordinary suite on its default disk. extra filesystems repeat the existing disk-touching selection, excluding the same substrings the old `DISKLESS` list excluded. a new disk test must not accidentally match one of those exclusions; the selection report makes that decision inspectable.
 
-windows creates 4096 MB expandable VHDX images with diskpart and assigns R, X and Y. it points `TMP` and `TEMP` at a folder on each volume and runs `cargo test --locked --no-fail-fast`. runner admin access permits diskpart; normal contributor tests should not require admin access.
+linux reruns the built tests on btrfs and xfs loop images. their mounted filesystem types are checked first. a separate root-mounted FAT image lets the runner write but refuses chmod; `FETCHLOOM_TEST_NOOP_CHMOD` names it for the one writable-copy regression. macos attaches an HFS+ image for decomposed-unicode and no-reflink behavior. cleanup traps detach the images. macos first tries a normal detach, then force-detaches only its owned test image if it remains busy.
 
-linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. it then mounts a 64 MB fat image as root with `umask=000`, where every user may write but only root may change permissions, and runs `place::tests::a_writable_copy_works_where_the_mount_refuses_chmod` with `FETCHLOOM_TEST_NOOP_CHMOD` naming that mount; without the variable the test returns at once. arm64 linux and windows runners run the ordinary full tests, not these extra mount loops.
+the windows x64 job archives its checked test build once, including `recipe_step` and the libtest selection record. three jobs independently create ReFS, exFAT and FAT32 volumes, verify `Get-Volume` reports the requested filesystem, and point `TMP` and `TEMP` at that volume. each runs the entire disk selection, not one third. they depend only on the windows producer, not the slower linux/mac matrix. they check out into `source/` and use nextest's workspace remapping, exercising relocation of both executable and fixture paths. no Rust build is needed in these consumers. `finally` restores the environment and detaches the VHDX. the transfer archive is retained for one day.
 
-macos makes a 4 GB hfs+ disk image with `hdiutil`, attaches it without showing it in finder and points `TMPDIR` at it. apfs, the default disk, keeps each name in the unicode composition it was given, while hfs+ lists every name decomposed; both ignore case by default. tests that need such a disk return early on a disk that tells the spellings apart.
+[building and testing](building-and-testing.md#xfs-loop-mount) gives local filesystem reproduction commands. capability-sensitive assertions still follow the filesystem's available operations; this matrix is not a promise about every NAS or cloud-file-provider implementation.
 
-[building and testing](building-and-testing.md#xfs-loop-mount) gives a focused xfs reproduction. its [WSL gate](building-and-testing.md#wsl-gate) verifies a local branch without a push.
+## quality
 
-## live-source checks
+one linux job has separately named checks. each check runs even after an earlier one fails, without `continue-on-error` hiding its result:
 
-[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) runs every monday at 04:17 UTC and through manual dispatch. its linux x86_64 and windows x86_64 jobs run:
+| check | tool |
+|---|---|
+| rust formatting | the pinned rustfmt |
+| advisories, licenses, duplicate crates and sources | cargo-deny 0.20.2 with deny.toml |
+| workflow security and malformed workflow input | zizmor 1.32.0, offline with strict collection |
+| unused dependencies | cargo-machete 0.9.2 with metadata, followed by a Cargo.lock cleanliness check |
+| spelling | typos 1.52.2, excluding raw fixtures, snapshots, generated benchmark results and lockfiles |
+| shell installer | ShellCheck 0.11.0 with `-s dash` |
+| PowerShell installer | PSScriptAnalyzer 1.25.0, warnings/errors except Write-Host progress on supported PowerShell 5.1+ |
+| benchmark harness logic | `python3 -m unittest discover -s bench`, using only the standard library |
 
-```sh
-cargo test --locked -- --ignored
-```
+the benchmark itself never runs here. cargo-deny's three migration notices remain ignored with their existing reasons; duplicate versions warn. machete findings require inspection before removing dependencies. zizmor's offline mode does not audit remote action history. actions remain pinned to full commits with checkout credentials disabled; their monthly Dependabot updates have a seven-day cooldown. the existing scoped crates.io publishing token has a narrow zizmor exception until trusted publishing is configured. rust-cache 2.9.3 keeps dependency builds; PR runs restore but do not save caches.
 
-this exercises the ignored live source tests. jobs have 45-minute timeouts and do not fail fast. the workflow is separate from the required `ci` summary because public services can change or be unavailable.
+## musl checks
 
-default CI uses recorded metadata and local servers; work counters catch extra requests and copies. there is no wall-clock performance gate. action references are pinned to commits in every workflow.
+two required jobs retain the release-mode musl builds on ubuntu-24.04 and ubuntu-24.04-arm, with musl-tools and mimalloc, then check `--version`. this checks startup, not a release journey. all six target artifacts, installed wheels and installer journeys belong to the next CI slice; this gate does not pretend they already ran. [releasing](releasing.md) owns the current tag workflow and package inventory.
 
-[mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) runs only through manual dispatch. on `macos-latest` it builds a release executable and runs it as a person would against live zenodo and the search catalogs: `add zenodo:3608990`, `status`, `sync` after deleting `data/`, `get --dir`, `search iris --json`, a second project that must clone or hardlink from the shared cache, a project in `~/Library/CloudStorage` that must not hardlink, the default cache in `~/Library/Caches/fetchloom`, `auth --offline`, and the bash and zsh completion scripts. every check runs even after one fails, and the job uploads everything the commands printed as the `mac-e2e-log` artifact.
+the musl compiler installation depends on Ubuntu's apt archives in both CI and release. a resolver or archive outage fails provisioning, not a product test; the required gate still does not waive that job. mitigation belongs to the next slice.
 
 ## documentation site
 
-[pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml) publishes `docs/` as an [mdBook](https://rust-lang.github.io/mdBook/) site at `https://nikhil-yn-aix.github.io/fetchloom/`, so the site always matches the markdown on main. it runs on pushes to main that change `docs/**`, `book.toml`, `llms.txt`, `skills/**` or the workflow, when a release is published and through manual dispatch. it checks out the default branch even when a release tag starts it. the job has contents read, pages write and id-token write, a 15-minute timeout, the `github-pages` environment and the `pages` concurrency group, which lets a running deployment finish.
+the required docs job runs the existing python markdown file, heading and sidebar checks, builds with mdBook 0.5.4, and checks generated HTML links and anchors with lychee 0.24.2 offline. it renders under `site/fetchloom/` so absolute `/fetchloom/` paths resolve against the local site root. missing HTML or local targets fail. external service availability is not part of this offline check.
 
-the job downloads mdbook 0.5.4 from its github release, checks the archive's SHA-256 and runs `mdbook build`. [book.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/book.toml) reads `docs/` and writes `site/`. [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md) sets the sidebar order; a page missing from it is not published, and a listed page that does not exist fails the build. default preprocessors are off, so each `README.md` becomes `README.html` and links between pages keep working. links to files outside `docs/` use absolute github URLs because the site cannot serve them.
+[python/build_site.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/build_site.py) is the shared builder for CI and [pages.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/pages.yml). it runs mdBook and writes the same `llms.txt`, `llms-full.txt` and skills exports. [book.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/book.toml) and [SUMMARY.md](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/SUMMARY.md) still own the site layout. default preprocessors stay off, so README.md becomes README.html.
 
-| site path | source |
-|---|---|
-| `/` | the mdbook output, with `index.html` rendered from `docs/README.md` |
-| `/llms.txt` | `llms.txt` from the repository root, with links pointing at site pages or github and a line naming `llms-full.txt` |
-| `/llms-full.txt` | every user guide page in `SUMMARY.md` order, each preceded by its site URL |
-| `/skills/` | the `skills/` folder, unchanged |
-| `/apt/` | the signed apt repository from the latest published release; [releasing](releasing.md#apt-repository) describes it |
+pages remains the only deploying workflow. it builds the default branch and adds the signed apt repository from the latest published release before deploying the complete site. PR checks receive no apt key, pages-write or OIDC permission. [releasing](releasing.md#apt-repository) describes that publication boundary.
 
-preview the site from the repository root with mdbook 0.5.4 installed: `mdbook serve --open`. `mdbook build` writes the same files to `site/`, which git ignores.
+## live-source checks
 
-related: [engineering loop](README.md), [releasing](releasing.md), [performance](../performance/README.md), [placing](../architecture/placing.md).
+[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) still runs the ignored public-service tests weekly on linux and windows, outside the required result. [mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) remains manually dispatched until its unique checks are moved into deterministic artifact and weekly live journeys. neither is replaced by this slice.
+
+related: [engineering loop](README.md), [building and testing](building-and-testing.md), [releasing](releasing.md), [placing](../architecture/placing.md).

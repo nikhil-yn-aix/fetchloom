@@ -1,0 +1,20 @@
+nextest-version = { required = "0.9.151" }
+
+[profile.ci]
+retries = 1
+flaky-result = "fail"
+fail-fast = false
+test-threads = 4
+slow-timeout = { period = "30s", terminate-after = 6 }
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+flaky-fail-status = "failure"
+
+[[profile.ci.archive.include]]
+path = "debug/examples"
+relative-to = "target"
+depth = 1
+on-missing = "error"

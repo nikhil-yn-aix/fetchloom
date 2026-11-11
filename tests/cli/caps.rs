@@ -298,7 +298,7 @@ fn a_rate_capped_download_keeps_every_byte() -> Result {
 fn one_thread_unpacks_places_and_verifies_a_project() -> Result {
     let sandbox = Sandbox::new()?;
     let zip = std::fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        crate::support::workspace()
             .join("tests")
             .join("fixtures")
             .join("archives")

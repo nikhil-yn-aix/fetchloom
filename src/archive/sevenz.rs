@@ -161,7 +161,6 @@ fn failed(err: sevenz_rust2::Error) -> Error {
 mod tests {
     use std::cell::Cell;
     use std::io::{self, Cursor};
-    use std::path::PathBuf;
 
     use sevenz_rust2::encoder_options::Lzma2Options;
     use sevenz_rust2::{Archive, ArchiveEntry, Error as Seven, Password};
@@ -188,7 +187,7 @@ mod tests {
     /// with the password `fetchloom`: `sevenz-rust2-encrypted.7z` holds README.md in the clear,
     /// then data/train.csv encrypted, as `7z u -p` adds a file; the other encrypts its header too.
     fn fixture(name: &str) -> Vec<u8> {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let path = crate::test_paths::workspace()
             .join("tests/fixtures/archives")
             .join(name);
         std::fs::read(path).unwrap()

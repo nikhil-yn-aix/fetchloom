@@ -1102,9 +1102,7 @@ fn a_big_dataset_keeps_its_file_list_beside_data_lock() -> Result {
 #[test]
 fn switching_extract_needs_no_listing() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip = fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
-    )?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let listing = s3_listing("/shard-bucket.s3.amazonaws.com/", "shards/", None);
     let object = "/shard-bucket.s3.amazonaws.com/shards/train.zip".to_owned();
     let routes = Routes::start(vec![

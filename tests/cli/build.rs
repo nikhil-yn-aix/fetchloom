@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 
 use serde_json::Value;
 
@@ -466,46 +465,12 @@ fn no_other_command_runs_a_step() -> Result {
     Ok(())
 }
 
-/// the step program of these tests, built from `examples/recipe_step.rs` beside fetchloom: `cargo
-/// test` builds it, and a run of the cli tests alone builds it here once.
-fn step_program() -> Result<PathBuf> {
-    static BUILT: OnceLock<std::result::Result<PathBuf, String>> = OnceLock::new();
-    let built = BUILT.get_or_init(|| {
-        let fetchloom = Path::new(env!("CARGO_BIN_EXE_fetchloom"));
-        let program = fetchloom
-            .with_file_name("examples")
-            .join(format!("recipe_step{}", std::env::consts::EXE_SUFFIX));
-        if let Some(cargo) = std::env::var_os("CARGO") {
-            let mut build = Command::new(cargo);
-            build
-                .args(["build", "--locked", "--quiet", "--example", "recipe_step"])
-                .current_dir(env!("CARGO_MANIFEST_DIR"));
-            if fetchloom.parent().and_then(Path::file_name) == Some("release".as_ref()) {
-                build.arg("--release");
-            }
-            let output = build.output().map_err(|err| err.to_string())?;
-            if !output.status.success() {
-                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
-            }
-        }
-        if program.is_file() {
-            Ok(program)
-        } else {
-            Err(format!(
-                "{} is missing: run `cargo build --example recipe_step`",
-                program.display()
-            ))
-        }
-    });
-    built.clone().map_err(Into::into)
-}
-
 /// `fetchloom` with `args` in `folder`, with the step program on PATH as `recipe-step`.
 pub(crate) fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Command> {
     let bin = sandbox.folder("bin")?;
     let program = bin.join(format!("recipe-step{}", std::env::consts::EXE_SUFFIX));
     if !program.is_file() {
-        fs::copy(step_program()?, &program)?;
+        fs::copy(crate::support::recipe_step()?, &program)?;
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
     let paths = std::iter::once(bin).chain(std::env::split_paths(&path));
@@ -1403,7 +1368,9 @@ exit 0
 fn a_step_calling_fetchloom_on_its_project_fails_fast() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    let fetchloom = env!("CARGO_BIN_EXE_fetchloom").replace('\\', "\\\\");
+    let fetchloom = crate::support::executable()
+        .to_string_lossy()
+        .replace('\\', "\\\\");
     with(&sandbox, &server, &recipe(&["call", &fetchloom]))?;
     let output = build(&sandbox, &["--json", "build"])?;
     assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);

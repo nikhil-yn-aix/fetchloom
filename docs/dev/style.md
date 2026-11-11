@@ -67,4 +67,4 @@ a pull request title says what changed. its body explains what and why in two or
 
 ## existing checks
 
-cargo configures rust and clippy lints, including missing public-documentation warnings. CLI tests compare an option sentence with help and snapshot program output. markdown transcripts are not otherwise executed. typos, vale and comment-prose checks are not configured. [engineering](engineering/README.md) lists the available checks.
+cargo configures rust and clippy lints, including missing public-documentation warnings. CLI tests compare an option sentence with help and snapshot program output. markdown transcripts are not otherwise executed. CI runs typos with narrow exclusions for raw fixtures and generated files. vale and comment-prose checks are not configured. [engineering](engineering/README.md) lists the available checks.

@@ -28,6 +28,10 @@ mod units;
 mod volume;
 mod work;
 
+#[cfg(test)]
+#[path = "../tests/support/paths.rs"]
+mod test_paths;
+
 /// runs fetchloom with the arguments of the current process and returns its exit code.
 #[must_use]
 #[expect(

@@ -2,7 +2,6 @@
 //! archives made by real tools.
 
 use std::cell::Cell;
-use std::path::PathBuf;
 
 use super::guard::{Guard, Meter};
 use super::samples::{Scratch, compress, seven_zip, tar_of, zip_of, zstd_asking_for};
@@ -14,7 +13,7 @@ use crate::error::{Error, Kind};
 const FIXTURE_TREE: &str = "8c79dd9ba52babe269e8d1d2183c1c2201f677df8175749fe496f4d37bd0f2c1";
 
 fn fixture(name: &str) -> Result<Unpacked, Error> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = crate::test_paths::workspace()
         .join("tests/fixtures/archives")
         .join(name);
     let input = Input::File(path);

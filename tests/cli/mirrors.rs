@@ -31,9 +31,7 @@ fn ok(output: &Output) -> Result {
 /// a source serving one csv file and one zip, and a project in the sandbox's work folder that
 /// pins both, synced once there so the sandbox's cache holds them.
 pub(crate) fn project(sandbox: &Sandbox) -> Result<Routes> {
-    let zip = fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
-    )?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let source = Routes::start(vec![
         ("/files/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
         ("/files/dataset.zip".to_owned(), file(&zip, "\"z1\"")),
@@ -475,9 +473,7 @@ fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
     fs::remove_dir_all(root.join("trees"))?;
-    let zip = fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
-    )?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let hex = sha256(&zip);
     fs::create_dir_all(root.join("objects").join(&hex[..2]))?;
     fs::write(root.join("objects").join(&hex[..2]).join(&hex[2..]), &zip)?;
@@ -503,9 +499,7 @@ fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
 #[test]
 fn a_split_archive_comes_from_a_mirror_by_its_tree() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip = fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
-    )?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let scans = sandbox.folder("scans")?;
     let (first, second) = zip.split_at(zip.len() / 2);
     fs::write(scans.join("dataset.zip.001"), first)?;

@@ -142,8 +142,7 @@ fn every_file_gone_for_good_is_named_with_where_it_was() -> Result {
 #[test]
 fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
     let sandbox = Sandbox::new()?;
-    let zip =
-        fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"))?;
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
     let server = Server::start("/files/dataset.zip", vec![file(&zip, "\"z1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);

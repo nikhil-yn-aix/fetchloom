@@ -10,9 +10,14 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+#[path = "../support/paths.rs"]
+mod paths;
+mod programs;
 mod running;
 mod server;
 
+pub(crate) use paths::workspace;
+pub(crate) use programs::{executable, recipe_step};
 pub(crate) use running::Running;
 
 use server::{ServerTask, Shutdown};
@@ -176,7 +181,7 @@ impl Sandbox {
 
     pub(crate) fn command(&self, args: &[&str]) -> Command {
         let home = self.root.join("home");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fetchloom"));
+        let mut command = Command::new(executable());
         // nothing from the machine running the tests may reach fetchloom: its own settings,
         // proxies, colors, synced folders or any source's credentials
         for (name, _) in std::env::vars_os() {

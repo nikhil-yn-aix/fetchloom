@@ -1,0 +1,22 @@
+[files]
+extend-exclude = ["tests/fixtures/**", "tests/cli/snapshots/**", "bench/results/**", "bench/fonts/**", "Cargo.lock", "bench/uv.lock"]
+
+[default]
+# exact invalid inputs, byte samples and encoded names whose spelling is the test.
+extend-ignore-re = [
+    '"(?:--verison|sycn|verfiy|smal|claen|selct|exlcude|authenticat)"',
+    '\\"sycn\\"',
+    'no dataset called (?:smal|claen)',
+    '\b(?:selct|datsets|exculde)\s*=',
+    '"(?:abd|ond|fo|ba)"',
+    '(?i)caf(?:\\u\{e9\}|\\xe9|%c3%a9|%e9)',
+    '"mesures_e\\u\{301\}chantillon\.csv"',
+    '"[A-Za-z0-9_+/=-]{64,}"',
+    'cursor=[A-Za-z0-9_+/=-]{64,}',
+]
+
+[default.extend-identifiers]
+actaul_kb = "actaul_kb"
+WRONLY = "WRONLY"
+ND = "ND"
+flate2 = "flate2"
