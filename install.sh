@@ -1,6 +1,7 @@
 #!/bin/sh
-# installs fetchloom from a github release into ~/.local/bin, and adds that folder to
-# PATH in your shell profiles when PATH lacks it.
+# installs fetchloom from a github release into ~/.local/bin, with fl as a short name for it
+# there unless another fl would be hidden, and adds that folder to PATH in your shell profiles
+# when PATH lacks it.
 #
 #   curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh
 #   curl -LsSf https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.sh | sh -s -- 0.1.0
@@ -140,6 +141,27 @@ installed=$("$folder/fetchloom" --version) ||
 check_destination
 mv -f "$folder/fetchloom" "$bin_dir/fetchloom"
 echo "installed $installed in $bin_dir"
+
+# fl is a link beside fetchloom, so it runs whatever version is installed. it is made only where
+# no other fl would be hidden or replaced, and a link made before is kept
+short=$bin_dir/fl
+ours=''
+if [ -L "$short" ] && [ "$short" -ef "$bin_dir/fetchloom" ]; then
+    ours=1
+fi
+other=$(command -v fl 2> /dev/null || true)
+if [ -n "$other" ] && [ "$other" -ef "$bin_dir/fetchloom" ]; then
+    other=''
+fi
+if [ -z "$ours" ] && { [ -e "$short" ] || [ -L "$short" ]; }; then
+    echo "left ~/.local/bin/fl alone: it is not a link to fetchloom. to replace it with one: ln -sf fetchloom ~/.local/bin/fl"
+elif [ -n "$other" ]; then
+    echo "left fl alone: it runs $other here. to use fl for fetchloom in your shell, add alias fl=fetchloom to its startup file"
+elif [ -n "$ours" ] || ln -s fetchloom "$short"; then
+    echo "fl runs fetchloom too"
+else
+    echo "warning: fl was not made; fetchloom itself is installed" >&2
+fi
 
 case ":$PATH:" in
     *":$bin_dir:"* | *":$bin_dir/:"*)

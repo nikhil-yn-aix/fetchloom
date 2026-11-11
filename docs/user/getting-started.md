@@ -154,7 +154,7 @@ to remove the whole project, delete its folder. to remove every copy of a datase
 |---|---|
 | `cargo install` | `cargo uninstall fetchloom` |
 | `pip install fetchloom` | `pip uninstall fetchloom` |
-| `install.sh` | `rm ~/.local/bin/fetchloom`, and the line marked `# added by the fetchloom installer` in your shell profiles |
+| `install.sh` | `rm ~/.local/bin/fetchloom ~/.local/bin/fl`, and the line marked `# added by the fetchloom installer` in your shell profiles. if the installer said it left `fl` alone, that `fl` is another program: remove only `fetchloom` |
 | `install.ps1` | delete `%LOCALAPPDATA%\Programs\fetchloom`, and that folder's `bin` from your user PATH in the environment variables settings |
 
 projects keep their `data.toml`, `data.lock` and `data/`; delete them with the project.

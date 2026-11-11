@@ -95,13 +95,15 @@ the planned release will include [install.sh](https://github.com/nikhil-yn-aix/f
 
 the shell installer refuses an existing directory or directory symlink at `$HOME/.local/bin/fetchloom` before staging, and checks again before the final move. it leaves the directory and its contents alone. move the conflicting directory aside before installing.
 
+`install.sh` also makes `fl` in that folder, a link to `fetchloom` beside it, so an upgrade carries the short name along with nothing more to download. it never hides or replaces another `fl`: it leaves alone an `fl` already there that is not such a link, and makes none when `command -v fl` finds another program, earlier or later on PATH. either way it prints one line saying so and how to make the short name by hand. a reinstall keeps the link and puts back a missing one.
+
 both read `SHA256SUMS`, select the architecture's archive, verify its digest and stage it beside the destination. they run the staged executable's `--version` before moving it into place; when it cannot run, `install.sh` prints an `error:` line, `install.ps1` throws, and the installed executable stays as it was. an explicit version takes precedence over `FETCHLOOM_VERSION`; otherwise the installer requests the latest release. `FETCHLOOM_NO_MODIFY_PATH=1` leaves shell profiles and the user PATH alone. `FETCHLOOM_DOWNLOAD_URL` replaces the release directory for local tests.
 
 `install.sh` downloads with curl when it can, held to https and TLS 1.2 or later by `--proto =https --tlsv1.2`. otherwise it uses wget with `--https-only --secure-protocol=TLSv1_2`, the options rustup's installer passes; `--secure-protocol=TLSv1_2` makes wget speak TLS 1.2 only, and gnu wget applies `--https-only` to recursive downloads alone, so wget does not refuse a redirect to http the way curl does. busybox wget takes neither option, so the installer warns and downloads without them. a `FETCHLOOM_DOWNLOAD_URL` test folder may be served over http, so neither downloader insists on https for it.
 
 ## local fake-release test
 
-`python3 -m unittest discover -s python -p test_install.py` runs the shell installer against a loopback HTTP server on linux. it uses a fake executable and a private home to check matching and mismatched digests, failed version checks, and idempotent profile changes. it contacts no release service and leaves the real home and installed program alone. the digest regression also checks that a mismatched archive is never executed.
+`python3 -m unittest discover -s python -p test_install.py` runs the shell installer against a loopback HTTP server on linux. it uses a fake executable and a private home to check matching and mismatched digests, failed version checks, idempotent profile changes, the `fl` link, its reinstall and the skip beside another `fl`. its PATH holds only the folders of the programs the installer runs, so an `fl` elsewhere on the machine cannot change the result. it contacts no release service and leaves the real home and installed program alone. the digest regression also checks that a mismatched archive is never executed.
 
 use a folder named `release` holding a locally packaged archive with the layout above and its matching `SHA256SUMS`. an archive from a successful build-job artifact also works; no published release is needed. on linux, from the folder holding those archives, write the checksum file with `sha256sum -- *.tar.gz > SHA256SUMS`. on windows, from the repository root:
 
@@ -118,6 +120,7 @@ serve the same folder on linux with `python3 -m http.server 8000 --bind 127.0.0.
 mkdir -p .release-test/home
 HOME="$PWD/.release-test/home" FETCHLOOM_DOWNLOAD_URL=http://127.0.0.1:8000 sh install.sh
 .release-test/home/.local/bin/fetchloom --version
+.release-test/home/.local/bin/fl --version
 ```
 
 on windows, changing `LOCALAPPDATA` alone does not isolate the persistent user PATH. save and restore both the user PATH and process settings:

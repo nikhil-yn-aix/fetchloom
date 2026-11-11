@@ -18,6 +18,19 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# the programs install.sh runs. a test's PATH holds their folders and nothing else, so a
+# program named fl elsewhere on this machine cannot change what the installer sees
+TOOLS = ["sh", "curl", "wget", "sha256sum", "shasum", "tar", "gzip", "grep", "head", "cut",
+         "uname", "mkdir", "mv", "rm", "ln"]
+
+
+def tool_folders():
+    folders = []
+    for tool in TOOLS:
+        found = shutil.which(tool)
+        if found and os.path.dirname(found) not in folders:
+            folders.append(os.path.dirname(found))
+    return folders
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -48,6 +61,7 @@ class LocalRelease(unittest.TestCase):
         self.profile = self.home / ".profile"
         self.profile.write_text("# existing profile\n", encoding="utf-8")
         self.target = f"{arch}-unknown-linux-musl"
+        self.tools = tool_folders()
         handler = functools.partial(QuietHandler, directory=str(self.release))
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -60,12 +74,12 @@ class LocalRelease(unittest.TestCase):
         with opener.open(self.url + "/", timeout=5) as response:
             self.assertEqual(response.status, 200)
 
-    def package(self, matching=True, exit_code=0):
+    def package(self, matching=True, exit_code=0, build=""):
         name = f"fetchloom-0.1.0-{self.target}"
         executable = (
             '#!/bin/sh\nprintf ran > "$HOME/executed"\n'
             "printf 'fetchloom 0.1.0\\n'\n"
-            f"exit {exit_code}\n"
+            f"exit {exit_code}\n# {build}\n"
         ).encode()
         archive = self.release / f"{name}.tar.gz"
         with tarfile.open(archive, "w:gz") as packed:
@@ -77,10 +91,11 @@ class LocalRelease(unittest.TestCase):
         (self.release / "SHA256SUMS").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
         return executable
 
-    def install(self, modify_path=False):
+    def install(self, modify_path=False, path=None):
         env = {name: value for name, value in os.environ.items()
                if not name.upper().startswith("FETCHLOOM_") and not name.upper().endswith("_PROXY")}
-        env.update(HOME=str(self.home), FETCHLOOM_DOWNLOAD_URL=self.url, NO_PROXY="127.0.0.1")
+        env.update(HOME=str(self.home), FETCHLOOM_DOWNLOAD_URL=self.url, NO_PROXY="127.0.0.1",
+                   PATH=os.pathsep.join(self.tools if path is None else path))
         if not modify_path:
             env["FETCHLOOM_NO_MODIFY_PATH"] = "1"
         return subprocess.run(["sh", str(ROOT / "install.sh"), "0.1.0"], env=env,
@@ -158,3 +173,82 @@ class InstallerDestinationTests(LocalRelease):
         self.assertTrue(self.bin.is_symlink())
         self.assertFalse((self.home / "executed").exists())
         self.assertEqual(self.profile.read_text(), "# existing profile\n")
+
+
+class ShortNameTests(LocalRelease):
+    """fl is a link to fetchloom beside it, made only where it hides no other fl."""
+
+    def setUp(self):
+        super().setUp()
+        for folder in self.tools:
+            if os.access(os.path.join(folder, "fl"), os.X_OK):
+                self.skipTest(f"{folder} holds a program named fl, and the installer needs that folder")
+        self.link = self.bin.parent / "fl"
+
+    def other_fl(self):
+        folder = self.root / "elsewhere"
+        folder.mkdir()
+        program = folder / "fl"
+        program.write_bytes(b"#!/bin/sh\necho another fl\n")
+        program.chmod(0o755)
+        return program
+
+    def test_fl_is_a_link_to_fetchloom_beside_it(self):
+        self.package()
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(os.readlink(self.link), "fetchloom")
+        ran = subprocess.run([str(self.link)], env={"HOME": str(self.home)},
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(ran.stdout, "fetchloom 0.1.0\n")
+        self.assertIn("fl runs fetchloom too\n", result.stdout)
+
+    def test_a_reinstall_keeps_the_link_and_puts_back_a_missing_one(self):
+        on_path = [str(self.bin.parent), *self.tools]
+        self.package(build="first")
+        self.assertEqual(self.install(path=on_path).returncode, 0)
+        upgrade = self.package(build="second")
+        for case in ["kept", "put back"]:
+            with self.subTest(case):
+                if case == "put back":
+                    self.link.unlink()
+                result = self.install(path=on_path)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(os.readlink(self.link), "fetchloom")
+                self.assertEqual(self.link.read_bytes(), upgrade)
+                self.assertIn("fl runs fetchloom too\n", result.stdout)
+
+    def test_an_fl_already_in_the_folder_stays_as_it_is(self):
+        executable = self.package()
+        elsewhere = self.other_fl()
+        for case in ["file", "link elsewhere"]:
+            with self.subTest(case):
+                if case == "file":
+                    self.link.write_bytes(b"someone else's fl\n")
+                else:
+                    self.link.unlink()
+                    self.link.symlink_to(elsewhere)
+                before = os.readlink(self.link) if self.link.is_symlink() else self.link.read_bytes()
+                result = self.install()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                after = os.readlink(self.link) if self.link.is_symlink() else self.link.read_bytes()
+                self.assertEqual(after, before)
+                self.assertEqual(self.bin.read_bytes(), executable)
+                self.assertIn("left ~/.local/bin/fl alone: it is not a link to fetchloom. "
+                              "to replace it with one: ln -sf fetchloom ~/.local/bin/fl\n", result.stdout)
+                self.assertNotIn("fl runs fetchloom too", result.stdout)
+
+    def test_another_fl_on_path_is_never_hidden(self):
+        executable = self.package()
+        other = self.other_fl()
+        for case, path in [
+            ("earlier on PATH", [str(other.parent), str(self.bin.parent), *self.tools]),
+            ("later on PATH", [str(self.bin.parent), *self.tools, str(other.parent)]),
+        ]:
+            with self.subTest(case):
+                result = self.install(path=path)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(os.path.lexists(self.link))
+                self.assertEqual(self.bin.read_bytes(), executable)
+                self.assertIn(f"left fl alone: it runs {other} here. to use fl for fetchloom in your "
+                              "shell, add alias fl=fetchloom to its startup file\n", result.stdout)
