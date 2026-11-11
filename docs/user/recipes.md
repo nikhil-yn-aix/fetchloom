@@ -112,9 +112,22 @@ a step should make the same files from the same inputs. one that does not, as on
 ```text
        Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
          Ok everything matches data.lock by size and time
+  hint: `fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are
 ```
 
-look at them before you choose them: `fetchloom build --accept emb` pins and places them without running anything, and the commit of `data.lock` and `data.lock.d` records your choice. [a rebuild that differs](commands/build.md#a-rebuild-that-differs) has the details.
+look at them before you choose them. `fetchloom status -v` names each file that differs with the cache file that holds the rebuild's bytes, so you can compare it with the pinned file in the data folder:
+
+```text
+$ fetchloom status -v
+       Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
+            changed vectors.bin: /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
+         Ok everything matches data.lock by size and time
+            5 ms in all
+$ cmp data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
+data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef differ: byte 1, line 1
+```
+
+then `fetchloom build --accept emb` pins and places them without running anything, and the commit of `data.lock` and `data.lock.d` records your choice. [a rebuild that differs](commands/build.md#a-rebuild-that-differs) has the details.
 
 ## keep only the result
 

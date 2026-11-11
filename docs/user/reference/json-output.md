@@ -71,7 +71,7 @@ status arrays:
 |---|---|
 | `unlocked` | dataset names missing from the lock or with a changed spec or `extract`, and recipes whose result data.lock does not pin as building them now would make, which `fetchloom build` pins; human output says what moved |
 | `removed` | dataset names in data.lock but no longer in data.toml, recipe results included |
-| `candidates` | recipes with a kept rebuild, files a build made that differ from what data.lock pins for the same key, which `fetchloom build --accept` pins |
+| `candidates` | recipes with a kept rebuild, files a build made that differ from what data.lock pins for the same key, which `fetchloom build --accept` pins: `name`, `tree` and `files`, each file that differs with `path`, `difference` (`changed`, `missing` or `extra`), nullable `file`, the cache file of the rebuild's bytes, and nullable `pinned`, the cache file of the bytes data.lock pins |
 | `missing` | absent target paths |
 | `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
 | `untracked` | existing target paths without state records |

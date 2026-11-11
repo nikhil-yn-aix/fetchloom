@@ -180,7 +180,19 @@ error: emb differs from data.lock: 0 of 1 files match
   help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
 ```
 
-the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses: only you choose them over the pinned files. once you have looked at them, `fetchloom build --accept emb` pins them in `data.lock` and places them in the data folder, without running anything:
+the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses: only you choose them over the pinned files. `fetchloom status -v` names each of its files that differs from `data.lock` with the cache file that holds the rebuild's bytes, so you can compare it with the file `data.lock` pins, placed in the data folder; `status --json` gives the cache file of both. this run had the cache in its usual place on linux:
+
+```text
+$ fetchloom status -v
+       Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
+            changed vectors.bin: /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
+         Ok everything matches data.lock by size and time
+            5 ms in all
+$ cmp data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef
+data/emb/vectors.bin /home/ada/.cache/fetchloom/objects/c8/0f2364761266a6273ae7e5acf81bd28b959a15f2f9599bded72f23b3e8dfef differ: byte 1, line 1
+```
+
+a cache file is read-only and others may share it, so copy one before you change it. once you have looked at them, `fetchloom build --accept emb` pins them in `data.lock` and places them in the data folder, without running anything:
 
 ```text
    Accepted emb · 1 file, 24 B in place of the files data.lock pinned

@@ -1595,7 +1595,7 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
     assert_eq!(files(&sandbox.work().join("data"))?, data);
     let status = json(&there(&["--json", "status"])?)?;
-    assert_eq!(status["result"]["candidates"], serde_json::json!(["clean"]));
+    assert_eq!(kept_names(&status), ["clean"]);
     let told = text(&there(&["status"])?.stderr)?;
     assert!(
         told.contains("       Kept clean · a rebuild that differs from data.lock; `fetchloom build --accept clean` pins it\n"),
@@ -1623,6 +1623,16 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     Ok(())
 }
 
+/// the recipes with a kept rebuild in the `--json` document of a status.
+fn kept_names(status: &Value) -> Vec<&str> {
+    status["result"]["candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|kept| kept["name"].as_str())
+        .collect()
+}
+
 /// a project whose `clean` writes random bytes, built once, then checked, which keeps a rebuild
 /// that differs from data.lock.
 fn kept_rebuild(sandbox: &Sandbox, server: &Server, recipe: &str) -> Result {
@@ -1630,6 +1640,49 @@ fn kept_rebuild(sandbox: &Sandbox, server: &Server, recipe: &str) -> Result {
     assert_eq!(build(sandbox, &["build"])?.status.code(), Some(0));
     let output = build(sandbox, &["build", "--check"])?;
     assert_eq!(output.status.code(), Some(60), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+/// `status -v` names each file of a kept rebuild that differs from data.lock with the cache file
+/// that holds the rebuild's bytes, and `--json` gives the same with the file data.lock pins, so a
+/// person can compare them before `--accept`, which pins those very bytes.
+#[test]
+fn status_names_where_the_files_of_a_kept_rebuild_are() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    kept_rebuild(&sandbox, &server, &recipe(&["random"]))?;
+    let placed = sandbox.work().join("data").join("clean").join("random.bin");
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let kept = &document["result"]["candidates"][0];
+    assert_eq!(kept["name"], "clean");
+    let files = kept["files"].as_array().ok_or("no files")?;
+    assert_eq!(files.len(), 1, "{kept}");
+    assert_eq!(
+        (&files[0]["path"], &files[0]["difference"]),
+        (&Value::from("random.bin"), &Value::from("changed"))
+    );
+    let rebuilt = PathBuf::from(files[0]["file"].as_str().ok_or("no file")?);
+    let pinned = PathBuf::from(files[0]["pinned"].as_str().ok_or("no pinned file")?);
+    assert!(
+        rebuilt.starts_with(sandbox.cache()),
+        "{}",
+        rebuilt.display()
+    );
+    assert_eq!(fs::read(&pinned)?, fs::read(&placed)?);
+    assert_ne!(fs::read(&rebuilt)?, fs::read(&placed)?);
+    let told = text(&sandbox.run(&["-v", "status"])?.stderr)?;
+    let line = format!("            changed random.bin: {}\n", rebuilt.display());
+    assert!(told.contains(&line), "{line:?} in\n{told}");
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        told.contains("  hint: `fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are\n"),
+        "{told}"
+    );
+    assert_eq!(
+        build(&sandbox, &["build", "--accept"])?.status.code(),
+        Some(0)
+    );
+    assert_eq!(fs::read(&placed)?, fs::read(&rebuilt)?);
     Ok(())
 }
 
@@ -1700,7 +1753,7 @@ fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
             .is_some_and(|tree| tree.starts_with("sha256:"))
     );
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(status["result"]["candidates"], serde_json::json!(["clean"]));
+    assert_eq!(kept_names(&status), ["clean"]);
     let placed = sandbox.work().join("data/clean/random.bin");
     let before = fs::read(&placed)?;
     let output = build(&sandbox, &["--json", "build", "--accept", "clean"])?;
@@ -1782,10 +1835,7 @@ fn checks_report_every_step() -> Result {
         "{help}"
     );
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(
-        status["result"]["candidates"],
-        serde_json::json!(["clean", "noise"])
-    );
+    assert_eq!(kept_names(&status), ["clean", "noise"]);
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 //! downloads nothing and hashes only files whose size and time cannot vouch for them, so it
 //! answers at once even for large projects. asked to verify, it hashes every placed file.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -10,7 +10,8 @@ use serde::Serialize;
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
 use super::sync::{Scope, place};
-use crate::cache::Cache;
+use crate::build::compare;
+use crate::cache::{Cache, Member};
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::mirror::{Location, Mirrors};
@@ -19,6 +20,7 @@ use crate::plan;
 use crate::project::Project;
 use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::Manifest;
+use crate::project::state::Candidate;
 use crate::recipe;
 use crate::threads::Threads;
 use crate::units;
@@ -63,8 +65,8 @@ pub(super) struct Status {
     /// `sync` puts them back, or `sync --verify` for those only hashing finds.
     damaged: Vec<String>,
     /// recipes with a rebuild that differs from data.lock kept, which `fetchloom build --accept`
-    /// pins.
-    candidates: Vec<String>,
+    /// pins, each with where its files that differ are.
+    candidates: Vec<Kept>,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
@@ -100,6 +102,30 @@ pub(super) struct Status {
     /// build takes into the cache from the data folder when it lacks them.
     #[serde(skip)]
     holding: HashSet<Sha256>,
+}
+
+/// the rebuild a build kept of a recipe, files that differ from what data.lock pins for the
+/// same key.
+#[derive(Serialize)]
+struct Kept {
+    name: String,
+    /// the tree of its files, `sha256:` and its hash.
+    tree: String,
+    /// each file that differs from data.lock: changed ones, then missing, then extra, each by
+    /// path.
+    files: Vec<Differing>,
+}
+
+/// a file of a kept rebuild that differs from data.lock, with the cache files to compare.
+#[derive(Serialize)]
+struct Differing {
+    path: String,
+    /// `changed`, `missing` from the rebuild, or `extra`, made by the rebuild alone.
+    difference: &'static str,
+    /// the cache file holding the rebuild's bytes, unless it is missing or the cache lost it.
+    file: Option<PathBuf>,
+    /// the cache file holding the bytes data.lock pins, unless it is extra or the cache lacks it.
+    pinned: Option<PathBuf>,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -139,6 +165,11 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
                 names.join(" ")
             )),
         }
+    }
+    if !status.candidates.is_empty() && !output.shows_details() {
+        output.hint(
+            "`fetchloom status -v` lists where the files of each kept rebuild that differ from data.lock are",
+        );
     }
     for found in &status.unreached {
         let (said, help) = place::unreached_said(found);
@@ -244,14 +275,14 @@ fn check(
     status.candidates = survey
         .state
         .candidates
-        .keys()
-        .filter(|name| {
+        .iter()
+        .filter(|(name, _)| {
             manifest
                 .datasets
                 .get(*name)
                 .is_some_and(|entry| entry.recipe().is_some())
         })
-        .cloned()
+        .map(|(name, candidate)| kept(name, candidate, &lock, &cache))
         .collect();
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
@@ -373,6 +404,47 @@ fn unbuilt_here(
         }
     }
     status.unbuilt = unbuilt;
+}
+
+/// the kept rebuild `candidate` of the recipe `name`, beside the result `lock` pins for it.
+fn kept(name: &str, candidate: &Candidate, lock: &Lock, cache: &Cache) -> Kept {
+    let pinned = lock
+        .result(name)
+        .map_or(&[][..], |result| result.files.as_slice());
+    let compared = compare::compare(pinned, &candidate.files);
+    let made: HashMap<&str, &Member> = candidate
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    let was: HashMap<&str, &Member> = pinned
+        .iter()
+        .map(|file| (file.path.as_str(), file))
+        .collect();
+    let held = |files: &HashMap<&str, &Member>, path: &str| {
+        files
+            .get(path)
+            .and_then(|file| cache.find(&file.sha256, Some(file.size)))
+    };
+    let files = [
+        ("changed", &compared.changed),
+        ("missing", &compared.missing),
+        ("extra", &compared.extra),
+    ]
+    .into_iter()
+    .flat_map(|(difference, paths)| paths.iter().map(move |path| (difference, path)))
+    .map(|(difference, path)| Differing {
+        path: path.clone(),
+        difference,
+        file: held(&made, path),
+        pinned: held(&was, path),
+    })
+    .collect();
+    Kept {
+        name: name.to_owned(),
+        tree: format!("sha256:{}", candidate.tree),
+        files,
+    }
 }
 
 /// whether this machine holds every file a build reads of the fetched dataset `locked`: each
@@ -550,11 +622,8 @@ fn list(output: &Output, status: &Status) {
             &format!("{name} from data.toml; `fetchloom sync` updates data.lock"),
         );
     }
-    for name in &status.candidates {
-        output.mark(
-            "Kept",
-            &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
-        );
+    for kept in &status.candidates {
+        tell_kept(output, kept);
     }
     for (verb, paths) in status.lists() {
         for path in paths.iter().take(SHOWN) {
@@ -617,6 +686,31 @@ fn list(output: &Output, status: &Status) {
     if status.damaged.len() > SHOWN {
         let more = status.damaged.len() - SHOWN;
         output.mark("", &format!("and {more} more"));
+    }
+}
+
+/// the line of a kept rebuild, and with `-v` each of its files that differs from data.lock with
+/// the cache file that holds the rebuild's bytes.
+fn tell_kept(output: &Output, kept: &Kept) {
+    let name = &kept.name;
+    output.mark(
+        "Kept",
+        &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
+    );
+    for file in kept.files.iter().take(SHOWN) {
+        let how = match file.difference {
+            "extra" => "new",
+            how => how,
+        };
+        let path = &file.path;
+        output.detail(&match (&file.file, file.difference) {
+            (Some(found), _) => format!("{how} {path}: {}", found.display()),
+            (None, "missing") => format!("{how} {path}"),
+            (None, _) => format!("{how} {path}, which the cache no longer holds"),
+        });
+    }
+    if kept.files.len() > SHOWN {
+        output.detail(&format!("and {} more", kept.files.len() - SHOWN));
     }
 }
 

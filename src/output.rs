@@ -275,6 +275,11 @@ impl Output {
         self.hints && self.tells(Level::Normal)
     }
 
+    /// whether [`Output::detail`] prints, as with `-v`.
+    pub(crate) fn shows_details(&self) -> bool {
+        self.tells(Level::Verbose)
+    }
+
     /// the step a person usually takes after a run that worked, such as committing data.lock.
     pub(crate) fn next(&self, text: &str) {
         if self.shows_next() {
