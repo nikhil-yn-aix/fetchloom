@@ -78,7 +78,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; after a git merge, ask which side of each dataset in `result.merge.conflicts` to keep; for `lock.outdated`, the lock is missing or differs from the manifest, so review the inputs before running `fetchloom lock` |
+| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; after a git merge, ask which side of each dataset in `result.merge.conflicts` to keep; for `lock.outdated`, the lock is missing or differs from the manifest, so review the inputs before running `fetchloom lock`. a clone with no data.lock has nothing pinning its bytes: ask the user whether the project's owner can commit data.lock before `fetchloom lock` pins what the sources serve today |
 | 2 | `usage` | fix the command line as `fix` or `help` says |
 | 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose a candidate from `result.candidates` |
 | 20 | `network.*`, `offline.missing` | retry later; to go online, remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |

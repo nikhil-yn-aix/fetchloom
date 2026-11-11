@@ -617,9 +617,13 @@ async fn preview_lock(
     })
 }
 
+/// the two ways on for a project without data.lock, such as a clone whose owner never committed
+/// it: the owner's pins, or new pins of what the sources serve now.
+pub(super) const UNPINNED: &str = "ask whoever shares the project to commit data.lock, or run `fetchloom lock` to pin what the sources serve today";
+
 /// what `--locked` asks: data.lock exists and its entries for the datasets of `scope` are up to
 /// date with data.toml, or the command fails without writing it. `instead` is the other way out
-/// the help names, such as "sync without --locked".
+/// the help names for an outdated data.lock, such as "sync without --locked".
 pub(super) fn locked(
     project: &Project,
     manifest: &Manifest,
@@ -627,10 +631,14 @@ pub(super) fn locked(
     instead: &str,
     scope: &Scope,
 ) -> Result<(), Error> {
-    let help = format!("run `fetchloom lock` and commit data.lock, or {instead}");
     let Some(lock) = lock else {
-        return Err(Error::new(Kind::Outdated, "there is no data.lock yet").help(help));
+        return Err(Error::new(
+            Kind::Outdated,
+            "there is no data.lock, so nothing pins the files' bytes yet",
+        )
+        .help(UNPINNED));
     };
+    let help = format!("run `fetchloom lock` and commit data.lock, or {instead}");
     check(project, manifest, Some(lock), scope)
         .map(drop)
         .map_err(|error| match error.kind {

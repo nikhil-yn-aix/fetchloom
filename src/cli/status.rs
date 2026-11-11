@@ -78,6 +78,9 @@ pub(super) struct Status {
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
+    /// whether the project has no data.lock, so nothing pins its files yet.
+    #[serde(skip)]
+    lockless: bool,
     /// damaged files that are links to the cache's changed copy, for the reason the terminal
     /// gives.
     #[serde(skip)]
@@ -143,7 +146,13 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
     let output = &context.output;
     list(output, &status);
     if sum_up(output, &status) {
-        if status.needs_sync() {
+        // a sync would pin what the sources serve now, which a clone may not want
+        if status.lockless {
+            output.hint(&format!(
+                "nothing pins the files' bytes yet: {}",
+                super::project::UNPINNED
+            ));
+        } else if status.needs_sync() {
             output.hint(
                 "`fetchloom sync` places missing or updated files and reports any conflicts it keeps",
             );
@@ -255,6 +264,7 @@ fn check(
             .as_ref()
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
+    let lockless = read.is_none();
     let lock = read.map(|(lock, _)| lock).unwrap_or_default();
     let (mut unlocked, removed) = out_of_date(&manifest, &lock);
     let building = unbuilt(project, &manifest, &lock)?;
@@ -263,6 +273,7 @@ fn check(
     let mut status = Status {
         project: project.root.clone(),
         verified: verify,
+        lockless,
         unlocked,
         removed,
         building,
@@ -625,11 +636,13 @@ fn list(output: &Output, status: &Status) {
             &format!("{name} · place = false in data.toml"),
         );
     }
+    let unpinned = if status.lockless {
+        "data.lock does not exist"
+    } else {
+        "data.toml changed since data.lock was written"
+    };
     for name in &status.unlocked {
-        let reason = status.building.get(name).map_or(
-            "data.toml changed since data.lock was written",
-            String::as_str,
-        );
+        let reason = status.building.get(name).map_or(unpinned, String::as_str);
         output.mark("Unlocked", &format!("{name} · {reason}"));
     }
     for name in &status.removed {

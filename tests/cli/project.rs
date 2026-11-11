@@ -515,6 +515,29 @@ fn lock_check_fails_until_the_lock_follows_data_toml() -> Result {
     Ok(())
 }
 
+/// a clone whose owner never committed data.lock: nothing pins the files' bytes yet, which sync
+/// and status both say, with the two ways on, rather than calling data.toml changed.
+#[test]
+fn a_clone_without_data_lock_says_nothing_pins_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let clone = sandbox.folder("clone")?;
+    fs::copy(sandbox.work().join("data.toml"), clone.join("data.toml"))?;
+
+    let locked = sandbox.command_in(&clone, &["sync", "--locked"]).output()?;
+    assert_eq!(locked.status.code(), Some(1));
+    let status = sandbox.command_in(&clone, &["status"]).output()?;
+    assert_eq!(status.status.code(), Some(0));
+    let stderr = format!("{}{}", text(&locked.stderr)?, text(&status.stderr)?);
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    assert!(
+        !clone.join("data.lock").exists(),
+        "neither writes data.lock"
+    );
+    Ok(())
+}
+
 #[test]
 fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     let sandbox = Sandbox::new()?;

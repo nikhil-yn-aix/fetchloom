@@ -1,0 +1,9 @@
+---
+source: tests/cli/project.rs
+expression: stderr
+---
+error: there is no data.lock, so nothing pins the files' bytes yet
+  help: ask whoever shares the project to commit data.lock, or run `fetchloom lock` to pin what the sources serve today
+   Unlocked iris · data.lock does not exist
+      Found 1 difference from data.lock
+  hint: nothing pins the files' bytes yet: ask whoever shares the project to commit data.lock, or run `fetchloom lock` to pin what the sources serve today
