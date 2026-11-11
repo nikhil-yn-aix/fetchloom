@@ -1,7 +1,7 @@
 //! `.fetchloom/state`: every file fetchloom placed and how it looked right after, so `status` and
 //! `sync` notice hand edits without hashing, except for a file as new as the state itself, whose
 //! size and time a coarse clock cannot vouch for. it also keeps each rebuild of a recipe that
-//! differs from data.lock until a person accepts it.
+//! differs from data.lock until a person accepts it or data.toml drops the recipe.
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::cache::Member;
 use crate::digest::Sha256;
 use crate::place::Method;
+use crate::project::manifest::Manifest;
 
 const VERSION: u32 = 1;
 
@@ -24,7 +25,8 @@ pub(crate) struct State {
     #[serde(default)]
     pub(crate) synced: Option<Synced>,
     /// the rebuild of each recipe that made other files than data.lock pins for its key, kept
-    /// until `fetchloom build --accept` pins it or a build pins something else.
+    /// until `fetchloom build --accept` pins it, a build pins something else or data.toml no
+    /// longer has the recipe.
     #[serde(default)]
     pub(crate) candidates: BTreeMap<String, Candidate>,
 }
@@ -85,6 +87,19 @@ impl State {
             Ok(state) if state.version == VERSION => state,
             _ => State::default(),
         }
+    }
+
+    /// drops the kept rebuild of each recipe `manifest` no longer has, as relocking drops the
+    /// recipe's pin, and says whether any went.
+    pub(crate) fn forget_removed(&mut self, manifest: &Manifest) -> bool {
+        let before = self.candidates.len();
+        self.candidates.retain(|name, _| {
+            manifest
+                .datasets
+                .get(name)
+                .is_some_and(|entry| entry.recipe().is_some())
+        });
+        self.candidates.len() != before
     }
 
     pub(crate) fn render(&self) -> Vec<u8> {

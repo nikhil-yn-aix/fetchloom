@@ -1730,6 +1730,45 @@ fn accept_refuses_after_the_recipe_changed() -> Result {
     Ok(())
 }
 
+/// a kept rebuild goes with its recipe: a sync after data.toml lost the recipe, or `remove` of
+/// it, drops the rebuild with the recipe's pin, so cache gc frees its files.
+#[test]
+fn a_kept_rebuild_goes_with_its_recipe() -> Result {
+    for (edited, args) in [(true, &["sync"][..]), (false, &["remove", "clean"])] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let random = recipe(&["random"]);
+        with(&sandbox, &server, &random)?;
+        assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+        let built = objects(&sandbox.cache())?;
+        assert_eq!(
+            build(&sandbox, &["build", "--check"])?.status.code(),
+            Some(60)
+        );
+        let kept: Vec<String> = objects(&sandbox.cache())?
+            .difference(&built)
+            .cloned()
+            .collect();
+        assert_eq!(kept.len(), 1, "the check keeps the file it made");
+        if edited {
+            let manifest = sandbox.work().join("data.toml");
+            fs::write(
+                &manifest,
+                fs::read_to_string(&manifest)?.replace(&random, ""),
+            )?;
+        }
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        let gc = sandbox.run(&["cache", "gc", "--now"])?;
+        assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+        assert!(
+            !objects(&sandbox.cache())?.contains(&kept[0]),
+            "gc frees the kept rebuild once {args:?} dropped its recipe"
+        );
+    }
+    Ok(())
+}
+
 /// sync places a pinned result from the cache and never runs its step; with the result in no
 /// cache, it names the build that makes it, unless a download of the same sync brings its bytes.
 #[test]

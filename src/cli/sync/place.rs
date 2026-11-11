@@ -772,7 +772,8 @@ impl<'a> Placing<'a> {
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let recorded = removed || adopted || undone || !tallies.is_empty();
-        record(project, state, synced, recorded, needs_writing)?;
+        let dropped = state.forget_removed(manifest);
+        record(project, state, synced, recorded, needs_writing || dropped)?;
         if stopped {
             return Err(Stop::stopped());
         }
@@ -814,7 +815,8 @@ impl<'a> Placing<'a> {
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         survey.smudge_edited();
         let forgot = survey.state.synced.take().is_some();
-        if removed || forgot || survey.needs_writing {
+        let dropped = survey.state.forget_removed(manifest);
+        if removed || forgot || dropped || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         tell(
@@ -831,9 +833,10 @@ impl<'a> Placing<'a> {
 }
 
 /// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
-/// `recorded`, must be written. a state that only settles files hashed as unchanged, or marks
-/// the run synced, spares later runs work, so a project folder that takes no write, as on a full
-/// disk, fails no run that changed nothing.
+/// `recorded`, must be written. a state that only settles files hashed as unchanged or marks the
+/// run synced spares later runs work, and one that only forgets a kept rebuild frees its files
+/// for gc, so a project folder that takes no write, as on a full disk, fails no run that changed
+/// nothing.
 fn record(
     project: &Project,
     state: &mut State,
