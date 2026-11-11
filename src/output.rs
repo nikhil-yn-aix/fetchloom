@@ -88,13 +88,13 @@ struct Problem<'a> {
 /// the first `fetchloom` command quoted in `help`, without its backticks. an example ("as in"),
 /// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
 /// running it would act on a dataset nobody named or ask the same question again. a command
-/// that first needs a broken file deleted, or a file edited by hand, is not ready to run either,
-/// and a build runs the project's code, which only a person may agree to. neither is taking other
-/// bytes than data.lock pins, which a help offers only "if the new bytes are intended". in a run
-/// that is `locked`, a command that may write data.lock is no fix either, since a script running
-/// it would undo `--locked`.
+/// that first needs a broken file deleted, a file edited by hand or the errors listed above fixed
+/// is not ready to run either, and a build runs the project's code, which only a person may agree
+/// to. neither is taking other bytes than data.lock pins, which a help offers only "if the new
+/// bytes are intended". in a run that is `locked`, a command that may write data.lock is no fix
+/// either, since a script running it would undo `--locked`.
 fn fix(help: &str, locked: bool) -> Option<&str> {
-    const NOT_A_FIX: [&str; 9] = [
+    const NOT_A_FIX: [&str; 10] = [
         "as in",
         "such as",
         "for example",
@@ -103,6 +103,7 @@ fn fix(help: &str, locked: bool) -> Option<&str> {
         "own terminal, run",
         "delete it and run",
         "by hand, then run",
+        "errors above, then run",
         "intended, run",
     ];
     let mut before = String::new();
@@ -1646,6 +1647,14 @@ mod tests {
                 false
             ),
             None
+        );
+        assert_eq!(
+            super::fix(
+                "downloaded files stay in the cache. fix the errors above, then run `fetchloom sync` again",
+                false
+            ),
+            None,
+            "files that failed on their own fail again until someone fixes them"
         );
         assert_eq!(
             super::fix(

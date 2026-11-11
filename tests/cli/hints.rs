@@ -2,7 +2,9 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, text};
+use serde_json::Value;
+
+use crate::support::{Result, Sandbox, Server, file, json, reply, text};
 
 /// windows holds a file another program opened without sharing it, as Excel does, so reading it
 /// fails, and replacing it fails while that program keeps it open even for reading.
@@ -428,5 +430,96 @@ fn attached_non_unicode_directories_keep_the_help_topic() -> Result {
             }
         }
     }
+    Ok(())
+}
+
+/// a project pinning one file from each server, whose first answer is what `add` pins, then a
+/// fresh clone of it with a cache of its own, where `sync` meets the answers that follow.
+fn pinned_then_changed(sandbox: &Sandbox, servers: &[&Server]) -> Result<std::path::PathBuf> {
+    for server in servers {
+        sandbox.allow(&server.url);
+        let added = sandbox.run(&["add", &server.url])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    crate::project::clone(sandbox, "cold")
+}
+
+/// what `--json` says about a sync of `project` with a cache nobody filled.
+fn synced_cold(sandbox: &Sandbox, project: &std::path::Path, args: &[&str]) -> Result<Value> {
+    let cache = sandbox.folder(&format!("cache-{}", args.len()))?;
+    let output = sandbox
+        .command_in(project, args)
+        .env("FETCHLOOM_CACHE", cache)
+        .output()?;
+    assert_ne!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    json(&output)
+}
+
+/// two files whose bytes changed upstream, one longer and one the same size, fail a sync each
+/// with its own way on, which only a person may choose: the one error for both keeps each file's
+/// details and offers no fix, with or without --locked, since running the sync again fails
+/// again.
+#[test]
+fn files_changed_upstream_give_no_fix_to_rerun() -> Result {
+    let sandbox = Sandbox::new()?;
+    let longer = Server::start(
+        "/files/longer.csv",
+        std::iter::once(file(b"a,1\n", "\"v1\""))
+            .chain(std::iter::repeat_with(|| file(b"a,1\na,2\n", "\"v2\"")).take(4))
+            .collect(),
+    )?;
+    let same_size = Server::start(
+        "/files/same.csv",
+        std::iter::once(file(b"b,1\n", "\"v1\""))
+            .chain(std::iter::repeat_with(|| file(b"b,2\n", "\"v2\"")).take(4))
+            .collect(),
+    )?;
+    let cold = pinned_then_changed(&sandbox, &[&longer, &same_size])?;
+    for args in [&["--json", "sync"][..], &["--json", "sync", "--locked"]] {
+        let error = &synced_cold(&sandbox, &cold, args)?["errors"][0];
+        assert_eq!(error["kind"], "integrity.mismatch", "{error}");
+        assert_eq!(error["fix"], Value::Null, "{args:?}: {error}");
+        let failures = error["failures"].as_array().cloned().unwrap_or_default();
+        assert_eq!(failures.len(), 2, "{error}");
+        for failure in &failures {
+            assert_eq!(failure["kind"], "integrity.mismatch", "{failure}");
+            assert!(failure["help"].is_string(), "{failure}");
+        }
+        assert!(!cold.join("data").exists(), "nothing unverified is placed");
+    }
+    Ok(())
+}
+
+/// a failure of another kind first, a dead link here, beside a file whose bytes changed
+/// upstream: the one error for both offers no fix either, since the changed file fails again.
+#[test]
+fn a_dead_link_beside_changed_bytes_gives_no_fix_to_rerun() -> Result {
+    let sandbox = Sandbox::new()?;
+    let dead = Server::start(
+        "/files/dead.csv",
+        std::iter::once(file(b"a,1\n", "\"v1\""))
+            .chain(
+                std::iter::repeat_with(|| reply("404 Not Found", &[("Content-Length", "0")], b""))
+                    .take(4),
+            )
+            .collect(),
+    )?;
+    let swapped = Server::start(
+        "/files/swapped.csv",
+        std::iter::once(file(b"b,1\n", "\"v1\""))
+            .chain(std::iter::repeat_with(|| file(b"b,2\n", "\"v2\"")).take(4))
+            .collect(),
+    )?;
+    let cold = pinned_then_changed(&sandbox, &[&dead, &swapped])?;
+    let error = &synced_cold(&sandbox, &cold, &["--json", "sync"])?["errors"][0];
+    let failures = error["failures"].as_array().cloned().unwrap_or_default();
+    let kinds: Vec<&Value> = failures.iter().map(|failure| &failure["kind"]).collect();
+    assert_eq!(
+        kinds,
+        ["reference.unresolved", "integrity.mismatch"],
+        "{error}"
+    );
+    assert_eq!(error["kind"], "reference.unresolved", "{error}");
+    assert_eq!(error["fix"], Value::Null, "{error}");
     Ok(())
 }
