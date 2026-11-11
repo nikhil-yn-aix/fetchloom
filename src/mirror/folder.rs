@@ -1490,12 +1490,20 @@ pub(crate) mod tests {
         );
     }
 
-    /// a file swapped for other bytes of the same size before its read-back never takes a name.
+    /// a file swapped for other bytes of the same size before its read-back never takes a name:
+    /// unix reads the swapped file back and finds the bytes changed, while windows refuses any
+    /// file with a new number as replaced.
     #[test]
     fn a_file_swapped_before_its_read_back_never_takes_a_name() {
         let (put, named) = one_put(Between::Alter);
+        #[cfg(unix)]
         assert!(
             matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            "{put:?}"
+        );
+        #[cfg(not(unix))]
+        assert!(
+            matches!(put, Err(Failed::File(0, Fault::Replaced))),
             "{put:?}"
         );
         assert_eq!(named, None);
