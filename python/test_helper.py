@@ -75,6 +75,65 @@ class HelperOptions(unittest.TestCase):
         self.assertEqual(raised.exception.message, "2 files in the data folder differ from data.lock")
 
 
+class GetOptions(unittest.TestCase):
+    def run_get(self, result, *args, **kwargs):
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": result, "warnings": []}), ""
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                actual = fetchloom.get(*args, **kwargs)
+        return actual, run.call_args.args[0]
+
+    def test_get_with_a_path_writes_that_file_and_returns_it(self):
+        digest = "d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d"
+        result = {"file": "/work/data.csv", "folder": "/work", "files": [], "items": []}
+        actual, argv = self.run_get(
+            result, "https://example.org/iris.csv", Path("data.csv"),
+            sha256=digest, force=True, yes=True, offline=True,
+        )
+        self.assertEqual(actual, Path("/work/data.csv"))
+        self.assertEqual(argv, [
+            "fetchloom", "--json", "-C", ".", "get", "--output=data.csv", f"--sha256={digest}",
+            "--force", "--yes", "--offline", "--", "https://example.org/iris.csv",
+        ])
+
+    def test_get_without_a_path_returns_the_folder(self):
+        result = {"file": None, "folder": "/work/flowers", "files": [], "items": []}
+        for folder, flags in [(None, []), ("flowers", ["--dir=flowers"])]:
+            with self.subTest(folder=folder):
+                actual, argv = self.run_get(result, "zenodo:3608990", folder=folder)
+                self.assertEqual(actual, Path("/work/flowers"))
+                self.assertEqual(argv, ["fetchloom", "--json", "-C", ".", "get", *flags, "--", "zenodo:3608990"])
+
+    def test_get_takes_a_path_or_a_folder_not_both(self):
+        with patch.object(fetchloom.subprocess, "run") as run:
+            with self.assertRaises(fetchloom.Error) as raised:
+                fetchloom.get("zenodo:3608990", "iris.csv", folder="iris")
+        run.assert_not_called()
+        self.assertEqual(raised.exception.kind, "usage")
+        with self.assertRaises(TypeError):
+            fetchloom.get("zenodo:3608990", "iris.csv", "iris")
+
+    def test_a_refused_file_raises_the_kind_fetchloom_gave(self):
+        answer = {
+            "status": "error",
+            "errors": [{
+                "kind": "local.not_empty",
+                "message": "data.csv already exists and holds other bytes than the link serves now",
+                "details": [],
+                "help": "add --force to replace it, or choose another name with -o",
+            }],
+            "warnings": [],
+        }
+        response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.get("https://example.org/iris.csv", "data.csv")
+        self.assertEqual((raised.exception.kind, raised.exception.code), ("local.not_empty", 50))
+
+
 class Errors(unittest.TestCase):
     def test_a_traceback_shows_the_details_and_the_help(self):
         answer = {
@@ -141,7 +200,7 @@ class Errors(unittest.TestCase):
 
 class PublicNames(unittest.TestCase):
     def test_dir_lists_only_the_helpers(self):
-        self.assertEqual(dir(fetchloom), ["Error", "path", "sync"])
+        self.assertEqual(dir(fetchloom), ["Error", "get", "path", "sync"])
 
     def test_the_version_is_the_installed_packages(self):
         with patch("importlib.metadata.version", return_value="9.9.9") as version:

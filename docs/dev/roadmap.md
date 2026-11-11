@@ -6,7 +6,6 @@ pending work covers the features planned for 0.1.0, remaining performance costs 
 
 each line goes when its feature lands, in the same change that documents it in the [user guide](../user/README.md).
 
-1. `fetchloom get <link> -o <file>` writes one writable, verified file and never replaces an existing one without `--force`; python gains `fetchloom.get`.
 2. `fetchloom sync <names>` and `fetchloom path <name>` sync only the named datasets.
 3. `path = "."` places a dataset at the root of the data folder, and datasets share a folder when none of their files clash.
 4. `fetchloom export` writes SHA-256 sums, links or an aria2 input for placed files and source objects, and `list --json` gives each file's SHA-256 and link.

@@ -121,19 +121,31 @@ project = fetchloom.sync(project=".", yes=True, strict=True)
 iris = fetchloom.path("iris/Iris.csv", project=".", offline=True)
 ```
 
+a notebook without a project can fetch one file where it wants it, as [`get -o`](commands/get.md#one-file) does:
+
+```python
+import fetchloom
+import pandas as pd
+
+frame = pd.read_csv(fetchloom.get("https://example.org/iris.csv", "data.csv"))
+```
+
 | function | return |
 |---|---|
 | `fetchloom.sync(project=".", *, yes=False, offline=False, strict=False, locked=False)` | absolute project root as `pathlib.Path` |
 | `fetchloom.path(name, project=".", *, yes=False, offline=False, locked=False)` | dataset, file or subfolder as `pathlib.Path` |
+| `fetchloom.get(link, path=None, *, folder=None, sha256=None, force=False, yes=False, offline=False)` | with `path`, the file written there; otherwise the folder, `folder` or a new one named after the download; as `pathlib.Path` |
 
 `project` accepts a string or path-like object naming any folder in the project and defaults to the current directory. `path()` may sync the whole project and download data when the dataset is not ready.
 
+`get()` passes `path` as `-o`, `folder` as `--dir`, and `sha256`, `force`, `yes` and `offline` as their flags; relative paths start at the current directory. `path` and `folder` cannot both be given: that raises `fetchloom.Error` with kind `usage` before anything runs. a file already at `path` holding the same bytes stays and is returned, so running a notebook cell again is safe; one holding other bytes raises kind `local.not_empty` unless `force=True` replaces it. with `sha256`, a file already holding those bytes is returned without a download.
+
 the helper first looks for the executable beside the imported package or in its installation prefix. it then checks the current and base interpreter scripts, the preferred user scripts directory, and PATH. this keeps a `pip --target` or `pip --prefix` package from using an unrelated interpreter-level executable when its own executable is present.
 
-both helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. a file sync put back as pinned matches the lock again, so it raises nothing; its warning says what was put back. use CLI JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
+the helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths and `code` is `None`. it does not overwrite them or audit unrelated extras. a file sync put back as pinned matches the lock again, so it raises nothing; its warning says what was put back. use CLI JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
 
-`yes`, `offline`, `locked` and sync's `strict` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`. `locked=True` passes `--locked`, so a data.lock that is missing or out of date with data.toml raises `lock.outdated` instead of being updated; use it in pipelines that must run on committed pins.
+`yes`, `offline`, `locked`, sync's `strict` and get's `force` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`. `locked=True` passes `--locked`, so a data.lock that is missing or out of date with data.toml raises `lock.outdated` instead of being updated; use it in pipelines that must run on committed pins.
 
-neither helper exposes `--force`. both inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
+`path()` and `sync()` do not expose `--force`; `get(force=True)` replaces only the file `path` names. all three inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
 
 a failed command raises `fetchloom.Error` with `kind`, `message`, `details`, `help` and `code`. `kind` is `None` when the process returned no JSON answer. printed, or in a traceback, the error reads like the command line's: the message, then each detail and the help on a line of its own. a command `help` names is the one a person types: without the helper's own `--json`, and without `-C .` when `project` is the current folder. a missing executable raises `FileNotFoundError`, whose message points at the [install steps](https://github.com/nikhil-yn-aix/fetchloom#install).
