@@ -221,6 +221,15 @@ impl RetryLines {
 }
 
 /// why requests wait for a host: `20 s for zenodo.org, whose limit of 133 requests is used up`.
+/// the project's folder `root` as a path from `here`, a folder inside it: `../` for each folder
+/// between them, so a command a help line names works where the person ran fetchloom.
+pub(crate) fn up_to(root: &std::path::Path, here: &std::path::Path) -> String {
+    let depth = here
+        .strip_prefix(root)
+        .map_or(0, |inside| inside.components().count());
+    "../".repeat(depth)
+}
+
 fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Duration) -> String {
     let wait = units::seconds(Duration::from_secs(
         wait.as_secs() + u64::from(wait.subsec_nanos() > 0),
@@ -1378,6 +1387,18 @@ mod tests {
         assert_eq!(
             command_words("fetchloom -C 'ada''s project' status", true).unwrap(),
             ["fetchloom", "-C", "ada's project", "status"],
+        );
+    }
+
+    #[test]
+    fn a_help_reaches_the_project_from_the_folder_fetchloom_ran_in() {
+        let root = std::path::Path::new("/work/project");
+        assert_eq!(up_to(root, root), "");
+        assert_eq!(up_to(root, &root.join("data").join("sample")), "../../");
+        assert_eq!(
+            up_to(root, std::path::Path::new("/elsewhere")),
+            "",
+            "from a folder not inside it, paths start at the project"
         );
     }
 }

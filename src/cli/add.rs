@@ -1710,10 +1710,7 @@ fn tell_added(work: &Loop<'_>, manifest: &Manifest, name: &str, here: &Path) -> 
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.
 fn from_here(project: &Project, here: &Path, path: &str) -> String {
-    let depth = here
-        .strip_prefix(&project.root)
-        .map_or(0, |inside| inside.components().count());
-    format!("{}{path}", "../".repeat(depth))
+    format!("{}{path}", super::up_to(&project.root, here))
 }
 
 fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, Error> {
