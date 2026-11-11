@@ -783,7 +783,9 @@ pub(super) fn together(labels: &[String], mut failed: Vec<(usize, Error)>) -> Op
     })))
 }
 
-/// says which file a failure concerns, and for bytes that changed upstream, how to take them on.
+/// says which file a failure concerns, and for bytes that changed upstream, the two ways on: the
+/// pinned bytes from a folder mirror someone pushed them to, or the new bytes by an upgrade,
+/// which only a person may choose, so the help offers it in words no fix takes.
 fn explain(error: Error, job: &Job) -> Error {
     // an MD5 mismatch comes with its own help, since the source contradicts itself
     let dataset = job.dataset.as_ref().filter(|_| {
@@ -800,12 +802,16 @@ fn explain(error: Error, job: &Job) -> Error {
     };
     Error {
         message: format!("{} is not the file data.lock records", job.label),
-        help: Some(
-            format!("if the new version is intended, run `fetchloom lock --upgrade {dataset}`")
-                .into(),
-        ),
+        help: Some(changed_upstream(dataset).into()),
         ..error
     }
+}
+
+/// what to do about pinned bytes of `dataset` that its source no longer serves.
+fn changed_upstream(dataset: &str) -> String {
+    format!(
+        "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade {dataset}`"
+    )
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `network.unreachable`, `network.status` | check connectivity and the link before retrying |
 | `network.rate_limited`, `network.refused` | respect the source's wait or access requirement |
 | `offline.missing` | prepare the missing data online |
-| `integrity.mismatch` | investigate changed bytes; upgrade pins only if intended |
+| `integrity.mismatch` | investigate changed bytes. when a source no longer serves the bytes data.lock pins, keep them from a folder mirror that holds them: someone who has them runs `fetchloom push --to <folder>`, then `fetchloom sync --mirror <folder>`. run `fetchloom lock --upgrade <name>` only if the new bytes are intended; `errors[0].fix` is null for it, since only a person may choose other bytes than data.lock pins |
 | `auth.required` | obtain access and set supported credentials |
 | `local.io` | check free space, permissions and files held open; after `add <folder> --as <name>`, check that the folder holds the files data.lock pins. when `push` says something replaced a file it wrote, stop whatever else writes into the mirror's folder, such as a sync client, a backup tool or antivirus, then push again. a build whose step the `build_floor` setting stopped needs free space on the cache's disk, or a lower floor |
 | `local.not_empty` | preserve existing files and choose another `get --dir` folder or `get -o` name; `get -o --force` replaces a file you no longer need. for `push`, name an empty folder or a mirror's top folder, and check that its disk is mounted |

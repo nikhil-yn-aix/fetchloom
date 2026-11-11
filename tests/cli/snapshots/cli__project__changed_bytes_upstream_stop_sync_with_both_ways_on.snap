@@ -1,0 +1,7 @@
+---
+source: tests/cli/project.rs
+expression: stderr
+---
+error: iris/iris.csv is not the file data.lock records
+  expected 32 bytes, got 15
+  help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`

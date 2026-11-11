@@ -1,7 +1,0 @@
----
-source: tests/cli/project.rs
-expression: stderr
----
-error: iris/iris.csv is not the file data.lock records
-  expected 32 bytes, got 15
-  help: if the new version is intended, run `fetchloom lock --upgrade iris`

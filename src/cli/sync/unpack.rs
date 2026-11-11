@@ -547,7 +547,7 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
         ),
     )
     .help(format!(
-        "data.lock may come from another version of fetchloom. `fetchloom lock --upgrade {dataset}` pins what this one unpacks"
+        "data.lock may come from another version of fetchloom. if what this one unpacks is intended, run `fetchloom lock --upgrade {dataset}`"
     ))
 }
 

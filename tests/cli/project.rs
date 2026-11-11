@@ -364,18 +364,20 @@ fn an_edit_to_a_placed_file_never_spreads_to_other_projects() -> Result {
     Ok(())
 }
 
+/// bytes that changed upstream stop a sync, which names both ways on: the pinned bytes from a
+/// folder mirror, or the new ones by an upgrade. only a person may choose the new bytes, so JSON
+/// gives no fix a script would run.
 #[test]
-fn changed_bytes_upstream_stop_sync_with_the_fix() -> Result {
+fn changed_bytes_upstream_stop_sync_with_both_ways_on() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        PATH,
-        vec![file(IRIS, "\"v1\""), file(b"species\nsetosa\n", "\"v2\"")],
-    )?;
+    let changed = || file(b"species\nsetosa\n", "\"v2\"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), changed(), changed()])?;
     added(&sandbox, &server)?;
     let cold = clone(&sandbox, "cold")?;
+    let other_cache = sandbox.folder("other-cache")?;
     let output = sandbox
         .command_in(&cold, &["sync"])
-        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .env("FETCHLOOM_CACHE", &other_cache)
         .output()?;
     assert_eq!(output.status.code(), Some(30));
     assert!(
@@ -384,6 +386,23 @@ fn changed_bytes_upstream_stop_sync_with_the_fix() -> Result {
     );
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+
+    let output = sandbox
+        .command_in(&cold, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &other_cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(30));
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "integrity.mismatch");
+    assert_eq!(error["fix"], serde_json::Value::Null, "{error}");
+    let help = error["help"].as_str().unwrap_or_default();
+    for way in [
+        "`fetchloom push --to <folder>`",
+        "`fetchloom sync --mirror <folder>`",
+        "`fetchloom lock --upgrade iris`",
+    ] {
+        assert!(help.contains(way), "{help}");
+    }
     Ok(())
 }
 

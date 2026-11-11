@@ -46,10 +46,10 @@ if a locked 32-byte file is replaced upstream by a 15-byte file, stderr reports:
 ```text
 error: iris/iris.csv is not the file data.lock records
   expected 32 bytes, got 15
-  help: if the new version is intended, run `fetchloom lock --upgrade iris`
+  help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`
 ```
 
-follow the upgrade hint only when you intend to change the input. [recovery](../concepts.md#recovery) covers expired download URLs and interrupted transfers.
+a [folder mirror](../mirrors.md) that holds the pinned bytes gives them back; follow the upgrade only when you intend to change the input, since it pins what the source serves now. with `--json` the error's `fix` is null. [recovery](../concepts.md#recovery) covers expired download URLs and interrupted transfers.
 
 ## named datasets
 

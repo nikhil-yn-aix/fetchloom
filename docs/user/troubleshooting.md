@@ -35,7 +35,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone` | [mirror-only mode](mirrors.md#mirror-only-mode) is on, and no mirror holds the file, as the details say for each mirror | ask whoever keeps the mirror to add it; a fetchloom on a machine that may ask sources can sync the project and fill the mirror with [`fetchloom push`](commands/push.md) |
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
 | `error: the proxy at http://proxy.example.org:8080 asked for a login before it would reach huggingface.co` | the proxy answered 407: it wants a login before it carries any request. one that asks for your windows sign-in, by NTLM or Kerberos, wants what fetchloom cannot send | for a windows sign-in, run a local relay that signs in for you, as [company proxies](#company-proxies) shows; for a name and password, put them in the proxy's address, as the help says |
-| `error: iris/iris.csv is not the file data.lock records` | downloaded bytes differ from the pin | investigate the source; upgrade only if the change is intended |
+| `error: iris/iris.csv is not the file data.lock records` | the source now serves other bytes than data.lock pins | keep the pinned bytes from a [folder mirror](mirrors.md) that holds them; upgrade only if the change is intended, as below |
 | `error: downloading huge.bin needs 2.0 GiB, and fetchloom cannot ask you here` | a large download needs a yes, and no one is at a terminal to answer | check the size, then pass `--yes` if you want it |
 | `error: SSL_CERT_FILE names /etc/ssl/corp.pem, which holds no certificates fetchloom can read` | the variable names a missing file, or one without PEM certificates | unset it to use the system's certificates, or set it to a file of PEM certificates |
 | `error: this sync needs at least 170.0 GiB on the disk holding the cache at /home/ada/.cache/fetchloom, which has 150.0 GiB free` | the downloads, and the archives they unpack, need more than the cache's disk has free | free space there, or set `FETCHLOOM_CACHE` to a folder on a bigger disk. downloads already in the cache are kept. `--yes` goes on anyway, as on a disk that compresses |
@@ -49,10 +49,10 @@ for a size mismatch, the full stderr answer can be:
 ```text
 error: iris/iris.csv is not the file data.lock records
   expected 32 bytes, got 15
-  help: if the new version is intended, run `fetchloom lock --upgrade iris`
+  help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`
 ```
 
-if the new input is intended, run the suggested upgrade, sync and commit the lock. otherwise preserve the pin and ask the source owner for the original bytes.
+fetchloom places nothing it cannot check, so the clone stays without the file. to keep the pinned bytes, someone who has them, such as whoever pinned them, runs `fetchloom push --to <folder>` into a folder you can read, then `fetchloom sync --mirror <folder>` takes them from there, checked against data.lock. if the new input is intended, run the suggested upgrade, sync and commit the lock. with `--json` the error's `fix` is null, since only a person may choose other bytes than data.lock pins.
 
 ## warnings and unexpected results
 
