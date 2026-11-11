@@ -334,7 +334,8 @@ fn settled_unheld(
     if args.verify {
         survey.verify(&project.root, &scope)?;
     }
-    let Some(placement) = place::untouched(project, &manifest, &survey, &seen, false)? else {
+    let Some(placement) = place::untouched(project, &manifest, &survey, &seen, false, &scope)?
+    else {
         return Ok(None);
     };
     if project.ignored_in_git(&manifest.data_dir)?.is_some() {
@@ -975,7 +976,8 @@ pub(super) async fn sync_all(
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
         Read::Settled(seen) => {
-            if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
+            if let Some(placement) =
+                place::untouched(work.project, manifest, &survey, seen, true, &work.scope)?
             {
                 work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
                 // files hashing found unchanged settle with a state written now; a project folder
@@ -1074,7 +1076,8 @@ pub(super) async fn preview_all(
     }
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
-        && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
+        && let Some(placement) =
+            place::untouched(work.project, manifest, &survey, seen, false, &work.scope)?
     {
         work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
         return Ok(Outcome {
@@ -1739,7 +1742,7 @@ pub(crate) mod tests {
         };
         let survey = Survey::read(&project, &manifest.data_dir, first.threads);
         assert!(
-            place::untouched(&project, &manifest, &survey, &seen, false)
+            place::untouched(&project, &manifest, &survey, &seen, false, &Scope::All)
                 .unwrap()
                 .is_some(),
             "the project is not settled"

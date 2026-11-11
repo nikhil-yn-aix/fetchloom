@@ -68,7 +68,7 @@ error: data.toml has no dataset called smal
   help: did you mean `fetchloom sync small`?
 ```
 
-a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first, or every dataset.
+with `--json`, `result.placement` counts small's files alone, `unchanged` too, even when the whole project was already in place. a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first, or every dataset.
 
 ## already in place
 

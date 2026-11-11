@@ -299,3 +299,47 @@ fn a_locked_path_checks_only_its_dataset() -> Result {
     assert_eq!(fs::read(fresh.folder.join("data.lock"))?, lock);
     Ok(())
 }
+
+/// a named sync of a settled project counts only the named datasets' files as unchanged: a has
+/// 2 files and b 1, and none once b has `place = false`. a checkout it may not write, which
+/// syncs without the project's hold, counts the same, and a sync of every dataset still counts
+/// every placed file.
+#[test]
+fn a_settled_named_sync_counts_only_its_datasets() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (name, files) in [("a", &["1.txt", "2.txt"][..]), ("b", &["3.txt"])] {
+        let folder = sandbox.folder(name)?;
+        for file in files {
+            fs::write(folder.join(file), file.as_bytes())?;
+        }
+        let added = sandbox.run(&["add", &format!("../{name}"), "--as", name])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let unchanged = |args: &[&str]| -> Result<serde_json::Value> {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        Ok(json(&output)?["result"]["placement"]["unchanged"].clone())
+    };
+    assert_eq!(unchanged(&["--json", "sync", "a"])?, 2);
+    assert_eq!(unchanged(&["--json", "sync", "b"])?, 1);
+    assert_eq!(unchanged(&["--json", "sync"])?, 3);
+    #[cfg(unix)]
+    if !rustix::process::geteuid().is_root() {
+        crate::project::writable(&sandbox.work(), false)?;
+        let read_only = unchanged(&["--json", "sync", "a"]);
+        crate::project::writable(&sandbox.work(), true)?;
+        assert_eq!(read_only?, 2);
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("[datasets.b]\n", "[datasets.b]\nplace = false\n"),
+    )?;
+    let retired = sandbox.run(&["sync"])?;
+    assert_eq!(retired.status.code(), Some(0), "{}", text(&retired.stderr)?);
+    assert_eq!(unchanged(&["--json", "sync", "b"])?, 0);
+    assert_eq!(unchanged(&["--json", "sync", "a"])?, 2);
+    assert_eq!(unchanged(&["--json", "sync"])?, 2);
+    Ok(())
+}

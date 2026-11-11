@@ -353,7 +353,7 @@ fn check(
     if verify {
         status.hashed_only = survey.verify(&project.root, &Scope::All)?;
     }
-    if place::untouched(project, &manifest, &survey, &seen, false)?.is_some() {
+    if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
         status.extra = extra(&survey, &recorded);
         return Ok(status);

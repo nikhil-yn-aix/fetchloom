@@ -2159,7 +2159,7 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
 /// sets every folder and file under `root` read-only, or writable again, as a checkout on a
 /// read-only mount or owned by another user is.
 #[cfg(unix)]
-fn writable(root: &std::path::Path, yes: bool) -> Result {
+pub(crate) fn writable(root: &std::path::Path, yes: bool) -> Result {
     use std::os::unix::fs::PermissionsExt;
     let mut paths = vec![root.to_path_buf()];
     let mut at = 0;

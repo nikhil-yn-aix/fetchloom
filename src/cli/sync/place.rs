@@ -1029,13 +1029,15 @@ fn needs_bytes(action: &Action) -> bool {
 /// for in place left them, so the state records exactly those files, and each one still looks as
 /// recorded. files as new as the state that hashing found unchanged need only a state written
 /// again, which the caller does. anything else, or any doubt the survey raised, takes the long
-/// way. a dry run passes `make` false so a missing data folder is not created.
+/// way. a dry run passes `make` false so a missing data folder is not created. the whole project
+/// must be settled, while the placement counts the files of the datasets in `scope` alone.
 pub(crate) fn untouched(
     project: &Project,
     manifest: &Manifest,
     survey: &Survey,
     seen: &Seen,
     make: bool,
+    scope: &Scope,
 ) -> Result<Option<Placement>, Error> {
     let _span = tracing::debug_span!("untouched").entered();
     let state = &survey.state;
@@ -1064,8 +1066,13 @@ pub(crate) fn untouched(
     } else {
         project.planned_data_dir(manifest)?;
     }
+    let unchanged = state
+        .files
+        .values()
+        .filter(|placed| scope.includes(&placed.dataset))
+        .count();
     Ok(Some(Placement {
-        unchanged: state.files.len() as u64,
+        unchanged: unchanged as u64,
         ..Placement::default()
     }))
 }
@@ -2543,7 +2550,7 @@ mod tests {
             complete: true,
         });
 
-        let found = untouched(&project, &manifest, &survey, &seen, false).unwrap();
+        let found = untouched(&project, &manifest, &survey, &seen, false, &Scope::All).unwrap();
 
         assert!(found.is_none(), "a settled sync would leave the copy");
     }
