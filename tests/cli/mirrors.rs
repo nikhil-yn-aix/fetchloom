@@ -7,7 +7,7 @@ use std::process::Output;
 
 use crate::add::sha256_hex as sha256;
 use crate::caps::shown;
-use crate::support::{Result, Routes, Sandbox, edit, file, json, reply, text};
+use crate::support::{Result, Routes, Sandbox, delete, edit, file, json, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
 
@@ -361,7 +361,7 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     let root = sandbox.folder("mirror")?;
     mirror_of(&sandbox, &root)?;
     let hex = sha256(IRIS);
-    fs::remove_file(root.join("objects").join(&hex[..2]).join(&hex[2..]))?;
+    delete(&root.join("objects").join(&hex[..2]).join(&hex[2..]))?;
     let asked = source.requests().len();
     let catalogs = Routes::start(Vec::new())?;
     let (folder, cache) = cold(&sandbox, "cold")?;
