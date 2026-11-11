@@ -532,6 +532,7 @@ impl Net {
                 .check(&hop, &self.typed)
                 .await
                 .map_err(|reason| refused(&hop, reason))?;
+            let carrier = wire.proxies.carrier(&hop);
             first_origin &= hop.origin() == url.origin();
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             // a signature goes with the first request alone, never after a redirect
@@ -548,14 +549,7 @@ impl Net {
                 }
                 None => shape(self.request(client, &hop, first_origin)),
             };
-            let mut response = tokio::select! {
-                sent = tokio::time::timeout(self.connect + self.idle, request.send()) => match sent {
-                    Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(&hop), (self.connect + self.idle).as_secs()))),
-                    Ok(Err(err)) => return Err(failure::classify(&hop, &err, self.offline)),
-                    Ok(Ok(response)) => response,
-                },
-                () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(&hop))),
-            };
+            let mut response = self.sent(wire, &hop, carrier.as_ref(), request).await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, Instant::now());
             if let Some(located) = located
@@ -602,6 +596,33 @@ impl Net {
             tracing::debug!(from = host(&hop), to = host(&next), "redirect");
             hop = next;
         }
+    }
+
+    /// sends `request` for `hop`, which `carrier` carries when a proxy does: the answer, or why
+    /// none came. a proxy that cannot be reached is named rather than the site behind it.
+    async fn sent(
+        &self,
+        wire: &Wire,
+        hop: &Url,
+        carrier: Option<&address::Carrier>,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        let deadline = self.connect + self.idle;
+        let response = tokio::select! {
+            sent = tokio::time::timeout(deadline, request.send()) => match sent {
+                Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(hop), deadline.as_secs()))),
+                Ok(Err(err)) => return Err(unanswered(wire, hop, carrier, &err, self.offline).await),
+                Ok(Ok(response)) => response,
+            },
+            (carrier, reason) = watched(wire, carrier) => {
+                return Err(Failure::Final(failure::proxy_down(hop, carrier, &reason)));
+            }
+            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(hop))),
+        };
+        if let Some(carrier) = carrier {
+            wire.proxies.reached(carrier);
+        }
+        Ok(response)
     }
 
     /// a GET with the user agent and, when `credentials` allows, the credential for this exact
@@ -725,6 +746,36 @@ fn signed(
         request = request.header(name, value);
     }
     Ok(request)
+}
+
+/// waits while a request through `carrier` has no answer, ending only once the proxy is found
+/// unreachable, with why. without a proxy it never ends.
+async fn watched<'c>(
+    wire: &Wire,
+    carrier: Option<&'c address::Carrier>,
+) -> (&'c address::Carrier, String) {
+    match carrier {
+        Some(carrier) => (carrier, wire.proxies.watch(carrier).await),
+        None => std::future::pending().await,
+    }
+}
+
+/// a request that failed before any answer came. when the proxy carrying it cannot be reached,
+/// the proxy is named rather than the site, and no other try is made.
+async fn unanswered(
+    wire: &Wire,
+    url: &Url,
+    carrier: Option<&address::Carrier>,
+    err: &reqwest::Error,
+    offline: Offline,
+) -> Failure {
+    if let Some(carrier) = carrier
+        && failure::before_proxy(err)
+        && let Some(reason) = wire.proxies.unreachable(carrier).await
+    {
+        return Failure::Final(failure::proxy_down(url, carrier, &reason));
+    }
+    failure::classify(url, err, offline)
 }
 
 /// a redirect may name the download even when the final storage response does not.

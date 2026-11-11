@@ -187,3 +187,38 @@ fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
     );
     Ok(())
 }
+
+/// a proxy nothing answers at, as when the variable names a closed port, is named with the
+/// variable it came from, and the run stops at the first try: no retry reaches a proxy that is
+/// down, and the site behind it is not blamed.
+#[test]
+fn a_proxy_that_cannot_be_reached_is_named_and_not_tried_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let closed = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let proxy = format!("http://{}", closed.local_addr()?);
+    drop(closed);
+    let output = sandbox
+        .command(&["--json", "get", "https://data.example.org/iris.csv"])
+        .env("HTTPS_PROXY", &proxy)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .env("FETCHLOOM_RETRIES", "1")
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "network.unreachable", "{error}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "could not reach the proxy at {proxy}, which HTTPS_PROXY names: it refused the connection"
+        )
+    );
+    assert_eq!(
+        error["help"],
+        "check HTTPS_PROXY, or unset HTTPS_PROXY to connect without a proxy. `fetchloom help environment` lists the proxy settings"
+    );
+    assert_eq!(document["work"]["retries"], 0, "{document}");
+    assert!(!text(&output.stderr)?.contains("trying again"));
+    Ok(())
+}

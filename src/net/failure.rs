@@ -87,7 +87,12 @@ impl<'a> Retry<'a> {
         has_copy: bool,
     ) -> Result<(), Error> {
         if self.attempt > self.net.retries || self.tries >= MOST_TRIES {
-            let error = gave_up(self.url, self.tries, &reason, has_copy);
+            let through = self
+                .net
+                .wire()
+                .ok()
+                .and_then(|wire| wire.proxies.carrier(self.url));
+            let error = gave_up(self.url, self.tries, &reason, has_copy, through.as_ref());
             if self.limited == 0 {
                 return Err(error);
             }
@@ -260,6 +265,57 @@ fn proxy_login(url: &Url, scheme: Option<&str>) -> Error {
     Error::new(Kind::NetworkUnreachable, message).help(help)
 }
 
+/// the proxy that carries requests for `url` cannot be reached, for `reason`. no other try would
+/// get further, and the site behind it is not to blame, so the help is about the proxy setting.
+pub(super) fn proxy_down(url: &Url, carrier: &address::Carrier, reason: &str) -> Error {
+    let (named, check) = if let Some(variable) = carrier.variable {
+        (
+            format!("which {variable} names"),
+            format!("check {variable}, or unset {variable} to connect without a proxy"),
+        )
+    } else {
+        let variable = if url.scheme() == "https" {
+            "HTTPS_PROXY"
+        } else {
+            "HTTP_PROXY"
+        };
+        (
+            "which the system's proxy settings name".to_owned(),
+            format!(
+                "check the system's proxy settings, or set {variable} to the proxy this network needs"
+            ),
+        )
+    };
+    Error::new(
+        Kind::NetworkUnreachable,
+        format!(
+            "could not reach the proxy at {}, {named}: {reason}",
+            carrier.shown
+        ),
+    )
+    .help(format!(
+        "{check}. `fetchloom help environment` lists the proxy settings"
+    ))
+}
+
+/// whether `err` ended a request before the proxy carrying it answered, so the proxy itself may
+/// be what cannot be reached. a tunnel the proxy refused, or asked a login for, was answered;
+/// hyper-util keeps those errors' type private, so their own words tell them apart.
+pub(super) fn before_proxy(err: &reqwest::Error) -> bool {
+    if !err.is_connect() {
+        return false;
+    }
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(current) = cause {
+        let text = current.to_string();
+        if text.starts_with("tunnel error: ") {
+            return text == "tunnel error: failed to create underlying connection";
+        }
+        cause = current.source();
+    }
+    true
+}
+
 /// the certificate error inside `error`, however many `io::Error`s wrap it. a direct connection
 /// gets two, from tokio-rustls and hyper-rustls, and std's `source()` steps over both.
 fn untrusted<'e>(mut error: &'e (dyn std::error::Error + 'static)) -> Option<&'e rustls::Error> {
@@ -371,7 +427,14 @@ pub(super) fn interrupted(url: &Url) -> Error {
     )
 }
 
-fn gave_up(url: &Url, tries: u32, reason: &str, has_copy: bool) -> Error {
+/// the error once the tries for `url` ran out, `through` the proxy that carries it, if one does.
+fn gave_up(
+    url: &Url,
+    tries: u32,
+    reason: &str,
+    has_copy: bool,
+    through: Option<&address::Carrier>,
+) -> Error {
     let message = format!(
         "gave up on {} after {}: {reason}",
         host(url),
@@ -397,29 +460,24 @@ fn gave_up(url: &Url, tries: u32, reason: &str, has_copy: bool) -> Error {
         }
         _ => {}
     }
-    let proxy = [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-        "HTTP_PROXY",
-        "http_proxy",
-    ]
-    .into_iter()
-    .find(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()));
     let error = Error::new(Kind::NetworkUnreachable, message);
-    let check = match proxy {
-        Some(name) => format!("check the connection and the proxy {name} names"),
+    let check = match through.map(|carrier| carrier.variable) {
+        Some(Some(variable)) => format!("check the connection and the proxy {variable} names"),
+        Some(None) => "check the connection and the system's proxy settings".to_owned(),
         None => "check the connection".to_owned(),
     };
-    if has_copy {
-        error.help(format!(
-            "{check}, or add --offline to use the copy downloaded earlier"
-        ))
+    let help = if has_copy {
+        format!("{check}, or add --offline to use the copy downloaded earlier")
     } else {
-        error.help(format!(
+        format!(
             "{check} and run the same command again, with FETCHLOOM_RETRIES=10 to keep trying for about 2 minutes"
-        ))
+        )
+    };
+    match through {
+        Some(_) => error.help(format!(
+            "{help}. `fetchloom help environment` lists the proxy settings"
+        )),
+        None => error.help(help),
     }
 }
 
@@ -619,7 +677,7 @@ mod tests {
     fn exhausting_retries_offers_the_copy_or_more_tries() {
         let url = Url::parse("https://example.org/list").unwrap();
         for has_copy in [false, true] {
-            let error = gave_up(&url, RETRIES + 1, "connection broke", has_copy);
+            let error = gave_up(&url, RETRIES + 1, "connection broke", has_copy, None);
             assert_eq!(error.kind, Kind::NetworkUnreachable);
             assert!(error.message.contains("5 tries"));
             assert!(error.message.contains("connection broke"));
@@ -690,13 +748,61 @@ mod tests {
         assert!(super::untrusted(&reset).is_none());
     }
 
+    /// a proxy that cannot be reached is named, without retry advice: by the variable that set
+    /// it, or by the system's settings, with the variable that would replace them.
+    #[test]
+    fn a_proxy_that_cannot_be_reached_is_named_with_where_it_was_set() {
+        let url = Url::parse("https://data.example.org/iris.csv").unwrap();
+        let system = address::Proxies::with_lookup("http://system.lab:8080", |_, _| {
+            Box::pin(async { None })
+        });
+        let carrier = system.carrier(&url).unwrap();
+        let error = proxy_down(&url, &carrier, "it refused the connection");
+        assert_eq!(error.kind, Kind::NetworkUnreachable);
+        assert_eq!(
+            error.message,
+            "could not reach the proxy at http://system.lab:8080, which the system's proxy settings name: it refused the connection"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "check the system's proxy settings, or set HTTPS_PROXY to the proxy this network needs. `fetchloom help environment` lists the proxy settings"
+            )
+        );
+    }
+
+    /// tries that ran out through a proxy name the setting that chose it, the one for the link's
+    /// scheme, and where the proxy settings are listed. a link the proxy does not carry, as one
+    /// `NO_PROXY` names, says nothing of a proxy.
+    #[test]
+    fn running_out_of_tries_through_a_proxy_names_its_setting() {
+        let url = Url::parse("http://data.example.org/iris.csv").unwrap();
+        let system = address::Proxies::with_lookup("http://system.lab:8080", |_, _| {
+            Box::pin(async { None })
+        });
+        let carrier = system.carrier(&url);
+        let help = |through| {
+            gave_up(&url, RETRIES + 1, "connection broke", false, through)
+                .help
+                .unwrap_or_default()
+        };
+        let proxied = help(carrier.as_ref());
+        assert!(
+            proxied.starts_with("check the connection and the system's proxy settings and run the same command again")
+                && proxied.ends_with("`fetchloom help environment` lists the proxy settings"),
+            "{proxied}"
+        );
+        let direct = help(None);
+        assert!(!direct.contains("proxy"), "{direct}");
+    }
+
     #[test]
     fn running_out_of_tries_says_whose_side_the_trouble_is_on() {
         let url = Url::parse("https://example.org/list").unwrap();
-        let limited = gave_up(&url, RETRIES + 1, "example.org answered 429", false);
+        let limited = gave_up(&url, RETRIES + 1, "example.org answered 429", false, None);
         assert_eq!(limited.kind, Kind::NetworkRateLimited);
         assert!(limited.help.unwrap().contains("limiting requests"));
-        let down = gave_up(&url, RETRIES + 1, "example.org answered 503", true);
+        let down = gave_up(&url, RETRIES + 1, "example.org answered 503", true, None);
         assert_eq!(down.kind, Kind::NetworkStatus);
         let help = down.help.unwrap();
         assert!(

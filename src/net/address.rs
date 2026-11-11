@@ -202,10 +202,16 @@ fn is_unknown(err: &std::io::Error) -> bool {
 /// what looking up the hosts sent through them found.
 pub(crate) struct Proxies {
     matcher: Matcher,
+    /// each variable that names a proxy, with the proxy it names, as the matcher reads them.
+    named: Vec<(&'static str, http::Uri)>,
     /// for each host looked up, why it was refused, if it was.
     looked_up: Mutex<HashMap<String, Option<String>>>,
+    /// what this run decided about each proxy it checked, by host and port.
+    checked: Mutex<HashMap<(String, u16), reach::Verdict>>,
     #[cfg(test)]
     test_lookup: Option<TestLookup>,
+    #[cfg(test)]
+    test_probe: Option<TestProbe>,
 }
 
 /// the proxy variables, each pair in the order the proxy matcher reads it: the lowercase name
@@ -283,6 +289,10 @@ pub(super) type LookupFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
 #[cfg(test)]
 type TestLookup = Arc<dyn Fn(String, u16) -> LookupFuture + Send + Sync>;
+#[cfg(test)]
+type ProbeFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Probe> + Send>>;
+#[cfg(test)]
+type TestProbe = Arc<dyn Fn(String, u16) -> ProbeFuture + Send + Sync>;
 
 /// the proxy this machine sends `url` through, as its scheme, host and port, without any login
 /// its address holds. none when the request goes straight to the host.
@@ -293,8 +303,11 @@ pub(crate) fn proxy_of(url: &Url) -> Option<String> {
 /// the proxy `matcher` picks for `url`, as [`proxy_of`] shows it.
 fn shown_proxy(matcher: &Matcher, url: &Url) -> Option<String> {
     let uri = url.as_str().parse::<http::Uri>().ok()?;
-    let intercept = matcher.intercept(&uri)?;
-    let proxy = intercept.uri();
+    shown(matcher.intercept(&uri)?.uri())
+}
+
+/// a proxy's address as messages show it: its scheme, host and port, without a login.
+fn shown(proxy: &http::Uri) -> Option<String> {
     let scheme = proxy.scheme_str().unwrap_or("http");
     let host = proxy.host()?;
     Some(match proxy.port_u16() {
@@ -305,6 +318,11 @@ fn shown_proxy(matcher: &Matcher, url: &Url) -> Option<String> {
 
 #[cfg(test)]
 mod proxy_tests;
+mod reach;
+
+pub(crate) use reach::Carrier;
+#[cfg(test)]
+use reach::Probe;
 
 impl Proxies {
     /// the proxies in the environment `var` reads and, where reqwest reads them, the system
@@ -314,12 +332,15 @@ impl Proxies {
     ///
     /// `usage` for a proxy variable whose value is no proxy address.
     pub(crate) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Proxies, Error> {
-        named(var)?;
         Ok(Proxies {
             matcher: Matcher::from_system(),
+            named: named(var)?,
             looked_up: Mutex::default(),
+            checked: Mutex::default(),
             #[cfg(test)]
             test_lookup: None,
+            #[cfg(test)]
+            test_probe: None,
         })
     }
 
@@ -366,8 +387,30 @@ impl Proxies {
     ) -> Proxies {
         Proxies {
             matcher: Matcher::builder().all(proxy.to_owned()).build(),
+            named: Vec::new(),
             looked_up: Mutex::default(),
+            checked: Mutex::default(),
             test_lookup: Some(Arc::new(lookup)),
+            test_probe: None,
+        }
+    }
+
+    /// the proxy at `proxy`, named by `variable`, whose checks `probe` answers.
+    #[cfg(test)]
+    fn with_probe(
+        variable: &'static str,
+        proxy: &str,
+        probe: impl Fn(String, u16) -> ProbeFuture + Send + Sync + 'static,
+    ) -> Proxies {
+        Proxies {
+            matcher: Matcher::builder().all(proxy.to_owned()).build(),
+            named: proxy_address(proxy)
+                .map(|uri| vec![(variable, uri)])
+                .unwrap_or_default(),
+            looked_up: Mutex::default(),
+            checked: Mutex::default(),
+            test_lookup: None,
+            test_probe: Some(Arc::new(probe)),
         }
     }
 

@@ -20,7 +20,7 @@ pub(crate) use paths::workspace;
 pub(crate) use programs::{executable, recipe_step};
 pub(crate) use running::Running;
 
-use server::{ServerTask, Shutdown};
+use server::{Connection, ServerTask, Shutdown};
 
 pub(crate) type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -522,10 +522,9 @@ impl Server {
         let seen = heads.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             for response in responses {
-                let Some((mut stream, _connection)) = stop.accept(&listener) else {
+                let Some((mut stream, _connection, head)) = asking(&listener, &stop) else {
                     return;
                 };
-                let head = read_head(&mut stream).to_ascii_lowercase();
                 seen.change(|heads| heads.push(head));
                 for part in response {
                     if stop.stopped() {
@@ -834,9 +833,13 @@ impl Proxy {
     }
 }
 
-/// passes one client's request on, then copies bytes both ways until a side hangs up.
+/// passes one client's request on, then copies bytes both ways until a side hangs up. a
+/// connection that asks nothing, as fetchloom's check whether a proxy is up, is no request.
 fn relay(mut client: TcpStream, seen: &Mutex<Vec<String>>, stop: &Arc<Shutdown>) {
     let head = read_head(&mut client);
+    if head.is_empty() {
+        return;
+    }
     let line = head.lines().next().unwrap_or_default().to_owned();
     if let Ok(mut seen) = seen.lock() {
         seen.push(line.to_ascii_lowercase());
@@ -953,6 +956,19 @@ impl Routes {
             .lock()
             .map(|requests| requests.clone())
             .unwrap_or_default()
+    }
+}
+
+/// the next connection that asks for something, with the head of its request, lowercased. a
+/// connection that closes without a request, as fetchloom's check whether a proxy is up, is
+/// passed over, so it takes no scripted response.
+fn asking(listener: &TcpListener, stop: &Arc<Shutdown>) -> Option<(TcpStream, Connection, String)> {
+    loop {
+        let (mut stream, connection) = stop.accept(listener)?;
+        let head = read_head(&mut stream).to_ascii_lowercase();
+        if !head.is_empty() {
+            return Some((stream, connection, head));
+        }
     }
 }
 
