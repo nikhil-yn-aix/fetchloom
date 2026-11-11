@@ -1093,7 +1093,7 @@ impl<'a> Loop<'a> {
                     downloaded
                         .iter()
                         .map(|fetched| (fetched.size, fetched.moved)),
-                    started.elapsed()
+                    Fetched::transfer(downloaded.iter().copied(), started)
                 )
             );
             self.context.output.step("Downloaded", &text);

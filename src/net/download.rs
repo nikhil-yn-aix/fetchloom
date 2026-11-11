@@ -4,6 +4,7 @@
 use std::fs;
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use reqwest::StatusCode;
@@ -25,7 +26,7 @@ mod split;
 pub(crate) use split::{SLOW, SMALLEST_PIECE, SPLIT_ABOVE, WINDOW};
 
 /// how often to look again while another fetchloom downloads the same URL.
-const POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const POLL: Duration = Duration::from_millis(250);
 /// pages a server may send before the file, such as a confirmation form.
 const DIVERSIONS: u32 = 3;
 /// the largest page read to find where the file is.
@@ -114,6 +115,7 @@ impl Fetch {
             name: None,
             origin: Origin::Cache,
             version,
+            arrived: None,
         })
     }
 
@@ -174,12 +176,34 @@ pub(crate) struct Fetched {
     pub(crate) origin: Origin,
     /// the S3 version the bytes were, when their bucket keeps versions.
     pub(crate) version: Option<String>,
+    /// when the last byte this run received arrived, before the disk kept the file. none when
+    /// nothing was received.
+    pub(crate) arrived: Option<Instant>,
+}
+
+impl Fetched {
+    /// how long the downloads among `fetched` took from `started` until their last byte arrived,
+    /// so the time a slow disk takes to keep them does not count against the link. with nothing
+    /// received, the time since `started`.
+    pub(crate) fn transfer<'a>(
+        fetched: impl IntoIterator<Item = &'a Fetched>,
+        started: Instant,
+    ) -> Duration {
+        fetched
+            .into_iter()
+            .filter_map(|fetched| fetched.arrived)
+            .max()
+            .map_or_else(
+                || started.elapsed(),
+                |arrived| arrived.saturating_duration_since(started),
+            )
+    }
 }
 
 enum Answer {
     NotModified,
     Stored {
-        stored: Stored,
+        received: Received,
         validators: Validators,
         name: Option<String>,
         resumed: bool,
@@ -480,14 +504,17 @@ impl Net {
                         });
                 }
                 Ok(Answer::Stored {
-                    stored,
+                    received: Received { stored, arrived },
                     validators,
                     name,
                     resumed,
                 }) => match verify(&fetch.url, &fetch.expect, &stored) {
                     Ok(()) => {
                         let moved = reach.moved.load(Ordering::Relaxed);
-                        return Ok(self.remember(fetch, cache, &stored, validators, name, moved));
+                        let mut fetched =
+                            self.remember(fetch, cache, &stored, validators, name, moved);
+                        fetched.arrived = Some(arrived);
+                        return Ok(fetched);
                     }
                     // bytes from two connections may not belong together, so a resumed or split
                     // download that does not match starts over once, as one stream, before it
@@ -672,7 +699,7 @@ impl Net {
             {
                 Run::Whole(writer) => {
                     return Ok(Answer::Stored {
-                        stored: self.after_body(&mut state.permits, finish(writer)).await?,
+                        received: self.after_body(&mut state.permits, finish(writer)).await?,
                         validators,
                         name,
                         resumed: offset + kept > 0,
@@ -701,7 +728,7 @@ impl Net {
             split::Streamed::StartOver => return Ok(Answer::StartOver),
         };
         Ok(Answer::Stored {
-            stored: self.after_body(&mut state.permits, finish(writer)).await?,
+            received: self.after_body(&mut state.permits, finish(writer)).await?,
             validators,
             name,
             resumed: offset + kept > 0 || pieced,
@@ -855,7 +882,7 @@ impl Net {
         let window = self.split.window;
         let lap = tokio::time::sleep(window);
         tokio::pin!(lap);
-        let (mut since, mut moved) = (std::time::Instant::now(), 0u64);
+        let (mut since, mut moved) = (Instant::now(), 0u64);
         // the idle deadline moves with every chunk without touching the timer, which is reset
         // only when it fires early
         let mut idle = tokio::time::Instant::now() + self.idle;
@@ -878,7 +905,7 @@ impl Net {
                     )));
                 }
                 () = &mut lap, if watch.is_some() => {
-                    let now = std::time::Instant::now();
+                    let now = Instant::now();
                     let seconds = now.duration_since(since).as_secs_f64().max(f64::EPSILON);
                     #[expect(clippy::cast_precision_loss, reason = "a rate needs no exact count")]
                     let rate = moved as f64 / seconds;
@@ -1030,6 +1057,7 @@ impl Net {
             name,
             origin: Origin::Network,
             version,
+            arrived: None,
         }
     }
 }
@@ -1261,6 +1289,7 @@ fn fetched(record: UrlRecord, origin: Origin) -> Fetched {
         name: record.name,
         origin,
         version: record.validators.version,
+        arrived: None,
     }
 }
 
@@ -1318,12 +1347,22 @@ async fn open(partial: &Partial, body: Body) -> Result<Option<PartialWriter>, Fa
     }
 }
 
-/// puts the finished file into the cache on a blocking thread, since that flushes it.
-async fn finish(writer: PartialWriter) -> Result<Stored, Failure> {
-    tokio::task::spawn_blocking(move || writer.finish())
+/// a file whose every byte arrived, put into the cache.
+struct Received {
+    stored: Stored,
+    /// when the last byte arrived, before the flush, which a slow disk can make long.
+    arrived: Instant,
+}
+
+/// puts the finished file into the cache on a blocking thread, since that flushes it. awaited as
+/// soon as the body ends, it takes that moment as when the last byte arrived.
+async fn finish(writer: PartialWriter) -> Result<Received, Failure> {
+    let arrived = Instant::now();
+    let stored = tokio::task::spawn_blocking(move || writer.finish())
         .await
         .map_err(|err| Failure::Final(local(&io::Error::other(err))))?
-        .map_err(|err| Failure::Final(local(&err)))
+        .map_err(|err| Failure::Final(local(&err)))?;
+    Ok(Received { stored, arrived })
 }
 
 #[cfg(test)]

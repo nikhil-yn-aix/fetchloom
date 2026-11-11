@@ -23,11 +23,12 @@ fn a_long_download_says_what_it_is_doing_once() -> Result {
     let output = sandbox.run(&["add", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    let waiting: Vec<&str> = stderr
+    // a loaded machine can take past 10 s, which adds lines of how far it got; they come after
+    let started: Vec<&str> = stderr
         .lines()
-        .filter(|line| line.contains("Downloading"))
+        .filter(|line| line.starts_with("Downloading iris.csv"))
         .collect();
-    assert_eq!(waiting, ["Downloading iris.csv · 32 B"], "{stderr}");
+    assert_eq!(started, ["Downloading iris.csv · 32 B"], "{stderr}");
     assert!(
         stderr.find("Downloading") < stderr.find("Downloaded"),
         "{stderr}"

@@ -687,9 +687,13 @@ fn a_download_moves_its_whole_size_and_a_cached_file_nothing() {
         (fetched.origin, fetched.size, fetched.moved),
         (Origin::Network, 4, 4)
     );
+    assert!(fetched.arrived.is_some(), "it says when the bytes arrived");
     fetch.expect.sha256 = Some(fetched.digest);
     let found = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
-    assert_eq!((found.origin, found.moved), (Origin::Cache, 0));
+    assert_eq!(
+        (found.origin, found.moved, found.arrived),
+        (Origin::Cache, 0, None)
+    );
 }
 
 fn md5(bytes: &[u8]) -> Md5 {
@@ -1141,4 +1145,22 @@ fn a_changed_object_still_reaches_its_pinned_version() {
             "GET /raw/b.csv?versionId=v1 HTTP/1.1",
         ]
     );
+}
+
+/// the time downloads took ends when their last byte arrived, not when the disk kept them, so a
+/// slow flush does not make the link look slow.
+#[test]
+fn the_transfer_time_ends_with_the_last_byte() {
+    let started = Instant::now();
+    let fetched = |arrived: Option<u64>| Fetched {
+        digest: crate::digest::sha256(b"iris"),
+        size: 57,
+        moved: 57,
+        name: None,
+        origin: Origin::Network,
+        version: None,
+        arrived: arrived.map(|seconds| started + Duration::from_secs(seconds)),
+    };
+    let files = [fetched(Some(3)), fetched(Some(1)), fetched(None)];
+    assert_eq!(Fetched::transfer(&files, started), Duration::from_secs(3));
 }

@@ -13,7 +13,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Gave, Missing};
 use crate::mirror::{Location, Mirrors, Wanted, web};
-use crate::net::Net;
+use crate::net::{Fetched, Net};
 use crate::project::lock::archives::Archive;
 use crate::settings::{Origin, Settings};
 use crate::stop::Stop;
@@ -462,6 +462,7 @@ async fn from_web(
         .collect();
     let started = Instant::now();
     let results = super::apart(context, net, cache, jobs).await?;
+    let elapsed = Fetched::transfer(results.iter().flatten(), started);
     let mut stored = HashSet::new();
     let mut fetched = Vec::new();
     let mut damaged = Vec::new();
@@ -499,7 +500,7 @@ async fn from_web(
             &format!(
                 "{} \u{b7} {} from {location}",
                 units::count(fetched.len() as u64, "file", "files"),
-                units::downloaded(fetched, started.elapsed())
+                units::downloaded(fetched, elapsed)
             ),
         );
     }

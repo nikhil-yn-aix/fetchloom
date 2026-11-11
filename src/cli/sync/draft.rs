@@ -1594,6 +1594,7 @@ mod tests {
                 name: Some("other.txt".to_owned()),
                 origin: crate::net::Origin::Network,
                 version: None,
+                arrived: None,
             },
             &cache,
         );
@@ -1623,6 +1624,7 @@ mod tests {
             name: None,
             origin: crate::net::Origin::Network,
             version: Some(version.to_owned()),
+            arrived: None,
         };
         let listing = |reference: &str, link: &Url, md5: Option<Md5>| Listing {
             within: Vec::new(),
@@ -1800,6 +1802,7 @@ mod tests {
                 name: None,
                 origin: crate::net::Origin::Network,
                 version: None,
+                arrived: None,
             };
             draft.learn(index, &fetched, &cache);
         }

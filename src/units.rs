@@ -29,7 +29,9 @@ pub(crate) fn rate(bytes: u64, elapsed: Duration) -> String {
 
 /// what downloads brought, from each file's size and the bytes this run moved for it:
 /// `79.6 MiB in 3.2 s · 17.7 MiB/s · 23.0 MiB from an earlier run`. the rate counts only the
-/// bytes moved, so a resumed file does not look faster than the link.
+/// bytes moved, so a resumed file does not look faster than the link, and `elapsed` ends at the
+/// last byte that arrived, as `Fetched::transfer` gives it, so a slow disk does not make the
+/// link look slow either.
 pub(crate) fn downloaded(files: impl IntoIterator<Item = (u64, u64)>, elapsed: Duration) -> String {
     let (mut total, mut moved, mut earlier) = (0_u64, 0_u64, 0_u64);
     for (file, moved_for_it) in files {

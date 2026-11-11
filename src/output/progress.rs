@@ -161,11 +161,7 @@ fn style(
                     String::new()
                 };
                 // unpacking and checking read local files, whose pauses mean nothing
-                let quiet = if verb == "Downloading" {
-                    moved.quiet()
-                } else {
-                    Duration::ZERO
-                };
+                let quiet = (verb == "Downloading").then(|| moved.quiet());
                 let amount = measure(
                     state.pos(),
                     state.len(),
@@ -261,22 +257,33 @@ fn middle(name: &str, width: usize) -> String {
 }
 
 /// elapsed time stays visible until a settled rate can estimate the time left, and a download
-/// that has received nothing for [`STALL`] says so instead of showing a fading rate.
+/// that has received nothing for [`STALL`] says so instead of showing a fading rate. one with
+/// every byte in says it waits for the disk. `quiet`, how long since a download last received
+/// bytes, is none for local work.
 fn measure(
     done: u64,
     total: Option<u64>,
     rate: f64,
     elapsed: Duration,
     left: Duration,
-    quiet: Duration,
+    quiet: Option<Duration>,
 ) -> String {
     let mut parts = Vec::new();
     if done > 0 {
         parts.push(total.map_or_else(|| units::size(done), |total| fraction(done, total)));
     }
-    if quiet >= STALL {
-        parts.push(format!("no data for {}", units::seconds(quiet)));
-        return parts.join(" · ");
+    if let Some(quiet) = quiet {
+        if every_byte_in(done, total) {
+            parts.push("waiting for the disk".to_owned());
+            if quiet >= MOMENT {
+                parts.push(units::seconds(quiet));
+            }
+            return parts.join(" · ");
+        }
+        if quiet >= STALL {
+            parts.push(format!("no data for {}", units::seconds(quiet)));
+            return parts.join(" · ");
+        }
     }
     let settled = done > 0 && rate > 0.0 && elapsed >= SETTLE;
     let foreseen =
@@ -291,6 +298,12 @@ fn measure(
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
+}
+
+/// whether `done` reached a known, nonzero `total`: a download then has every byte in, and what
+/// is left is the disk's.
+fn every_byte_in(done: u64, total: Option<u64>) -> bool {
+    total.is_some_and(|total| total > 0 && done >= total)
 }
 
 fn fraction(done: u64, total: u64) -> String {
@@ -415,7 +428,7 @@ impl Drop for Ticker {
 /// waits out the batch, saying what it does after `moment` and how far it got every `every`.
 fn tick(
     shared: &Shared,
-    verb: &str,
+    verb: &'static str,
     what: &str,
     (moment, every): (Duration, Duration),
     say: &dyn Fn(&str, &str),
@@ -439,35 +452,57 @@ fn tick(
         drop(finished);
         let total = (shared.unknown.load(Ordering::Relaxed) == 0)
             .then(|| shared.total.load(Ordering::Relaxed));
+        let done = shared.done.load(Ordering::Relaxed);
+        let (verb, text) = report(verb, what, (done, total), started.elapsed(), !told);
+        say(verb, &text);
         if told {
-            let done = shared.done.load(Ordering::Relaxed);
-            let elapsed = units::seconds(started.elapsed());
-            say(
-                verb,
-                &match total {
-                    Some(total) => format!(
-                        "{} of {} · {elapsed}",
-                        units::size(done.min(total)),
-                        units::size(total)
-                    ),
-                    // a wait with no bytes to count, such as a source taking its time to answer
-                    None if done == 0 => format!("{what} · {elapsed}"),
-                    None => format!("{} · {elapsed}", units::size(done)),
-                },
-            );
             next += every;
         } else {
-            say(
-                verb,
-                &match total {
-                    Some(total) => format!("{what} · {}", units::size(total)),
-                    None => what.to_owned(),
-                },
-            );
             told = true;
             next = every;
         }
     }
+}
+
+/// the line a batch tells once it has run `elapsed`: the `first` time what it does, after that
+/// how far it got of `total`, which is known once every file's size is. a download with every
+/// byte in waits only for the disk to keep its files, so it says that.
+fn report(
+    verb: &'static str,
+    what: &str,
+    (done, total): (u64, Option<u64>),
+    elapsed: Duration,
+    first: bool,
+) -> (&'static str, String) {
+    if first {
+        return (
+            verb,
+            match total {
+                Some(total) => format!("{what} · {}", units::size(total)),
+                None => what.to_owned(),
+            },
+        );
+    }
+    let elapsed = units::seconds(elapsed);
+    if verb == "Downloading" && every_byte_in(done, total) {
+        return (
+            "Waiting",
+            format!("for the disk to finish writing {what} · {elapsed}"),
+        );
+    }
+    (
+        verb,
+        match total {
+            Some(total) => format!(
+                "{} of {} · {elapsed}",
+                units::size(done.min(total)),
+                units::size(total)
+            ),
+            // a wait with no bytes to count, such as a source taking its time to answer
+            None if done == 0 => format!("{what} · {elapsed}"),
+            None => format!("{} · {elapsed}", units::size(done)),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -682,7 +717,7 @@ mod tests {
     #[test]
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
-        let busy = Duration::ZERO;
+        let busy = Some(Duration::ZERO);
         assert_eq!(measure(0, None, 0.0, second, Duration::ZERO, busy), "");
         assert_eq!(
             measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy),
@@ -712,25 +747,100 @@ mod tests {
                 300.0,
                 40 * second,
                 10 * second,
-                12 * second
+                Some(12 * second)
             ),
             "1.0/4.0 KiB · no data for 12 s"
         );
         assert_eq!(
-            measure(0, Some(4096), 0.0, 9 * second, Duration::ZERO, 9 * second),
+            measure(
+                0,
+                Some(4096),
+                0.0,
+                9 * second,
+                Duration::ZERO,
+                Some(9 * second)
+            ),
             "no data for 9 s"
         );
         assert_eq!(
-            measure(1024, Some(4096), 512.0, 12 * second, 6 * second, 4 * second),
+            measure(
+                1024,
+                Some(4096),
+                512.0,
+                12 * second,
+                6 * second,
+                Some(4 * second)
+            ),
             "1.0/4.0 KiB · 512 B/s · 6 s left",
             "a gap of a few seconds is ordinary"
+        );
+    }
+
+    /// a bar whose download has every byte in waits on the disk to keep the file, so it says
+    /// that, and for how long once it has waited a moment, rather than that no data came.
+    #[test]
+    fn a_full_bar_says_it_waits_for_the_disk() {
+        let second = Duration::from_secs(1);
+        assert_eq!(
+            measure(
+                57,
+                Some(57),
+                4.0,
+                15 * second,
+                Duration::ZERO,
+                Some(12 * second)
+            ),
+            "57/57 B · waiting for the disk · 12 s"
+        );
+        assert_eq!(
+            measure(
+                57,
+                Some(57),
+                40.0,
+                second,
+                Duration::ZERO,
+                Some(Duration::ZERO)
+            ),
+            "57/57 B · waiting for the disk"
+        );
+    }
+
+    /// the plain line says what a batch does the first time, then how far it got. once every
+    /// byte of a download is in, what is left is the disk's, so the line says it waits for that.
+    #[test]
+    fn a_plain_line_says_a_download_waits_for_the_disk_once_every_byte_is_in() {
+        let ten = Duration::from_secs(10);
+        let told = |verb, done, total| report(verb, "iris.csv", (done, total), ten, false);
+        assert_eq!(
+            report("Downloading", "iris.csv", (57, Some(57)), ten, true),
+            ("Downloading", "iris.csv · 57 B".to_owned())
+        );
+        assert_eq!(
+            told("Downloading", 20, Some(57)),
+            ("Downloading", "20 B of 57 B · 10 s".to_owned())
+        );
+        assert_eq!(
+            told("Downloading", 57, Some(57)),
+            (
+                "Waiting",
+                "for the disk to finish writing iris.csv · 10 s".to_owned()
+            )
+        );
+        assert_eq!(
+            told("Downloading", 0, Some(0)),
+            ("Downloading", "0 B of 0 B · 10 s".to_owned()),
+            "a batch of empty files has had no byte yet"
+        );
+        assert_eq!(
+            told("Unpacking", 57, Some(57)),
+            ("Unpacking", "57 B of 57 B · 10 s".to_owned())
         );
     }
 
     #[test]
     fn the_time_left_waits_until_the_rate_can_carry_it() {
         let second = Duration::from_secs(1);
-        let busy = Duration::ZERO;
+        let busy = Some(Duration::ZERO);
         let mib = 1024 * 1024;
         assert_eq!(
             measure(

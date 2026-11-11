@@ -1787,7 +1787,7 @@ async fn learn_names(
     };
     let moved = units::downloaded(
         downloaded.iter().map(|(_, moved)| *moved),
-        started.elapsed(),
+        crate::net::Fetched::transfer(&fetched, started),
     );
     context
         .output

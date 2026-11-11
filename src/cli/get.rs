@@ -332,12 +332,13 @@ async fn one_link(
     let fetched = fetch::all(context, net, &cache, jobs)
         .await
         .map_err(Error::unchanged)?;
+    let elapsed = Fetched::transfer(&fetched, started);
     let done = finish(
         context,
         &cache,
         wanted,
         fetched,
-        started.elapsed(),
+        elapsed,
         &mut Taken::default(),
     )
     .await?;
@@ -400,7 +401,7 @@ async fn many(
             fetched[owner].push(result);
         }
     }
-    let elapsed = started.elapsed();
+    let elapsed = Fetched::transfer(fetched.iter().flatten().flatten(), started);
     let mut items = Vec::with_capacity(links.len());
     let mut failed = Vec::new();
     let mut taken = Taken::default();
