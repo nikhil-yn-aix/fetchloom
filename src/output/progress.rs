@@ -199,29 +199,49 @@ fn meter(done: u64, total: u64, color: bool) -> String {
     )
 }
 
-/// counters and bar space give way before the name, including the verb when only the name fits.
+/// the fewest columns a name keeps beside its counters before the counters give way.
+const NAME_LEAST: usize = 16;
+
+/// facts before decoration: as the terminal narrows, the bar gives way first, then the verb, then
+/// the name shortens in the middle down to [`NAME_LEAST`] columns, and only then do the counters
+/// drop from the end. a name with no room for any counter is shortened to fit alone.
 fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: bool) -> String {
     let dim = super::paint(color, anstyle::Style::new().dimmed());
-    let line = |bar: &str, amount: &str| {
+    let line = |parts: &[&str], amount: &str| {
         let amount = if amount.is_empty() {
             String::new()
         } else {
             format!("{dim}{amount}{dim:#}")
         };
-        [verb, name, bar, &amount]
-            .into_iter()
+        parts
+            .iter()
+            .copied()
+            .chain([amount.as_str()])
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join(" ")
     };
+    let fits = |shown: &str| console::measure_text_width(shown) <= width;
+    for shown in [
+        line(&[verb, name, bar], amount),
+        line(&[verb, name], amount),
+    ] {
+        if fits(&shown) {
+            return shown;
+        }
+    }
     let mut kept = std::borrow::Cow::Borrowed(amount);
     loop {
-        let shown = line(bar, &kept);
-        if console::measure_text_width(&shown) <= width {
+        let shown = line(&[name], &kept);
+        if fits(&shown) {
             return shown;
         }
         if kept.is_empty() {
             break;
+        }
+        let room = width.saturating_sub(console::measure_text_width(&kept) + 1);
+        if room >= NAME_LEAST {
+            return line(&[&middle(name, room)], &kept);
         }
         let shorter = match kept.rsplit_once(" · ") {
             Some((head, _)) => head.to_owned(),
@@ -234,10 +254,6 @@ fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: 
                 }),
         };
         kept = shorter.into();
-    }
-    let shown = line("", "");
-    if console::measure_text_width(&shown) <= width {
-        return shown;
     }
     middle(name, width)
 }
@@ -620,13 +636,33 @@ mod tests {
             );
         }
         assert_eq!(
-            render("iris.csv", "Downloading", "", amount, 28, false),
-            "Downloading iris.csv 1.0 MiB"
+            render("iris.csv", "Downloading", "", amount, 16, false),
+            "iris.csv 1.0 MiB"
         );
         assert_eq!(
-            render("iris.csv", "Downloading", "", "512 KiB/4.0 MiB", 28, false),
-            "Downloading iris.csv 512 KiB"
+            render("iris.csv", "Downloading", "", "512 KiB/4.0 MiB", 16, false),
+            "iris.csv 512 KiB"
         );
+    }
+
+    /// a narrow terminal drops decoration before facts: the bar first, then the verb, then the
+    /// name shortens in the middle, while the size, the speed and the time left keep their room.
+    #[test]
+    fn narrow_progress_drops_decoration_before_facts() {
+        let name = "train-00000-of-00004.parquet";
+        let bar = "#####---------------";
+        let amount = "113.9/190.7 MiB · 47.7 MiB/s · 2 s left";
+        let at = |width| render(name, "Downloading", bar, amount, width, false);
+        assert_eq!(at(101), format!("Downloading {name} {bar} {amount}"));
+        assert_eq!(at(80), format!("Downloading {name} {amount}"));
+        assert_eq!(at(68), format!("{name} {amount}"));
+        let narrow = at(60);
+        assert!(narrow.ends_with(&format!(" {amount}")), "{narrow}");
+        assert!(
+            narrow.starts_with("train-") && narrow.contains('~'),
+            "{narrow}"
+        );
+        assert_eq!(console::measure_text_width(&narrow), 60, "{narrow}");
     }
 
     #[test]
@@ -672,8 +708,12 @@ mod tests {
                         "{width}: {line}"
                     );
                     assert!(!line.contains('\n'), "{width}: {line}");
-                    if width >= console::measure_text_width(name) {
+                    let beside =
+                        console::measure_text_width(name) + 1 + console::measure_text_width(amount);
+                    if width >= beside {
                         assert!(line.contains(name), "{width}: {line}");
+                    } else if width > 0 {
+                        assert!(line.contains(name) || line.contains('~'), "{width}: {line}");
                     }
                 }
             }
