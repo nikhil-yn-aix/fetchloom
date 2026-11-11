@@ -104,6 +104,18 @@ warning: data/m/measure.csv has changed, so it stays, but mc reads the bytes dat
   help: to build from the fix, make it in a step of mc, or copy the file out of data/ and add it as a dataset of its own with `fetchloom add <copy> --as <name>` for mc to read
 ```
 
+an edit of a result's own file, which `copy = true` on the recipe allows, stays too when a build pins another result, so the data folder keeps the earlier version, and the build says so (stderr):
+
+```text
+      Needs up to 51 B on the disk holding the cache, which has 322.2 GiB free
+    Running mc · python3 c.py <build>/in/m <build>/out
+            kept 2 of 4 rows
+      Built mc · 1 file, 19 B in 32 ms
+warning: data/mc/measure_clean.csv has changed, so it stays, but it is an edit of an earlier version of mc, not what data.lock pins now
+  help: `fetchloom sync --force mc` replaces it
+         Ok pinned mc's result in data.lock
+```
+
 `fetchloom build --check` runs every step again from the inputs `data.lock` pins and compares what each makes with `data.lock`, file by file, without changing it or the data folder:
 
 ```text

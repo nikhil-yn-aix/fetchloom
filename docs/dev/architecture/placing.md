@@ -56,7 +56,7 @@ flowchart TD
 | adopt | existing bytes match the target; record them as managed. a file nothing recorded is marked adopted and, once the run placed everything, linked to the cache's copy where it can be |
 | place | no file occupies the target |
 | replace | old managed data is superseded, an unchanged alias is proven damaged, a matching file needs writable placement, or force permits replacement |
-| leave | preserve an edited or foreign file and report why it stayed |
+| leave | preserve an edited or foreign file and report why it stayed; `Kept.earlier` marks an edit of a file the state records for another pin than data.lock has now, whose warning says it keeps an earlier version |
 | overwrite | with force, replace a file sync would otherwise keep, and name it with the reason it was kept; the file is moved aside until the pinned file is in place |
 | freed | remove the entry in a missing file's way when it is a file fetchloom placed that no dataset needs now, or a folder of only such files, then place; one changed since the scan stays, and the file is blocked |
 | unblock | with force, remove the entry in a missing file's way, without following it, then place |

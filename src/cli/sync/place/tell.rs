@@ -574,6 +574,13 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                 Some(dataset) if !readers(manifest, dataset).is_empty() => {
                     not_read(manifest, &kept.path, dataset)
                 }
+                Some(dataset) if kept.earlier => (
+                    format!(
+                        "{} has changed, so it stays, but it is an edit of an earlier version of {dataset}, not what data.lock pins now",
+                        kept.path
+                    ),
+                    format!("`{force}` replaces it"),
+                ),
                 _ => (
                     format!("{} has changed, so it stays", kept.path),
                     format!("`{force}` replaces it"),

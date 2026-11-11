@@ -44,7 +44,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
    - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
    - otherwise put in the cache the files of the datasets it reads, from the data folder, a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache and data folder lack it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`.
 5. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
-6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would.
+6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would. a file you edited stays, and when it is an edit of an earlier result than the one now pinned, as `copy = true` on the recipe allows, the warning says so and names `fetchloom sync --force` with that recipe alone, as [recipes](../recipes.md) shows.
 
 this output is from a project where `clean` is made from `iris` with `python3 clean.py`:
 

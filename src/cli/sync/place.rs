@@ -186,6 +186,10 @@ pub(crate) struct Kept {
     /// the dataset that places the file, when a target names it.
     #[serde(skip)]
     pub(crate) dataset: Option<String>,
+    /// whether fetchloom placed the file for another pin than data.lock has now, so an edit of
+    /// it keeps an earlier version, as after a rebuild or an upgrade.
+    #[serde(skip)]
+    pub(crate) earlier: bool,
 }
 
 impl Kept {
@@ -195,13 +199,19 @@ impl Kept {
             reason,
             blocker: None,
             dataset: None,
+            earlier: false,
         }
     }
 
-    /// the file of `target`, left as it is for `reason`.
-    fn of(target: &Target, reason: Reason) -> Kept {
+    /// the file of `target`, left as it is for `reason`, as `survey` found it.
+    fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
         Kept {
             dataset: Some(target.dataset.to_owned()),
+            earlier: survey
+                .state
+                .files
+                .get(&target.path)
+                .is_some_and(|placed| placed.sha256 != target.sha256),
             ..Kept::new(target.path.clone(), reason)
         }
     }
@@ -687,11 +697,11 @@ impl<'a> Placing<'a> {
                     }
                 }
                 Action::Leave(reason) => {
-                    placement.kept.push(Kept::of(target, *reason));
+                    placement.kept.push(Kept::of(target, *reason, &self.survey));
                 }
                 Action::Blocked(blocker) => placement.kept.push(Kept {
                     blocker: Some(blocker.clone()),
-                    ..Kept::of(target, Reason::Blocked)
+                    ..Kept::of(target, Reason::Blocked, &self.survey)
                 }),
                 Action::Replace | Action::Overwrite(_) | Action::Unblock(_) => {
                     if let Action::Overwrite(reason) = action {
@@ -1249,7 +1259,7 @@ fn settle<'t, 'a>(
                 } else {
                     placement.kept.push(Kept {
                         blocker: Some(blocker),
-                        ..Kept::of(target, Reason::Blocked)
+                        ..Kept::of(target, Reason::Blocked, survey)
                     });
                 }
             }
@@ -1261,7 +1271,7 @@ fn settle<'t, 'a>(
             }
             Action::Blocked(blocker) | Action::Freed(blocker) => placement.kept.push(Kept {
                 blocker: Some(blocker),
-                ..Kept::of(target, Reason::Blocked)
+                ..Kept::of(target, Reason::Blocked, survey)
             }),
             Action::Adopt(seen) => {
                 adopt(project, cache, survey, target, seen, placement);
@@ -1275,7 +1285,7 @@ fn settle<'t, 'a>(
                 placement.unchanged += 1;
                 adopted = true;
             }
-            Action::Leave(reason) => placement.kept.push(Kept::of(target, reason)),
+            Action::Leave(reason) => placement.kept.push(Kept::of(target, reason, survey)),
             Action::Replace | Action::Overwrite(_) => {
                 let destination = project.root.join(&target.path);
                 match now(&destination) {
@@ -1285,7 +1295,7 @@ fn settle<'t, 'a>(
                         } else {
                             Reason::Foreign
                         };
-                        placement.kept.push(Kept::of(target, reason));
+                        placement.kept.push(Kept::of(target, reason, survey));
                         continue;
                     }
                     Some(_) => {

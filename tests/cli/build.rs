@@ -931,8 +931,9 @@ fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
     Ok(())
 }
 
-/// a rebuild keeps an edit of the result it replaces, which `copy = true` allows, and its help
-/// names only the recipe whose file stays, never iris, which has `place = false`.
+/// a rebuild keeps an edit of the result it replaces, which `copy = true` allows, and says the
+/// file holds an earlier version than data.lock pins now. its help names only the recipe whose
+/// file stays, never iris, which has `place = false`.
 #[test]
 fn a_rebuild_that_keeps_an_edit_names_its_recipe_alone() -> Result {
     let sandbox = Sandbox::new()?;
@@ -957,7 +958,7 @@ fn a_rebuild_that_keeps_an_edit_names_its_recipe_alone() -> Result {
     let told = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{told}");
     assert!(
-        told.contains("  help: `fetchloom sync --force clean` replaces it\n"),
+        told.contains("warning: data/clean/clean.csv has changed, so it stays, but it is an edit of an earlier version of clean, not what data.lock pins now\n  help: `fetchloom sync --force clean` replaces it\n"),
         "{told}"
     );
     assert_eq!(fs::read(&edited)?, b"one, edited\n");
