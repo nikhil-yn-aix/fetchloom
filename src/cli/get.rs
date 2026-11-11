@@ -158,6 +158,12 @@ struct Wanted {
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
+    run_links(context, args)
+        .await
+        .map_err(|error| unprojected(context.offline, error))
+}
+
+async fn run_links(context: &Context, args: Get) -> Result<Report, Error> {
     if let Some(path) = &args.output {
         file::usage(path, &args.links, args.input_file.is_some())?;
     }
@@ -200,6 +206,35 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
         return one_link(context, &net, &args, one.clone()).await;
     }
     many(context, &net, &args, &asked).await
+}
+
+/// `error` in the words of a run that keeps no project: get was given its link on the command
+/// line or in a list and pins nothing, so no help names data.toml or a pin. `offline` says what
+/// turned offline mode on.
+fn unprojected(offline: net::Offline, mut error: Error) -> Error {
+    let reworded = |help: &str| -> Option<String> {
+        if help == net::MOVED_HELP {
+            Some("check the link in a browser. if it moved, run get with the new link".to_owned())
+        } else if help == crate::source::UNKNOWN_HELP {
+            Some("check the id in a browser, then run get with the right one. a dataset that was removed cannot be fetched".to_owned())
+        } else if help == offline.unlearned_help() {
+            Some(format!(
+                "{} to download it once. after that, `fetchloom get <link> --offline` reuses it",
+                offline.retry()
+            ))
+        } else {
+            None
+        }
+    };
+    if let Some(help) = error.help.as_deref().and_then(reworded) {
+        error = error.help(help);
+    }
+    for failure in &mut error.failures {
+        if let Some(help) = failure.help.as_deref().and_then(reworded) {
+            failure.help = Some(help);
+        }
+    }
+    error
 }
 
 /// a link to fetch, and the SHA-256 its one file must have when one was given.
@@ -319,7 +354,7 @@ async fn one_link(
     asked: Asked,
 ) -> Result<Report, Error> {
     let mut link = asked.link;
-    super::search::refuse_local(&link)?;
+    super::search::refuse_local(&link, false)?;
     if is_search(&link) {
         link = super::search::pick(context, net.as_ref(), &link, "get").await?;
     }
@@ -480,6 +515,7 @@ async fn many(
         let wanted = match wanted {
             Ok(wanted) => wanted,
             Err(error) => {
+                let error = unprojected(context.offline, error);
                 items.push(Item::failed(link, &error));
                 failed.push((index, error));
                 continue;
@@ -491,6 +527,7 @@ async fn many(
                 items.push(Item::done(link, &done));
             }
             Err(error) => {
+                let error = unprojected(context.offline, error);
                 tell_failed(context, link, &error);
                 items.push(Item::failed(link, &error));
                 failed.push((index, error));

@@ -1166,10 +1166,7 @@ impl<'a> Loop<'a> {
                 "offline, and a new link must be downloaded once to learn its SHA-256",
             );
             error = shown_five(error, &missing);
-            return Err(error.help(format!(
-                "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
-                self.net.offline().retry()
-            )));
+            return Err(error.help(self.net.offline().unlearned_help()));
         }
         Err(self.offline_missing(&missing))
     }

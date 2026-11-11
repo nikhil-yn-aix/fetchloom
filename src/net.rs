@@ -25,7 +25,7 @@ use url::Url;
 
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin};
-pub(crate) use failure::{MOST_RETRIES, RETRIES};
+pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES};
 pub(crate) use rate::Rate;
 pub(crate) use shown::{Shown, mask_query, secret};
 
@@ -121,6 +121,15 @@ impl Offline {
             Self::Environment => "unset FETCHLOOM_OFFLINE, then run the same command",
             Self::Both => "unset FETCHLOOM_OFFLINE, then run it again without --offline",
         }
+    }
+
+    /// what to do offline about a new link, whose SHA-256 only a download can teach, as a
+    /// project or a command line gives links. `get`, which pins nothing, words its own.
+    pub(crate) fn unlearned_help(self) -> String {
+        format!(
+            "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
+            self.retry()
+        )
     }
 
     /// what to do when offline work needs bytes the cache lacks: go online, or use a cache that

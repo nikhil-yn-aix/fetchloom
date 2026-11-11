@@ -110,6 +110,25 @@ fn an_unmatched_select_still_reports_an_example() {
     );
 }
 
+/// a pattern that matches nothing is fixed where it was written: on the command line, as add
+/// and get take one, or in data.toml.
+#[test]
+fn an_unmatched_select_is_fixed_where_it_was_written() {
+    for (cli, help) in [
+        (
+            true,
+            "compare the pattern with the paths above, then fix --select",
+        ),
+        (
+            false,
+            "compare the pattern with the paths above, then fix select in data.toml",
+        ),
+    ] {
+        let error = filtered("docs", &entry(&["*.csv"], &[], cli), &mixed()).unwrap_err();
+        assert_eq!(error.help.as_deref(), Some(help), "{cli}");
+    }
+}
+
 #[test]
 fn a_doc_only_listing_can_explain_an_unmatched_select() {
     let listing = listing(fixture_bytes("drive/folder-select-doc.html"));

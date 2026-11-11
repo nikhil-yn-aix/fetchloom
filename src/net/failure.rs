@@ -192,7 +192,7 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             Kind::ReferenceUnresolved,
             format!("{} has nothing at {} ({code})", host(url), Shown(url)),
         )
-        .help("check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml"),
+        .help(MOVED_HELP),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
             let host = host(url).to_ascii_lowercase();
             // a server that asks for a username and password takes the login a person saves
@@ -330,6 +330,10 @@ fn without_link(err: &reqwest::Error) -> String {
     }
 }
 
+/// what to do about a link with nothing at it, as a project or a command line gives links.
+/// `get`, which keeps no project, words its own.
+pub(crate) const MOVED_HELP: &str = "check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml";
+
 pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
     if !pinned {
         // a new link has no fingerprint yet, so no cached file can stand in for it
@@ -340,10 +344,7 @@ pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
                 Shown(url)
             ),
         )
-        .help(format!(
-            "{} to pin it. `fetchloom get <link> --offline` reuses a file fetched before",
-            mode.retry()
-        ));
+        .help(mode.unlearned_help());
     }
     Error::new(
         Kind::OfflineMissing,

@@ -837,6 +837,61 @@ fn a_missing_file_fails_with_the_reference_code() -> Result {
     Ok(())
 }
 
+/// get keeps no project, so its errors name neither data.toml nor a pin: a link that moved or an
+/// id nobody has is given to get again, a pattern is fixed on the command line, a new link
+/// offline is downloaded once, and a folder named like the search words leaves a search.
+#[test]
+fn get_errors_speak_of_no_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let gone = Server::start(
+        "/gone.csv",
+        vec![reply("404 Not Found", &[("Content-Length", "0")], b"")],
+    )?;
+    let fresh = Server::start(PATH, Vec::new())?;
+    fs::create_dir(sandbox.work().join("iris"))?;
+    let cases = [
+        (
+            vec!["get", gone.url.as_str(), "-o", "x.csv"],
+            "check the link in a browser. if it moved, run get with the new link",
+        ),
+        (
+            vec!["--offline", "get", fresh.url.as_str(), "-o", "x.csv"],
+            "run it again without --offline to download it once. after that, `fetchloom get <link> --offline` reuses it",
+        ),
+        (
+            vec!["get", fresh.url.as_str(), "--select", "*.data"],
+            "compare the pattern with the paths above, then fix --select",
+        ),
+        (vec!["get", "iris"], "run `fetchloom search iris` to search"),
+    ];
+    for (args, help) in cases {
+        let document = json(&sandbox.run(&[&["--json"][..], &args].concat())?)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["help"], help, "{args:?}: {document}");
+        for failure in error["failures"].as_array().into_iter().flatten() {
+            assert_eq!(failure["help"], help, "{args:?}: {document}");
+        }
+    }
+    // a catalog on this machine stands in for zenodo, which debug builds alone allow
+    #[cfg(debug_assertions)]
+    {
+        let nobody = Server::start(
+            "/",
+            vec![reply("404 Not Found", &[("Content-Length", "0")], b"")],
+        )?;
+        let output = sandbox
+            .command(&["--json", "get", "zenodo:1"])
+            .env("FETCHLOOM_TEST_ZENODO_API", &nobody.url)
+            .output()?;
+        assert_eq!(
+            json(&output)?["errors"][0]["help"],
+            "check the id in a browser, then run get with the right one. a dataset that was removed cannot be fetched"
+        );
+    }
+    assert_eq!(fresh.requests(), Vec::<String>::new());
+    Ok(())
+}
+
 #[test]
 fn offline_uses_only_what_the_cache_holds() -> Result {
     let sandbox = Sandbox::new()?;

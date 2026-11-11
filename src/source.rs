@@ -717,6 +717,10 @@ fn is_about(path: &str) -> bool {
             })
 }
 
+/// what to do about an id its source does not have, as a project or a command line gives ids.
+/// `get`, which keeps no project, words its own.
+pub(crate) const UNKNOWN_HELP: &str = "check the id in a browser, then fix it on the command line or as ref in data.toml. a dataset that was removed cannot be fetched";
+
 /// reads a JSON answer from a source's API. a missing dataset and a refusal become errors that
 /// name the reference, so every source words them the same way.
 pub(crate) fn json<T: serde::de::DeserializeOwned>(
@@ -727,10 +731,19 @@ pub(crate) fn json<T: serde::de::DeserializeOwned>(
     let reference = net::mask_query(&reference);
     match response.status {
         200..=299 => response.json(),
-        404 | 410 => Err(Error::new(Kind::ReferenceUnresolved, format!("{reference} does not exist, or is not public"))
-            .help("check the id in a browser, then fix it on the command line or as ref in data.toml. a dataset that was removed cannot be fetched")),
+        404 | 410 => Err(Error::new(
+            Kind::ReferenceUnresolved,
+            format!("{reference} does not exist, or is not public"),
+        )
+        .help(UNKNOWN_HELP)),
         401 | 403 => Err(refused(net::host(&response.url), &reference)),
-        status => Err(Error::new(Kind::NetworkStatus, format!("{} answered {status} for {reference}", net::host(&response.url)))),
+        status => Err(Error::new(
+            Kind::NetworkStatus,
+            format!(
+                "{} answered {status} for {reference}",
+                net::host(&response.url)
+            ),
+        )),
     }
 }
 

@@ -132,7 +132,7 @@ a link that fails is reported on a `Failed` line while the others finish. the ru
      Failed http://127.0.0.1:[port]/gone.csv · 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
 error: 1 of 2 links could not be fetched
   http://127.0.0.1:[port]/gone.csv: 127.0.0.1 has nothing at http://127.0.0.1:[port]/gone.csv (404)
-  help: check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml
+  help: check the link in a browser. if it moved, run get with the new link
 ```
 
 an interruption, a refused question about the total size or a cache that cannot open still stops the whole run. during placement, ctrl-c stops new files and checks between copy blocks. completed files stay; unfinished copies never take their final names.

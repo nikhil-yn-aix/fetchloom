@@ -67,8 +67,9 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
 }
 
 /// refuses `text`, given to add or get, before any request when it names something on this
-/// machine: a path, or words that name a file or folder in the current folder.
-pub(super) fn refuse_local(text: &str) -> Result<(), Error> {
+/// machine: a path, or words that name a file or folder in the current folder. `pins` says the
+/// command can pin that file or folder, as add can, while get, which keeps no project, cannot.
+pub(super) fn refuse_local(text: &str, pins: bool) -> Result<(), Error> {
     if local::is_path(text) {
         return Err(local::refused(text));
     }
@@ -82,15 +83,20 @@ pub(super) fn refuse_local(text: &str) -> Result<(), Error> {
     else {
         return Ok(());
     };
+    let search = format!("`fetchloom search {}` to search", super::shell_word(word));
+    let help = if pins {
+        format!(
+            "run `fetchloom add {}` to pin it, or {search}",
+            super::shell_word(&format!("./{word}"))
+        )
+    } else {
+        format!("run {search}")
+    };
     Err(Error::new(
         Kind::Usage,
         format!("\"{word}\" is a {what} here, so fetchloom did not search for it"),
     )
-    .help(format!(
-        "run `fetchloom add {}` to pin it, or `fetchloom search {}` to search",
-        super::shell_word(&format!("./{word}")),
-        super::shell_word(word)
-    )))
+    .help(help))
 }
 
 pub(super) async fn pick(

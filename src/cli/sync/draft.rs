@@ -927,9 +927,14 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
             "patterns match the whole path. try \"{}\"",
             deeper.as_str()
         )),
-        None => error.help(
-            "compare the pattern with the paths above, then fix --select or select in data.toml",
-        ),
+        None => error.help(match written(entry) {
+            Patterns::OnCommandLine => {
+                "compare the pattern with the paths above, then fix --select"
+            }
+            Patterns::InDataToml => {
+                "compare the pattern with the paths above, then fix select in data.toml"
+            }
+        }),
     }
 }
 

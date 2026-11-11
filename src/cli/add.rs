@@ -279,7 +279,7 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
     if local::is_path(&link) {
         return Ok(Request::Path(link));
     }
-    super::search::refuse_local(&link)?;
+    super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
 }
 
