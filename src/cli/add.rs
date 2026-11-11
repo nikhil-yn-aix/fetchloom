@@ -1309,7 +1309,6 @@ async fn resolve_add(
     let folders = crate::glob::folders_of(&select);
     let listing =
         engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
-    engine::tell_resolved(&context.output, &listing);
     let reference = stored_reference(link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
@@ -1323,9 +1322,14 @@ async fn resolve_add(
     )?)?;
     let mut entry = alone.datasets["new"].clone();
     entry.lines.clear();
-    if let Some(source) = entry.source() {
-        engine::filter(&parsed.reference.shown(), &entry, source, &listing)?;
-    }
+    let kept = entry
+        .source()
+        .map(|source| engine::filter(&parsed.reference.shown(), &entry, source, &listing))
+        .transpose();
+    // what the patterns keep is what gets pinned, so the line counts that
+    let told = kept.as_ref().ok().and_then(Option::as_deref);
+    engine::tell_kept(&context.output, &listing, told.unwrap_or(&listing.files));
+    kept?;
     Ok(Addition {
         listing,
         reference,

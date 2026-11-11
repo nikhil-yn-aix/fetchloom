@@ -137,6 +137,28 @@ fn openneuro() -> Result<Routes> {
     ])
 }
 
+/// an add that keeps some of the files a link lists counts what it keeps on its Resolved line,
+/// so the files of a whole repository never read as the ones added.
+#[test]
+fn add_counts_the_files_it_keeps_when_it_resolves() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let added = [
+        "add",
+        "s3://openneuro.org/ds000001/",
+        "--select",
+        "participants.tsv",
+    ];
+    let output = command(&sandbox, &routes, &added).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Resolved s3://openneuro.org/ds000001/ · 1 of 3 files · 28 B\n"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a public bucket never sees a key, even one `s3_buckets` lists while keys are set.
 #[test]
 fn an_s3_prefix_is_added_pinned_and_synced_anonymously() -> Result {
