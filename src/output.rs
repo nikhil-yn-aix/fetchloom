@@ -1061,7 +1061,7 @@ fn stopped_text(error: &Error, color: bool) -> String {
             text,
             "\n{:>11} {dim}{}{dim:#}",
             "",
-            accented(&plain(line), dim, color)
+            accented(&plain(&hashes_apart(line)), dim, color)
         );
     }
     if let Some(help) = &error.help {
@@ -1082,7 +1082,7 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         let _ = write!(
             text,
             "\n  {dim}{}{dim:#}",
-            accented(&plain(line), dim, color)
+            accented(&plain(&hashes_apart(line)), dim, color)
         );
     }
     if let Some(help) = &error.help {
@@ -1093,6 +1093,55 @@ fn error_text(error: &Error, level: Level, color: bool) -> String {
         let _ = write!(text, "\n  {dim}kind: {}{dim:#}", error.kind.name());
     }
     text
+}
+
+/// `line` as a person reads it: each whole SHA-256 on it, a word of 64 hex digits, cut to its
+/// first 12 digits, or to one past the first digit where it differs from another hash on the
+/// line, so two hashes that differ late still read apart. `--json` gives them whole.
+fn hashes_apart(line: &str) -> Cow<'_, str> {
+    const WHOLE: usize = 64;
+    const SHORT: usize = 12;
+    let bytes = line.as_bytes();
+    let digit = |byte: &u8| matches!(byte, b'0'..=b'9' | b'a'..=b'f');
+    let mut hashes: Vec<(usize, &str)> = Vec::new();
+    let mut start = 0;
+    while start < bytes.len() {
+        let run = bytes[start..].iter().take_while(|byte| digit(byte)).count();
+        let end = start + run;
+        // a word of its own, never part of a path or a longer name
+        let opens = start == 0 || matches!(bytes[start - 1], b' ' | b'(');
+        let closes = bytes
+            .get(end)
+            .is_none_or(|byte| matches!(byte, b' ' | b',' | b';' | b'.' | b')'));
+        if run == WHOLE && opens && closes {
+            hashes.push((start, &line[start..end]));
+        }
+        start = end + 1;
+    }
+    if hashes.is_empty() {
+        return Cow::Borrowed(line);
+    }
+    let mut shown = String::with_capacity(line.len());
+    let mut at = 0;
+    for (start, hash) in &hashes {
+        let length = hashes
+            .iter()
+            .filter(|(other, _)| other != start)
+            .map(|(_, other)| {
+                hash.bytes()
+                    .zip(other.bytes())
+                    .take_while(|(a, b)| a == b)
+                    .count()
+                    + 1
+            })
+            .fold(SHORT, usize::max)
+            .min(WHOLE);
+        shown.push_str(&line[at..*start]);
+        shown.push_str(&hash[..length]);
+        at = start + WHOLE;
+    }
+    shown.push_str(&line[at..]);
+    Cow::Owned(shown)
 }
 
 fn hint_line(text: &str, color: bool) -> String {
@@ -1555,6 +1604,46 @@ mod tests {
             None,
             "only a person may take other bytes than data.lock pins"
         );
+    }
+
+    /// two hashes on a line read apart wherever they differ, at least 12 digits each; a lone
+    /// hash takes 12, and hex digits in a path or a longer word stay as they are.
+    #[test]
+    fn hashes_on_a_line_read_apart_however_late_they_differ() {
+        let hash = "e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b1";
+        let at = |index: usize| {
+            let mut other = hash.to_owned();
+            other.replace_range(
+                index..=index,
+                if &hash[index..=index] == "0" {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
+            other
+        };
+        let (late, early) = (at(40), at(3));
+        assert_eq!(
+            super::hashes_apart(&format!("expected sha256 {hash}, got {late}")),
+            format!("expected sha256 {}, got {}", &hash[..41], &late[..41])
+        );
+        assert_eq!(
+            super::hashes_apart(&format!("expected sha256 {hash}, got {early}")),
+            format!("expected sha256 {}, got {}", &hash[..12], &early[..12])
+        );
+        assert_eq!(
+            super::hashes_apart(&format!("got {hash}.")),
+            format!("got {}.", &hash[..12])
+        );
+        for untouched in [
+            format!("could not read /cache/builds/{hash}/lock"),
+            format!("sha256:{hash}"),
+            format!("{hash}0 is no hash"),
+            "expected 32 bytes, got 15".to_owned(),
+        ] {
+            assert_eq!(super::hashes_apart(&untouched), untouched);
+        }
     }
 
     #[test]

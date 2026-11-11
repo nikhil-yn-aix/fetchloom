@@ -149,7 +149,7 @@ a list always runs as several links, even when it holds one, so `--dir` names th
 
 ## checking a hash
 
-`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the first 12 digits of the expected and received hashes.
+`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the expected and received hashes, each cut to its first 12 digits, or to just past the first digit where the two differ, so hashes that differ late still read apart; `--json` gives both whole.
 
 ## existing folders
 

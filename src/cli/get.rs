@@ -605,8 +605,8 @@ fn one_file(files: &[Remote], expected: &Expected, parsed: &Parsed) -> Result<()
         )
         .detail(format!(
             "expected sha256 {}, the source states {}",
-            expected.sha256.short(),
-            stated.short()
+            expected.sha256.hex(),
+            stated.hex()
         ))
         .help(expected.help())),
         _ => Ok(()),
@@ -783,8 +783,8 @@ fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<()
     )
     .detail(format!(
         "expected sha256 {}, got {}",
-        expected.sha256.short(),
-        digest.short()
+        expected.sha256.hex(),
+        digest.hex()
     ))
     .help(expected.help()))
 }

@@ -1176,8 +1176,8 @@ fn verify(url: &Url, expect: &Expect, stored: &Stored) -> Result<(), Error> {
         )
         .detail(format!(
             "expected sha256 {}, got {}",
-            expected.short(),
-            stored.digest.short()
+            expected.hex(),
+            stored.digest.hex()
         )));
     }
     if let (Some(stated), Some(got)) = (expect.md5, stored.md5)

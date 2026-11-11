@@ -1330,11 +1330,19 @@ fn a_matching_sha256_lets_the_file_in() -> Result {
     Ok(())
 }
 
+/// a hash that differs from the file's late, past the 12 digits a person usually reads, still
+/// reads apart: each is shown up to just past the first digit where they differ, and JSON gives
+/// both whole.
 #[test]
 fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    let wrong = "0".repeat(64);
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let late = if &IRIS_SHA256[30..31] == "0" {
+        "1"
+    } else {
+        "0"
+    };
+    let wrong = format!("{}{late}{}", &IRIS_SHA256[..30], &IRIS_SHA256[31..]);
     let output = sandbox.run(&["--json", "get", &server.url, "--sha256", &wrong])?;
     assert_eq!(output.status.code(), Some(30), "{}", text(&output.stdout)?);
     let document = json(&output)?;
@@ -1343,7 +1351,18 @@ fn another_sha256_stops_the_file_before_it_is_placed() -> Result {
     assert_eq!(error["message"], "iris.csv does not match --sha256");
     assert_eq!(
         error["details"][0],
-        format!("expected sha256 000000000000, got {}", &IRIS_SHA256[..12])
+        format!("expected sha256 {wrong}, got {IRIS_SHA256}")
+    );
+    let told = sandbox.run(&["get", &server.url, "--sha256", &wrong])?;
+    assert_eq!(told.status.code(), Some(30));
+    assert!(
+        text(&told.stderr)?.contains(&format!(
+            "  expected sha256 {}, got {}\n",
+            &wrong[..31],
+            &IRIS_SHA256[..31]
+        )),
+        "{}",
+        text(&told.stderr)?
     );
     assert!(!sandbox.work().join("iris").exists());
     Ok(())

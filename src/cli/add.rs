@@ -1061,8 +1061,8 @@ fn listed_entry(
             )
             .detail(format!(
                 "expected sha256 {}, the source states {}",
-                sha256.short(),
-                stated.short()
+                sha256.hex(),
+                stated.hex()
             ))
             .help(format!(
                 "check the hash on {at}, or ask the file's owner which bytes are right"
@@ -1187,8 +1187,8 @@ impl Promised {
             )
             .detail(format!(
                 "expected sha256 {}, got {}",
-                self.sha256.short(),
-                file.sha256.short()
+                self.sha256.hex(),
+                file.sha256.hex()
             ))
             .help(format!(
                 "check the hash on {}, or ask the file's owner which bytes are right",

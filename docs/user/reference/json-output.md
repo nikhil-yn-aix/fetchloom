@@ -30,7 +30,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 
 batch download errors keep every file in `failures`, even though the human summary names at most ten. each file keeps its own kind, message, details and help. the overall kind and exit code come from the first failed file in job order, not completion order or severity. interruption and other failures that stop the whole batch return immediately instead.
 
-SHA-256 mismatch details contain only the first 12 hex digits, even with `--json` or `-v`. parse `kind` and result fields rather than human messages.
+SHA-256 mismatch details give each hash whole with `--json`. a person, `-v` included, reads each cut to its first 12 hex digits, or to just past the first digit where the two differ. parse `kind` and result fields rather than human messages.
 
 bare `fetchloom` inside a project reports command `status`. outside a project, and for `--version`, command is null and result is `{"version":"0.1.0"}`. on a usage error, command is the prefix clap recognized, or null. `--json` is recognized anywhere before `--` on that error path; other display flags depend on what clap read.
 

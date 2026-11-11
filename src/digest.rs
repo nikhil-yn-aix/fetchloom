@@ -27,7 +27,7 @@ impl Sha256 {
         hex(&self.0)
     }
 
-    /// the first 12 hex digits, enough to compare two hashes at a glance.
+    /// the first 12 hex digits, enough to name one hash in a log. two hashes may share them.
     pub(crate) fn short(&self) -> String {
         let mut text = self.hex();
         text.truncate(12);
