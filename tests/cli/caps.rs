@@ -1,7 +1,6 @@
 //! resource caps and the other settings, read from the environment and the settings file.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text};
 
@@ -178,26 +177,44 @@ fn a_settings_file_named_by_the_variable_must_exist() -> Result {
 #[test]
 fn bad_settings_in_the_environment_are_usage_errors() -> Result {
     let sandbox = Sandbox::new()?;
-    for (name, value, said) in [
+    for (name, value, said, help) in [
         (
             "FETCHLOOM_HOST_JOBS",
             "0",
             "FETCHLOOM_HOST_JOBS is \"0\", which is not a number from 1 to 256",
+            None,
         ),
         (
             "FETCHLOOM_TIMEOUT",
             "0",
             "FETCHLOOM_TIMEOUT is \"0\", which is not a number from 1 to 3600",
+            None,
         ),
         (
             "FETCHLOOM_ASK_ABOVE",
             "big",
             "FETCHLOOM_ASK_ABOVE is \"big\", which is not a size such as 512M or 4G",
+            None,
         ),
         (
             "FETCHLOOM_MEMORY",
             "4gb",
             "FETCHLOOM_MEMORY is \"4gb\", which is not a size such as 512M or 4G",
+            None,
+        ),
+        (
+            "FETCHLOOM_RATE",
+            "fast",
+            "FETCHLOOM_RATE is \"fast\", which is not a positive byte rate",
+            Some("unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M"),
+        ),
+        (
+            "FETCHLOOM_THREADS",
+            "257",
+            "FETCHLOOM_THREADS is \"257\", which is not a number from 1 to 256",
+            Some(
+                "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256",
+            ),
         ),
     ] {
         let output = sandbox
@@ -207,7 +224,10 @@ fn bad_settings_in_the_environment_are_usage_errors() -> Result {
         assert_eq!(output.status.code(), Some(2), "{name}");
         let document = json(&output)?;
         assert_eq!(document["errors"][0]["kind"], "usage", "{name}");
-        assert_eq!(document["errors"][0]["message"], said);
+        assert_eq!(document["errors"][0]["message"], said, "{name}");
+        if let Some(help) = help {
+            assert_eq!(document["errors"][0]["help"], help, "{name}");
+        }
     }
     Ok(())
 }
@@ -237,8 +257,9 @@ fn ask_above_sets_the_size_that_needs_a_yes() -> Result {
 #[test]
 fn the_timeout_setting_ends_a_stalled_download() -> Result {
     let sandbox = Sandbox::new()?;
+    let (release, held) = std::sync::mpsc::channel();
     let mut stalled = reply("200 OK", &[("Content-Length", "4096")], b"");
-    stalled.push(Part::Pause(Duration::from_secs(5)));
+    stalled.push(Part::Wait(held));
     stalled.push(Part::Bytes(vec![b'x'; 4096]));
     let server = Server::start("/stalled.bin", vec![stalled])?;
     let output = sandbox
@@ -246,8 +267,11 @@ fn the_timeout_setting_ends_a_stalled_download() -> Result {
         .env("FETCHLOOM_TIMEOUT", "1")
         .env("FETCHLOOM_RETRIES", "0")
         .output()?;
-    assert!(!output.status.success());
-    let message = json(&output)?["errors"][0]["message"].to_string();
+    drop(release);
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "network.unreachable");
+    let message = document["errors"][0]["message"].to_string();
     assert!(message.contains("sent nothing for 1 s"), "{message}");
     Ok(())
 }
@@ -266,48 +290,6 @@ fn a_rate_capped_download_keeps_every_byte() -> Result {
     assert_eq!(
         std::fs::read(sandbox.work().join("capped").join("capped.bin"))?,
         body
-    );
-    Ok(())
-}
-
-#[test]
-fn a_bad_rate_is_a_settings_error() -> Result {
-    let sandbox = Sandbox::new()?;
-    let output = sandbox
-        .command(&["--json", "cache"])
-        .env("FETCHLOOM_RATE", "fast")
-        .output()?;
-    assert_eq!(output.status.code(), Some(2));
-    let document = json(&output)?;
-    assert_eq!(document["errors"][0]["kind"], "usage");
-    assert_eq!(
-        document["errors"][0]["message"],
-        "FETCHLOOM_RATE is \"fast\", which is not a positive byte rate"
-    );
-    assert_eq!(
-        document["errors"][0]["help"],
-        "unset FETCHLOOM_RATE for no cap, or use bytes per second such as 500K or 2.5M"
-    );
-    Ok(())
-}
-
-#[test]
-fn a_bad_thread_cap_is_a_settings_error() -> Result {
-    let sandbox = Sandbox::new()?;
-    let output = sandbox
-        .command(&["--json", "cache"])
-        .env("FETCHLOOM_THREADS", "257")
-        .output()?;
-    assert_eq!(output.status.code(), Some(2));
-    let document = json(&output)?;
-    assert_eq!(document["errors"][0]["kind"], "usage");
-    assert_eq!(
-        document["errors"][0]["message"],
-        "FETCHLOOM_THREADS is \"257\", which is not a number from 1 to 256"
-    );
-    assert_eq!(
-        document["errors"][0]["help"],
-        "unset FETCHLOOM_THREADS to use the default worker counts, or set it to a number from 1 to 256"
     );
     Ok(())
 }

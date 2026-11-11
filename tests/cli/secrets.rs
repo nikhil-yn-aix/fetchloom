@@ -74,23 +74,45 @@ fn a_dropped_connection_never_shows_the_token() -> Result {
 
 #[test]
 fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
+    use std::io::{Read as _, Write as _};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![])?;
-    let host = server
-        .url
-        .trim_start_matches("http://")
-        .split('/')
-        .next()
-        .ok_or("no host")?
-        .to_owned();
-    let output = sandbox.run(&["--json", "add", &format!("dataverse:{host}/doi:10.1/X")])?;
-    let document = json(&output)?;
-    // the test server speaks plain http, so the request fails, but only after it was let through
-    assert_ne!(
-        document["errors"][0]["kind"], "network.refused",
-        "{document}"
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let (output, hello) = std::thread::scope(|scope| -> Result<_> {
+        let attempt = scope.spawn(move || -> std::io::Result<_> {
+            let (mut client, _) = listener.accept()?;
+            client.set_read_timeout(Some(Duration::from_secs(30)))?;
+            let mut first = [0];
+            let read = client.read(&mut first)?;
+            Ok((read == 1).then_some(first[0]))
+        });
+        let output = sandbox
+            .command(&["--json", "add", &format!("dataverse:{address}/doi:10.1/X")])
+            .env("FETCHLOOM_RETRIES", "0")
+            .output();
+        // a refusal before connecting must still release the observer, with no TLS hello.
+        let mut wake = TcpStream::connect(address).ok();
+        if let Some(wake) = &mut wake {
+            let _ = wake.write_all(&[0]);
+        }
+        let hello = attempt
+            .join()
+            .map_err(|_| "admission observer panicked")??;
+        Ok((output?, hello))
+    })?;
+    assert_eq!(
+        hello,
+        Some(0x16),
+        "the typed private host received no TLS handshake"
     );
-    assert!(!text(&output.stderr)?.contains("private address"));
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["errors"][0]["kind"], "network.unreachable");
+    assert_eq!(document["work"]["requests"], 1);
+    assert_eq!(document["work"]["retries"], 0);
     Ok(())
 }
 

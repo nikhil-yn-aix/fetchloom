@@ -448,12 +448,16 @@ fn backoff(attempt: u32, asked: Option<Duration>) -> Result<Duration, Duration> 
 }
 
 pub(super) fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    retry_after_with(headers, SystemTime::now)
+}
+
+fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Option<Duration> {
     let value = headers.get(header::RETRY_AFTER)?.to_str().ok()?.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));
     }
     let when = httpdate::parse_http_date(value).ok()?;
-    Some(when.duration_since(SystemTime::now()).unwrap_or_default())
+    Some(when.duration_since(now()).unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -480,16 +484,20 @@ mod tests {
 
     #[test]
     fn retry_after_reads_seconds_and_dates() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_hours(1);
         let mut headers = HeaderMap::new();
-        assert_eq!(retry_after(&headers), None);
+        assert_eq!(retry_after_with(&headers, || now), None);
         headers.insert(header::RETRY_AFTER, "7".parse().unwrap());
-        assert_eq!(retry_after(&headers), Some(Duration::from_secs(7)));
+        assert_eq!(
+            retry_after_with(&headers, || now),
+            Some(Duration::from_secs(7))
+        );
         headers.insert(
             header::RETRY_AFTER,
-            "Tue, 01 Oct 2024 10:00:00 GMT".parse().unwrap(),
+            "Thu, 01 Jan 1970 00:00:00 GMT".parse().unwrap(),
         );
         assert_eq!(
-            retry_after(&headers),
+            retry_after_with(&headers, || now),
             Some(Duration::ZERO),
             "a date in the past means now"
         );
@@ -560,33 +568,30 @@ mod tests {
 
     #[test]
     fn retry_after_ignores_invalid_values_and_reads_a_future_http_date() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_hours(1);
         let mut headers = HeaderMap::new();
         for value in ["nonsense", "-1", "1.5", "18446744073709551616", ""] {
             headers.insert(header::RETRY_AFTER, value.parse().unwrap());
-            assert_eq!(retry_after(&headers), None, "{value}");
+            assert_eq!(retry_after_with(&headers, || now), None, "{value}");
         }
         headers.insert(
             header::RETRY_AFTER,
             header::HeaderValue::from_bytes(b"\xff").unwrap(),
         );
-        assert_eq!(retry_after(&headers), None);
+        assert_eq!(retry_after_with(&headers, || now), None);
         headers.insert(header::RETRY_AFTER, "  60  ".parse().unwrap());
-        assert_eq!(retry_after(&headers), Some(Duration::from_secs(60)));
-        let before = SystemTime::now();
-        let seconds = before
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-            + 120;
-        let deadline = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+        assert_eq!(
+            retry_after_with(&headers, || now),
+            Some(Duration::from_secs(60))
+        );
         headers.insert(
             header::RETRY_AFTER,
-            httpdate::fmt_http_date(deadline).parse().unwrap(),
+            "Thu, 01 Jan 1970 01:02:00 GMT".parse().unwrap(),
         );
-        let wait = retry_after(&headers).unwrap();
-        let after = SystemTime::now();
-        assert!(wait <= deadline.duration_since(before).unwrap());
-        assert!(wait >= deadline.duration_since(after).unwrap_or_default());
+        assert_eq!(
+            retry_after_with(&headers, || now),
+            Some(Duration::from_mins(2))
+        );
     }
 
     #[test]
