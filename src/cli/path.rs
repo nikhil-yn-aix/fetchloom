@@ -7,10 +7,10 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Read, Waited, find, hold_until, ignore_data, known, locked, sync_all};
+use super::project::{Run, Waited, find, hold_until, ignore_data, known, locked, sync_all};
+use super::sync::Loop;
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
-use super::sync::{Loop, Upgrade};
 use super::{Context, open_cache};
 use crate::cache::Cache;
 use crate::digest;
@@ -93,11 +93,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                         &work,
                         &manifest,
                         read.map(|(lock, _)| lock),
-                        &Upgrade::Nothing,
-                        false,
-                        false,
                         None,
-                        Read::Planned(&seen),
+                        Run::planned(&seen),
                     )
                     .await?;
                     ignore_data(&work, &manifest)?;

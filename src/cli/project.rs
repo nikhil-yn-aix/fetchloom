@@ -149,11 +149,13 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         &work,
         &manifest,
         old,
-        &Upgrade::Nothing,
-        args.force,
-        args.verify,
         None,
-        Read::Settled(&seen),
+        Run {
+            upgrade: Upgrade::Nothing,
+            force: args.force,
+            verify: args.verify,
+            read: Read::Settled(&seen),
+        },
     )
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
@@ -534,22 +536,46 @@ pub(super) struct Outcome<T> {
     pub(super) placed: T,
 }
 
+/// the choices a command makes for one [`sync_all`].
+pub(super) struct Run<'a> {
+    /// which datasets resolve their newest version.
+    pub(super) upgrade: Upgrade,
+    /// whether edited files and files fetchloom did not place are replaced.
+    pub(super) force: bool,
+    /// whether every placed file is hashed, so changes that kept their size and time show.
+    pub(super) verify: bool,
+    pub(super) read: Read<'a>,
+}
+
+impl<'a> Run<'a> {
+    /// a run that plans even when the data folder looks settled, upgrades nothing, replaces no
+    /// edit and hashes only the files it must, as `path` makes when its dataset is not in place.
+    pub(super) fn planned(seen: &'a Seen) -> Self {
+        Run {
+            upgrade: Upgrade::Nothing,
+            force: false,
+            verify: false,
+            read: Read::Planned(seen),
+        }
+    }
+}
+
 /// the lock, the cache and the data folder brought in line, in that order, and the state left
-/// recording data.toml and data.lock as `read` and as this run leaves them.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each is one independent choice a command makes for the run"
-)]
+/// recording data.toml and data.lock as the run read them and as it leaves them. `given` is a
+/// listing already resolved for one dataset.
 pub(super) async fn sync_all(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<Lock>,
-    upgrade: &Upgrade,
-    force: bool,
-    verify: bool,
     given: Option<(String, Listing)>,
-    read: Read<'_>,
+    run: Run<'_>,
 ) -> Result<Outcome<Placement>, Error> {
+    let Run {
+        upgrade,
+        force,
+        verify,
+        read,
+    } = run;
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -586,7 +612,7 @@ pub(super) async fn sync_all(
         Read::Planned(seen) => seen,
     };
     let (lock, before) = work
-        .relock(manifest, old, upgrade, given)
+        .relock(manifest, old, &upgrade, given)
         .instrument(tracing::debug_span!("relock"))
         .await
         .map_err(|error| work.before_placing(error))?;
@@ -1037,11 +1063,8 @@ pub(crate) mod tests {
             &work,
             &manifest,
             Some(old.clone()),
-            &Upgrade::Nothing,
-            false,
-            false,
             Some(given),
-            Read::Planned(&unread()),
+            Run::planned(&unread()),
         ))
         .unwrap_err();
 
@@ -1089,11 +1112,8 @@ pub(crate) mod tests {
             &work,
             &manifest,
             Some(old.clone()),
-            &Upgrade::Nothing,
-            false,
-            false,
             Some(given),
-            Read::Planned(&unread()),
+            Run::planned(&unread()),
         ))
         .unwrap_err();
         let kept = std::fs::read_to_string(project.root.join(lock::FILE)).unwrap() == old.render();
@@ -1177,11 +1197,8 @@ pub(crate) mod tests {
             &work,
             &manifest,
             Some(old.clone()),
-            &Upgrade::Nothing,
-            false,
-            false,
             Some(given),
-            Read::Planned(&unread()),
+            Run::planned(&unread()),
         ))
         .unwrap_err();
 
@@ -1225,16 +1242,7 @@ pub(crate) mod tests {
             lock: None,
         };
         let work = Loop::new(&first, &project, Arc::new(first.net()), cache.clone());
-        let synced = sync_all(
-            &work,
-            &manifest,
-            None,
-            &Upgrade::Nothing,
-            false,
-            false,
-            None,
-            Read::Planned(&unlocked),
-        );
+        let synced = sync_all(&work, &manifest, None, None, Run::planned(&unlocked));
         assert!(super::super::block_on(&first, synced).is_ok());
         let (lock, text) = project.lock_and_text().unwrap().unwrap();
         let seen = Seen {
@@ -1260,11 +1268,11 @@ pub(crate) mod tests {
                     &work,
                     &manifest,
                     Some(lock.clone()),
-                    &Upgrade::Nothing,
-                    false,
-                    false,
                     None,
-                    Read::Settled(&seen),
+                    Run {
+                        read: Read::Settled(&seen),
+                        ..Run::planned(&seen)
+                    },
                 )
                 .await;
                 context.stop.ask();
