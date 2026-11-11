@@ -41,6 +41,9 @@ struct Moved {
     at: AtomicU64,
     /// set once for every bar of the run, at the first ctrl-c.
     stopping: Arc<AtomicBool>,
+    /// bytes an earlier run or attempt kept, which count toward how far the bar got but never
+    /// toward its speed or time left: indicatif counts only the rest.
+    kept: AtomicU64,
 }
 
 impl Moved {
@@ -49,7 +52,17 @@ impl Moved {
             born: Instant::now(),
             at: AtomicU64::new(0),
             stopping,
+            kept: AtomicU64::new(0),
         }
+    }
+
+    /// how far the bar got and what it fills to, from indicatif's count of the bytes moved.
+    fn shown(&self, moved: u64, length: Option<u64>) -> (u64, Option<u64>) {
+        let kept = self.kept.load(Ordering::Relaxed);
+        (
+            moved.saturating_add(kept),
+            length.map(|length| length.saturating_add(kept)),
+        )
     }
 
     fn now(&self) {
@@ -108,14 +121,28 @@ impl Bar {
         }
     }
 
+    /// a transfer of `total` bytes that goes on from `resumed`, which it does not rate.
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.drawn {
+            self.moved.kept.store(resumed, Ordering::Relaxed);
             if let Some(total) = total {
-                bar.set_length(total);
+                bar.set_length(total.saturating_sub(resumed));
             }
-            bar.set_position(resumed);
+            // back to 0, which indicatif reads as a fresh start of its estimate
+            bar.set_position(0);
             bar.reset_eta();
             self.moved.now();
+        }
+    }
+
+    /// `bytes` that count toward how far the bar got but were not moved now, as the part an
+    /// earlier run kept of one file among several.
+    pub(crate) fn kept(&self, bytes: u64) {
+        if let Some(bar) = &self.drawn {
+            self.moved.kept.fetch_add(bytes, Ordering::Relaxed);
+            if let Some(length) = bar.length() {
+                bar.set_length(length.saturating_sub(bytes));
+            }
         }
     }
 
@@ -126,10 +153,16 @@ impl Bar {
         }
     }
 
+    /// the text beside the bar's verb, for tests.
+    #[cfg(test)]
+    pub(crate) fn told(&self) -> Option<String> {
+        self.drawn.as_ref().map(ProgressBar::message)
+    }
+
     /// what the bar fills to, as a size learned during the downloads changes it.
     pub(crate) fn length(&self, total: u64) {
         if let Some(bar) = &self.drawn {
-            bar.set_length(total);
+            bar.set_length(total.saturating_sub(self.moved.kept.load(Ordering::Relaxed)));
         }
     }
 }
@@ -157,19 +190,17 @@ fn style(
         .with_key(
             "line",
             move |state: &ProgressState, out: &mut dyn fmt::Write| {
+                let (done, total) = moved.shown(state.pos(), state.len());
                 let bar = if matches!(verb, "Downloading" | "Unpacking" | "Checking") {
-                    state.len().map_or_else(
-                        || meter(0, 1, color),
-                        |total| meter(state.pos(), total, color),
-                    )
+                    total.map_or_else(|| meter(0, 1, color), |total| meter(done, total, color))
                 } else {
                     String::new()
                 };
                 // unpacking and checking read local files, whose pauses mean nothing
                 let quiet = (verb == "Downloading").then(|| moved.quiet());
                 let amount = measure(
-                    state.pos(),
-                    state.len(),
+                    done,
+                    total,
                     state.per_sec(),
                     state.elapsed(),
                     state.eta(),
@@ -551,6 +582,38 @@ mod tests {
             let _ = announced.send(());
         };
         (heard, reported, say)
+    }
+
+    /// a download that goes on from 900 bytes an earlier run kept, then moves 100, rates and
+    /// times only those 100: the estimate behind its speed and time left counts this run's bytes.
+    #[test]
+    fn a_resumed_bar_rates_only_the_bytes_this_run_moved() {
+        let bars = MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden());
+        let bar = Bar::add(
+            &bars,
+            "Downloading",
+            "big.bin".to_owned(),
+            (false, false),
+            Arc::default(),
+        );
+        bar.start(Some(1000), 900);
+        bar.advance(100);
+        let counted = bar
+            .drawn
+            .as_ref()
+            .map(|drawn| (drawn.position(), drawn.length()));
+        assert_eq!(counted, Some((100, Some(100))));
+        assert_eq!(bar.moved.shown(100, Some(100)), (1000, Some(1000)));
+        bar.start(Some(1000), 0);
+        let restarted = bar
+            .drawn
+            .as_ref()
+            .map(|drawn| (drawn.position(), drawn.length()));
+        assert_eq!(
+            restarted,
+            Some((0, Some(1000))),
+            "a fresh start keeps nothing"
+        );
     }
 
     #[test]

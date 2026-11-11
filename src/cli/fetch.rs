@@ -171,6 +171,15 @@ impl Overall {
         }
     }
 
+    fn kept(&self, bytes: u64) {
+        if let Some(bar) = &self.bar {
+            bar.kept(bytes);
+        }
+        if let Some(ticker) = self.ticker.get() {
+            ticker.advance(bytes);
+        }
+    }
+
     fn sized(&self, bytes: u64) {
         if let Some(bar) = &self.bar {
             let mut length = self
@@ -346,6 +355,15 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// moves the overall progress up to `position` with bytes kept from before, which count
+    /// toward how far the batch got but not toward its speed.
+    fn count_kept(&self, position: u64) {
+        let before = self.counted.fetch_max(position, Ordering::Relaxed);
+        if position > before {
+            self.overall.kept(position - before);
+        }
+    }
+
     /// a download that began at `resumed` of `total`: checks the disk has room for it, asks
     /// first where its size calls for it, then shows its bar from there.
     fn started(&self, total: Option<u64>, resumed: u64, resumable: Resumable) -> Result<(), Error> {
@@ -391,7 +409,7 @@ impl<'a> Watch<'a> {
         bar.message("Downloading", self.job.label.clone());
         bar.start(total, resumed);
         self.held.keep(resumed, resumable);
-        self.count(resumed);
+        self.count_kept(resumed);
         Ok(())
     }
 
@@ -403,10 +421,19 @@ impl<'a> Watch<'a> {
                 self.bar().message("Waiting", what.clone());
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
-            // no bar yet: the download may still wait for a free slot
+            // no new bar: the download may still wait for a free slot. a lone download's bar,
+            // already showing, says what it goes on from
             Event::Kept { bytes, resumable } => {
                 self.held.keep(bytes, resumable);
                 self.earlier.store(bytes, Ordering::Relaxed);
+                if let Some(bar) = self.bar.get()
+                    && bytes > 0
+                {
+                    bar.message(
+                        "Checking",
+                        format!("{label} · {} kept from an earlier run", units::size(bytes)),
+                    );
+                }
             }
             Event::Started {
                 total,
@@ -1358,6 +1385,45 @@ mod tests {
             })
             .unwrap();
         assert!(overall.ticker.get().is_some());
+    }
+
+    /// a lone download that finds bytes an earlier run kept says so on its bar while it gets
+    /// ready to go on from them, before the server answers, rather than an empty bar.
+    #[test]
+    fn a_kept_part_is_told_before_the_download_starts() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big/big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = Overall::new(&context, std::slice::from_ref(&job));
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        let watch = Watch::new(&job, &context.output, &overall, &approval, false, &held);
+        watch.bar();
+        watch
+            .on(&Event::Kept {
+                bytes: 900,
+                resumable: Resumable::Yes,
+            })
+            .unwrap();
+        assert_eq!(
+            watch.bar().told().as_deref(),
+            Some("big/big.bin · 900 B kept from an earlier run")
+        );
     }
 
     #[test]
