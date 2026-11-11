@@ -370,7 +370,7 @@ impl<'a> Loop<'a> {
 
     /// places what [`Loop::prepare`] readied for `lock`, records `synced` in the state, and says
     /// how to unpack each archive it put in the data folder packed, as a clone's first sync puts
-    /// a rar there.
+    /// a rar there, and each one that came inside another.
     pub(super) fn apply(
         &self,
         manifest: &Manifest,
@@ -379,6 +379,7 @@ impl<'a> Loop<'a> {
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
         let packed = self.packed_in(manifest, lock, &placing);
+        let nested = placing.nested();
         let placement = placing.apply(
             &self.context.output,
             &self.context.work,
@@ -389,6 +390,9 @@ impl<'a> Loop<'a> {
         )?;
         for (dataset, path, why) in packed {
             self.tell_packed(manifest, dataset, path, &why);
+        }
+        for (dataset, path, archive) in nested {
+            self.tell_nested(manifest, dataset, &path, &archive.path);
         }
         Ok(placement)
     }

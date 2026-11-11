@@ -534,6 +534,46 @@ fn a_rar_left_packed_has_a_next_step_for_each_system() {
     );
 }
 
+/// an archive that came inside another stays packed, and the next step unpacks it beside itself
+/// with what each system has: unzip or powershell for a zip, tar for the rest, and on linux
+/// bsdtar for a 7z, which gnu tar does not read.
+#[test]
+fn an_archive_inside_another_has_a_next_step_for_each_system() {
+    let step = |system, name| super::unpack_inner(system, &format!("data/x/{name}"), "data/x/");
+    assert_eq!(
+        step(System::Linux, "inner.zip"),
+        "unpack it with unzip from your package manager: `unzip data/x/inner.zip -d data/x/inner-unpacked`"
+    );
+    assert_eq!(
+        step(System::Linux, "train.tar.gz"),
+        "unpack it with tar: `mkdir -p data/x/train-unpacked && tar -xf data/x/train.tar.gz -C data/x/train-unpacked`"
+    );
+    assert_eq!(
+        step(System::Linux, "scans.7z"),
+        "unpack it with bsdtar from your package manager: `mkdir -p data/x/scans-unpacked && bsdtar -xf data/x/scans.7z -C data/x/scans-unpacked`"
+    );
+    assert_eq!(
+        step(System::Macos, "inner.zip"),
+        "unpack it with the unzip macos has: `unzip data/x/inner.zip -d data/x/inner-unpacked`"
+    );
+    assert_eq!(
+        step(System::Macos, "scans.7z"),
+        "unpack it with the tar macos has: `mkdir -p data/x/scans-unpacked && tar -xf data/x/scans.7z -C data/x/scans-unpacked`"
+    );
+    assert_eq!(
+        step(System::Windows, "inner.zip"),
+        r"unpack it with powershell's Expand-Archive: `Expand-Archive data\x\inner.zip -DestinationPath data\x\inner-unpacked`"
+    );
+    assert_eq!(
+        step(System::Windows, "train.tar.gz"),
+        r"unpack it with the tar windows has: `mkdir data\x\train-unpacked; tar -xf data\x\train.tar.gz -C data\x\train-unpacked`"
+    );
+    assert_eq!(
+        step(System::Linux, "clips.rar"),
+        "unpack it with unrar from your package manager: `unrar x data/x/clips.rar data/x/clips-unpacked/`"
+    );
+}
+
 /// a zip spanned over `.z01` files stays packed, and the next step joins its parts with zip, or
 /// on windows unpacks them with 7-Zip, which reads them all from the `.zip`.
 #[test]

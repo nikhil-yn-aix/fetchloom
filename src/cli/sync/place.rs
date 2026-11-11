@@ -452,6 +452,26 @@ impl<'a> Placing<'a> {
     /// those of `paths`, paths in the project, where applying this placing puts a file of its
     /// own: placed, put back or replaced, never one it adopts or keeps.
     pub(crate) fn puts<'p>(&self, paths: &HashSet<&'p str>) -> HashSet<&'p str> {
+        self.put()
+            .filter_map(|target| paths.get(target.path.as_str()).copied())
+            .collect()
+    }
+
+    /// the files inside archives that applying this placing puts in the data folder and whose
+    /// names are archives too, each by its dataset, its path in the project and the archive it
+    /// came in, which fetchloom did not unpack again.
+    pub(crate) fn nested(&self) -> Vec<(&'a str, String, &'a LockedFile)> {
+        self.put()
+            .filter(|target| crate::archive::by_name(&target.path).is_some())
+            .filter_map(|target| {
+                let file = target.file().filter(|file| file.unpacks_to.is_some())?;
+                Some((target.dataset, target.path.clone(), file))
+            })
+            .collect()
+    }
+
+    /// the targets applying this placing puts a file of its own at.
+    fn put(&self) -> impl Iterator<Item = &Target<'a>> {
         self.targets
             .iter()
             .zip(&self.actions)
@@ -465,8 +485,7 @@ impl<'a> Placing<'a> {
                         | Action::Freed(_)
                 )
             })
-            .filter_map(|(target, _)| paths.get(target.path.as_str()).copied())
-            .collect()
+            .map(|(target, _)| target)
     }
 
     /// the files already at their places with the bytes data.lock pins there, by the state or by

@@ -898,6 +898,56 @@ fn a_rar_under_a_zip_name_says_how_to_unpack_it() -> Result {
     Ok(())
 }
 
+/// the help for a zip that came inside another archive, on this system: a command that unpacks
+/// the zip at `path` into `folder`.
+fn inner_step(path: &str, folder: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            "unpack it with powershell's Expand-Archive: `Expand-Archive {} -DestinationPath {}`",
+            path.replace('/', "\\"),
+            folder.replace('/', "\\")
+        )
+    } else if cfg!(target_os = "macos") {
+        format!("unpack it with the unzip macos has: `unzip {path} -d {folder}`")
+    } else {
+        format!("unpack it with unzip from your package manager: `unzip {path} -d {folder}`")
+    }
+}
+
+/// fetchloom unpacks no archive inside another, so a zip in a zip lands packed, told once with
+/// how to unpack it beside itself.
+#[test]
+fn a_zip_inside_a_zip_says_once_how_to_unpack_it() -> Result {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in [
+        ("bundle/inner.zip", &b"PK\x05\x06"[..]),
+        ("bundle/README.txt", b"hi"),
+    ] {
+        zip.start_file(path, zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut zip, bytes)?;
+    }
+    let bytes = zip.finish()?.into_inner();
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/nested.zip", vec![file(&bytes, "\"n1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    ok(&added)?;
+    let stderr = text(&added.stderr)?;
+    let warned = format!(
+        "warning: nested/inner.zip stays packed: it came inside nested.zip, and fetchloom unpacks no archive inside another\n  help: {}\n",
+        inner_step("data/nested/inner.zip", "data/nested/inner-unpacked")
+    );
+    assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    // a sync that puts another file back leaves the zip where it was, and says nothing of it
+    delete(&sandbox.work().join("data/nested/README.txt"))?;
+    let again = sandbox.run(&["sync"])?;
+    ok(&again)?;
+    let stderr = text(&again.stderr)?;
+    assert!(stderr.contains("Placed data/nested · 1 file"), "{stderr}");
+    assert!(!stderr.contains("stays packed"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
     let sandbox = Sandbox::new()?;

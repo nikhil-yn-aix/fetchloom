@@ -337,6 +337,33 @@ impl Loop<'_> {
             .collect()
     }
 
+    /// says that the archive at `path` in the project, a file of `dataset` that came inside its
+    /// archive `outer`, stays packed, with how a person unpacks it beside itself. a run tells
+    /// each once.
+    pub(super) fn tell_nested(&self, manifest: &Manifest, dataset: &str, path: &str, outer: &str) {
+        let folder = format!("{}/", plan::folder(manifest, dataset));
+        let inside = path.strip_prefix(&folder).unwrap_or(path);
+        let first = self
+            .told_packed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((dataset.to_owned(), inside.to_owned()));
+        if !first {
+            return;
+        }
+        let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
+        let placed = format!("{}{path}", crate::cli::up_to(&self.project.root, &here));
+        let beside = placed
+            .rsplit_once('/')
+            .map_or_else(String::new, |(folder, _)| format!("{folder}/"));
+        self.context.output.warn_with(
+            &format!(
+                "{dataset}/{inside} stays packed: it came inside {outer}, and fetchloom unpacks no archive inside another"
+            ),
+            &archive::unpack_inner(System::RUNNING, &placed, &beside),
+        );
+    }
+
     /// says that the archive at `path` in `dataset` stays packed and why, with how a person
     /// unpacks it beside the archive, inside the data folder `manifest` sets, as typed where
     /// fetchloom runs. git ignores the data folder, so what they unpack stays out of git. a run

@@ -154,6 +154,11 @@ impl System {
 /// project's `parent` is the archive's own folder, inside the data folder git ignores; `get`'s
 /// is outside the folder it fills, which a later `get` would otherwise refuse to fill again.
 pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
+    format!("{}. {stop} stops this warning", unrar(system, path, parent))
+}
+
+/// the command [`unpack_elsewhere`] gives for a rar.
+fn unrar(system: System, path: &str, parent: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     let named = name
         .rsplit_once('.')
@@ -165,16 +170,52 @@ pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &
     match system {
         // rarlab's own reader: bsdtar and some distributions' unar fail solid rar4 or rar5
         System::Linux => format!(
-            "unpack it with unrar from your package manager: `unrar x {archive} {}`. {stop} stops this warning",
+            "unpack it with unrar from your package manager: `unrar x {archive} {}`",
             system.word(&format!("{folder}/"))
         ),
         System::Macos => format!(
-            "unpack it with unar: `brew install unar`, then `unar -D -o {} {archive}`. {stop} stops this warning",
+            "unpack it with unar: `brew install unar`, then `unar -D -o {} {archive}`",
             system.word(&folder)
         ),
         System::Windows => format!(
-            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {archive} {}`. {stop} stops this warning"#,
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {archive} {}`"#,
             system.word(&format!("-o{folder}"))
+        ),
+    }
+}
+
+/// how a person on `system` unpacks the archive at `path`, which came inside another archive and
+/// so stays packed, into a folder named after it in `parent`, both as they read from where
+/// fetchloom runs: with a program the system has, or for a 7z on linux bsdtar, which reads every
+/// format fetchloom unpacks, and for a rar as [`unpack_elsewhere`] says.
+pub(crate) fn unpack_inner(system: System, path: &str, parent: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if by_name(name) == Some(Packed::Unsupported("rar")) {
+        return unrar(system, path, parent);
+    }
+    let ending = name.rsplit_once('.').map(|(_, ending)| ending);
+    let is = |format: &str| ending.is_some_and(|ending| ending.eq_ignore_ascii_case(format));
+    let folder = system.word(&format!("{parent}{}-unpacked", stem(name)));
+    let archive = system.word(path);
+    let untar = |tar: &str| format!("`mkdir -p {folder} && {tar} -xf {archive} -C {folder}`");
+    match system {
+        System::Linux if is("zip") => {
+            format!("unpack it with unzip from your package manager: `unzip {archive} -d {folder}`")
+        }
+        System::Linux if is("7z") => format!(
+            "unpack it with bsdtar from your package manager: {}",
+            untar("bsdtar")
+        ),
+        System::Linux => format!("unpack it with tar: {}", untar("tar")),
+        System::Macos if is("zip") => {
+            format!("unpack it with the unzip macos has: `unzip {archive} -d {folder}`")
+        }
+        System::Macos => format!("unpack it with the tar macos has: {}", untar("tar")),
+        System::Windows if is("zip") => format!(
+            "unpack it with powershell's Expand-Archive: `Expand-Archive {archive} -DestinationPath {folder}`"
+        ),
+        System::Windows => format!(
+            "unpack it with the tar windows has: `mkdir {folder}; tar -xf {archive} -C {folder}`"
         ),
     }
 }
