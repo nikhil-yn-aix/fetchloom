@@ -23,6 +23,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | check data/ against the lock | `fetchloom status --json` |
 | inspect signed-in accounts | `fetchloom auth --json` |
 | check cached bytes | `fetchloom cache verify --json` |
+| git left `<<<<<<<` lines in data.toml or data.lock after a merge | `fetchloom lock --json`. it merges both files without downloading; when it exits 1 with `unconfirmed`, `result.merge.conflicts` names the datasets each side changed its own way: ask the user which side to keep, then run `fetchloom lock --ours <name>` or `--theirs <name>` |
 | what the project uses | `fetchloom list --json`; `fetchloom list <name> --json` for one dataset, with `locked_files` paths, sizes, `sha256` and `url`, and `access`, what its source said about who may read it (`public`, `login`, `terms` or `unknown`) |
 | checksums for an audit, or links for another downloader | `fetchloom export --json`: `result.placed` (files in data/, archive members included, with `sha256`) and `result.sources` (downloaded files with `url` and `sha256`). `fetchloom export -o data.sha256` writes `sha256sum -c` lines, `--format links` or `--format aria2` the links. a text form is complete or refused; JSON names what is unknown in `unlocked`, `not_unpacked` and `no_link` |
 
@@ -53,13 +54,13 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 | exit | kinds | what to do |
 |---|---|---|
-| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; for `lock.outdated`, the lock is missing or differs from the manifest, so review the inputs before running `fetchloom lock` |
+| 1 | `unconfirmed`, `lock.outdated` | ask before `--yes`; after a git merge, ask which side of each dataset in `result.merge.conflicts` to keep; for `lock.outdated`, the lock is missing or differs from the manifest, so review the inputs before running `fetchloom lock` |
 | 2 | `usage` | fix the command line as `fix` or `help` says |
 | 10 | `reference.*`, `source.invalid` | check the id or link; for `reference.ambiguous`, choose a candidate from `result.candidates` |
 | 20 | `network.*`, `offline.missing` | retry later; to go online, remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` |
 | 30 | `integrity.mismatch` | the bytes, size, archive tree or stated hash differ from the expected pin. check any supplied `--sha256` and the source; this does not prove upstream data changed. `cache verify` means cached bytes differ, possibly through a shared hardlink. preserve edits and ask before `sync --force` restores the pins |
 | 40 | `auth.required` | ask the user to sign in in their own terminal with the command in `help`, or to accept terms at the page in `help` |
-| 50 | `local.*`, `project.*` | a local I/O or resource failure, file conflict, or broken data.toml; report the cause. `project.changed` means data.toml or data.lock changed while an add downloaded, so it wrote neither: check the change, then run the add again. an unfinished git merge conflict in data.toml or data.lock needs the user to choose what each side keeps; never pick a side for them |
+| 50 | `local.*`, `project.*` | a local I/O or resource failure, file conflict, or broken data.toml; report the cause. `project.changed` means data.toml or data.lock changed while an add downloaded, so it wrote neither: check the change, then run the add again. an unfinished git merge conflict in data.toml or data.lock is for `fetchloom lock`, as `fix` says; it never picks a side, and neither may you: `--ours` and `--theirs` only with the user's choice |
 | 130 | `interrupted` | the run was stopped; completed placements stay, unfinished copies are discarded; run it again |
 
 `cache gc` failures retain successful counts and `result.not_removed`; `cache verify` uses `result.unreadable`. these entries contain `path`, `kind`, `os_code` and `message`. use the original cause before suggesting permission changes. unreadable cache change marks stop sync and get: repair storage or access, verify and retry; never delete the marks to bypass the refusal.

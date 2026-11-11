@@ -48,7 +48,9 @@ fetchloom reads and writes format 1 only. a lock with a higher `version` comes f
 
 ## a git merge conflict
 
-a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. keep the datasets from both sides, delete those lines, then run `fetchloom lock`, which pins any dataset data.lock still lacks. with git's `diff3` conflict style, delete the older lines between `|||||||` and `=======` as well. where both sides changed one dataset, keep one side's entry for it. the JSON error has no `fix`, since only a person can choose what each side keeps.
+a git merge that could not combine two changes leaves both sides in the file between conflict lines, `<<<<<<<`, `=======` and `>>>>>>>`. every command then stops with `project.invalid`, exit 50, saying `data.lock has an unfinished git merge conflict` and naming the first such line; `data.toml` gets the same. its help, and the JSON `fix`, name `fetchloom lock`, which [merges both files](../commands/lock.md#after-a-git-merge) one dataset at a time without downloading: each side of `data.lock` must read on its own, a pin is kept only when it answers the merged `data.toml`, and two pins of the same files made at different times are alike. a dataset each side pinned its own way waits for `--ours <name>` or `--theirs <name>`.
+
+the lists in `data.lock.d` are named by their contents, so a merge brings each branch's new parts in beside the others without a conflict. the merge reads only the parts of the pins it keeps, which may be all git left of a side, and removes the parts no pin names once `data.lock` is written.
 
 ## big datasets
 

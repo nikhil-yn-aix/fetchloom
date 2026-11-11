@@ -3,6 +3,8 @@
 //! line. each command reads the project, takes its lock when it changes something, and leaves the
 //! order of work to the sync loop.
 
+mod conflicts;
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +23,7 @@ use crate::error::{Error, Kind};
 use crate::name;
 use crate::output::Output;
 use crate::plan;
+use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
@@ -41,6 +44,9 @@ pub(super) struct Report {
     /// with `--dry-run`, the paths that would change.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) changes: Option<Changes>,
+    /// how each dataset came out when `lock` merged both sides of a git merge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) merge: Option<merge::Summary>,
 }
 
 impl Report {
@@ -53,6 +59,7 @@ impl Report {
             placement: Some(outcome.placed.placement),
             dry_run: true,
             changes: Some(outcome.placed.changes),
+            merge: None,
         }
     }
 }
@@ -323,6 +330,13 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     } else {
         Some(hold(context, &project, "lock").await?)
     };
+    // a check or an upgrade reads both files as they are, and so says to merge them first
+    if !args.check
+        && args.upgrade.is_none()
+        && let Some(report) = conflicts::merge(context, &project, &args)?
+    {
+        return Ok(report);
+    }
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
     if args.check {
@@ -441,6 +455,7 @@ async fn preview_lock(
             unpack: dry.unpack,
             ..Changes::default()
         }),
+        merge: None,
     })
 }
 

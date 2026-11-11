@@ -776,8 +776,7 @@ fn a_project_outside_the_git_repository_needs_its_folder_named() -> Result {
 }
 
 /// a merge git could not finish in data.toml or data.lock stops a command before any request and
-/// says how to finish it, with no command offered to run for it, since only a person can choose
-/// what to keep.
+/// names `fetchloom lock`, which merges both sides and never picks one for a person.
 #[test]
 fn an_unfinished_merge_says_how_to_finish_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -800,7 +799,7 @@ fn an_unfinished_merge_says_how_to_finish_it() -> Result {
             format!("{name} has an unfinished git merge conflict")
         );
         assert_eq!(error["details"], serde_json::json!([format!("{name}:1")]));
-        assert_eq!(error["fix"], serde_json::Value::Null, "{name}");
+        assert_eq!(error["fix"], "fetchloom lock", "{name}");
         assert_eq!(report["work"]["requests"], 0);
         fs::write(&path, merged)?;
     }

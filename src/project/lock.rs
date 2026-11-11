@@ -6,6 +6,7 @@
 mod canonical;
 pub(crate) mod derived;
 pub(crate) mod lists;
+pub(crate) mod merge;
 #[cfg(test)]
 mod model_tests;
 

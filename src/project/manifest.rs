@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlError};
+use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlError, Value};
 
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
@@ -525,11 +525,17 @@ fn shift_positions(table: &mut Table, from: isize) {
 /// a blank line above stay, such as a note at the top of the file.
 pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
     let mut document = editable(text)?;
+    remove(&mut document, name);
+    Ok(document.to_string().trim_start_matches('\n').to_owned())
+}
+
+/// takes the dataset `name` out of `document`, as [`without_dataset`] says.
+fn remove(document: &mut DocumentMut, name: &str) {
     let Some(datasets) = document
         .get_mut("datasets")
         .and_then(Item::as_table_like_mut)
     else {
-        return Ok(document.to_string());
+        return;
     };
     let removed = datasets.get(name).and_then(Item::as_table).map(|table| {
         let prefix = table
@@ -550,7 +556,7 @@ pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
     if let Some((Some(position), kept)) = removed
         && !kept.trim().is_empty()
     {
-        if let Some(table) = next_table(&mut document, position) {
+        if let Some(table) = next_table(document, position) {
             let prefix = table
                 .decor()
                 .prefix()
@@ -563,7 +569,102 @@ pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
             document.set_trailing(format!("{}\n{trailing}", kept.trim_end()));
         }
     }
-    Ok(document.to_string().trim_start_matches('\n').to_owned())
+}
+
+/// data.toml's text with the dataset `name` as `other`, the text of another data.toml, writes it,
+/// comments touching its header included: in place of the one `text` has, under any note above
+/// that one, or else before the dataset whose name follows it.
+pub(crate) fn with_dataset_from(text: &str, other: &str, name: &str) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let copied = editable(other)?
+        .get("datasets")
+        .and_then(Item::as_table_like)
+        .and_then(|datasets| datasets.get(name))
+        .cloned();
+    let mut table = match copied {
+        Some(Item::Table(table)) => table,
+        Some(Item::Value(Value::InlineTable(inline))) => inline.into_table(),
+        _ => {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!("the other data.toml has no table for datasets.{name}"),
+            ));
+        }
+    };
+    table.set_dotted(false);
+    table.set_implicit(false);
+    let touching = split_note(prefix(&table)).1.to_owned();
+    let place = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+        .filter(|table| !table.is_dotted());
+    if let Some(found) = place
+        && let Some(position) = found.position()
+    {
+        let above = split_note(prefix(found)).0;
+        table.decor_mut().set_prefix(format!("{above}{touching}"));
+        table.set_position(Some(position));
+        *found = table;
+        return Ok(document.to_string());
+    }
+    remove(&mut document, name);
+    if !put(&mut document, name, table) {
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            "data.toml writes its datasets inline, so fetchloom cannot merge them",
+        )
+        .help("merge data.toml by hand, then run `fetchloom lock`"));
+    }
+    Ok(document.to_string())
+}
+
+/// each dataset's own text: its table as it would read alone in a data.toml, with the comments
+/// touching its header, so two files can be compared a dataset at a time.
+pub(crate) fn tables(text: &str) -> Result<BTreeMap<String, String>, Error> {
+    let document = editable(text)?;
+    let Some(datasets) = document.get("datasets").and_then(Item::as_table_like) else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(datasets
+        .iter()
+        .map(|(name, item)| {
+            let mut item = item.clone();
+            if let Item::Table(table) = &mut item {
+                let touching = split_note(prefix(table)).1.to_owned();
+                table.decor_mut().set_prefix(touching);
+                table.set_position(None);
+            }
+            let mut alone = Table::new();
+            alone.set_implicit(true);
+            alone.insert(name, item);
+            let mut document = DocumentMut::new();
+            document.insert("datasets", Item::Table(alone));
+            (name.to_owned(), document.to_string())
+        })
+        .collect())
+}
+
+/// what data.toml holds outside its datasets, such as `[project]`, notes and comments, without
+/// blank lines.
+pub(crate) fn outside(text: &str) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let names: Vec<String> = document
+        .get("datasets")
+        .and_then(Item::as_table_like)
+        .map(|datasets| datasets.iter().map(|(name, _)| name.to_owned()).collect())
+        .unwrap_or_default();
+    for name in &names {
+        remove(&mut document, name);
+    }
+    Ok(document
+        .to_string()
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 /// the first table written after `position`.
@@ -905,6 +1006,56 @@ mod tests {
         assert_eq!(
             add(after_project, "delta"),
             "[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.delta]\nref = \"zenodo:delta\"\n\n[project]\ndata_dir = \"in\"\n"
+        );
+    }
+
+    /// a merge takes a dataset from the other side with the comments touching its header: in
+    /// place of the one this side has, or in name order.
+    #[test]
+    fn a_dataset_from_the_other_side_keeps_its_comments_and_its_place() {
+        let ours = "# inputs\n\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.core]\nref = \"zenodo:3\"\n";
+        let theirs = "[datasets.beta]\nref = \"zenodo:2\" # new\n\n# upgraded\n[datasets.core]\nref = \"zenodo:4\"\n";
+        let with_beta = with_dataset_from(ours, theirs, "beta").unwrap();
+        assert_eq!(
+            with_beta,
+            "# inputs\n\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.beta]\nref = \"zenodo:2\" # new\n\n[datasets.core]\nref = \"zenodo:3\"\n"
+        );
+        assert_eq!(
+            with_dataset_from(&with_beta, theirs, "core").unwrap(),
+            "# inputs\n\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.beta]\nref = \"zenodo:2\" # new\n\n# upgraded\n[datasets.core]\nref = \"zenodo:4\"\n"
+        );
+        assert_eq!(
+            with_dataset_from("", "datasets = { x = { ref = \"zenodo:9\" } }\n", "x").unwrap(),
+            "[datasets.x]\nref = \"zenodo:9\"\n"
+        );
+        assert!(with_dataset_from(ours, theirs, "missing").is_err());
+    }
+
+    #[test]
+    fn each_dataset_reads_alone_and_the_rest_without_them() {
+        let text = "# inputs\n\n[project]\ndata_dir = \"in\"\n\n# about alpha\n[datasets.alpha]\nref = \"zenodo:1\"\n\n[datasets.beta]\nref = \"zenodo:2\"\n";
+        let tables = tables(text).unwrap();
+        assert_eq!(
+            tables.into_iter().collect::<Vec<_>>(),
+            [
+                (
+                    "alpha".to_owned(),
+                    "# about alpha\n[datasets.alpha]\nref = \"zenodo:1\"\n".to_owned()
+                ),
+                (
+                    "beta".to_owned(),
+                    "[datasets.beta]\nref = \"zenodo:2\"\n".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            outside(text).unwrap(),
+            "# inputs\n[project]\ndata_dir = \"in\""
+        );
+        assert_eq!(
+            outside(&text.replace("\n\n[datasets.beta]", "\n[datasets.beta]")).unwrap(),
+            outside(text).unwrap(),
+            "blank lines do not count"
         );
     }
 

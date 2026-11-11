@@ -1,0 +1,413 @@
+use std::fs;
+
+use super::*;
+use crate::digest;
+use crate::project::lock::{LockedFile, lists};
+use crate::source::Access;
+
+/// data.toml holding one dataset for each `(name, ref)`, in that order.
+fn toml(datasets: &[(&str, &str)]) -> String {
+    datasets
+        .iter()
+        .map(|(name, reference)| format!("[datasets.{name}]\nref = \"{reference}\"\n"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// the pin of `name`, made from `reference`, of one file holding `bytes`.
+fn pin(name: &str, reference: &str, bytes: &[u8]) -> Locked {
+    let entry = &Manifest::parse(&toml(&[(name, reference)]))
+        .unwrap()
+        .datasets[name];
+    Locked {
+        name: name.to_owned(),
+        reference: reference.to_owned(),
+        spec: spec(entry),
+        extract: true,
+        resolved: reference.to_owned(),
+        title: None,
+        license: None,
+        doi: None,
+        access: Access::Unknown,
+        timestamp: "2026-11-10T00:00:00Z".to_owned(),
+        files: vec![LockedFile {
+            path: format!("{name}.csv"),
+            size: bytes.len() as u64,
+            sha256: digest::sha256(bytes),
+            md5: None,
+            url: format!("https://example.org/{name}.csv"),
+            unpacks_to: None,
+        }],
+    }
+}
+
+/// data.lock pinning `pins`.
+fn lock(mut pins: Vec<Locked>) -> String {
+    pins.sort_by(|a, b| a.name.cmp(&b.name));
+    Lock {
+        datasets: pins,
+        ..Lock::default()
+    }
+    .render()
+}
+
+fn sides(ours: String, theirs: String, base: Option<String>) -> Sides {
+    Sides { ours, theirs, base }
+}
+
+/// merges the sides with `choices` in a project folder holding no lists.
+fn merged(manifest: &Sides, locks: &Sides, choices: &[(&str, Side)]) -> Result<Merged, Error> {
+    let root = tempfile::tempdir().unwrap();
+    let choices = choices
+        .iter()
+        .map(|(name, side)| ((*name).to_owned(), *side))
+        .collect();
+    merge(manifest, Some(locks), &choices, root.path())
+}
+
+fn names(lock: &Lock) -> Vec<&str> {
+    lock.datasets
+        .iter()
+        .map(|locked| locked.name.as_str())
+        .collect()
+}
+
+/// two teammates each added a dataset beside `core`.
+fn two_additions(base: bool) -> (Sides, Sides) {
+    let core = pin("core", "zenodo:3", b"core");
+    let manifest = sides(
+        toml(&[("alpha", "zenodo:1"), ("core", "zenodo:3")]),
+        toml(&[("beta", "zenodo:2"), ("core", "zenodo:3")]),
+        base.then(|| toml(&[("core", "zenodo:3")])),
+    );
+    let locks = sides(
+        lock(vec![pin("alpha", "zenodo:1", b"alpha"), core.clone()]),
+        lock(vec![pin("beta", "zenodo:2", b"beta"), core.clone()]),
+        base.then(|| lock(vec![core])),
+    );
+    (manifest, locks)
+}
+
+#[test]
+fn independent_additions_are_kept() {
+    let (manifest, locks) = two_additions(true);
+    let merged = merged(&manifest, &locks, &[]).unwrap();
+    assert_eq!(
+        merged.manifest,
+        toml(&[
+            ("alpha", "zenodo:1"),
+            ("beta", "zenodo:2"),
+            ("core", "zenodo:3")
+        ])
+    );
+    let lock = merged.lock.unwrap();
+    assert_eq!(names(&lock), ["alpha", "beta", "core"]);
+    assert_eq!(lock.datasets[1], pin("beta", "zenodo:2", b"beta"));
+    assert_eq!(
+        merged.summary,
+        Summary {
+            from_ours: vec!["alpha".to_owned()],
+            from_theirs: vec!["beta".to_owned()],
+            same: vec!["core".to_owned()],
+            ..Summary::default()
+        }
+    );
+    assert_eq!(merged.warnings, Vec::<String>::new());
+}
+
+#[test]
+fn a_removal_survives_with_a_base() {
+    let zeta = pin("zeta", "zenodo:9", b"zeta");
+    let core = pin("core", "zenodo:3", b"core");
+    let manifest = sides(
+        toml(&[("zeta", "zenodo:9")]),
+        toml(&[
+            ("beta", "zenodo:2"),
+            ("core", "zenodo:3"),
+            ("zeta", "zenodo:9"),
+        ]),
+        Some(toml(&[("core", "zenodo:3"), ("zeta", "zenodo:9")])),
+    );
+    let locks = sides(
+        lock(vec![zeta.clone()]),
+        lock(vec![
+            pin("beta", "zenodo:2", b"beta"),
+            core.clone(),
+            zeta.clone(),
+        ]),
+        Some(lock(vec![core, zeta])),
+    );
+    let merged = merged(&manifest, &locks, &[]).unwrap();
+    assert_eq!(
+        merged.manifest,
+        toml(&[("beta", "zenodo:2"), ("zeta", "zenodo:9")])
+    );
+    assert_eq!(names(&merged.lock.unwrap()), ["beta", "zeta"]);
+    assert_eq!(merged.summary.removed, ["core"]);
+    assert_eq!(merged.summary.from_theirs, ["beta"]);
+}
+
+#[test]
+fn one_sided_datasets_without_a_base_need_a_choice() {
+    let (manifest, locks) = two_additions(false);
+    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    assert_eq!(error.kind, Kind::Unconfirmed);
+    assert_eq!(error.message, "the merge needs a choice for 2 datasets");
+    assert_eq!(
+        error.details[..2],
+        [
+            "alpha: only ours has it, and fetchloom cannot tell whether ours added it or theirs removed it",
+            "beta: only theirs has it, and fetchloom cannot tell whether theirs added it or ours removed it",
+        ]
+    );
+    assert!(error.details[2].starts_with("no merge base was found"));
+    let help = error.help.as_deref().unwrap();
+    assert!(help.contains("`fetchloom lock --ours <name>`"), "{help}");
+    let result = error.result.unwrap();
+    assert_eq!(
+        result["merge"]["conflicts"],
+        serde_json::json!(["alpha", "beta"])
+    );
+    assert_eq!(
+        result["merge"]["same"],
+        serde_json::json!(["core"]),
+        "what needs no choice is told too"
+    );
+
+    let kept = merged(
+        &manifest,
+        &locks,
+        &[("alpha", Side::Ours), ("beta", Side::Theirs)],
+    )
+    .unwrap();
+    assert_eq!(names(&kept.lock.unwrap()), ["alpha", "beta", "core"]);
+    let dropped = merged(
+        &manifest,
+        &locks,
+        &[("alpha", Side::Theirs), ("beta", Side::Theirs)],
+    )
+    .unwrap();
+    assert_eq!(
+        dropped.manifest,
+        toml(&[("beta", "zenodo:2"), ("core", "zenodo:3")])
+    );
+    assert_eq!(dropped.summary.removed, ["alpha"]);
+
+    let both = [("alpha", Side::Ours), ("beta", Side::Ours)];
+    for (extra, message) in [
+        ("core", "core needs no choice in this merge"),
+        ("nope", "nope is on neither side of the merge"),
+    ] {
+        let mut choices = both.to_vec();
+        choices.push((extra, Side::Theirs));
+        let error = merged(&manifest, &locks, &choices).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(error.message, message);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(format!("leave out --theirs {extra}").as_str())
+        );
+    }
+}
+
+/// both teammates upgraded one dataset: data.toml did not change, data.lock pins other bytes on
+/// each side.
+#[test]
+fn two_changes_to_one_dataset_need_a_choice() {
+    let text = toml(&[("version", "https://example.org/v.csv")]);
+    let manifest = sides(text.clone(), text, None);
+    let pinned = |bytes: &[u8]| pin("version", "https://example.org/v.csv", bytes);
+    let locks = sides(
+        lock(vec![pinned(b"2,left")]),
+        lock(vec![pinned(b"3,right")]),
+        Some(lock(vec![pinned(b"1,base")])),
+    );
+    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    assert_eq!(error.kind, Kind::Unconfirmed);
+    assert_eq!(error.message, "the merge needs a choice for version");
+    assert_eq!(error.details, ["version: each side changed it its own way"]);
+    let theirs = merged(&manifest, &locks, &[("version", Side::Theirs)]).unwrap();
+    assert_eq!(theirs.lock.unwrap().datasets, [pinned(b"3,right")]);
+    assert_eq!(theirs.summary.from_theirs, ["version"]);
+
+    // one side upgraded, and pinning it again at another time changes nothing else
+    let mut later = pinned(b"1,base");
+    later.timestamp = "2026-11-11T00:00:00Z".to_owned();
+    let locks = sides(
+        lock(vec![later]),
+        lock(vec![pinned(b"3,right")]),
+        Some(lock(vec![pinned(b"1,base")])),
+    );
+    let upgraded = merged(&manifest, &locks, &[]).unwrap();
+    assert_eq!(upgraded.lock.unwrap().datasets, [pinned(b"3,right")]);
+}
+
+/// a dataset both sides changed in data.toml takes the chosen side's entry, and that side's pin
+/// when it answers the entry; otherwise it is left for `fetchloom lock` to pin.
+#[test]
+fn the_lock_record_follows_the_chosen_entry_by_spec() {
+    let manifest = sides(
+        toml(&[("x", "zenodo:2")]),
+        toml(&[("x", "zenodo:3")]),
+        Some(toml(&[("x", "zenodo:1")])),
+    );
+    let relocked = sides(
+        lock(vec![pin("x", "zenodo:2", b"two")]),
+        lock(vec![pin("x", "zenodo:3", b"three")]),
+        Some(lock(vec![pin("x", "zenodo:1", b"one")])),
+    );
+    let error = merged(&manifest, &relocked, &[]).unwrap_err();
+    assert_eq!(error.details, ["x: each side changed it its own way"]);
+    let theirs = merged(&manifest, &relocked, &[("x", Side::Theirs)]).unwrap();
+    assert_eq!(theirs.manifest, toml(&[("x", "zenodo:3")]));
+    assert_eq!(
+        theirs.lock.unwrap().datasets,
+        [pin("x", "zenodo:3", b"three")]
+    );
+    assert_eq!(theirs.summary.unpinned, Vec::<String>::new());
+
+    let unlocked = sides(
+        lock(vec![pin("x", "zenodo:2", b"two")]),
+        lock(vec![pin("x", "zenodo:1", b"one")]),
+        Some(lock(vec![pin("x", "zenodo:1", b"one")])),
+    );
+    let stale = merged(&manifest, &unlocked, &[("x", Side::Theirs)]).unwrap();
+    assert_eq!(stale.lock.unwrap().datasets, Vec::<Locked>::new());
+    assert_eq!(stale.summary.unpinned, ["x"]);
+}
+
+/// a big dataset's files live in parts named by their content, so after a merge the parts of
+/// both sides can be there, or only those of the side git kept. only the kept side's are read.
+#[test]
+fn listed_datasets_merge_from_the_parts_of_the_side_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let mut photos = pin("photos", "zenodo:7", b"one");
+    photos.files.push(LockedFile {
+        path: "photos2.csv".to_owned(),
+        ..photos.files[0].clone()
+    });
+    let mut upgraded = photos.clone();
+    upgraded.files[1].size = 2;
+    let listed = |datasets: Vec<Locked>| Lock {
+        datasets,
+        ..Lock::default()
+    };
+    let ours = listed(vec![photos.clone()]);
+    let theirs = listed(vec![upgraded.clone(), pin("beta", "zenodo:2", b"beta")]);
+    fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+    for (part, text) in theirs.lists_with(1) {
+        fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+    }
+    let manifest = sides(
+        toml(&[("photos", "zenodo:7")]),
+        toml(&[("beta", "zenodo:2"), ("photos", "zenodo:7")]),
+        Some(toml(&[("photos", "zenodo:7")])),
+    );
+    let locks = sides(
+        ours.render_with(1),
+        theirs.render_with(1),
+        Some(ours.render_with(1)),
+    );
+    let choices = Choices::new();
+    let merged = merge(&manifest, Some(&locks), &choices, root.path()).unwrap();
+    let lock = merged.lock.unwrap();
+    assert_eq!(names(&lock), ["beta", "photos"]);
+    assert_eq!(lock.datasets[1].files, upgraded.files);
+    assert_eq!(merged.summary.from_theirs, ["beta", "photos"]);
+}
+
+#[test]
+fn recipe_results_merge_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let files = vec![crate::cache::Member {
+        path: "out.csv".to_owned(),
+        size: 1,
+        sha256: digest::sha256(b"x"),
+    }];
+    let clean = Derived {
+        name: "clean".to_owned(),
+        from: vec![super::super::derived::Input {
+            name: "core".to_owned(),
+            content: digest::sha256(b"core"),
+        }],
+        run: vec!["python3".to_owned(), "clean.py".to_owned()],
+        code: Vec::new(),
+        env: BTreeMap::new(),
+        key: digest::sha256(b"key"),
+        timestamp: "2026-11-10T00:00:00Z".to_owned(),
+        tree: crate::cache::tree_hash(&files),
+        files,
+    };
+    let core = pin("core", "zenodo:3", b"core");
+    let with_result = Lock {
+        datasets: vec![core.clone()],
+        derived: vec![clean.clone()],
+    };
+    fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+    for (part, text) in with_result.lists() {
+        fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+    }
+    let text = toml(&[("core", "zenodo:3")]);
+    let manifest = sides(text.clone(), text, None);
+    let added = sides(
+        with_result.render(),
+        lock(vec![core.clone()]),
+        Some(lock(vec![core.clone()])),
+    );
+    let choices = Choices::new();
+    let merged = merge(&manifest, Some(&added), &choices, root.path()).unwrap();
+    assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
+    assert_eq!(merged.summary.from_ours, ["clean"]);
+    let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
+    let error = merge(&manifest, Some(&unknown), &choices, root.path()).unwrap_err();
+    assert_eq!(error.message, "the merge needs a choice for clean");
+}
+
+#[test]
+fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
+    let datasets = toml(&[("a", "zenodo:1")]);
+    let with = |note: &str| format!("# {note}\n\n{datasets}");
+    let locks = sides(lock(Vec::new()), lock(Vec::new()), None);
+    let both = sides(with("ours"), with("theirs"), Some(with("base")));
+    let error = merged(&both, &locks, &[]).unwrap_err();
+    assert_eq!(error.kind, Kind::ProjectInvalid);
+    assert!(
+        error
+            .message
+            .starts_with("data.toml differs outside its datasets")
+    );
+    assert!(
+        error
+            .help
+            .as_deref()
+            .is_some_and(|help| help.ends_with("by hand, then run `fetchloom lock`")),
+        "only a person can merge that part, so no fix"
+    );
+    let one = sides(with("base"), with("theirs"), Some(with("base")));
+    assert_eq!(merged(&one, &locks, &[]).unwrap().manifest, with("theirs"));
+
+    let broken = sides("[datasets.a\n".to_owned(), datasets.clone(), None);
+    let error = merged(&broken, &locks, &[]).unwrap_err();
+    assert_eq!(
+        error.message,
+        "data.toml on our side of the merge cannot be read"
+    );
+}
+
+/// the same dataset written two ways on each side, with no base to tell which changed, is
+/// written as our side has it.
+#[test]
+fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
+    let ours = "[datasets.a]\nref = \"zenodo:1\" # ours\n".to_owned();
+    let theirs = "[datasets.a]\nref = \"zenodo:1\"\n".to_owned();
+    let locks = sides(lock(Vec::new()), lock(Vec::new()), None);
+    let merged = merged(&sides(ours.clone(), theirs, None), &locks, &[]).unwrap();
+    assert_eq!(merged.manifest, ours);
+    assert_eq!(merged.summary.same, ["a"]);
+    assert_eq!(
+        merged.warnings,
+        [
+            "kept datasets.a as our side writes it in data.toml; their side differs only in comments or spacing"
+        ]
+    );
+}

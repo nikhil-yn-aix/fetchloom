@@ -1,0 +1,248 @@
+//! `fetchloom lock` in a project where a git merge left both sides in data.toml or data.lock:
+//! both merged a dataset at a time, with the merge base from git's conflict lines or else from
+//! git's index, and nothing resolved or downloaded.
+
+use super::{Changes, Report, committed, dry_run_done};
+use crate::cli::Context;
+use crate::cli::args;
+use crate::error::{Error, Kind};
+use crate::project::Project;
+use crate::project::lock::merge::markers::{self, Sides};
+use crate::project::lock::merge::{self, Choices, Merged, Side, Summary};
+use crate::project::lock::{self, Lock};
+use crate::project::manifest::{self, Manifest};
+
+/// data.toml and data.lock as a merge left them, and the sides of each that holds git's conflict
+/// lines.
+struct Conflicted {
+    manifest: String,
+    /// none when the project has no data.lock.
+    lock: Option<String>,
+    manifest_sides: Option<Sides>,
+    lock_sides: Option<Sides>,
+}
+
+impl Conflicted {
+    /// the files that hold conflict lines, as a message names them.
+    fn files(&self) -> &'static str {
+        match (&self.manifest_sides, &self.lock_sides) {
+            (Some(_), Some(_)) => "data.toml and data.lock",
+            (Some(_), None) => "data.toml",
+            (None, _) => "data.lock",
+        }
+    }
+}
+
+/// the merge `lock` makes when data.toml or data.lock holds git's conflict lines, written unless
+/// `--dry-run`, or none when neither does.
+pub(super) fn merge(
+    context: &Context,
+    project: &Project,
+    args: &args::Lock,
+) -> Result<Option<Report>, Error> {
+    let choices = choices(args)?;
+    let Some(conflicted) = read(project)? else {
+        return Ok(None);
+    };
+    if conflicted.manifest_sides.is_none() && conflicted.lock_sides.is_none() {
+        if choices.is_empty() {
+            return Ok(None);
+        }
+        return Err(Error::new(
+            Kind::Usage,
+            "--ours and --theirs choose a side in a merge, and neither data.toml nor data.lock holds git's conflict lines",
+        )
+        .help("run `fetchloom lock` without them"));
+    }
+    let (manifest, lock) = sides(project, &conflicted);
+    let merged = merge::merge(&manifest, lock.as_ref(), &choices, &project.root)
+        .map_err(|error| in_project(error, project))?;
+    for warning in &merged.warnings {
+        context.output.warn(warning);
+    }
+    let rendered = merged.lock.as_ref().map(Lock::render);
+    let lock_changed = rendered.is_some() && rendered != conflicted.lock;
+    if !args.dry.dry_run {
+        // a stop asked while the sides were read leaves both files as they were
+        context.stop.check()?;
+        context.stop.finish();
+        let changed = rendered.as_deref().filter(|_| lock_changed);
+        write(project, &merged, &conflicted.manifest, changed)?;
+    }
+    tell(
+        context,
+        project,
+        &merged,
+        conflicted.files(),
+        args.dry.dry_run,
+    );
+    Ok(Some(Report {
+        project: project.root.clone(),
+        datasets: merged.repinned,
+        lock_changed,
+        placement: None,
+        dry_run: args.dry.dry_run,
+        changes: args.dry.dry_run.then(Changes::default),
+        merge: Some(merged.summary),
+    }))
+}
+
+/// the side `--ours` and `--theirs` name for each dataset.
+fn choices(args: &args::Lock) -> Result<Choices, Error> {
+    let mut choices = Choices::new();
+    for (names, side) in [(&args.ours, Side::Ours), (&args.theirs, Side::Theirs)] {
+        for name in names {
+            if choices
+                .insert(name.clone(), side)
+                .is_some_and(|other| other != side)
+            {
+                return Err(Error::new(
+                    Kind::Usage,
+                    format!("{name} is named by both --ours and --theirs"),
+                )
+                .help("keep one side of each dataset"));
+            }
+        }
+    }
+    Ok(choices)
+}
+
+/// data.toml and data.lock with the sides of each, or none when data.toml cannot be read, which
+/// the usual reader then explains.
+fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
+    let Ok(manifest) = std::fs::read_to_string(project.manifest_path()) else {
+        return Ok(None);
+    };
+    let lock = std::fs::read_to_string(project.root.join(lock::FILE)).ok();
+    let manifest_sides = markers::split(&manifest, manifest::FILE)?;
+    let lock_sides = lock
+        .as_deref()
+        .map(|text| markers::split(text, lock::FILE))
+        .transpose()?
+        .flatten();
+    Ok(Some(Conflicted {
+        manifest,
+        lock,
+        manifest_sides,
+        lock_sides,
+    }))
+}
+
+/// the sides of data.toml and of data.lock, each with its merge base from git's index when its
+/// conflict lines do not show one. a file without conflict lines is the same on both sides.
+fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
+    let git =
+        std::env::var_os("PATH").and_then(|path| merge::git::find(Some(&path), &project.root));
+    let based = |sides: Option<&Sides>, file: &str, text: &str| match sides {
+        Some(sides) => {
+            let mut sides = sides.clone();
+            if sides.base.is_none() {
+                sides.base = git
+                    .as_deref()
+                    .and_then(|git| merge::git::base(git, &project.root, file));
+            }
+            sides
+        }
+        None => Sides {
+            ours: text.to_owned(),
+            theirs: text.to_owned(),
+            base: None,
+        },
+    };
+    let manifest = based(
+        conflicted.manifest_sides.as_ref(),
+        manifest::FILE,
+        &conflicted.manifest,
+    );
+    let lock = conflicted
+        .lock
+        .as_deref()
+        .map(|text| based(conflicted.lock_sides.as_ref(), lock::FILE, text));
+    (manifest, lock)
+}
+
+/// `error` with the project beside what the merge found, so `--json` names both.
+fn in_project(error: Error, project: &Project) -> Error {
+    let Some(result) = error.result.clone() else {
+        return error;
+    };
+    let mut result = *result;
+    result["project"] = serde_json::json!(project.root);
+    error.with_result(result)
+}
+
+/// writes the merged data.toml when it changed, then, when data.lock changed into `rendered`, the
+/// lists it names and data.lock itself, and sweeps the lists no side needs any more.
+fn write(
+    project: &Project,
+    merged: &Merged,
+    manifest: &str,
+    rendered: Option<&str>,
+) -> Result<(), Error> {
+    if merged.manifest != manifest {
+        project.write(manifest::FILE, merged.manifest.as_bytes())?;
+    }
+    if let (Some(lock), Some(text)) = (&merged.lock, rendered) {
+        // the lists first, so data.lock never names a part that is not there yet
+        project.write_lists(lock)?;
+        project.write(lock::FILE, text.as_bytes())?;
+        project.sweep_lists(lock);
+    }
+    Ok(())
+}
+
+/// what the merge did, or with `dry_run` would do, to `files`, and what comes next.
+fn tell(context: &Context, project: &Project, merged: &Merged, files: &str, dry_run: bool) {
+    let output = &context.output;
+    let verb = if dry_run { "Would merge" } else { "Merged" };
+    output.done(verb, &format!("{files} \u{b7} {}", facts(&merged.summary)));
+    let unpinned = &merged.summary.unpinned;
+    if !unpinned.is_empty() {
+        let (names, are, them) = match unpinned.as_slice() {
+            [one] => (one.clone(), "is", "it"),
+            many => (many.join(", "), "are", "them"),
+        };
+        output.warn(&format!(
+            "{names} {are} not pinned, as neither side of data.lock pins {them} as data.toml now asks"
+        ));
+    }
+    if dry_run {
+        dry_run_done(output, None);
+        return;
+    }
+    let data_dir = Manifest::parse(&merged.manifest).map_or_else(
+        |_| manifest::DATA_DIR.to_owned(),
+        |manifest| manifest.data_dir,
+    );
+    let sync = if unpinned.is_empty() {
+        format!("run `fetchloom sync` to update {data_dir}/")
+    } else {
+        format!("run `fetchloom sync`, which pins them and updates {data_dir}/")
+    };
+    output.next(&format!(
+        "{sync}, then commit {} to finish the merge",
+        committed(project)
+    ));
+}
+
+/// how the datasets came out, in a few words: `alpha from ours, beta from theirs, 1 the same`.
+fn facts(summary: &Summary) -> String {
+    let mut facts = Vec::new();
+    for (names, how) in [
+        (&summary.from_ours, "from ours"),
+        (&summary.from_theirs, "from theirs"),
+        (&summary.removed, "removed"),
+    ] {
+        if !names.is_empty() {
+            facts.push(format!("{} {how}", names.join(", ")));
+        }
+    }
+    if !summary.same.is_empty() {
+        facts.push(format!("{} the same", summary.same.len()));
+    }
+    if facts.is_empty() {
+        "no datasets".to_owned()
+    } else {
+        facts.join(", ")
+    }
+}

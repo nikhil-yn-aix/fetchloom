@@ -736,23 +736,14 @@ fn is_repository(folder: &Path) -> bool {
 /// both sides between conflict lines at the start of a line, `<<<<<<<`, `|||||||`, `=======`
 /// and `>>>>>>>`. none when no such line is there.
 fn unmerged(name: &str, text: &str) -> Option<Error> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let line = text.lines().position(|line| {
-        line == "======="
-            || ["<<<<<<<", "|||||||", ">>>>>>>"].iter().any(|marker| {
-                line.strip_prefix(marker)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
-            })
-    })?;
+    let line = lock::merge::markers::first(text)?;
     Some(
         Error::new(
             Kind::ProjectInvalid,
             format!("{name} has an unfinished git merge conflict"),
         )
         .detail(format!("{name}:{}", line + 1))
-        // "by hand, then run" keeps the lock command out of the json fix: only a person can
-        // choose what each side keeps
-        .help("keep the datasets from both sides and delete git's <<<<<<<, ======= and >>>>>>> lines by hand, then run `fetchloom lock`"),
+        .help("run `fetchloom lock`, which merges both sides without downloading"),
     )
 }
 
@@ -1644,7 +1635,7 @@ mod tests {
         let base =
             "version = 1\r\n\r\n<<<<<<< ours\r\n||||||| base\r\n=======\r\n>>>>>>> theirs\r\n";
         let (_dir, project) = project(&[(manifest::FILE, both), (lock::FILE, base)]);
-        let help = "keep the datasets from both sides and delete git's <<<<<<<, ======= and >>>>>>> lines by hand, then run `fetchloom lock`";
+        let help = "run `fetchloom lock`, which merges both sides without downloading";
         let manifest = project.manifest().unwrap_err();
         assert_eq!(manifest.kind, Kind::ProjectInvalid);
         assert_eq!(

@@ -40,9 +40,9 @@ on disk: updates the data folder from data.lock, writing data.lock first if need
   fetchloom lock
   fetchloom lock --check
   fetchloom lock --upgrade iris
-  fetchloom lock --upgrade --dry-run
+  fetchloom lock --theirs iris
 
-on disk: writes data.lock and may add files to the cache. --check and --dry-run write nothing";
+on disk: writes data.lock and may add files to the cache. after a git merge, it merges data.toml and data.lock without downloading. --check and --dry-run write nothing";
 
     pub(super) const STATUS: &str = "examples:
   fetchloom status
@@ -735,6 +735,15 @@ pub(crate) struct Lock {
     /// change nothing, and fail when data.lock is out of date, for CI
     #[arg(long, conflicts_with = "upgrade", help_heading = "options")]
     pub(crate) check: bool,
+
+    /// after a git merge, keep the checked-out branch's side of a dataset the two sides
+    /// changed each their own way. repeat it for more
+    #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
+    pub(crate) ours: Vec<String>,
+
+    /// after a git merge, keep the merged branch's side of such a dataset. repeat it for more
+    #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
+    pub(crate) theirs: Vec<String>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

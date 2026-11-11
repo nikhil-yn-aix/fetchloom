@@ -14,6 +14,7 @@ mod dry_run;
 mod export;
 mod get;
 mod hints;
+mod merge;
 mod moved;
 mod path;
 mod placing;
