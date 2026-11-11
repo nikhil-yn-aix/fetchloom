@@ -948,3 +948,37 @@ fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
     }
     Ok(())
 }
+
+/// a link's query or fragment may hold a secret under a name no list knows, such as the `rlkey`
+/// of a dropbox link, and a notebook keeps the error it printed. help that says to run the
+/// command again never repeats a line holding one, in text or in json, and says to run the same
+/// command instead.
+#[test]
+fn a_retry_never_repeats_a_link_with_a_query_or_a_fragment() -> Result {
+    const SENTINEL: &str = "s3ntinel";
+    for suffix in ["?rlkey=s3ntinel&dl=1", "#s3ntinel"] {
+        for mode in [&[][..], &["--json"]] {
+            let sandbox = Sandbox::new()?;
+            // nothing listens on the port once its listener is gone, so the request cannot
+            // connect, which a retry could get past
+            let port = std::net::TcpListener::bind("127.0.0.1:0")?
+                .local_addr()?
+                .port();
+            let link = format!("http://127.0.0.1:{port}{PATH}{suffix}");
+            let args: Vec<&str> = mode
+                .iter()
+                .copied()
+                .chain(["get", "--output=x.csv", "--", &link])
+                .collect();
+            let output = sandbox
+                .command(&args)
+                .env("FETCHLOOM_RETRIES", "0")
+                .output()?;
+            let shown = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+            assert_eq!(output.status.code(), Some(20), "{shown}");
+            assert!(!shown.contains(SENTINEL), "{args:?}: {shown}");
+            assert!(shown.contains("run the same command again"), "{shown}");
+        }
+    }
+    Ok(())
+}

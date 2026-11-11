@@ -1088,20 +1088,57 @@ fn moved_command(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<S
 }
 
 /// the command line as typed, ready to copy, for help that says to run it again. none when an
-/// argument holds a secret no message may repeat, such as a token in a link, or is not unicode.
+/// argument holds a link with a query, a fragment or a login, or is not unicode.
 fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String> {
     let mut line = String::from("fetchloom");
     for arg in args {
         let arg = arg.into_string().ok()?;
-        let login = url::Url::parse(&arg)
-            .is_ok_and(|url| !url.username().is_empty() || url.password().is_some());
-        if login || matches!(net::mask_query(&arg), Cow::Owned(_)) {
+        if may_hold_secret(&arg) {
             return None;
         }
         line.push(' ');
         line.push_str(&shell_word(&arg));
     }
     Some(line)
+}
+
+/// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
+/// a name no list knows, such as dropbox's `rlkey`: the whole word, an option's value after `=`,
+/// a link attached to a short option, or a link pasted wholly percent-encoded.
+fn may_hold_secret(arg: &str) -> bool {
+    if matches!(net::mask_query(arg), Cow::Owned(_)) {
+        return true;
+    }
+    let decoded;
+    let arg = if !arg.contains(':') && arg.contains('%') {
+        decoded = percent_encoding::percent_decode_str(arg).decode_utf8_lossy();
+        decoded.as_ref()
+    } else {
+        arg
+    };
+    let value = arg
+        .starts_with('-')
+        .then(|| arg.find('=').map(|at| at + 1))
+        .flatten();
+    let schemes = arg.match_indices("://").map(|(at, _)| {
+        let run = arg[..at]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || "+-.".contains(*c)))
+            .map_or(0, |(before, c)| before + c.len_utf8());
+        // a scheme starts with a letter, so `-ihttps://` holds the link `ihttps://`
+        arg[run..at]
+            .find(|c: char| c.is_ascii_alphabetic())
+            .map_or(at, |letter| run + letter)
+    });
+    std::iter::once(0).chain(value).chain(schemes).any(|start| {
+        url::Url::parse(&arg[start..]).is_ok_and(|url| {
+            url.query().is_some()
+                || url.fragment().is_some()
+                || !url.username().is_empty()
+                || url.password().is_some()
+        })
+    })
 }
 
 /// the command a person likely meant: the command line they typed with the words `typed`
@@ -1421,6 +1458,35 @@ mod tests {
         assert_eq!(
             line(&["get", "https://user:secret@example.org/a.csv"]),
             None
+        );
+        // a name no list knows may hold a secret too, as dropbox's rlkey does, so any query,
+        // fragment or login in a link keeps the line from being repeated
+        for link in [
+            "https://example.org/a.csv?rlkey=abc",
+            "https://example.org/a.csv?download=1",
+            "https://example.org/a.csv#abc",
+            "s3://key:abc@bucket/a.csv",
+            "https%3A%2F%2Fexample.org%2Fa.csv%3Fsv%3Dabc",
+        ] {
+            assert_eq!(line(&["get", link]), None, "{link}");
+        }
+        assert_eq!(
+            line(&["--mirror=https://lab.example.org/m?code=abc", "sync"]),
+            None,
+            "a link given as an option's value"
+        );
+        assert_eq!(
+            line(&["-ihttps://example.org/list.txt#abc", "get"]),
+            None,
+            "a link attached to a short option"
+        );
+        assert_eq!(
+            line(&["get", "https://example.org/a.csv", "-o", "a#1.csv"]).as_deref(),
+            Some("fetchloom get https://example.org/a.csv -o \"a#1.csv\"")
+        );
+        assert_eq!(
+            line(&["add", "hf:org/name@main"]).as_deref(),
+            Some("fetchloom add hf:org/name@main")
         );
     }
 
