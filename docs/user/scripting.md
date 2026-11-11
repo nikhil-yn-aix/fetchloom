@@ -114,6 +114,8 @@ install from source with python 3.10 or later and the [rust build prerequisites]
 pip install "git+https://github.com/nikhil-yn-aix/fetchloom"
 ```
 
+`python -m fetchloom` runs the program the package installs, which reaches it where the environment's scripts folder is not on PATH. the release wheels will also install `fl`, a short name for it.
+
 on python 3.10 or later:
 
 ```python

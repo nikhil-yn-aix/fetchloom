@@ -281,16 +281,26 @@ jobs:
           # reuses the binary built and checked above
           .release/maturin/${{ matrix.scripts }}/maturin build --release --locked \
             --target ${{ matrix.target }} --out dist ${{ matrix.wheel-tags }}
+          # maturin refuses console scripts beside an executable, so fl joins the built wheel here
+          .release/maturin/${{ matrix.scripts }}/python python/wheel_scripts.py dist/*.whl
       - name: check the wheel
         run: |
           "${{ matrix.python }}" -m venv .release/check
           check=.release/check/${{ matrix.scripts }}
           "$check/python" -m pip install --quiet --disable-pip-version-check --no-index dist/*.whl
-          name=fetchloom
-          said=$("$check/$name" --version)
-          echo "wheel $name --version: $said"
+          # fl and python -m fetchloom run the executable the wheel installs beside them
+          for name in fetchloom fl; do
+            said=$("$check/$name" --version)
+            echo "wheel $name --version: $said"
+            if [ "$said" != "fetchloom $VERSION" ]; then
+              echo "::error::the wheel's $name --version printed $said"
+              exit 1
+            fi
+          done
+          said=$("$check/python" -m fetchloom --version)
+          echo "wheel python -m fetchloom --version: $said"
           if [ "$said" != "fetchloom $VERSION" ]; then
-            echo "::error::the wheel's $name --version printed $said"
+            echo "::error::the wheel's python -m fetchloom --version printed $said"
             exit 1
           fi
           mkdir -p .release/empty

@@ -10,7 +10,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 | job | permissions | work |
 |---|---|---|
-| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build and install a wheel, exercise its executable and python module |
+| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build a wheel and add `fl` to it, install it, exercise its executable, `fl` and python module |
 | `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
@@ -27,7 +27,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. a comment beside the windows flags in release.yml says so.
 
-build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version` and verify that the python helper reports `project.invalid` outside a project.
+build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version`, `fl --version` and `python -m fetchloom --version`, and verify that the python helper reports `project.invalid` outside a project.
 
 [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
 
@@ -70,6 +70,8 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `install.sh`, `install.ps1` | release installers |
 | `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
 
+every wheel the release builds also has `fl`, a console script. maturin refuses console scripts in a wheel that carries an executable, so the build job adds it after `maturin build` with `python/wheel_scripts.py`: an `entry_points.txt` naming the launcher, which pip and uv turn into a command, `fl.exe` on windows, and its line in RECORD, with every other file left as maturin wrote it. the launcher, `python/fetchloom/__main__.py`, finds the executable the wheel installed beside it, as the helper does, and hands it the command line. on unix it replaces itself with the executable through `os.execv`; windows has no exec, so there it runs the executable, leaves ctrl-c to it and exits with its code. `python -m fetchloom` runs the same launcher. wheels have no links, and a second copy of the executable would double the wheel, so `fl` costs a python start instead. a wheel maturin builds from source, as `pip install` from git does, has no `fl`; `python -m fetchloom` works there too.
+
 ## publish a version
 
 1. set the Cargo version, refresh `Cargo.lock` through cargo and commit on main. wait for [CI](ci.md) on that commit.
@@ -83,7 +85,7 @@ the archives are packed so the same files give the same bytes. the build job exp
    ```
 
 5. edit release notes and publish the draft. installer `latest` URLs begin serving it then, and `publish.yml` and `pages.yml` start. watch them with `gh run watch`.
-6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
+6. in a new virtual environment, verify `pip install fetchloom==0.1.0`, `fetchloom --version`, `fl --version` and the python helper. check `cargo install fetchloom` and both installers on a clean machine or container.
 7. after the first release, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper).
 8. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 

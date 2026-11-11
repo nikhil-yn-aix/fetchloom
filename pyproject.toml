@@ -30,3 +30,5 @@ Documentation = "https://github.com/nikhil-yn-aix/fetchloom/tree/main/docs"
 [tool.maturin]
 bindings = "bin"
 python-source = "python"
+# maturin refuses console scripts beside an executable, so the release adds fl to each built
+# wheel with python/wheel_scripts.py

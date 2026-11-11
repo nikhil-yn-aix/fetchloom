@@ -2,14 +2,17 @@
 
 import itertools
 import json
+import os
 import pickle
 import subprocess
+import sys
 import traceback
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import fetchloom
+import wheel_scripts
 
 
 class HelperOptions(unittest.TestCase):
@@ -313,3 +316,61 @@ class ProgramDiscovery(unittest.TestCase):
                     self.assertEqual(fetchloom._program(), "from-path")
         preferred.assert_called_once_with("user")
         get_path.assert_any_call("scripts", "custom_user")
+
+
+class Launcher(unittest.TestCase):
+    """``fl`` and ``python -m fetchloom`` hand everything to the program and return its exit code."""
+
+    # stands in for fetchloom: it reports what it was given, writes to stderr and exits 3
+    PROGRAM = (
+        "import json, os, sys\n"
+        "given = sys.stdin.read()\n"
+        "print(json.dumps({'arguments': sys.argv[1:], 'stdin': given, 'process': os.getpid()}))\n"
+        "print('said on stderr', file=sys.stderr)\n"
+        "sys.exit(3)\n"
+    )
+
+    def starters(self):
+        module, function = wheel_scripts.SCRIPTS["fl"].split(":")
+        # the program found is this python, so no fetchloom build is needed
+        found = "import runpy, sys, fetchloom\nfetchloom._program = lambda: sys.executable\n"
+        return {
+            "fl": f"{found}from {module} import {function}\nsys.exit({function}())\n",
+            "python -m fetchloom": f"{found}runpy.run_module('fetchloom', run_name='__main__', alter_sys=True)\n",
+        }
+
+    def launch(self, starter, *arguments, stdin=b""):
+        environment = dict(os.environ, PYTHONPATH=str(Path(fetchloom.__file__).resolve().parents[1]))
+        process = subprocess.Popen(
+            [sys.executable, "-c", starter, *arguments],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+        )
+        stdout, stderr = process.communicate(stdin, timeout=60)
+        return process, stdout, stderr.decode("utf-8")
+
+    def test_arguments_stdin_and_exit_code_pass_through(self):
+        arguments = ["two words", "", "--json", "\u00fc", "-"]
+        for name, starter in self.starters().items():
+            with self.subTest(name):
+                process, stdout, stderr = self.launch(
+                    starter, "-c", self.PROGRAM, *arguments, stdin=b"piped input\n"
+                )
+                self.assertEqual(process.returncode, 3, stderr)
+                report = json.loads(stdout)
+                self.assertEqual(report["arguments"], arguments)
+                self.assertEqual(report["stdin"], "piped input\n")
+                self.assertEqual(stderr.splitlines(), ["said on stderr"])
+                if os.name == "posix":
+                    # the program took over the launcher's process rather than running under it
+                    self.assertEqual(report["process"], process.pid)
+
+    def test_a_missing_program_exits_127_with_the_install_hint(self):
+        starter = self.starters()["fl"].replace(
+            "fetchloom._program = lambda: sys.executable",
+            "def missing():\n    raise FileNotFoundError('the fetchloom program is missing')\n"
+            "fetchloom._program = missing",
+        )
+        process, stdout, stderr = self.launch(starter)
+        self.assertEqual(process.returncode, 127)
+        self.assertEqual(stdout, b"")
+        self.assertEqual(stderr.splitlines(), ["error: the fetchloom program is missing"])
