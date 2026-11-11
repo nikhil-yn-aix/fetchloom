@@ -1,7 +1,7 @@
 //! catalog discovery and safe unattended behavior against local catalog responses.
 #![cfg(debug_assertions)]
 
-use crate::support::{Result, Sandbox, Server, json, reply, text};
+use crate::support::{Part, Result, Sandbox, Server, json, reply, text};
 use std::process::Command;
 
 const HF: &[u8] = include_bytes!("../fixtures/sources/search/hf.json");
@@ -312,6 +312,72 @@ fn a_failed_catalog_is_a_warning_in_json() -> Result {
             .unwrap_or_default()
             .starts_with("kaggle search failed:")
     );
+    Ok(())
+}
+
+/// the first ctrl-c while one catalog still searches ends add there, as it ends search: a stop,
+/// exit 130, with no warning about the catalog it cut short and no choice from the matches the
+/// others found.
+#[cfg(unix)]
+#[test]
+fn a_first_stop_while_a_catalog_searches_ends_add() -> Result {
+    use std::io::BufRead as _;
+
+    let sandbox = Sandbox::new()?;
+    let answering = |body: &[u8]| {
+        Server::start(
+            "/",
+            vec![reply(
+                "200 OK",
+                &[("Content-Type", "application/json")],
+                body,
+            )],
+        )
+    };
+    let (hf, kaggle) = (answering(HF)?, answering(KAGGLE)?);
+    let (_release, held) = std::sync::mpsc::channel();
+    let zenodo = Server::start("/", vec![vec![Part::Wait(held)]])?;
+    let mut child = sandbox
+        .command(&["-vv", "add", "iris"])
+        .env("FETCHLOOM_TEST_HF_API", &hf.url)
+        .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
+        .env("FETCHLOOM_TEST_ZENODO_API", &zenodo.url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stream = child.stderr.take().ok_or("no stderr")?;
+    let (heard, lines) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut told = String::new();
+        for line in std::io::BufReader::new(stream)
+            .lines()
+            .map_while(std::io::Result::ok)
+        {
+            let _ = heard.send(line.clone());
+            told.push_str(&line);
+            told.push('\n');
+        }
+        told
+    });
+    let mut answers = 0;
+    while answers < 2 {
+        let line = lines.recv_timeout(std::time::Duration::from_mins(1))?;
+        if line.contains("net::api: answer") {
+            answers += 1;
+        }
+    }
+    zenodo.wait_for_requests(1)?;
+    let sent = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()?;
+    assert!(sent.success());
+    let status = child.wait()?;
+    let stderr = reader.join().map_err(|_| "reading stderr failed")?;
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert!(stderr.contains("Stopped"), "{stderr}");
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    assert!(!sandbox.work().join("data.toml").exists(), "{stderr}");
     Ok(())
 }
 

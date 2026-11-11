@@ -193,7 +193,10 @@ async fn find(
     context
         .output
         .step("Searching", &format!("{named} for \"{words}\""));
-    let result = search::search(api, words, catalogs, limit).await?;
+    let result = search::search(api, words, catalogs, limit).await;
+    // a stop cuts short the catalogs still searching, so what the others found is no choice
+    context.stop.check()?;
+    let result = result?;
     for warning in result.warnings {
         context.output.warn(&warning);
     }
