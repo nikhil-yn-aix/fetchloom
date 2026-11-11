@@ -46,7 +46,7 @@ a cached archive that cannot be read because the filesystem failed uses `local.i
 
 ## success with differences
 
-the python helper also has a helper-only `conflict.kept` error with no process exit code; see [strict sync](../scripting.md#python-helper).
+the python helper also raises errors of its own, with no process exit code, so their `code` is `None`: `conflict.kept` from [strict sync](../scripting.md#python-helper), and `usage` when `get()` is given both `path` and `folder`, or `force=True` without `path`.
 
 `status` exits 0 when it finds differences. `sync` exits 0 when it preserves conflicts. inspect status arrays and `result.placement.kept` before using the data. a cache registration warning also leaves sync successful.
 

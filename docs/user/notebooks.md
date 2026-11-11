@@ -48,7 +48,9 @@ each `!` line runs in a shell of its own, so a `cd` or an `export` there does no
 !fetchloom sync --locked --yes
 ```
 
-on colab, clone into `/content` and leave `FETCHLOOM_CACHE` unset. the [python helper](scripting.md#python-helper) passes its environment to fetchloom, so set `os.environ["FETCHLOOM_CACHE"]` before calling it.
+on colab, clone into `/content` and leave `FETCHLOOM_CACHE` unset. the [python helper](scripting.md#python-helper) passes its environment to fetchloom, so set `os.environ["FETCHLOOM_CACHE"]` before calling it, to an absolute folder: a relative one is read in the folder each call works in, so `sync("project")` and `get()` would fill two caches.
+
+a `!` line runs fetchloom as a terminal does and shows its progress, which the python helper cannot. when the kernel's PATH lacks the folder where its python installs programs, `!fetchloom` says `command not found`; `!{sys.executable} -m fetchloom sync --locked` runs the same program through that python.
 
 ## dev containers and codespaces
 

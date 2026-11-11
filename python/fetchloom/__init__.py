@@ -54,7 +54,8 @@ class Error(Exception):
 
     ``kind`` is the JSON error's kind, such as ``usage`` or ``network.unreachable``, and
     ``message`` its summary. ``details`` lists supporting lines, ``help`` names the command
-    or flag that fixes the error or is None, and ``code`` is the exit code. ``kind`` is None
+    or flag that fixes the error or is None, and ``code`` is the exit code, or None when the
+    helper raised the error itself, with no process to exit. ``kind`` is None
     when fetchloom stopped without a JSON answer. ``str(error)`` reads like the command
     line's error: the message, then each detail and the help on a line of its own.
     """
