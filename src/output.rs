@@ -354,16 +354,23 @@ impl Output {
     }
 
     /// one numbered choice: what to type, padded to `pad`, then its title and dim facts, both
-    /// already padded into columns. what is cut on a narrow terminal is the end, never what to type.
+    /// already padded into columns, the facts on a line of their own under what to type when
+    /// `below` says so. what is cut on a narrow terminal is the end, never what to type.
     pub(crate) fn candidate(
         &self,
         number: usize,
         typed: &str,
         pad: usize,
         title: &str,
-        facts: &str,
+        (facts, below): (&str, bool),
     ) {
         if !self.tells(Level::Normal) {
+            return;
+        }
+        if below {
+            self.candidate(number, typed, pad, title, ("", false));
+            let dim = paint(self.style.color, Paint::new().dimmed());
+            self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(facts)));
             return;
         }
         let color = self.style.color;

@@ -29,11 +29,17 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     );
     // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() {
-        let parts = parts(output, &report.candidates);
-        let pad = widest(parts.iter().map(|(reference, _, _)| reference.as_str()))
+        let parts = parts(output, &report.candidates, output.width(), LIST_LEAD);
+        let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
             .min(crate::output::REFERENCE_COLUMN);
-        for (number, (reference, title, facts)) in parts.iter().enumerate() {
-            output.candidate(number + 1, reference, pad, title, facts);
+        for (number, shown) in parts.iter().enumerate() {
+            output.candidate(
+                number + 1,
+                &shown.reference,
+                pad,
+                &shown.title,
+                (&shown.facts, shown.below),
+            );
         }
         for candidate in &report.candidates {
             output.answer_untold(&line(candidate));
@@ -106,7 +112,12 @@ pub(super) async fn pick(
     command: &str,
 ) -> Result<String, Error> {
     let report = find(context, api, words, &[], search::LIMIT).await?;
-    let rows = rows(&context.output, &report.candidates);
+    let rows = rows(
+        &context.output,
+        &report.candidates,
+        context.output.width(),
+        PICKER_LEAD,
+    );
     let footer = if more(&report.candidates, search::LIMIT) {
         // words a shell would read differently are not offered as something to paste
         let safe = !words.trim_start().starts_with('-')
@@ -136,6 +147,11 @@ pub(super) async fn pick(
         Err(error)
     }
 }
+
+/// the columns before a reference in the list `search` prints, its number among them.
+const LIST_LEAD: usize = 12;
+/// the columns before a reference in the picker, its cursor and number among them.
+const PICKER_LEAD: usize = 6;
 
 /// whether a catalog filled its share, so it may hold more matches than were shown.
 fn more(candidates: &[Candidate], limit: usize) -> bool {
@@ -230,11 +246,31 @@ fn line(candidate: &Candidate) -> String {
     line
 }
 
+/// one candidate as a person reads it: what to type, its title and its facts, already padded
+/// into columns, and whether the facts take a line of their own under the reference.
+struct Shown {
+    reference: String,
+    title: String,
+    facts: String,
+    below: bool,
+}
+
+/// the fewest columns a title keeps before it gives way altogether, and the most it takes.
+const TITLE_LEAST: usize = 12;
+const TITLE_MOST: usize = 52;
+
 /// each candidate as what to type, its title and its facts, padded so every row has the same
 /// columns: title, size, downloads, note. a cell the catalog leaves out stays blank and a column
 /// nobody fills is left out. hugging face titles are the repository id the reference already
-/// shows, so they stay blank. the title is clipped to what the terminal leaves after the facts.
-fn parts(output: &Output, candidates: &[Candidate]) -> Vec<(String, String, String)> {
+/// shows, so they stay blank. on a terminal `width` columns wide, with `lead` columns before each
+/// reference, the download count gives way first, then the title; the size and the access note
+/// never do, and take a line of their own under the reference when they do not fit beside it.
+fn parts(
+    output: &Output,
+    candidates: &[Candidate],
+    width: Option<usize>,
+    lead: usize,
+) -> Vec<Shown> {
     let references: Vec<String> = candidates
         .iter()
         .map(|candidate| candidate.reference.to_string())
@@ -252,44 +288,60 @@ fn parts(output: &Output, candidates: &[Candidate]) -> Vec<(String, String, Stri
             ]
         })
         .collect();
-    let widths: Vec<usize> = (0..3)
-        .map(|column| widest(cells.iter().map(|row| row[column].as_str())))
-        .collect();
-    let facts: Vec<String> = cells
-        .iter()
-        .map(|row| {
-            row.iter()
-                .zip(&widths)
-                .enumerate()
-                .filter(|(_, (_, width))| **width > 0)
-                .map(|(column, (cell, width))| pad(cell, *width, column < 2))
-                .collect::<Vec<_>>()
-                .join("  ")
-        })
-        .collect();
-    let facts_width = widest(facts.iter().map(String::as_str));
     let reference_width =
         widest(references.iter().map(String::as_str)).min(crate::output::REFERENCE_COLUMN);
-    let most = output
-        .width()
-        .map_or(52, |width| {
-            width.saturating_sub(12 + reference_width + 4 + facts_width)
+    // what a row leaves after its reference and two spaces, with the last column spare
+    let room = |reference: &str| {
+        width.map(|width| {
+            width.saturating_sub(
+                lead + console::measure_text_width(reference).max(reference_width) + 3,
+            )
         })
-        .clamp(12, 52);
-    let titles: Vec<String> = candidates
+    };
+    let given: Vec<String> = candidates
         .iter()
         .zip(&references)
         .map(|(candidate, reference)| {
             if reference.ends_with(&candidate.title) {
                 return String::new();
             }
-            let shown: String = candidate
+            candidate
                 .title
                 .chars()
                 .map(|c| if c.is_control() { ' ' } else { c })
-                .collect();
-            output.clip(&shown, most)
+                .collect()
         })
+        .collect();
+    let any_title = given.iter().any(|title| !title.is_empty());
+    let shared = room("");
+    let mut plan = (false, None);
+    for downloads in [true, false] {
+        let facts_width = widest(facts(&cells, downloads).iter().map(String::as_str));
+        let gap = if facts_width > 0 { 2 } else { 0 };
+        match shared {
+            None => {
+                plan = (downloads, Some(TITLE_MOST));
+                break;
+            }
+            Some(room) if any_title && room > facts_width + gap + TITLE_LEAST => {
+                plan = (
+                    downloads,
+                    Some((room - facts_width - gap - 1).min(TITLE_MOST)),
+                );
+                break;
+            }
+            Some(room) if !any_title && facts_width <= room => {
+                plan = (downloads, Some(TITLE_MOST));
+                break;
+            }
+            Some(_) => {}
+        }
+    }
+    let (downloads, most) = plan;
+    let facts = facts(&cells, downloads);
+    let titles: Vec<String> = given
+        .iter()
+        .map(|title| most.map_or_else(String::new, |most| output.clip(title, most)))
         .collect();
     let title_width = widest(titles.iter().map(String::as_str));
     references
@@ -297,12 +349,45 @@ fn parts(output: &Output, candidates: &[Candidate]) -> Vec<(String, String, Stri
         .zip(titles)
         .zip(facts)
         .map(|((reference, title), facts)| {
-            let title = if facts.trim().is_empty() {
+            let facts = facts.trim_end().to_owned();
+            let title = if facts.is_empty() {
                 title
             } else {
                 pad(&title, title_width, false)
             };
-            (reference, title, facts.trim_end().to_owned())
+            let rest = [title.as_str(), facts.as_str()]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .map(|part| console::measure_text_width(part))
+                .fold(0, |sum, part| sum + part + 2)
+                .saturating_sub(2);
+            let below = room(&reference).is_some_and(|room| rest > room);
+            Shown {
+                title: if below { String::new() } else { title },
+                reference,
+                facts,
+                below,
+            }
+        })
+        .collect()
+}
+
+/// each row's facts in their columns: size, then downloads where `downloads` keeps them, then
+/// the access note, numbers to the right.
+fn facts(cells: &[[String; 3]], downloads: bool) -> Vec<String> {
+    let widths: Vec<usize> = (0..3)
+        .map(|column| widest(cells.iter().map(|row| row[column].as_str())))
+        .collect();
+    cells
+        .iter()
+        .map(|row| {
+            row.iter()
+                .zip(&widths)
+                .enumerate()
+                .filter(|(column, (_, width))| **width > 0 && (downloads || *column != 1))
+                .map(|(column, (cell, width))| pad(cell, *width, column < 2))
+                .collect::<Vec<_>>()
+                .join("  ")
         })
         .collect()
 }
@@ -324,20 +409,28 @@ fn pad(text: &str, width: usize, right: bool) -> String {
     }
 }
 
-/// the candidates as plain aligned lines, for the picker and for an error's details.
-fn rows(output: &Output, candidates: &[Candidate]) -> Vec<String> {
-    let parts = parts(output, candidates);
-    let width = widest(parts.iter().map(|(reference, _, _)| reference.as_str()))
+/// the candidates as plain aligned lines, for the picker and for an error's details. a row whose
+/// facts do not fit beside its reference has no title, so the picker can put them under it.
+fn rows(
+    output: &Output,
+    candidates: &[Candidate],
+    width: Option<usize>,
+    lead: usize,
+) -> Vec<String> {
+    let parts = parts(output, candidates, width, lead);
+    let width = widest(parts.iter().map(|shown| shown.reference.as_str()))
         .min(crate::output::REFERENCE_COLUMN);
     parts
         .into_iter()
-        .map(|(reference, title, facts)| {
-            let mut row = format!("{reference:width$}");
-            for part in [title, facts] {
-                if !part.is_empty() {
-                    row.push_str("  ");
-                    row.push_str(&part);
-                }
+        .map(|shown| {
+            let mut row = format!("{:width$}", shown.reference);
+            if !shown.title.is_empty() {
+                row.push_str("  ");
+                row.push_str(&shown.title);
+            }
+            if !shown.facts.is_empty() {
+                row.push_str("  ");
+                row.push_str(&shown.facts);
             }
             row.trim_end().to_owned()
         })
@@ -405,7 +498,7 @@ mod tests {
                 note: None,
             },
         ];
-        let rows = rows(&output, &candidates);
+        let rows = rows(&output, &candidates, None, PICKER_LEAD);
         assert_eq!(
             rows,
             [
@@ -419,6 +512,110 @@ mod tests {
             ]
         );
         assert_eq!(rows[0].len(), rows[2].len(), "downloads end in one column");
+    }
+
+    fn quiet_output() -> Output {
+        Output::new(
+            Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        )
+    }
+
+    /// matches as j5's picker showed them at 60, 80 and 100 columns: what to type, whether the
+    /// data needs access and its size stay whole in every row, at the cost of the download count
+    /// and the title, and the size and access go on a line of their own when even they do not
+    /// fit beside the reference.
+    #[test]
+    fn narrow_rows_keep_the_access_note_and_the_size_whole() {
+        let candidate = |reference: &str, title: &str, size, downloads, gated: bool| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "kaggle",
+            size: Some(size),
+            downloads: Some(downloads),
+            note: gated.then(|| "needs access".to_owned()),
+        };
+        let candidates = vec![
+            candidate(
+                "hf:datasets/ILSVRC/imagenet-1k",
+                "ILSVRC/imagenet-1k",
+                166_022_000_000,
+                44_000,
+                true,
+            ),
+            candidate(
+                "kaggle:himanshunakrani/iris-dataset",
+                "Iris dataset",
+                1006,
+                117_000,
+                false,
+            ),
+            candidate(
+                "hf:datasets/fatdove/Iris_Database",
+                "fatdove/Iris_Database",
+                87_727_000_000,
+                5000,
+                false,
+            ),
+            candidate(
+                "kaggle:arshid/iris-flower-dataset",
+                "Iris Flower Dataset",
+                1010,
+                260_000,
+                false,
+            ),
+        ];
+        let output = quiet_output();
+        for width in [60, 80, 100] {
+            for lead in [LIST_LEAD, PICKER_LEAD] {
+                let parts = parts(&output, &candidates, Some(width), lead);
+                let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
+                for (shown, candidate) in parts.iter().zip(&candidates) {
+                    assert_eq!(shown.reference, candidate.reference.to_string());
+                    let lines = if shown.below {
+                        vec![shown.reference.clone(), shown.facts.clone()]
+                    } else {
+                        let mut line = format!("{:column$}", shown.reference);
+                        for part in [&shown.title, &shown.facts] {
+                            if !part.is_empty() {
+                                line.push_str("  ");
+                                line.push_str(part);
+                            }
+                        }
+                        vec![line]
+                    };
+                    for line in &lines {
+                        assert!(
+                            console::measure_text_width(line.trim_end()) < width - lead,
+                            "{width} {lead}: {line:?}"
+                        );
+                    }
+                    let size = units::size(candidate.size.unwrap_or_default());
+                    assert!(shown.facts.contains(&size), "{width} {lead}: {lines:?}");
+                    if candidate.note.is_some() {
+                        assert!(
+                            shown.facts.contains("needs access"),
+                            "{width} {lead}: {lines:?}"
+                        );
+                    }
+                }
+            }
+        }
+        let wide = parts(&output, &candidates, Some(200), LIST_LEAD);
+        assert!(wide.iter().all(|shown| shown.facts.contains("downloads")));
+        assert!(
+            wide[1].title.starts_with("Iris dataset"),
+            "{}",
+            wide[1].title
+        );
     }
 
     #[test]
@@ -454,7 +651,7 @@ mod tests {
                 note: None,
             },
         ];
-        let rows = rows(&output, &candidates);
+        let rows = rows(&output, &candidates, None, PICKER_LEAD);
         assert_eq!(rows[0].find("Iris Species"), Some(50), "{}", rows[0]);
         assert!(rows[1].starts_with(&format!("{long}  ")), "{}", rows[1]);
     }

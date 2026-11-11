@@ -93,11 +93,16 @@ fn back(shown: usize) -> String {
     }
 }
 
-/// the screen rows a line takes, since a line wider than the terminal wraps.
+/// the screen rows a line takes, since a line wider than the terminal wraps, and an option's
+/// facts can take a line of their own.
 fn rows(line: &str, width: usize) -> usize {
-    console::measure_text_width(line)
-        .div_ceil(width.max(1))
-        .max(1)
+    line.split('\n')
+        .map(|part| {
+            console::measure_text_width(part)
+                .div_ceil(width.max(1))
+                .max(1)
+        })
+        .sum()
 }
 /// the picker's lines: the question with its keys, a row for each option, then the footer.
 fn frame(
@@ -186,7 +191,8 @@ fn cancelled() -> Error {
 
 /// one option: the reference, then from `column` on its title and facts, dim unless the cursor
 /// is on it, or right after a reference too long for the column. the reference is never cut; the
-/// rest gives way on a narrow terminal.
+/// rest gives way on a narrow terminal, or takes a line of its own under the reference when it
+/// does not fit beside it but fits there.
 fn row(
     option: &str,
     index: usize,
@@ -207,25 +213,33 @@ fn row(
     let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
     let room = width.saturating_sub(column.max(reference.chars().count() + 2) + 7);
     let more = if style.unicode { "\u{2026}" } else { "..." };
-    let rest = if room < 8 {
+    let wide = console::measure_text_width(rest);
+    let below = !rest.is_empty() && wide > room && wide <= width.saturating_sub(7);
+    let beside = if below || room < 8 {
         String::new()
     } else {
         console::truncate_str(rest, room, more).into_owned()
     };
-    let rest = super::shown(&rest, style.unicode);
+    let beside = super::shown(&beside, style.unicode);
     let number = index + 1;
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
-    if index == cursor {
+    let line = if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
         let cyan = paint(style.color, accent().bold());
-        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}  {rest}")
+        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}  {beside}")
             .trim_end()
             .to_owned()
     } else {
-        format!("    {dim}{number}{dim:#} {reference}{pad}  {dim}{rest}{dim:#}")
+        format!("    {dim}{number}{dim:#} {reference}{pad}  {dim}{beside}{dim:#}")
             .trim_end()
             .to_owned()
+    };
+    if below {
+        let rest = super::shown(rest, style.unicode);
+        format!("{line}\n      {dim}{rest}{dim:#}")
+    } else {
+        line
     }
 }
 
@@ -379,7 +393,8 @@ mod tests {
         );
     }
 
-    /// one long name runs long on its own row, and every other row keeps its title and facts.
+    /// one long name runs long on its own row, with its title and facts whole on the line under
+    /// it, and every other row keeps its title and facts.
     #[test]
     fn a_long_reference_does_not_push_the_other_rows_off_the_terminal() {
         let long = format!("hf:datasets/{}", "x".repeat(80));
@@ -396,10 +411,9 @@ mod tests {
             "{}",
             lines[1]
         );
-        assert!(
-            lines[2].starts_with(&format!("    2 {long}  Huberman")),
-            "{}",
-            lines[2]
+        assert_eq!(
+            lines[2],
+            format!("    2 {long}\n      Huberman  90.0 KiB  2 downloads")
         );
     }
 
