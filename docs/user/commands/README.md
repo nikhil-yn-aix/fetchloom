@@ -36,7 +36,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <
 |---|---|
 | `-q`, `--quiet` | keep stdout answers, warnings and errors; hide other normal output; questions still apply |
 | `-v`, `--verbose` | add details, error kinds and work counters |
-| `-vv` | also enable debug logs |
+| `-vv` | also enable debug logs, which name local paths, dataset references and the queries sent to sources; read them before you share them, as [what leaves your machine](../concepts.md#what-leaves-your-machine) says |
 | `--json` | print one result document on stdout, including failures; never prompt |
 | `--offline` | prevent HTTP and DNS requests by fetchloom |
 | `-y`, `--yes` | answer yes to questions, but never pick a dataset for you |

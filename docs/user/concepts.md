@@ -186,3 +186,16 @@ a data-use agreement can require deleting a dataset's bytes from a machine. fetc
 a cached file stays while another project using the same cache pins the same bytes, under any dataset name, since projects share files by SHA-256. `fetchloom cache` lists the projects that use the cache.
 
 fetchloom cannot reach copies it did not make: backups, a mirror or shared drive you copied files to, a synced folder's trash or version history, and copies other programs made. it deletes a file the way `rm` does, without overwriting it, so snapshots, copy-on-write clones or the disk itself can keep the bytes, and fetchloom does not verify erasure. when an agreement requires that, follow your institution's procedure for the disk. the git history of `data.toml` and `data.lock` keeps the dataset's reference, file names, sizes and SHA-256, not its bytes.
+
+## what leaves your machine
+
+fetchloom sends nothing on its own: it has no telemetry, no account and no update check. a request goes out only for work a command does:
+
+| what | goes to |
+|---|---|
+| search words, given to `search`, or to `add` or `get` in place of a link | the search of hugging face, kaggle and zenodo, or of the sites `--source` names |
+| a reference | the site it names: a DOI to doi.org, which says where it points, an id such as `zenodo:3608990` to that site, a link to its host |
+| a download | the file's host, or a [mirror](mirrors.md#privacy) you named, which is asked by SHA-256 alone |
+| a key | its own host only, over https, as [auth](commands/auth.md) describes |
+
+each request names fetchloom and its version, as `fetchloom/0.1.0`, in its `User-Agent` header. a path on this machine never leaves it: `add` copies the files a path names into the cache with no request, `get` and `search` refuse a path before any request, and data.lock records no path for an import. what your repository shares is `data.toml` and `data.lock`: each dataset's reference, links, file names, sizes and SHA-256. a `-vv` log names local paths and every link fetchloom asked for, so read it before you share it.
