@@ -110,10 +110,6 @@ insta = { version = "1.49", features = ["filters"] }
 # the cli sandbox probes clone support on every platform
 reflink-copy = { version = "0.1", default-features = false }
 
-# the md-5 package's library is named md5, which cargo machete does not match to the package
-[package.metadata.cargo-machete]
-ignored = ["md-5"]
-
 [lints.rust]
 missing_docs = "warn"
 unreachable_pub = "warn"
