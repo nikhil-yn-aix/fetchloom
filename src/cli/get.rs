@@ -1337,6 +1337,12 @@ fn wanted_patterns(args: &Get, parsed: &Parsed) -> Vec<String> {
 
 /// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.
 fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote>, Error> {
+    if let Some(file) = &parsed.file
+        && args.filter.select.is_empty()
+        && !listing.paths().any(|path| path == file)
+    {
+        return Err(missing_file(parsed, listing, file));
+    }
     let select = wanted_patterns(args, parsed);
     if select.is_empty() && args.filter.exclude.is_empty() && listing.unavailable.is_empty() {
         return Ok(listing.files.clone());
@@ -1355,6 +1361,31 @@ fn selected(args: &Get, parsed: &Parsed, listing: &Listing) -> Result<Vec<Remote
         Some(source) => engine::filter(&parsed.reference.shown(), &entry, source, listing),
         None => Ok(listing.files.clone()),
     }
+}
+
+/// the error for a pasted link to `file`, which its listing lacks. it names the file the link
+/// most likely meant: one whose name differs only in case, as hugging face's `Iris.csv` from a
+/// typed `iris.csv`, else a near typo.
+fn missing_file(parsed: &Parsed, listing: &Listing, file: &str) -> Error {
+    let error = Error::new(
+        Kind::Usage,
+        format!("{} has no file {file}", parsed.reference.shown()),
+    );
+    let folded = name::fold(file);
+    if let Some(meant) = listing.paths().find(|path| name::fold(path) == folded) {
+        return error.help(format!("its name is {meant}: write that in the link"));
+    }
+    if let Some(meant) = name::closest(file, listing.paths()) {
+        return error.help(format!("did you mean {meant}? write that in the link"));
+    }
+    let error = match name::nearest(file, listing.paths(), 1).first() {
+        Some(nearest) => error.detail(format!(
+            "{} considered, the nearest {nearest}",
+            units::count(listing.paths().count() as u64, "file was", "files were")
+        )),
+        None => error,
+    };
+    error.help("check the file's name in the link")
 }
 
 /// the names to call a folder after: a file its source wrapped in a zip by its listed name, so
@@ -1667,6 +1698,83 @@ mod tests {
         );
         jobs[0].fetch.held = Some(crate::digest::sha256(b"the bytes fetched before"));
         approve(&context, &cache, &jobs).unwrap();
+    }
+
+    /// a link to a file the listing lacks names the file it most likely meant, such as hugging
+    /// face's `Iris.csv` for a typed `iris.csv`, rather than a pattern nobody typed.
+    #[test]
+    fn a_link_to_a_missing_file_names_the_one_meant() {
+        let listing = |paths: &[&str]| Listing {
+            resolved: Reference::parse("hf:datasets/scikit-learn/iris@main")
+                .unwrap()
+                .reference,
+            title: None,
+            license: None,
+            doi: None,
+            access: crate::source::Access::Unknown,
+            files: paths
+                .iter()
+                .map(|path| Remote {
+                    path: (*path).to_owned(),
+                    size: Some(1),
+                    sha256: None,
+                    md5: None,
+                    url: url::Url::parse(&format!("https://example.org/{path}")).unwrap(),
+                    named_by_server: false,
+                })
+                .collect(),
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            within: Vec::new(),
+        };
+        let args = Get {
+            links: Vec::new(),
+            output: None,
+            force: false,
+            dir: None,
+            input_file: None,
+            sha256: None,
+            filter: Filter {
+                select: Vec::new(),
+                exclude: Vec::new(),
+            },
+            no_extract: false,
+        };
+        let pasted = |file: &str| {
+            Reference::parse(&format!(
+                "https://huggingface.co/datasets/scikit-learn/iris/resolve/main/{file}"
+            ))
+            .unwrap()
+        };
+        let files = [".gitattributes", "Iris.csv", "README.md", "database.sqlite"];
+        for (typed, details, help) in [
+            (
+                "iris.csv",
+                &[][..],
+                "its name is Iris.csv: write that in the link",
+            ),
+            (
+                "Iris.cvs",
+                &[],
+                "did you mean Iris.csv? write that in the link",
+            ),
+            (
+                "flowers.csv",
+                &["4 files were considered, the nearest Iris.csv"],
+                "check the file's name in the link",
+            ),
+        ] {
+            let error = selected(&args, &pasted(typed), &listing(&files)).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage);
+            assert_eq!(
+                error.message,
+                format!("hf:datasets/scikit-learn/iris@main has no file {typed}")
+            );
+            assert_eq!(error.details, details, "{typed}");
+            assert_eq!(error.help.as_deref(), Some(help), "{typed}");
+        }
+        let kept = selected(&args, &pasted("Iris.csv"), &listing(&files)).unwrap();
+        assert_eq!(kept.len(), 1);
     }
 
     #[test]

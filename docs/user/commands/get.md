@@ -29,7 +29,7 @@ fetchloom get [options] <link>...
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
 
-[global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
+[global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain. a pasted link to one file that its site does not list is a usage error before any download, and its help names the file the link likely meant: one whose name differs only in case, as hugging face's `Iris.csv` for a typed `iris.csv`, or by a typo.
 
 ## what happens
 
@@ -184,6 +184,7 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
 | `"fashion" is not a link, a DOI or an id` | unquoted search words read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
+| `hf:datasets/scikit-learn/iris@main has no file iris.csv` | the link names a file its site lists under another name, often in other case | write the name the help gives in the link |
 | `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
 | `data.csv already exists and holds other bytes than the link serves now` | `-o` never replaces a file without being asked | choose another name with `-o`, or add `--force` |
 | `data.csv already exists, and its bytes are not the ones --sha256 names` | the hash or the file is not the one you meant | check the hash; if it is right, choose another name with `-o`, or add `--force` |
