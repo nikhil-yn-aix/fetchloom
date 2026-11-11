@@ -11,6 +11,8 @@ mod accept;
 mod preview;
 mod room;
 
+pub(super) use accept::again;
+
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;

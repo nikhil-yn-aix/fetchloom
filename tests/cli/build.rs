@@ -2188,7 +2188,7 @@ fn prepare_fetches_what_the_build_places() -> Result {
 }
 
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
-/// `--accept` refuses it and changes nothing.
+/// status says it is stale and `--accept` refuses it and changes nothing.
 #[test]
 fn accept_refuses_after_the_recipe_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2196,7 +2196,19 @@ fn accept_refuses_after_the_recipe_changed() -> Result {
     let random = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"random\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
     fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
     kept_rebuild(&sandbox, &server, random)?;
+    let stale = || -> Result<Value> {
+        Ok(json(&sandbox.run(&["--json", "status"])?)?["result"]["candidates"][0]["stale"].clone())
+    };
+    assert_eq!(stale()?, false);
     fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    assert_eq!(stale()?, true);
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    for line in [
+        "       Kept clean · a rebuild from another recipe or pin than data.lock has now, so `fetchloom build --accept` refuses it\n",
+        "  hint: `fetchloom build --check clean` runs its step again as data.lock pins it now, and keeps its files when they differ\n",
+    ] {
+        assert!(told.contains(line), "{line:?} in\n{told}");
+    }
     let pinned = pins(&sandbox.work())?;
     let data = files(&sandbox.work().join("data"))?;
     let output = build(&sandbox, &["--json", "build", "--accept"])?;

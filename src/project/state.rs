@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::cache::Member;
 use crate::digest::Sha256;
 use crate::place::Method;
+use crate::project::lock::derived::Derived;
 use crate::project::manifest::Manifest;
 
 const VERSION: u32 = 1;
@@ -42,6 +43,17 @@ pub(crate) struct Candidate {
     pub(crate) pinned: Sha256,
     /// sorted by path.
     pub(crate) files: Vec<Member>,
+}
+
+impl Candidate {
+    /// whether the rebuild answers the recipe and the pin as they are now, which `build --accept`
+    /// asks: `key` is the recipe's key now, the result data.lock pins now, `pinned`, must be the
+    /// one it was kept beside, and its files must hash to its tree.
+    pub(crate) fn answers(&self, key: Option<Sha256>, pinned: Option<&Derived>) -> bool {
+        key == Some(self.key)
+            && pinned.is_some_and(|pinned| pinned.key == self.key && pinned.tree == self.pinned)
+            && crate::cache::tree_hash(&self.files) == self.tree
+    }
 }
 
 /// the SHA-256 of data.toml and data.lock as a sync left them, and whether that sync left every

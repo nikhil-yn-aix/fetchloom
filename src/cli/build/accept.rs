@@ -115,11 +115,7 @@ fn checked<'s>(
         .help(again(name))
     })?;
     let step = Step::read(&project.root, manifest, lock, name)?;
-    let agrees = step.as_ref().and_then(Step::key) == Some(candidate.key)
-        && lock
-            .result(name)
-            .is_some_and(|pinned| pinned.key == candidate.key && pinned.tree == candidate.pinned)
-        && crate::cache::tree_hash(&candidate.files) == candidate.tree;
+    let agrees = candidate.answers(step.as_ref().and_then(Step::key), lock.result(name));
     let step = match step {
         Some(step) if agrees => step,
         _ => {
@@ -205,7 +201,7 @@ fn tell(context: &Context, project: &Project, manifest: &Manifest, accepted: &[S
 }
 
 /// what to run for a new kept rebuild of `name`.
-fn again(name: &str) -> String {
+pub(crate) fn again(name: &str) -> String {
     format!(
         "`fetchloom build --check {name}` runs its step again as data.lock pins it now, and keeps its files when they differ"
     )

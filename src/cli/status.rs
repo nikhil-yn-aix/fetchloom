@@ -119,6 +119,9 @@ struct Kept {
     name: String,
     /// the tree of its files, `sha256:` and its hash.
     tree: String,
+    /// whether it came from another recipe or pin than data.lock has now, as after a checkout of
+    /// another commit, so `build --accept` refuses it.
+    stale: bool,
     /// each file that differs from data.lock: changed ones, then missing, then extra, each by
     /// path.
     files: Vec<Differing>,
@@ -176,6 +179,9 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
                 names.join(" ")
             )),
         }
+    }
+    for kept in status.candidates.iter().filter(|kept| kept.stale) {
+        output.hint(&super::build::again(&kept.name));
     }
     if !status.candidates.is_empty() && !output.shows_details() {
         output.hint(
@@ -327,7 +333,14 @@ fn check(
                 .get(*name)
                 .is_some_and(|entry| entry.recipe().is_some())
         })
-        .map(|(name, candidate)| kept(name, candidate, &lock, &cache))
+        .map(|(name, candidate)| {
+            // a step that cannot be read cannot be accepted either
+            let key = recipe::Step::read(&project.root, &manifest, &lock, name)
+                .ok()
+                .flatten()
+                .and_then(|step| step.key());
+            kept(name, candidate, &lock, &cache, key)
+        })
         .collect();
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
@@ -446,8 +459,15 @@ fn unbuilt_here(
     status.unbuilt = unbuilt;
 }
 
-/// the kept rebuild `candidate` of the recipe `name`, beside the result `lock` pins for it.
-fn kept(name: &str, candidate: &Candidate, lock: &Lock, cache: &Cache) -> Kept {
+/// the kept rebuild `candidate` of the recipe `name`, beside the result `lock` pins for it, and
+/// whether it answers `key`, the recipe's key now.
+fn kept(
+    name: &str,
+    candidate: &Candidate,
+    lock: &Lock,
+    cache: &Cache,
+    key: Option<Sha256>,
+) -> Kept {
     let pinned = lock
         .result(name)
         .map_or(&[][..], |result| result.files.as_slice());
@@ -483,6 +503,7 @@ fn kept(name: &str, candidate: &Candidate, lock: &Lock, cache: &Cache) -> Kept {
     Kept {
         name: name.to_owned(),
         tree: format!("sha256:{}", candidate.tree),
+        stale: !candidate.answers(key, lock.result(name)),
         files,
     }
 }
@@ -775,10 +796,17 @@ fn list(output: &Output, status: &Status) {
 /// the cache file that holds the rebuild's bytes.
 fn tell_kept(output: &Output, kept: &Kept) {
     let name = &kept.name;
-    output.mark(
-        "Kept",
-        &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
-    );
+    if kept.stale {
+        output.mark(
+            "Kept",
+            &format!("{name} · a rebuild from another recipe or pin than data.lock has now, so `fetchloom build --accept` refuses it"),
+        );
+    } else {
+        output.mark(
+            "Kept",
+            &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
+        );
+    }
     for file in kept.files.iter().take(SHOWN) {
         let how = match file.difference {
             "extra" => "new",
