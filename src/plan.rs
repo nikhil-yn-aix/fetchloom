@@ -10,7 +10,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
 use crate::project::lock::{Lock, LockedFile};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{self, Manifest};
 
 /// one file a lock places.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,14 +36,17 @@ pub(crate) struct Plan<'a> {
     pub(crate) unknown: Vec<(&'a str, &'a LockedFile)>,
 }
 
-/// the folder a dataset lands in, relative to the project.
+/// the folder a dataset lands in, relative to the project: the data folder itself for
+/// `path = "."`.
 pub(crate) fn folder(manifest: &Manifest, name: &str) -> String {
-    let inner = manifest
+    match manifest
         .datasets
         .get(name)
         .and_then(|entry| entry.path.as_deref())
-        .unwrap_or(name);
-    format!("{}/{inner}", manifest.data_dir)
+    {
+        Some(manifest::DATA_FOLDER_ITSELF) => manifest.data_dir.clone(),
+        inner => format!("{}/{}", manifest.data_dir, inner.unwrap_or(name)),
+    }
 }
 
 /// the plan for `lock`, with each archive standing for the files the cache records it unpacked
@@ -420,6 +423,19 @@ mod tests {
             ["data/a/x.csv", "data/a/sub/y.csv", "data/elsewhere/b/z.csv"]
         );
         assert!(targets[2].copy && !targets[0].copy);
+    }
+
+    #[test]
+    fn a_dataset_at_the_root_lands_in_the_data_folder() {
+        let root = manifest("[datasets.a]\nref = \"x\"\npath = \".\"\n");
+        assert_eq!(folder(&root, "a"), "data");
+        let locked = lock(&[("a", &["train.csv", "raw/x.csv"])]);
+        let paths: Vec<String> = targets(&root, &locked)
+            .unwrap()
+            .into_iter()
+            .map(|target| target.path)
+            .collect();
+        assert_eq!(paths, ["data/train.csv", "data/raw/x.csv"]);
     }
 
     #[test]

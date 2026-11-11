@@ -308,8 +308,9 @@ pub(crate) fn is_bidi_control(character: char) -> bool {
 }
 
 /// why a path inside a dataset or an archive is refused, if it is: it could reach outside its
-/// folder on some platform, or it holds a control character that terminals would act on. such a
-/// path is refused everywhere, so a `data.lock` works on every machine.
+/// folder on some platform, it spells a folder a second way, as `a/./b` spells `a/b`, or it holds
+/// a control character that terminals would act on. such a path is refused everywhere, so a
+/// `data.lock` works on every machine.
 pub(crate) fn escapes(path: &str) -> Option<&'static str> {
     if path.is_empty() {
         return Some("it is empty");
@@ -331,8 +332,11 @@ pub(crate) fn escapes(path: &str) -> Option<&'static str> {
         if part.is_empty() {
             return Some("it has an empty folder name");
         }
-        if part == "." || part == ".." {
+        if part == ".." {
             return Some("it climbs out of its folder");
+        }
+        if part == "." {
+            return Some("it has . as a folder name");
         }
     }
     None
@@ -611,6 +615,8 @@ mod tests {
         ] {
             assert!(escapes(unsafe_path).is_some(), "{unsafe_path:?}");
         }
+        assert_eq!(escapes("a/../../x"), Some("it climbs out of its folder"));
+        assert_eq!(escapes("./x"), Some("it has . as a folder name"));
     }
 
     #[test]

@@ -13,6 +13,8 @@ use crate::name;
 pub(crate) const FILE: &str = "data.toml";
 /// the data folder of a project whose data.toml names none.
 pub(crate) const DATA_DIR: &str = "data";
+/// the `path` that puts a dataset's files straight in the data folder.
+pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
 const DATASET_KEYS: [&str; 6] = ["ref", "select", "exclude", "extract", "copy", "path"];
@@ -31,7 +33,8 @@ pub(crate) struct Entry {
     pub(crate) exclude: Vec<Glob>,
     pub(crate) extract: bool,
     pub(crate) copy: bool,
-    /// where the dataset lands inside the data folder, when not under its name.
+    /// where the dataset lands inside the data folder, when not under its name: a folder, or
+    /// [`DATA_FOLDER_ITSELF`].
     pub(crate) path: Option<String>,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
     pub(crate) lines: BTreeMap<&'static str, String>,
@@ -231,16 +234,20 @@ impl Reader<'_> {
         })
     }
 
-    /// a path inside the project, which may not climb out of it.
+    /// a path inside the project, which may not climb out of it. a dataset's `path` may also be
+    /// [`DATA_FOLDER_ITSELF`], the data folder.
     fn relative(&self, item: &Item, key: &str) -> Result<String, Error> {
         let text = self.string(item, key)?.trim().trim_end_matches('/');
+        let refused = |reason: &str| {
+            self.error(
+                item.span(),
+                format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
+            )
+        };
         if let Some(reason) = name::metadata(text) {
-            return Err(self
-                .error(
-                    item.span(),
-                    format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
-                )
-                .help(format!("choose a {key} outside the repository's metadata")));
+            return Err(
+                refused(reason).help(format!("choose a {key} outside the repository's metadata"))
+            );
         }
         if shorthand(text) {
             let inside = if key == "data_dir" {
@@ -248,21 +255,25 @@ impl Reader<'_> {
             } else {
                 "the data folder"
             };
-            return Err(self
-                .error(
-                    item.span(),
-                    format!("{key} = \"{text}\" in data.toml is refused because fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"),
-                )
+            return Err(refused(&format!("fetchloom does not expand ~ or $NAME, and the folder is always inside {inside}"))
                 .help("to keep data on a scratch disk, set FETCHLOOM_CACHE to a folder there, or move the whole project there. see https://nikhil-yn-aix.github.io/fetchloom/user/hpc.html"));
+        }
+        if text == DATA_FOLDER_ITSELF {
+            return match key {
+                "path" => Ok(text.to_owned()),
+                _ => Err(refused("it would mix data with the project's own files")
+                    .help("use a folder inside the project, such as data")),
+            };
         }
         match name::escapes(text) {
             None => Ok(text.to_owned()),
-            Some(reason) => Err(self
-                .error(
-                    item.span(),
-                    format!("{key} = \"{text}\" in data.toml is refused because {reason}"),
-                )
-                .help("use a folder inside the project, with / between folders")),
+            Some(reason) => Err(refused(reason).help(match key {
+                "path" if text.is_empty() => "use \".\" for the data folder itself",
+                "path" => {
+                    "use a folder inside the data folder, with / between folders, or \".\" for the data folder itself"
+                }
+                _ => "use a folder inside the project, with / between folders",
+            })),
         }
     }
 
@@ -1122,7 +1133,11 @@ mod tests {
                 assert!(name::is_dataset_name(dataset), "{dataset:?}");
                 assert!(!entry.reference.is_empty(), "{dataset:?}");
                 assert_eq!(entry.reference.trim(), entry.reference);
-                if let Some(path) = &entry.path {
+                if let Some(path) = entry
+                    .path
+                    .as_deref()
+                    .filter(|path| *path != DATA_FOLDER_ITSELF)
+                {
                     assert_eq!(name::escapes(path), None, "{path:?}");
                     assert_eq!(name::metadata(path), None, "{path:?}");
                 }
@@ -1242,10 +1257,51 @@ mod tests {
     }
 
     #[test]
+    fn path_dot_means_the_data_folder_and_empty_is_refused() {
+        let table = "[datasets.x]\nref = \"https://example.org/x\"\n";
+        for written in [".", "./", " . "] {
+            let manifest = parse(&format!("{table}path = \"{written}\"\n"));
+            assert_eq!(
+                manifest.datasets["x"].path.as_deref(),
+                Some("."),
+                "{written:?}"
+            );
+        }
+        let empty = fails(&format!("{table}path = \"\"\n"));
+        assert_eq!(
+            empty.message,
+            "path = \"\" in data.toml is refused because it is empty"
+        );
+        assert_eq!(
+            empty.help.as_deref(),
+            Some("use \".\" for the data folder itself")
+        );
+        for (written, reason) in [
+            ("..", "it climbs out of its folder"),
+            ("raw/../x", "it climbs out of its folder"),
+            ("./raw", "it has . as a folder name"),
+        ] {
+            let error = fails(&format!("{table}path = \"{written}\"\n"));
+            assert_eq!(
+                error.message,
+                format!("path = \"{written}\" in data.toml is refused because {reason}")
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "use a folder inside the data folder, with / between folders, or \".\" for the data folder itself"
+                )
+            );
+        }
+    }
+
+    #[test]
     fn data_directories_must_stay_inside_the_project() {
         for directory in [
             "",
             " ",
+            ".",
+            "./",
             "../outside",
             "data/../outside",
             "/absolute",
@@ -1263,6 +1319,10 @@ mod tests {
             );
             assert!(error.help.unwrap().contains("inside the project"));
         }
+        assert_eq!(
+            fails("[project]\ndata_dir = '.'\n").message,
+            "data_dir = \".\" in data.toml is refused because it would mix data with the project's own files"
+        );
         assert_eq!(parse("[project]\n").data_dir, "data");
         assert_eq!(
             parse("[project]\ndata_dir = '  inputs/raw///  '\n").data_dir,
