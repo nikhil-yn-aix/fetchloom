@@ -128,7 +128,7 @@ mod tests {
         );
         let read = State::parse(&state.render());
         assert_eq!(read.files, state.files);
-        assert_eq!(read.synced, None, "a state from before syncs were recorded");
+        assert_eq!(read.synced, None, "no sync settled yet");
         state.synced = Some(Synced {
             manifest: digest::sha256(b"data.toml"),
             lock: digest::sha256(b"data.lock"),
