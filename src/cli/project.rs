@@ -299,10 +299,8 @@ fn tell_synced(
             },
         );
     } else {
-        context.output.done(
-            "Synced",
-            &synced_into(manifest, scope, placement.kept.len(), &placement.unbuilt),
-        );
+        let (verb, text) = synced(manifest, scope, placement.kept.len(), &placement.unbuilt);
+        context.output.done(verb, &text);
         // `path` answers only a dataset placed in the data folder
         let placed = |name: &&String| manifest.datasets[*name].place;
         let first = match scope {
@@ -328,24 +326,45 @@ fn tell_synced(
     }
 }
 
-/// what a sync of `scope` that changed something synced, with how many other datasets it left
-/// as they were, how many files, `kept`, it left unchanged and the recipes whose results it left
-/// out, `unbuilt`. a sync of every dataset counts those it placed, so neither those left out nor
-/// those with `place = false`.
-fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize, unbuilt: &[String]) -> String {
-    let (datasets, others) = match scope {
-        Scope::All => (
-            units::count(
-                manifest
-                    .datasets
-                    .iter()
-                    .filter(|(name, entry)| entry.place && !unbuilt.contains(*name))
-                    .count() as u64,
-                "dataset",
-                "datasets",
-            ),
-            0,
+/// the last line of a sync of `scope` that changed something, as its verb and text: what it
+/// synced, with how many other datasets it left as they were, how many files, `kept`, it left
+/// unchanged and the recipes whose results it left out, `unbuilt`. a sync of every dataset counts
+/// those it placed, so neither those left out nor those with `place = false`, and one that placed
+/// none says there was nothing to place, and until which build.
+fn synced(
+    manifest: &Manifest,
+    scope: &Scope,
+    kept: usize,
+    unbuilt: &[String],
+) -> (&'static str, String) {
+    let kept = match kept {
+        0 => String::new(),
+        kept => format!(
+            ", {}; see the warnings above",
+            units::count(kept as u64, "file left unchanged", "files left unchanged")
         ),
+    };
+    let (datasets, others) = match scope {
+        Scope::All => {
+            let placed = manifest
+                .datasets
+                .iter()
+                .filter(|(name, entry)| entry.place && !unbuilt.contains(*name))
+                .count();
+            if placed == 0 {
+                let until = match unbuilt {
+                    [] => String::new(),
+                    [recipe] => format!(" until {recipe} is built"),
+                    many => format!(
+                        " until {} are built",
+                        units::count(many.len() as u64, "result", "results")
+                    ),
+                };
+                let data = &manifest.data_dir;
+                return ("Ok", format!("nothing to place in {data}{until}{kept}"));
+            }
+            (units::count(placed as u64, "dataset", "datasets"), 0)
+        }
         Scope::Only(names) => (
             named(names),
             manifest
@@ -368,11 +387,7 @@ fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize, unbuilt: &[Strin
         let left = units::count(unbuilt.len() as u64, "result", "results");
         said = format!("{said} · {left} left out until built");
     }
-    if kept > 0 {
-        let kept = units::count(kept as u64, "file left unchanged", "files left unchanged");
-        said = format!("{said}, {kept}; see the warnings above");
-    }
-    said
+    ("Synced", format!("{said}{kept}"))
 }
 
 /// what a sync of `scope` with nothing to do found in place: every pinned file, or the named
@@ -1574,5 +1589,58 @@ pub(crate) mod tests {
             stopped.push(synced.err().map(|error| error.kind));
         }
         assert_eq!(stopped, [None, Some(Kind::Interrupted)]);
+    }
+
+    /// a sync of every dataset counts the datasets it placed. one that placed none, since each
+    /// has `place = false` or waits for a build, says there was nothing to place, and until what.
+    #[test]
+    fn a_sync_that_places_no_dataset_says_so() {
+        let raw = "[datasets.raw]\nplace = false\nref = \"zenodo:1\"\n";
+        let clean = "[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]\n";
+        let tidy = "[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"python3\", \"tidy.py\", \"{clean}\", \"{out}\"]\n";
+        let iris = "[datasets.iris]\nref = \"zenodo:2\"\n";
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|&name| name.to_owned())
+                .collect::<Vec<_>>()
+        };
+        for (tables, kept, unbuilt, said) in [
+            (
+                &[raw, clean, iris][..],
+                0,
+                names(&["clean"]),
+                (
+                    "Synced",
+                    "1 dataset into data · 1 result left out until built",
+                ),
+            ),
+            (
+                &[raw, clean],
+                0,
+                names(&["clean"]),
+                ("Ok", "nothing to place in data until clean is built"),
+            ),
+            (
+                &[raw, clean, tidy],
+                0,
+                names(&["clean", "tidy"]),
+                ("Ok", "nothing to place in data until 2 results are built"),
+            ),
+            (&[raw], 0, Vec::new(), ("Ok", "nothing to place in data")),
+            (
+                &[raw],
+                1,
+                Vec::new(),
+                (
+                    "Ok",
+                    "nothing to place in data, 1 file left unchanged; see the warnings above",
+                ),
+            ),
+        ] {
+            let manifest = Manifest::parse(&tables.join("\n")).unwrap();
+            let (verb, text) = synced(&manifest, &Scope::All, kept, &unbuilt);
+            assert_eq!((verb, text.as_str()), said, "{tables:?}");
+        }
     }
 }

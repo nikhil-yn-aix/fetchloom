@@ -140,6 +140,14 @@ warning: clean's pinned result is not on this machine or a mirror, so it is left
      Synced 1 dataset into data · 1 result left out until built
 ```
 
+when that leaves nothing to place, as in a clone whose only other dataset has `place = false`, the last line says so:
+
+```text
+warning: clean's pinned result is not on this machine or a mirror, so it is left out
+  help: run `fetchloom build clean` to make it here
+         Ok nothing to place in data until clean is built
+```
+
 `sync clean`, which names the recipe, and `sync --locked` stop instead with `build.needed`, exit 60, before anything is placed.
 
 a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` with the build as help and exits 0, while `sync clean` stops with `build.needed`, exit 60.
