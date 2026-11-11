@@ -55,7 +55,7 @@ rate values accept surrounding whitespace and a decimal fraction with digits on 
 
 an invalid value for a setting above or the rate fails a named command with kind `usage` and exit 2, even when it does not download; the message names the variable, or the key and the settings file. welcome, bare-project status, help, version and completions bypass those checks. the thread setting is also checked for welcome and bare-project status, since the latter may hash files; help, version and completions bypass it. an invalid thread value also fails with kind `usage` and exit 2. an invalid log filter falls back to `-vv`'s default, if requested. explicit logging can write stderr in quiet or JSON mode and disables progress bars.
 
-synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, the icloud drive folder on windows, and on macos `~/Library/Mobile Documents` and the onedrive and dropbox folders in `~/Library/CloudStorage`. the home folder is `HOME`, else `USERPROFILE`. system proxy settings and proxy environment variables are read by the HTTP stack.
+synced-folder detection reads `OneDrive`, `OneDriveConsumer`, `OneDriveCommercial`, dropbox's `info.json` under `APPDATA`, `LOCALAPPDATA` or the home folder, the icloud drive folder on windows, on macos `~/Library/Mobile Documents` and the onedrive and dropbox folders in `~/Library/CloudStorage`, and on linux a google drive mount of type `fuse.drive` in `/proc/self/mounts`, as google colab mounts it. the home folder is `HOME`, else `USERPROFILE`. system proxy settings and proxy environment variables are read by the HTTP stack.
 
 ## settings file
 

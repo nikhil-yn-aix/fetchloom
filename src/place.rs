@@ -117,7 +117,7 @@ impl<T> Put<T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unlinked {
     /// the root sits inside a folder this sync client owns, which breaks links: "onedrive",
-    /// "dropbox" or "icloud drive".
+    /// "dropbox", "icloud drive" or "google drive".
     Synced(&'static str),
     /// hardlinks failed because the cache sits on another drive, which a cache on the same drive
     /// would fix.
@@ -174,7 +174,7 @@ impl Placer {
     /// sits inside a folder a sync client owns. capability probes use the opened root too.
     pub(crate) fn new(root: &Path) -> Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
-        let synced = synced::client(&root, &|name| std::env::var_os(name));
+        let synced = synced::client(&root, &|name| std::env::var_os(name), &synced::mounts);
         if let Some(client) = synced {
             tracing::debug!(root = %root.display(), client, "inside a synced folder, so no hardlinks");
         }

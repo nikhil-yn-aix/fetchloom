@@ -1,20 +1,77 @@
-//! folders that onedrive, dropbox or icloud drive keep in sync. those clients break hardlinks
-//! or upload each link as a whole file, so files placed there are copied.
+//! folders that onedrive, dropbox, icloud drive or google drive keep in sync. those clients
+//! break hardlinks or upload each link as a whole file, so files placed there are copied.
 
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-/// the sync client that owns `folder`, if any. `folder` must be absolute.
+/// the sync client that owns `folder`, if any. `folder` must be absolute. `mounts` reads the
+/// table of mounted filesystems, in the form of linux's /proc/self/mounts.
 pub(super) fn client(
     folder: &Path,
     var: &dyn Fn(&str) -> Option<OsString>,
+    mounts: &dyn Fn() -> Option<String>,
 ) -> Option<&'static str> {
     let folder = resolved(folder);
     roots(var)
         .into_iter()
         .find(|(root, _)| inside(&folder, &resolved(root)))
         .map(|(_, client)| client)
+        .or_else(|| mounted(&folder, &mounts()?))
+}
+
+/// the table of mounted filesystems, which linux lists in /proc/self/mounts.
+pub(super) fn mounts() -> Option<String> {
+    if cfg!(target_os = "linux") {
+        fs::read_to_string("/proc/self/mounts").ok()
+    } else {
+        None
+    }
+}
+
+/// the sync client whose filesystem holds `folder`, as the mount table `mounts` tells: google
+/// colab mounts google drive, by default at /content/drive, as a fuse filesystem of type
+/// `fuse.drive`. the deepest mount holding `folder` is its filesystem.
+fn mounted(folder: &Path, mounts: &str) -> Option<&'static str> {
+    let (_, kind) = mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let point = unescape(fields.nth(1)?);
+            let kind = fields.next()?;
+            inside(folder, &point).then(|| (point.components().count(), kind))
+        })
+        .max_by_key(|(depth, _)| *depth)?;
+    (kind == "fuse.drive").then_some("google drive")
+}
+
+/// a mount point as the mount table writes it, with a space, tab, newline or backslash as an
+/// octal escape such as `\040`.
+fn unescape(field: &str) -> PathBuf {
+    let mut bytes = Vec::with_capacity(field.len());
+    let mut rest = field.as_bytes();
+    while let Some((&first, after)) = rest.split_first() {
+        if first == b'\\'
+            && let Some(byte) = octal(after)
+        {
+            bytes.push(byte);
+            rest = &after[3..];
+        } else {
+            bytes.push(first);
+            rest = after;
+        }
+    }
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// the byte that the three octal digits `digits` starts with stand for.
+fn octal(digits: &[u8]) -> Option<u8> {
+    let value = digits.get(..3)?.iter().try_fold(0_u32, |value, digit| {
+        (b'0'..=b'7')
+            .contains(digit)
+            .then(|| value * 8 + u32::from(digit - b'0'))
+    })?;
+    u8::try_from(value).ok()
 }
 
 /// `path` with the links in its existing part resolved, so two names for one folder compare
@@ -140,6 +197,11 @@ fn same(a: Component<'_>, b: Component<'_>) -> bool {
 mod tests {
     use super::*;
 
+    /// a mount table that says nothing, as on a system without one.
+    fn unmounted() -> Option<String> {
+        None
+    }
+
     fn env(pairs: &[(&str, &Path)]) -> impl Fn(&str) -> Option<OsString> + use<> {
         let pairs: Vec<(String, OsString)> = pairs
             .iter()
@@ -159,12 +221,15 @@ mod tests {
         let onedrive = home.path().join("OneDrive - Contoso");
         let var = env(&[("OneDriveCommercial", &onedrive)]);
         assert_eq!(
-            client(&onedrive.join("thesis").join("data"), &var),
+            client(&onedrive.join("thesis").join("data"), &var, &unmounted),
             Some("onedrive")
         );
-        assert_eq!(client(&home.path().join("projects"), &var), None);
         assert_eq!(
-            client(&home.path().join("OneDrive - Contoso2"), &var),
+            client(&home.path().join("projects"), &var, &unmounted),
+            None
+        );
+        assert_eq!(
+            client(&home.path().join("OneDrive - Contoso2"), &var, &unmounted),
             None,
             "a folder with a longer name is not inside"
         );
@@ -183,9 +248,15 @@ mod tests {
         });
         fs::write(info.join("info.json"), text.to_string()).unwrap();
         let var = env(&[("HOME", home.path())]);
-        assert_eq!(client(&personal.join("x"), &var), Some("dropbox"));
-        assert_eq!(client(&business, &var), Some("dropbox"));
-        assert_eq!(client(&home.path().join("elsewhere"), &var), None);
+        assert_eq!(
+            client(&personal.join("x"), &var, &unmounted),
+            Some("dropbox")
+        );
+        assert_eq!(client(&business, &var, &unmounted), Some("dropbox"));
+        assert_eq!(
+            client(&home.path().join("elsewhere"), &var, &unmounted),
+            None
+        );
     }
 
     #[test]
@@ -252,16 +323,23 @@ mod tests {
         let onedrive = home.path().join("Library/CloudStorage/OneDrive-Personal");
         fs::create_dir_all(&onedrive).unwrap();
         let var = env(&[("HOME", home.path())]);
-        assert_eq!(client(&onedrive.join("thesis"), &var), Some("onedrive"));
+        assert_eq!(
+            client(&onedrive.join("thesis"), &var, &unmounted),
+            Some("onedrive")
+        );
         let icloud = home
             .path()
             .join("Library/Mobile Documents/com~apple~CloudDocs");
-        assert_eq!(client(&icloud, &var), Some("icloud drive"));
-        assert_eq!(client(&home.path().join("projects"), &var), None);
+        assert_eq!(client(&icloud, &var, &unmounted), Some("icloud drive"));
+        assert_eq!(
+            client(&home.path().join("projects"), &var, &unmounted),
+            None
+        );
         assert_eq!(
             client(
                 &home.path().join("library/cloudstorage/onedrive-personal"),
-                &var
+                &var,
+                &unmounted
             ),
             Some("onedrive"),
             "names compare without case, as apfs compares them"
@@ -282,13 +360,57 @@ mod tests {
         assert!(crate::place::tests::link_folder(&onedrive, &link));
         let root_through_link = env(&[("OneDrive", &link)]);
         assert_eq!(
-            client(&onedrive.join("data"), &root_through_link),
+            client(&onedrive.join("data"), &root_through_link, &unmounted),
             Some("onedrive")
         );
         let folder_through_link = env(&[("OneDrive", &onedrive)]);
         assert_eq!(
-            client(&link.join("data"), &folder_through_link),
+            client(&link.join("data"), &folder_through_link, &unmounted),
             Some("onedrive")
+        );
+    }
+
+    /// google colab mounts google drive at /content/drive as a fuse filesystem of type
+    /// `fuse.drive`, as its `drive.mount` checks for in the mount table.
+    #[cfg(unix)]
+    #[test]
+    fn colab_mounts_google_drive_as_a_synced_folder() {
+        let table = "/dev/root / ext4 rw,relatime 0 0\n\
+            drive /content/drive fuse.drive rw,nosuid,nodev,relatime,user_id=0,group_id=0,allow_other 0 0\n\
+            drive /content/my\\040drive fuse.drive rw 0 0\n\
+            tmpfs /content/drive/MyDrive/scratch tmpfs rw 0 0\n\
+            remote /content/sshfs fuse.sshfs rw 0 0\n\
+            odd /content/odd\\777 fuse.drive rw 0 0\n";
+        let mounts = || Some(table.to_owned());
+        let none = env(&[]);
+        let on = |path: &str| client(Path::new(path), &none, &mounts);
+
+        assert_eq!(
+            on("/content/drive/MyDrive/thesis/data"),
+            Some("google drive")
+        );
+        assert_eq!(on("/content/drive"), Some("google drive"));
+        assert_eq!(on("/content/my drive/data"), Some("google drive"));
+        assert_eq!(on("/content/thesis/data"), None);
+        assert_eq!(
+            on("/content/drive2/data"),
+            None,
+            "a longer name is not inside"
+        );
+        assert_eq!(
+            on("/content/drive/MyDrive/scratch/data"),
+            None,
+            "a mount inside it"
+        );
+        assert_eq!(on("/content/sshfs/data"), None, "another fuse filesystem");
+        assert_eq!(
+            on("/content/odd\\777/data"),
+            Some("google drive"),
+            "an escape past one byte stays as written"
+        );
+        assert_eq!(
+            client(Path::new("/content/drive/data"), &none, &unmounted),
+            None
         );
     }
 
@@ -297,7 +419,7 @@ mod tests {
     fn windows_compares_names_without_case() {
         let var = env(&[("OneDrive", Path::new(r"C:\Users\ada\OneDrive"))]);
         assert_eq!(
-            client(Path::new(r"c:\users\ADA\onedrive\data"), &var),
+            client(Path::new(r"c:\users\ADA\onedrive\data"), &var, &unmounted),
             Some("onedrive")
         );
     }

@@ -21,6 +21,13 @@ these facts come from each platform's own documentation; fetchloom has not been 
 
 [google colab](https://research.google.com/colaboratory/faq.html) deletes a runtime's virtual machine when it sits idle and when it reaches a maximum lifetime, with everything on its disk, `/content` and the home folder included. clone the project into `/content` and sync it there in each new runtime. a cache on google drive, mounted at `/content/drive`, would keep the bytes between runtimes, but every file would then be copied from drive, which is another disk, and colab's FAQ warns that drive times out or fails on folders holding many items.
 
+fetchloom treats that mount, which linux lists with the type `fuse.drive` that [colab's drive helper](https://github.com/googlecolab/colabtools/blob/main/google/colab/drive.py) looks for, as a synced folder like onedrive: a project or `get` folder inside `/content/drive` gets copies, never links, and a sync there says why on stderr:
+
+```text
+warning: data is inside google drive, which breaks links, so files were copied
+  help: a folder outside google drive lets fetchloom try links
+```
+
 a new kaggle notebook's first cell says what lasts: `/kaggle/input` is read-only, up to 20 GB written to `/kaggle/working` is kept as output when you save a version, and `/kaggle/temp` lasts one session. keep the project and the cache in `/kaggle/temp`, unless the data should be saved with the version, where it counts against the 20 GB. turn the notebook's internet setting on to download.
 
 [sagemaker notebook instances](https://docs.aws.amazon.com/sagemaker/latest/dg/howitworks-create-ws.html) keep only `/home/ec2-user/SageMaker`, a volume of 5 GB unless you chose a larger one, so the default cache in the home folder is lost when the instance stops. keep projects in that folder and set `FETCHLOOM_CACHE` to a folder beside them. in [sagemaker studio's jupyterlab](https://docs.aws.amazon.com/sagemaker/latest/dg/studio-updated-jl-user-guide.html), the space's storage volume outlives the instance it runs on, and the [home folder](https://docs.aws.amazon.com/sagemaker/latest/dg/studio-updated-jl-admin-guide.html), `/home/sagemaker-user`, is on that volume, so the default cache already lasts.
