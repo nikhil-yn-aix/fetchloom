@@ -347,6 +347,33 @@ fn every_setting_is_documented_and_every_documented_one_is_read() -> Result {
     Ok(())
 }
 
+/// every command `help --json` lists has its result fields in the JSON reference, but for
+/// `completions`, whose `--json` is always a usage error.
+#[test]
+fn every_command_result_is_in_the_json_reference() -> Result {
+    let cli = cli()?;
+    let page = fs::read_to_string(repository().join("docs/user/reference/json-output.md"))?;
+    let listed: BTreeSet<&str> = page
+        .lines()
+        .skip_while(|line| *line != "## command results")
+        .skip_while(|line| !line.starts_with('|'))
+        .take_while(|line| line.starts_with('|'))
+        .filter_map(|row| row.split('|').nth(1))
+        .flat_map(|cell| cell.split('`').skip(1).step_by(2))
+        .collect();
+    let missing: Vec<&str> = cli
+        .commands
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| *name != "completions" && !listed.contains(name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/user/reference/json-output.md has no result row for {missing:?}"
+    );
+    Ok(())
+}
+
 fn collect_rust(folder: &Path, found: &mut Vec<PathBuf>) -> Result {
     for entry in fs::read_dir(folder)? {
         let path = entry?.path();

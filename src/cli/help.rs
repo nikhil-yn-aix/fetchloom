@@ -141,7 +141,8 @@ const EXIT_CODES: &str = "fetchloom exit codes
    40  auth.required: sign in, or accept the source's terms
    50  local.*, project.*: disk, permissions, a broken or changed project file
    60  build.needed: a recipe changed or is not built; it runs your code, so
-       build it yourself
+       build it yourself. build.failed: a step failed. build.differs: a step
+       built again made other files than data.lock pins
   130  interrupted
 
 with --json, errors[0].kind names the exact cause and errors[0].fix, when
@@ -472,8 +473,10 @@ mod tests {
         }
     }
 
+    /// each code the reference lists, with each kind it gives the code, by its name or as one of
+    /// a family such as `network.*`.
     #[test]
-    fn the_exit_codes_topic_lists_every_documented_code() {
+    fn the_exit_codes_topic_lists_every_documented_code_and_kind() {
         let docs = include_str!("../../docs/user/reference/exit-codes.md");
         for line in docs.lines().filter(|line| line.starts_with("| ")) {
             let Some(code) = line[2..]
@@ -483,12 +486,23 @@ mod tests {
             else {
                 continue;
             };
-            assert!(
-                EXIT_CODES
-                    .lines()
-                    .any(|topic| topic.trim_start().starts_with(&format!("{code} "))),
-                "exit {code}"
-            );
+            let said: String = EXIT_CODES
+                .lines()
+                .skip_while(|topic| !topic.trim_start().starts_with(&format!("{code} ")))
+                .enumerate()
+                .take_while(|(at, topic)| *at == 0 || topic.starts_with("       "))
+                .map(|(_, topic)| topic)
+                .collect();
+            assert!(!said.is_empty(), "exit {code}");
+            for kind in line.split('`').skip(1).step_by(2) {
+                let family = kind
+                    .split_once('.')
+                    .map(|(family, _)| format!("{family}.*"));
+                assert!(
+                    said.contains(kind) || family.is_some_and(|family| said.contains(&family)),
+                    "exit {code} lacks {kind}: {said}"
+                );
+            }
         }
     }
 

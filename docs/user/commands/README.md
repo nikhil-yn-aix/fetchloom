@@ -48,7 +48,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
-all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists persistent shell settings and color precedence. fetchloom has no config file.
+all except `--version` and `--dry-run` apply before or after a subcommand; `--dry-run` goes after its command, as in `fetchloom sync --dry-run`. quiet conflicts with verbosity. [environment](../reference/environment.md) lists persistent shell settings and color precedence. a [settings file](../reference/environment.md#settings-file), `settings.toml`, keeps settings for every run, and [`fetchloom settings`](settings.md) shows each setting and where it came from.
 
 ```sh
 fetchloom help concepts
