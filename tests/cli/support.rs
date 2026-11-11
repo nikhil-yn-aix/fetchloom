@@ -192,7 +192,12 @@ impl Sandbox {
             .env("APPDATA", &home)
             .env("LOCALAPPDATA", &home)
             // a test never reads or writes the credential store of the machine running it
-            .env("FETCHLOOM_KEYRING", "0");
+            .env("FETCHLOOM_KEYRING", "0")
+            .env("AWS_CONFIG_FILE", self.root.join("no-aws-config"))
+            .env(
+                "AWS_SHARED_CREDENTIALS_FILE",
+                self.root.join("no-aws-credentials"),
+            );
         let allowed = self
             .allowed
             .lock()
@@ -421,6 +426,7 @@ fn leaks(name: &str) -> bool {
         || name.starts_with("KAGGLE_")
         || name.starts_with("HF_")
         || name.starts_with("DATAVERSE_")
+        || name.starts_with("AWS_")
         || name.ends_with("_PROXY")
         || name.ends_with("_TOKEN")
         || matches!(
@@ -1079,6 +1085,33 @@ fn dropping_a_server_interrupts_an_unreleased_response() -> Result {
     dropping.join().map_err(|_| "server shutdown panicked")?;
     client.set_read_timeout(Some(Duration::from_secs(1)))?;
     assert_eq!(client.read(&mut [0])?, 0);
+    Ok(())
+}
+
+/// a test reads only the AWS keys and profiles it sets itself: none of the machine's reach a
+/// command, and the shared AWS files are ones that do not exist.
+#[test]
+fn no_aws_setting_of_the_machine_reaches_a_command() -> Result {
+    for name in [
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_ENDPOINT_URL_S3",
+        "aws_config_file",
+    ] {
+        assert!(leaks(name), "{name}");
+    }
+    let sandbox = Sandbox::new()?;
+    let command = sandbox.command(&["--version"]);
+    for name in ["AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"] {
+        let path = command
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .and_then(|(_, value)| value)
+            .ok_or(name)?;
+        assert!(!Path::new(path).exists(), "{name}");
+    }
     Ok(())
 }
 
