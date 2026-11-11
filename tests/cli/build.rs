@@ -1306,3 +1306,22 @@ fn a_missing_program_cannot_start() -> Result {
     );
     Ok(())
 }
+
+/// cache gc keeps the files of a result data.lock pins, which only a build could make again.
+#[test]
+fn gc_keeps_a_pinned_result() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let gc = sandbox.run(&["cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+    let made = sha256(b"made");
+    let object = sandbox
+        .cache()
+        .join("objects")
+        .join(&made[..2])
+        .join(&made[2..]);
+    assert!(object.is_file(), "{}", text(&gc.stderr)?);
+    Ok(())
+}

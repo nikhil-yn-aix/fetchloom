@@ -693,7 +693,8 @@ fn needed_with(
 
 /// adds what one lock needs. an archive needs the files it unpacked to that `manifest`'s members
 /// tables keep, and its own bytes too while this machine never unpacked it or lost such a file,
-/// since unpacking again is the only way back. without `manifest`, every file is kept.
+/// since unpacking again is the only way back. without `manifest`, every file is kept. a
+/// recipe's pinned result needs its files, which only a build makes again.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
@@ -701,6 +702,10 @@ fn add_with_stop(
     manifest: Option<&Manifest>,
     stop: &Stop,
 ) -> Result<(), Error> {
+    for file in lock.derived.iter().flat_map(|result| &result.files) {
+        stop.check()?;
+        needed.objects.insert(file.sha256);
+    }
     for dataset in &lock.datasets {
         let filters = manifest
             .and_then(|manifest| manifest.datasets.get(&dataset.name))
