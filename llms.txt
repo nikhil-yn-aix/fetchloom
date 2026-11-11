@@ -34,7 +34,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [google drive](docs/user/sources/google-drive.md): shared files and folders, resource keys and download confirmation pages
 - [dropbox](docs/user/sources/dropbox.md): shared file links and folder zips
 - [public cloud buckets](docs/user/sources/buckets.md): anonymous `s3://` and `gs://` prefixes, listing, pins and the public-only rule
-- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, secret-URL rejection and credential-safe diagnostic citations
+- [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, `path = "."` for files straight in `data/`, shared folders and clashes, secret-URL rejection and credential-safe diagnostic citations
 - [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, source records and hash encodings
 - [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions

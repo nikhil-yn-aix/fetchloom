@@ -55,7 +55,12 @@ an explicitly supplied `--as` name that is taken is refused. a name that breaks 
 
 `data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused, with one exception: `path = "."` is the data folder itself, so a dataset's `train.csv` lands at `data/train.csv` for scripts that already read it there. `data_dir = "."` stays refused, since it would mix data with the project's own files. trailing `/` is stripped. the data folder and its child folders must be real directories; see [filesystem placement](../../dev/architecture/placing.md#choose-a-filesystem-method). a data folder that is a link to another disk is refused too, and `data_dir` cannot point there instead: to keep the data on another disk, move the whole project folder to that disk.
 
-`path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. use `path = "."` to put it at `data/train.csv`.
+`path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. sync places it there and warns, naming the `path` that puts it at `data/train.csv`:
+
+```text
+warning: path = "train.csv" makes a folder named train.csv, so the file is data/train.csv/train.csv
+  help: path names a folder; to put the file at data/train.csv, set path = "." on datasets.train in data.toml
+```
 
 datasets may share a folder, and one may sit in the data folder itself while others sit in folders below it, as long as no two files land on the same path. names are compared the way a disk that ignores case compares them, so `README` from one dataset and `readme` from another clash on every system, and so do two files with the same bytes. a clash names both datasets and the path:
 

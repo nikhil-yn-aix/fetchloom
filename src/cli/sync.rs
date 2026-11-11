@@ -124,6 +124,9 @@ impl<'a> Loop<'a> {
         force: bool,
         survey: Survey,
     ) -> Result<Placing<'p>, Error> {
+        for (said, help) in plan::file_shaped_paths(manifest, &plan) {
+            self.context.output.warn_with(&said, &help);
+        }
         let mut placing = Placing::from_plan(self.project, manifest, plan, force, survey)?;
         self.ask_room(&placing)?;
         let unknown = placing.unknown();

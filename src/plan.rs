@@ -214,6 +214,44 @@ fn key(path: &str) -> String {
     name::fold(path)
 }
 
+/// a warning and its help for each dataset whose `path` ends in the name of a file placed
+/// straight inside it, as `path = "train.csv"` puts train.csv at data/train.csv/train.csv: a
+/// person who wrote that most likely meant the file's own place, since `path` names a folder.
+pub(crate) fn file_shaped_paths(manifest: &Manifest, plan: &Plan) -> Vec<(String, String)> {
+    let mut warnings = Vec::new();
+    for (dataset, entry) in &manifest.datasets {
+        let Some(path) = entry
+            .path
+            .as_deref()
+            .filter(|path| *path != manifest::DATA_FOLDER_ITSELF)
+        else {
+            continue;
+        };
+        let (parent, name) = path
+            .rsplit_once('/')
+            .unwrap_or((manifest::DATA_FOLDER_ITSELF, path));
+        let inside = format!("{}/", folder(manifest, dataset));
+        let named = key(name);
+        let Some(file) = plan.targets.iter().find_map(|target| {
+            let file = target.path.strip_prefix(&inside)?;
+            (target.dataset == dataset && !file.contains('/') && key(file) == named).then_some(file)
+        }) else {
+            continue;
+        };
+        let meant = match parent {
+            manifest::DATA_FOLDER_ITSELF => format!("{}/{file}", manifest.data_dir),
+            parent => format!("{}/{parent}/{file}", manifest.data_dir),
+        };
+        warnings.push((
+            format!("path = \"{path}\" makes a folder named {name}, so the file is {inside}{file}"),
+            format!(
+                "path names a folder; to put the file at {meant}, set path = \"{parent}\" on datasets.{dataset} in data.toml"
+            ),
+        ));
+    }
+    warnings
+}
+
 /// refuses targets that cannot all be stored: a name this machine cannot store, two files on one
 /// path as a case-insensitive disk sees it, or a file where a folder must be. datasets may share
 /// folders, so targets of two datasets clash only where their files do.
@@ -663,6 +701,44 @@ mod tests {
             targets(&one, &lock(&[("a", &["2020-01-01T10:00:00.csv"])])).is_err(),
             cfg!(windows)
         );
+    }
+
+    /// `path` names a folder, so one that ends in the name of a file placed straight inside it
+    /// most likely meant that file's own place.
+    #[test]
+    fn a_path_named_like_its_file_is_found() {
+        let flagged = |path: &str, files: &[&str]| {
+            let text = format!("[datasets.train]\nref = \"x\"\npath = \"{path}\"\n");
+            let manifest = manifest(&text);
+            let locked = lock(&[("train", files)]);
+            file_shaped_paths(&manifest, &plan(&manifest, &locked, &|_| None).unwrap())
+        };
+        assert_eq!(
+            flagged("train.csv", &["train.csv", "README"]),
+            [(
+                "path = \"train.csv\" makes a folder named train.csv, so the file is data/train.csv/train.csv".to_owned(),
+                "path names a folder; to put the file at data/train.csv, set path = \".\" on datasets.train in data.toml".to_owned()
+            )]
+        );
+        assert_eq!(
+            flagged("raw/Train.CSV", &["train.csv"]),
+            [(
+                "path = \"raw/Train.CSV\" makes a folder named Train.CSV, so the file is data/raw/Train.CSV/train.csv".to_owned(),
+                "path names a folder; to put the file at data/raw/train.csv, set path = \"raw\" on datasets.train in data.toml".to_owned()
+            )],
+            "a disk that ignores case"
+        );
+        for (path, files) in [
+            ("train.csv", &["sub/train.csv"][..]),
+            ("splits", &["train.csv"][..]),
+            (".", &["train.csv"][..]),
+        ] {
+            assert_eq!(flagged(path, files), [], "{path} with {files:?}");
+        }
+        let unnamed = manifest("[datasets.iris]\nref = \"x\"\n");
+        let locked = lock(&[("iris", &["iris"])]);
+        let planned = plan(&unnamed, &locked, &|_| None).unwrap();
+        assert_eq!(file_shaped_paths(&unnamed, &planned), []);
     }
 
     #[test]

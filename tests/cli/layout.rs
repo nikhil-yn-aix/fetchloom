@@ -151,3 +151,30 @@ fn a_clash_the_listings_show_stops_sync_before_any_download() -> Result {
     assert!(!sandbox.work().join("data").exists());
     Ok(())
 }
+
+/// `path` names a folder, so `path = "train.csv"` puts the file at data/train.csv/train.csv. that
+/// layout works, and sync says how to put the file at data/train.csv instead.
+#[test]
+fn a_filename_shaped_path_warns() -> Result {
+    let sandbox = Sandbox::new()?;
+    let servers = serve(&sandbox, &[("/train.csv", TRAIN)])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.train]\nref = \"{}\"\npath = \"train.csv\"\n",
+            servers[0].url
+        ),
+    )?;
+
+    let synced = sandbox.run(&["sync"])?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: path = \"train.csv\" makes a folder named train.csv, so the file is data/train.csv/train.csv\n  help: path names a folder; to put the file at data/train.csv, set path = \".\" on datasets.train in data.toml\n"),
+        "{stderr}"
+    );
+    let placed = sandbox.work().join("data").join("train.csv");
+    assert_eq!(fs::read(placed.join("train.csv"))?, TRAIN);
+    Ok(())
+}
