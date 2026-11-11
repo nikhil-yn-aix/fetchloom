@@ -21,7 +21,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
 use crate::place::{Method, Order, Placer};
-use crate::source::{Listing, Parsed, Remote};
+use crate::source::{Listing, Parsed, Reference, Remote};
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::volume::Volume;
@@ -30,7 +30,7 @@ use crate::work::Work;
 /// refuses an `-o` that cannot name the one file to write, before anything is asked of a source:
 /// stdout, several links or a list of them, a folder, or a name this machine's disks cannot
 /// store.
-pub(super) fn usage(path: &Path, links: usize, listed: bool) -> Result<(), Error> {
+pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), Error> {
     if path == Path::new("-") {
         return Err(Error::new(
             Kind::Usage,
@@ -38,11 +38,11 @@ pub(super) fn usage(path: &Path, links: usize, listed: bool) -> Result<(), Error
         )
         .help("give -o a file name, then read that file; get prints its path"));
     }
-    if listed || links > 1 {
+    if listed || links.len() > 1 {
         let several = if listed {
             "reads its links from a list".to_owned()
         } else {
-            format!("has {links} links")
+            format!("has {} links", links.len())
         };
         return Err(Error::new(
             Kind::Usage,
@@ -60,12 +60,18 @@ pub(super) fn usage(path: &Path, links: usize, listed: bool) -> Result<(), Error
         || !matches!(path.components().next_back(), Some(Component::Normal(_)))
         || fs::metadata(path).is_ok_and(|metadata| metadata.is_dir());
     if folder {
+        // --dir would refuse a folder that holds files of its own, as most do
+        let name = links
+            .first()
+            .and_then(|link| named_in(link))
+            .unwrap_or_else(|| "<file>".to_owned());
         return Err(Error::new(
             Kind::Usage,
             format!("-o needs a file name, and {shown} names a folder"),
         )
         .help(format!(
-            "use --dir {shown} to put the download in that folder"
+            "name the file inside it, as in `-o {}`",
+            path.join(name).display()
         )));
     }
     if let Some(reason) = path
@@ -79,6 +85,17 @@ pub(super) fn usage(path: &Path, links: usize, listed: bool) -> Result<(), Error
         );
     }
     Ok(())
+}
+
+/// the name of the file a link points at, as its path ends, when that shows before any source
+/// lists it: `iris.csv` for a link to `.../iris.csv`, none for an id such as a DOI.
+fn named_in(link: &str) -> Option<String> {
+    let parsed = Reference::parse(link).ok()?;
+    match (&parsed.file, &parsed.reference) {
+        (Some(file), _) => file.rsplit('/').next().and_then(crate::name::sanitize),
+        (None, Reference::Url(url)) => crate::name::from_url(url),
+        _ => None,
+    }
 }
 
 /// what is at the path `-o` names.
@@ -784,61 +801,95 @@ fn take(_object: &Path, _path: &Path, _replace: bool) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::Reference;
 
     #[test]
     fn output_takes_one_link_and_a_file_name() {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("downloads");
         fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("notes.txt"), "mine").unwrap();
         let folder = folder.display().to_string();
-        let ending = format!("downloads{}", std::path::MAIN_SEPARATOR);
+        let separator = std::path::MAIN_SEPARATOR;
+        let ending = format!("downloads{separator}");
+        let iris = "https://example.org/data/iris.csv";
+        let hugging = "https://huggingface.co/datasets/scikit-learn/iris/blob/main/Iris.csv";
         for (path, links, listed, message, help) in [
             (
                 "-",
-                1,
+                &[iris][..],
                 false,
-                "get checks a file before it appears, so -o cannot be - for stdout",
-                "give -o a file name",
+                "get checks a file before it appears, so -o cannot be - for stdout".to_owned(),
+                "give -o a file name".to_owned(),
             ),
             (
                 "a.csv",
-                2,
+                &[iris, iris],
                 false,
-                "-o writes one file, and this get has 2 links",
-                "use --dir <folder> instead",
+                "-o writes one file, and this get has 2 links".to_owned(),
+                "use --dir <folder> instead".to_owned(),
             ),
             (
                 "a.csv",
-                0,
+                &[],
                 true,
-                "-o writes one file, and this get reads its links from a list",
-                "use --dir <folder> instead",
+                "-o writes one file, and this get reads its links from a list".to_owned(),
+                "use --dir <folder> instead".to_owned(),
             ),
-            (&ending, 1, false, "names a folder", "use --dir downloads"),
-            (".", 1, false, "names a folder", "use --dir ."),
-            ("..", 1, false, "names a folder", "use --dir .."),
-            (&folder, 1, false, "names a folder", "use --dir "),
+            // a folder holding files of its own would refuse --dir, so the file is named in it
+            (
+                &ending,
+                &[iris],
+                false,
+                format!("-o needs a file name, and {ending} names a folder"),
+                format!("name the file inside it, as in `-o downloads{separator}iris.csv`"),
+            ),
+            (
+                ".",
+                &[iris],
+                false,
+                "names a folder".to_owned(),
+                format!("as in `-o .{separator}iris.csv`"),
+            ),
+            (
+                "..",
+                &["zenodo:3608990"],
+                false,
+                "names a folder".to_owned(),
+                format!("as in `-o ..{separator}<file>`"),
+            ),
+            (
+                &folder,
+                &[hugging],
+                false,
+                "names a folder".to_owned(),
+                format!("as in `-o {folder}{separator}Iris.csv`"),
+            ),
         ] {
-            let error = usage(Path::new(path), links, listed).unwrap_err();
+            let links: Vec<String> = links.iter().map(|&link| link.to_owned()).collect();
+            let error = usage(Path::new(path), &links, listed).unwrap_err();
             assert_eq!(error.kind, Kind::Usage, "{path}");
-            assert!(error.message.contains(message), "{path}: {}", error.message);
+            assert!(
+                error.message.contains(&message),
+                "{path}: {}",
+                error.message
+            );
             assert!(
                 error
                     .help
                     .as_deref()
-                    .is_some_and(|said| said.contains(help)),
+                    .is_some_and(|said| said.contains(&help)),
                 "{path}: {:?}",
                 error.help
             );
         }
+        let one = [iris.to_owned()];
         let long = "x".repeat(300);
         assert_eq!(
-            usage(Path::new(&long), 1, false).unwrap_err().kind,
+            usage(Path::new(&long), &one, false).unwrap_err().kind,
             Kind::Usage
         );
         for path in ["a.csv", "new/a.csv", ".hidden"] {
-            usage(Path::new(path), 1, false).unwrap();
+            usage(Path::new(path), &one, false).unwrap();
         }
     }
 

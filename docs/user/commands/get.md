@@ -81,7 +81,15 @@ an unchanged direct URL can return a 304 response, avoiding its file-body downlo
 - missing folders on the path are made. the folder you name may be a link to a folder elsewhere. a path that starts with a folder named `~`, as a quoted `~` reaches fetchloom, means a folder of that name here, not your home folder, so a warning says so; write `./~/...` when you mean that folder.
 - bytes this run downloaded leave the cache once the file holds them, unless a project on this machine pins them, so the file is their only copy. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them, and so do the bytes of a run that stopped before the file took them, which a rerun then reuses.
 
-`-o` takes one link that resolves to one file. several links, `-i`, a dataset with several files left after `--select` and a path that names a folder are usage errors, exit 2, before any file downloads, and they say to use `--dir`. so is a file its source sends inside a zip, as kaggle may send a competition's file, once its bytes show it. `-o -` is refused too, since the file is checked before it appears and stdout cannot wait for that.
+`-o` takes one link that resolves to one file. several links, `-i` and a dataset with several files left after `--select` are usage errors, exit 2, before any file downloads, and they say to use `--dir`. a path that names a folder is one too, and its help names a file inside that folder, since `--dir` refuses a folder that already holds other files:
+
+```text
+$ fetchloom get https://example.org/data/iris.csv -o results
+error: -o needs a file name, and results names a folder
+  help: name the file inside it, as in `-o results/iris.csv`
+```
+
+a file its source sends inside a zip, as kaggle may send a competition's file, is a usage error too once its bytes show it. `-o -` is refused as well, since the file is checked before it appears and stdout cannot wait for that.
 
 ### a file already there
 

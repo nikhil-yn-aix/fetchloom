@@ -159,7 +159,7 @@ struct Wanted {
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     if let Some(path) = &args.output {
-        file::usage(path, args.links.len(), args.input_file.is_some())?;
+        file::usage(path, &args.links, args.input_file.is_some())?;
     }
     for path in args.output.iter().chain(&args.dir) {
         warn_tilde(context, path);
