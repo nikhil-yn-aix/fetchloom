@@ -71,7 +71,7 @@ def main():
     parser.add_argument("--dist", type=Path, default=Path("dist"))
     parser.add_argument("--proofs", type=Path, required=True)
     args = parser.parse_args()
-    destination = Path("target/artifact-bin") / args.target
+    destination = Path(".release/artifact-bin") / args.target
     binary = unpack(args.dist / archive_name(args.target, args.version), args.target, args.version, destination)
     check_machine(binary, args.target)
     for name in ["LICENSE", "NOTICE", "README.md"]:

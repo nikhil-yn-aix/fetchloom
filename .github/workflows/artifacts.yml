@@ -30,8 +30,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      PROOFS: target/ci-artifacts/${{ matrix.target }}
-      PACKAGED: target/artifact-bin/${{ matrix.target }}/fetchloom${{ matrix.exe }}
+      PROOFS: .release/proofs/${{ matrix.target }}
+      PACKAGED: .release/artifact-bin/${{ matrix.target }}/fetchloom${{ matrix.exe }}
     strategy:
       fail-fast: false
       matrix:
@@ -380,7 +380,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proof-${{ matrix.target }}
-          path: target/ci-artifacts/${{ matrix.target }}/
+          path: .release/proofs/${{ matrix.target }}/
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
 
@@ -395,21 +396,23 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: github.ref_type != 'tag'
         with:
-          shared-key: source-package
+          shared-key: source-package-v2
           save-if: ${{ github.event_name != 'pull_request' }}
       - name: package and install the source distribution
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           cargo package --locked
-          mkdir -p target/source-install
-          tar -xzf "target/package/fetchloom-$version.crate" -C target/source-install
-          cargo install --path "target/source-install/fetchloom-$version" --locked --root "$PWD/target/source-installed"
-          python3 python/ci_journey.py --binary target/source-installed/bin/fetchloom \
-            --version "$version" --commit "$FETCHLOOM_COMMIT" --report target/ci-artifacts/source-package.json
+          mkdir -p .release/source-install
+          tar -xzf "target/package/fetchloom-$version.crate" -C .release/source-install
+          cargo install --path ".release/source-install/fetchloom-$version" --locked \
+            --target-dir "$PWD/target/source-build" --root "$PWD/.release/source-installed"
+          python3 python/ci_journey.py --binary .release/source-installed/bin/fetchloom \
+            --version "$version" --commit "$FETCHLOOM_COMMIT" --report .release/source-package.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: proof-source-package
-          path: target/ci-artifacts/source-package.json
+          path: .release/source-package.json
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
 

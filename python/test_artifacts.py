@@ -12,6 +12,7 @@ import zipfile
 
 from check_archive import check_machine, unpack
 from check_artifacts import TARGETS, archive_name, inventory, stages
+import check_wheel
 from check_wheel import inspect_wheel
 from ci_journey import check_version
 
@@ -128,3 +129,26 @@ class VersionTests(unittest.TestCase):
         with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.01\n'):
             with self.assertRaises(AssertionError):
                 check_version(Path('fetchloom'), VERSION)
+
+
+class WheelEnvironmentTests(unittest.TestCase):
+    def test_restored_rust_cache_does_not_supply_the_wheel_environment(self):
+        class EnvironmentSelected(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cached = root / 'target/wheel-check/wheel-current'
+            cached.mkdir(parents=True)
+            (cached / 'old-install').write_text('previous revision', encoding='utf-8')
+            arguments = ['check_wheel.py', 'package.whl', '--binary', 'fetchloom',
+                         '--version', VERSION, '--commit', COMMIT, '--stage', 'wheel-current',
+                         '--proofs', str(root / 'proofs')]
+            with patch.object(check_wheel, 'ROOT', root), patch('sys.argv', arguments), \
+                 patch.object(check_wheel, 'inspect_wheel'), \
+                 patch.object(check_wheel.subprocess, 'run', side_effect=EnvironmentSelected) as run:
+                with self.assertRaises(EnvironmentSelected):
+                    check_wheel.main()
+            prefix = Path(run.call_args.args[0][-1])
+            self.assertFalse(prefix.is_relative_to(root / 'target'))
+            self.assertEqual((cached / 'old-install').read_text(encoding='utf-8'), 'previous revision')

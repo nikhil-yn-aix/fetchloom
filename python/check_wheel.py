@@ -38,7 +38,7 @@ def main():
     parser.add_argument('--proofs', type=Path, required=True)
     args = parser.parse_args()
     inspect_wheel(args.wheel, args.version, args.binary)
-    prefix = (ROOT / 'target/wheel-check' / args.stage).resolve()
+    prefix = (ROOT / '.release/wheel-check' / args.stage).resolve()
     require(not prefix.exists(), 'wheel check requires a fresh environment')
     subprocess.run([sys.executable, '-m', 'venv', str(prefix)], check=True)
     scripts = prefix / ('Scripts' if sys.platform == 'win32' else 'bin')
