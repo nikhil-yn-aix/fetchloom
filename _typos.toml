@@ -4,7 +4,8 @@ extend-exclude = ["tests/fixtures/**", "tests/cli/snapshots/**", "bench/results/
 [default]
 # exact invalid inputs, byte samples and encoded names whose spelling is the test.
 extend-ignore-re = [
-    '"(?:--verison|sycn|verfiy|smal|claen|selct|exlcude|authenticat)"',
+    '"(?:--verison|sycn|verfiy|smal|claen|selct|exlcude|authenticat|seach|sarch|serach|saerch|serch|stauts|settigns|snyc|fasion mnist|--yse|--limt(?:=5)?|--sorce)"',
+    '`(?:fetchloom Serach iris|seach|--limt=5)`',
     '\\"sycn\\"',
     'no dataset called (?:smal|claen)',
     '\b(?:selct|datsets|exculde)\s*=',
