@@ -28,6 +28,7 @@ use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
+use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
 use crate::units;
 
@@ -592,11 +593,17 @@ pub(super) fn locked(
     };
     check(project, manifest, Some(lock), scope)
         .map(drop)
-        .map_err(|error| error.help(help))
+        .map_err(|error| match error.kind {
+            Kind::Outdated => error.help(help),
+            _ => error,
+        })
 }
 
 /// `lock --check`: compares the entries of the datasets in `scope` without the network and
-/// without writing.
+/// without writing. a fetched dataset data.lock does not pin as data.toml asks is
+/// `lock.outdated`, which `fetchloom lock` fixes; a recipe whose result data.lock does not pin as
+/// building it now would make is `build.needed`, which only `fetchloom build` fixes, since it
+/// runs the project's code.
 fn check(
     project: &Project,
     manifest: &Manifest,
@@ -606,8 +613,21 @@ fn check(
     let empty = Lock::default();
     let old = old.unwrap_or(&empty);
     let mut stale: Vec<String> = Vec::new();
+    let mut unbuilt: Vec<(String, Vec<Change>)> = Vec::new();
     for (name, entry) in &manifest.datasets {
         if !scope.includes(name) {
+            continue;
+        }
+        if entry.recipe().is_some() {
+            if old.get(name).is_some() {
+                stale.push(format!(
+                    "{name} is made by a recipe in data.toml, but data.lock has it as fetched"
+                ));
+            }
+            let changes = recipe::drift(&project.root, manifest, old, name)?;
+            if !changes.is_empty() {
+                unbuilt.push((name.clone(), changes));
+            }
             continue;
         }
         match old.get(name).map(|locked| locked.drift(entry)) {
@@ -619,25 +639,75 @@ fn check(
             Some(None) => {}
         }
     }
-    for dataset in &old.datasets {
-        if scope.includes(&dataset.name) && !manifest.datasets.contains_key(&dataset.name) {
-            stale.push(format!(
-                "{} is in data.lock but no longer in data.toml",
-                dataset.name
-            ));
+    let names = old.datasets.iter().map(|dataset| &dataset.name);
+    for name in names.chain(old.derived.iter().map(|result| &result.name)) {
+        if !scope.includes(name) {
+            continue;
+        }
+        match manifest.datasets.get(name) {
+            None => stale.push(format!("{name} is in data.lock but no longer in data.toml")),
+            Some(entry) if entry.source().is_some() && old.result(name).is_some() => {
+                stale.push(format!(
+                    "{name} is fetched in data.toml, but data.lock has it as made by a recipe"
+                ));
+            }
+            Some(_) => {}
         }
     }
-    if stale.is_empty() {
-        return Ok(Report {
-            project: project.root.clone(),
-            ..Report::default()
-        });
+    if !stale.is_empty() {
+        let mut error = Error::new(Kind::Outdated, "data.lock is out of date with data.toml");
+        for line in stale {
+            error = error.detail(line);
+        }
+        return Err(error.help("run `fetchloom lock` and commit data.lock"));
     }
-    let mut error = Error::new(Kind::Outdated, "data.lock is out of date with data.toml");
-    for line in stale {
-        error = error.detail(line);
+    if let Some(error) = needs_building(&unbuilt) {
+        return Err(error);
     }
-    Err(error.help("run `fetchloom lock` and commit data.lock"))
+    Ok(Report {
+        project: project.root.clone(),
+        ..Report::default()
+    })
+}
+
+/// the error for recipes whose result data.lock does not pin as building them now would make,
+/// each named with what moved since it was built, or nothing when there are none.
+pub(super) fn needs_building(unbuilt: &[(String, Vec<Change>)]) -> Option<Error> {
+    let message = match unbuilt {
+        [] => return None,
+        [(name, changes)] if changes.first() == Some(&Change::Unbuilt) => {
+            format!("data.lock is out of date: {name} is not built yet")
+        }
+        [(name, _)] => format!("data.lock is out of date: {name} changed since it was built"),
+        many => {
+            let names: Vec<&str> = many.iter().map(|(name, _)| name.as_str()).collect();
+            let (last, rest) = names.split_last()?;
+            format!(
+                "data.lock is out of date: {} and {last} need building",
+                rest.join(", ")
+            )
+        }
+    };
+    let mut error = Error::new(Kind::BuildNeeded, message);
+    for (name, changes) in unbuilt {
+        error = error.detail(format!("{name}: {}", said(changes)));
+    }
+    let build = match unbuilt {
+        [(name, _)] => format!("fetchloom build {name}"),
+        _ => "fetchloom build".to_owned(),
+    };
+    Some(error.help(format!(
+        "run `{build}`, then commit data.lock and data.lock.d"
+    )))
+}
+
+/// what moved since a recipe was built, in a few words.
+pub(super) fn said(changes: &[Change]) -> String {
+    changes
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// data.toml and data.lock as a run read them, which the state records as the run leaves them.

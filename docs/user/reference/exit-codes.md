@@ -12,6 +12,7 @@ exit codes group failures, while error kinds identify the cause.
 | 30 | `integrity.mismatch`, including size mismatches and changed bytes found by cache verification |
 | 40 | `auth.required` |
 | 50 | `local.io`, `local.not_empty`, `project.invalid`, `project.changed` |
+| 60 | `build.needed` |
 | 130 | `interrupted` |
 
 a cancel you choose at a question keeps its exit code: q at the dataset list exits 2, no exits 1 and ctrl-c exits 130. a person sees one `Cancelled` line instead of `error:`, and `--json`, which never asks, reports errors as before. a stop you ask for with ctrl-c during other work is no error either: it exits 130, a person sees a `Stopped` line instead of `error:`, and `--json` reports it as `interrupted`.
@@ -36,6 +37,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `local.not_empty` | preserve existing files and choose another `get --dir` folder or `get -o` name; `get -o --force` replaces a file you no longer need |
 | `project.invalid` | correct or restore the manifest, lock or project folders |
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
+| `build.needed` | a recipe changed, or was never built, since data.lock pinned it: read what moved in `errors[0].details`, then build it deliberately, since building runs the project's code; `errors[0].fix` is always null for it |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
 a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.

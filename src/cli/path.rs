@@ -40,6 +40,17 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
+    // only `fetchloom build` makes a recipe's result, and nothing places one yet
+    if manifest.datasets[name].recipe().is_some() {
+        return Err(Error::new(
+            Kind::BuildNeeded,
+            format!(
+                "{name} is made by a recipe, and its result is not in {}/ yet",
+                manifest.data_dir
+            ),
+        )
+        .help(format!("run `fetchloom build {name}`, which makes it")));
+    }
     let lock = project.lock()?;
     let mut cache = None;
     let path = if let Some(path) = ready_path(

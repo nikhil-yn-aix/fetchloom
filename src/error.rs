@@ -28,6 +28,9 @@ pub(crate) enum Kind {
     ProjectChanged,
     /// a check found data.lock out of date with data.toml.
     Outdated,
+    /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
+    /// can pin, since it runs the project's code.
+    BuildNeeded,
     Interrupted,
 }
 
@@ -53,6 +56,7 @@ impl Kind {
             Kind::ProjectInvalid => "project.invalid",
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
+            Kind::BuildNeeded => "build.needed",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -73,6 +77,7 @@ impl Kind {
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
+            Kind::BuildNeeded => 60,
             Kind::Interrupted => 130,
         }
     }
@@ -338,6 +343,7 @@ mod tests {
             ProjectInvalid,
             ProjectChanged,
             Outdated,
+            BuildNeeded,
             Interrupted,
         ];
         let mut coded: Vec<(Option<u8>, String)> = kinds

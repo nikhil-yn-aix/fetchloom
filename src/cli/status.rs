@@ -2,7 +2,7 @@
 //! downloads nothing and hashes only files whose size and time cannot vouch for them, so it
 //! answers at once even for large projects. asked to verify, it hashes every placed file.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -17,6 +17,7 @@ use crate::plan;
 use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
+use crate::recipe;
 use crate::threads::Threads;
 use crate::units;
 
@@ -26,7 +27,8 @@ const SHOWN: usize = 20;
 #[derive(Default, Serialize)]
 pub(super) struct Status {
     project: PathBuf,
-    /// datasets whose entry in data.toml changed since data.lock was written.
+    /// datasets whose entry in data.toml changed since data.lock was written, and recipes whose
+    /// result data.lock does not pin as building them now would make.
     unlocked: Vec<String>,
     /// datasets still in data.lock whose entries were removed from data.toml.
     removed: Vec<String>,
@@ -68,6 +70,10 @@ pub(super) struct Status {
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
+    /// the recipes among `unlocked`, each with what moved since it was built, which only
+    /// `fetchloom build` brings in line.
+    #[serde(skip)]
+    building: BTreeMap<String, String>,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -93,6 +99,11 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         if !status.edited.is_empty() || !status.untracked.is_empty() || !status.blocked.is_empty() {
             output.hint("save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock");
         }
+        if !status.building.is_empty() {
+            output.hint(
+                "`fetchloom build --dry-run` shows the commands that would build the recipes again",
+            );
+        }
     }
     Ok(status)
 }
@@ -107,25 +118,47 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     Ok(status)
 }
 
-/// the datasets data.lock no longer pins as data.toml asks: those data.toml lists that the lock
+/// the datasets data.lock no longer pins as data.toml asks: those data.toml fetches that the lock
 /// lacks or pins for another spec or extract, and those the lock pins that data.toml dropped.
 fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
     let unlocked = manifest
         .datasets
         .iter()
         .filter(|(name, entry)| {
-            lock.get(name)
-                .is_none_or(|locked| locked.drift(entry).is_some())
+            entry.source().is_some()
+                && lock
+                    .get(name)
+                    .is_none_or(|locked| locked.drift(entry).is_some())
         })
         .map(|(name, _)| name.clone())
         .collect();
-    let removed = lock
-        .datasets
-        .iter()
-        .filter(|dataset| !manifest.datasets.contains_key(&dataset.name))
-        .map(|dataset| dataset.name.clone())
+    let names = lock.datasets.iter().map(|dataset| &dataset.name);
+    let removed = names
+        .chain(lock.derived.iter().map(|result| &result.name))
+        .filter(|name| !manifest.datasets.contains_key(*name))
+        .cloned()
         .collect();
     (unlocked, removed)
+}
+
+/// each recipe whose result data.lock does not pin as building it now would make, with what
+/// moved since it was built.
+fn unbuilt(
+    project: &Project,
+    manifest: &Manifest,
+    lock: &Lock,
+) -> Result<BTreeMap<String, String>, Error> {
+    let mut building = BTreeMap::new();
+    for (name, entry) in &manifest.datasets {
+        if entry.recipe().is_none() {
+            continue;
+        }
+        let changes = recipe::drift(&project.root, manifest, lock, name)?;
+        if !changes.is_empty() {
+            building.insert(name.clone(), super::project::said(&changes));
+        }
+    }
+    Ok(building)
 }
 
 /// compares the data folder with data.lock, reading only what the disk says about each file,
@@ -142,12 +175,16 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     let lock = read.map(|(lock, _)| lock).unwrap_or_default();
-    let (unlocked, removed) = out_of_date(&manifest, &lock);
+    let (mut unlocked, removed) = out_of_date(&manifest, &lock);
+    let building = unbuilt(project, &manifest, &lock)?;
+    unlocked.extend(building.keys().cloned());
+    unlocked.sort();
     let mut status = Status {
         project: project.root.clone(),
         verified: verify,
         unlocked,
         removed,
+        building,
         ..Status::default()
     };
     let cache = super::peek_cache()?;
@@ -297,7 +334,10 @@ impl Status {
 
     fn needs_sync(&self) -> bool {
         !self.removed.is_empty()
-            || !self.unlocked.is_empty()
+            || self
+                .unlocked
+                .iter()
+                .any(|name| !self.building.contains_key(name))
             || !self.missing.is_empty()
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
@@ -312,10 +352,11 @@ impl Status {
 /// a line for each difference, at most `SHOWN` of each kind.
 fn list(output: &Output, status: &Status) {
     for name in &status.unlocked {
-        output.mark(
-            "Unlocked",
-            &format!("{name} · data.toml changed since data.lock was written"),
+        let reason = status.building.get(name).map_or(
+            "data.toml changed since data.lock was written",
+            String::as_str,
         );
+        output.mark("Unlocked", &format!("{name} · {reason}"));
     }
     for name in &status.removed {
         output.mark(

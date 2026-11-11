@@ -3,12 +3,23 @@
 //! everything its result depends on, so fetchloom can tell when a pinned result is out of date.
 //! running a step belongs to `fetchloom build` alone.
 
-use std::collections::{BTreeMap, BTreeSet};
+pub(crate) mod code;
 
-use crate::project::manifest::Entry;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Write as _};
+use std::path::Path;
+
+use crate::digest::{self, Sha256};
+use crate::error::Error;
+use crate::project::lock::derived::{Code, Derived, Input};
+use crate::project::lock::{Lock, Locked};
+use crate::project::manifest::{Entry, Manifest, Origin};
 
 /// the name a word of `run` uses for the folder the result goes in, so no input may have it.
 pub(crate) const OUT: &str = "out";
+/// how a key is made. a change to what enters a key, or how, takes a new name, so no result made
+/// the old way stands for the new.
+const SCHEME: &str = "fetchloom-recipe-1";
 
 /// one word of a recipe's `run` as data.toml writes it: text, with `{name}` for the folder of an
 /// input and `{out}` for the folder the result goes in. `{{` and `}}` stand for one brace.
@@ -160,9 +171,529 @@ pub(crate) fn order(datasets: &BTreeMap<String, Entry>) -> Result<Vec<&str>, Vec
     Err(cycle)
 }
 
+/// what a recipe reads of a dataset fetched from a source: each file data.lock pins, an archive
+/// that unpacks with the tree of what it unpacks to, so the lines decide which files the step
+/// finds and where. links, versions and when it was pinned stay out, so a source that moves or
+/// renames a version keeps the content. member filters, once data.toml has them, follow the
+/// files as lines of their own, so a dataset without one keeps its content.
+pub(crate) fn content(locked: &Locked) -> Sha256 {
+    let mut files: Vec<_> = locked.files.iter().collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut text = String::new();
+    for file in files {
+        let _ = write!(text, "{}\t{}\t{}", file.path, file.size, file.sha256);
+        if let Some(tree) = file.unpacks_to {
+            let _ = write!(text, "\tsha256:{tree}");
+        }
+        text.push('\n');
+    }
+    digest::sha256(text.as_bytes())
+}
+
+/// the key of a recipe's result: the hash of the JSON of [`SCHEME`], the content of each dataset
+/// it reads, by name, its command as written, the hash of each file or folder of its code, by
+/// path, and its variables, by name. it holds nothing of the machine, the project's place, the
+/// dataset's own name or when it ran, so a moved project or a renamed recipe keeps its key.
+pub(crate) fn key(
+    from: &[Input],
+    run: &[String],
+    code: &[Code],
+    env: &BTreeMap<String, String>,
+) -> Sha256 {
+    let mut inputs: Vec<(&str, String)> = from
+        .iter()
+        .map(|input| (input.name.as_str(), format!("sha256:{}", input.content)))
+        .collect();
+    inputs.sort();
+    let mut hashes: Vec<(&str, String)> = code
+        .iter()
+        .map(|code| {
+            let prefix = if code.folder { "tree:" } else { "" };
+            (
+                code.path.as_str(),
+                format!("{prefix}sha256:{}", code.sha256),
+            )
+        })
+        .collect();
+    hashes.sort();
+    let pairs = |pairs: &mut dyn Iterator<Item = (&str, &str)>| {
+        let pairs: Vec<String> = pairs
+            .map(|(name, value)| format!("[{},{}]", json(name), json(value)))
+            .collect();
+        format!("[{}]", pairs.join(","))
+    };
+    let words: Vec<String> = run.iter().map(|word| json(word)).collect();
+    let text = format!(
+        "{{\"scheme\":{},\"from\":{},\"run\":[{}],\"code\":{},\"env\":{}}}",
+        json(SCHEME),
+        pairs(&mut inputs.iter().map(|(name, hash)| (*name, hash.as_str()))),
+        words.join(","),
+        pairs(&mut hashes.iter().map(|(path, hash)| (*path, hash.as_str()))),
+        pairs(
+            &mut env
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+        ),
+    );
+    digest::sha256(text.as_bytes())
+}
+
+/// `text` as a JSON string, escaped as `serde_json` and python's `json.dumps` escape it.
+fn json(text: &str) -> String {
+    serde_json::Value::String(text.to_owned()).to_string()
+}
+
+/// a recipe as it stands now: the content data.lock pins of each dataset it reads, its command
+/// as data.toml writes it, the hash of its code on disk and its variables, which make its key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Step {
+    pub(crate) name: String,
+    /// each dataset it reads, in data.toml's order, with the content data.lock pins of it, or
+    /// none while data.lock pins none.
+    pub(crate) inputs: Vec<(String, Option<Sha256>)>,
+    pub(crate) run: Vec<String>,
+    /// each file or folder of its code, sorted by path, or none where nothing is.
+    pub(crate) code: Vec<(String, Option<Code>)>,
+    pub(crate) env: BTreeMap<String, String>,
+}
+
+impl Step {
+    /// the recipe `name` of `manifest` as it stands in the project at `root`, with what `lock`
+    /// pins, or none when `name` is no recipe.
+    ///
+    /// # Errors
+    ///
+    /// the code's own refusals and read failures, from [`code::hash`].
+    pub(crate) fn read(
+        root: &Path,
+        manifest: &Manifest,
+        lock: &Lock,
+        name: &str,
+    ) -> Result<Option<Step>, Error> {
+        let Some(recipe) = manifest.datasets.get(name).and_then(Entry::recipe) else {
+            return Ok(None);
+        };
+        let inputs = recipe
+            .from
+            .iter()
+            .map(|input| (input.clone(), pinned(manifest, lock, input)))
+            .collect();
+        let mut hashed = Vec::with_capacity(recipe.code.len());
+        for path in &recipe.code {
+            hashed.push((path.clone(), code::hash(root, name, path)?));
+        }
+        hashed.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(Some(Step {
+            name: name.to_owned(),
+            inputs,
+            run: recipe
+                .run
+                .iter()
+                .map(|word| word.text().to_owned())
+                .collect(),
+            code: hashed,
+            env: recipe.env.clone(),
+        }))
+    }
+
+    /// each dataset it reads with its content, as data.lock records them, once data.lock pins
+    /// every one.
+    pub(crate) fn from(&self) -> Option<Vec<Input>> {
+        self.inputs
+            .iter()
+            .map(|(name, content)| {
+                Some(Input {
+                    name: name.clone(),
+                    content: (*content)?,
+                })
+            })
+            .collect()
+    }
+
+    /// its code with each hash, once every file and folder of it is there.
+    pub(crate) fn hashed(&self) -> Option<Vec<Code>> {
+        self.code.iter().map(|(_, code)| code.clone()).collect()
+    }
+
+    /// its key, once data.lock pins every dataset it reads and all its code is there.
+    pub(crate) fn key(&self) -> Option<Sha256> {
+        Some(key(&self.from()?, &self.run, &self.hashed()?, &self.env))
+    }
+
+    /// what moved since `pinned`, data.lock's result of it, was built: nothing when it still
+    /// answers the recipe as it stands.
+    pub(crate) fn changes(&self, pinned: Option<&Derived>) -> Vec<Change> {
+        let unpinned = self
+            .inputs
+            .iter()
+            .filter(|(_, content)| content.is_none())
+            .map(|(name, _)| Change::Unpinned(name.clone()));
+        let Some(pinned) = pinned else {
+            return std::iter::once(Change::Unbuilt).chain(unpinned).collect();
+        };
+        let mut changes: Vec<Change> = unpinned.collect();
+        let now: BTreeMap<&str, Sha256> = self
+            .inputs
+            .iter()
+            .filter_map(|(name, content)| Some((name.as_str(), (*content)?)))
+            .collect();
+        let was: BTreeMap<&str, Sha256> = pinned
+            .from
+            .iter()
+            .map(|input| (input.name.as_str(), input.content))
+            .collect();
+        let read: BTreeSet<&str> = now.keys().chain(was.keys()).copied().collect();
+        for name in read {
+            match (now.get(name), was.get(name)) {
+                (Some(now), Some(was)) if now == was => {}
+                (None, Some(_)) if self.inputs.iter().any(|(input, _)| input == name) => {}
+                _ => changes.push(Change::Input(name.to_owned())),
+            }
+        }
+        if self.run != pinned.run {
+            changes.push(Change::Run);
+        }
+        let paths: BTreeSet<&str> = self
+            .code
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .chain(pinned.code.iter().map(|code| code.path.as_str()))
+            .collect();
+        for path in paths {
+            let now = self.code.iter().find(|(known, _)| known == path);
+            let was = pinned.code.iter().find(|code| code.path == path);
+            match (now, was) {
+                (Some((_, None)), _) => changes.push(Change::Gone(path.to_owned())),
+                (Some((_, Some(now))), Some(was)) if now == was => {}
+                _ => changes.push(Change::Code(path.to_owned())),
+            }
+        }
+        if self.env != pinned.env {
+            changes.push(Change::Env);
+        }
+        if changes.is_empty() && self.key() != Some(pinned.key) {
+            changes.push(Change::Key);
+        }
+        changes
+    }
+}
+
+/// what data.lock pins of the dataset `name` that a recipe reads: a fetched dataset's content, or
+/// the tree of a recipe's result.
+fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
+    match &manifest.datasets.get(name)?.origin {
+        Origin::Source(_) => lock.get(name).map(content),
+        Origin::Derived(_) => lock.result(name).map(|result| result.tree),
+    }
+}
+
+/// what moved since a recipe's result was built, so data.lock no longer pins what building it now
+/// would make.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Change {
+    /// data.lock pins no result of it yet.
+    Unbuilt,
+    /// data.lock pins nothing yet of a dataset it reads.
+    Unpinned(String),
+    /// a dataset it reads holds other content, or it reads another set of datasets.
+    Input(String),
+    Run,
+    /// a file or folder of its code changed, or code names another set of them.
+    Code(String),
+    /// a file or folder of its code is not there.
+    Gone(String),
+    Env,
+    /// everything it records agrees, yet its key does not: data.lock made it another way.
+    Key,
+}
+
+impl fmt::Display for Change {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Change::Unbuilt => f.write_str("not built yet"),
+            Change::Unpinned(input) => write!(f, "{input} is not pinned yet"),
+            Change::Input(input) => write!(f, "{input} changed"),
+            Change::Run => f.write_str("run changed"),
+            Change::Code(path) => write!(f, "{path} changed"),
+            Change::Gone(path) => write!(f, "{path} is missing"),
+            Change::Env => f.write_str("env changed"),
+            Change::Key => f.write_str("its key in data.lock is not the one its recipe makes"),
+        }
+    }
+}
+
+/// what moved since data.lock's result of the recipe `name` was built, as [`Step::changes`]
+/// finds it; nothing for a dataset fetched from a source.
+///
+/// # Errors
+///
+/// as [`Step::read`].
+pub(crate) fn drift(
+    root: &Path,
+    manifest: &Manifest,
+    lock: &Lock,
+    name: &str,
+) -> Result<Vec<Change>, Error> {
+    Ok(Step::read(root, manifest, lock, name)?
+        .map(|step| step.changes(lock.result(name)))
+        .unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::Member;
+    use crate::project::lock::LockedFile;
+    use crate::source::Access;
+
+    /// a recipe's inputs, command, code and variables, with escapes and unicode in them.
+    fn parts() -> (Vec<Input>, Vec<String>, Vec<Code>, BTreeMap<String, String>) {
+        let input = |name: &str| Input {
+            name: name.to_owned(),
+            content: digest::sha256(name.as_bytes()),
+        };
+        let run = [
+            "python3",
+            "clean.py",
+            "{raw}",
+            "{labels}",
+            "{out}",
+            "--sep=\"é\\",
+        ];
+        let code = [
+            Code {
+                path: "lib".to_owned(),
+                sha256: digest::sha256(b"lib"),
+                folder: true,
+            },
+            Code {
+                path: "clean.py".to_owned(),
+                sha256: digest::sha256(b"clean"),
+                folder: false,
+            },
+        ];
+        let env = [("SEED", "1"), ("NOTE", "a\nb\u{1}")]
+            .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        (
+            vec![input("raw"), input("labels")],
+            run.map(str::to_owned).to_vec(),
+            code.to_vec(),
+            env.into_iter().collect(),
+        )
+    }
+
+    /// the key's JSON, as python's `json.dumps(obj, separators=(",", ":"), ensure_ascii=False)`
+    /// writes it, gave this hash; a change to how keys are made fails here first.
+    #[test]
+    fn a_known_key_matches_python() {
+        let (from, run, code, env) = parts();
+        assert_eq!(
+            key(&from, &run, &code, &env).hex(),
+            "8b4d3b6143e8731693dab2b9bec3dd9e1e1910268c5d4c4ceca028111f31a654"
+        );
+    }
+
+    #[test]
+    fn the_key_follows_run_code_env_and_inputs() {
+        let (from, run, code, env) = parts();
+        let base = key(&from, &run, &code, &env);
+        let mut reordered = (from.clone(), code.clone());
+        reordered.0.reverse();
+        reordered.1.reverse();
+        assert_eq!(key(&reordered.0, &run, &reordered.1, &env), base);
+        let mut changed_input = from.clone();
+        changed_input[0].content = digest::sha256(b"other");
+        let mut changed_run = run.clone();
+        changed_run.push("--fast".to_owned());
+        let mut changed_code = code.clone();
+        changed_code[1].sha256 = digest::sha256(b"clean, edited");
+        let mut as_file = code.clone();
+        as_file[0].folder = false;
+        let mut changed_env = env.clone();
+        changed_env.insert("SEED".to_owned(), "2".to_owned());
+        for other in [
+            key(&changed_input, &run, &code, &env),
+            key(&from, &changed_run, &code, &env),
+            key(&from, &run, &changed_code, &env),
+            key(&from, &run, &as_file, &env),
+            key(&from, &run, &code, &changed_env),
+            key(&from[..1], &run, &code, &env),
+        ] {
+            assert_ne!(other, base);
+        }
+    }
+
+    fn locked(files: Vec<LockedFile>) -> Locked {
+        Locked {
+            name: "raw".to_owned(),
+            reference: "zenodo:1".to_owned(),
+            spec: "sha256:00".to_owned(),
+            extract: true,
+            resolved: "zenodo:1@1".to_owned(),
+            title: Some("raw".to_owned()),
+            license: None,
+            doi: None,
+            access: Access::Unknown,
+            timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            files,
+        }
+    }
+
+    fn pinned(path: &str, bytes: &[u8], unpacks_to: Option<Sha256>) -> LockedFile {
+        LockedFile {
+            path: path.to_owned(),
+            size: bytes.len() as u64,
+            sha256: digest::sha256(bytes),
+            md5: None,
+            url: format!("https://example.org/{path}"),
+            unpacks_to,
+        }
+    }
+
+    #[test]
+    fn source_content_ignores_urls_and_versions() {
+        let files = vec![
+            pinned("b/x.zip", b"zipped", Some(digest::sha256(b"tree"))),
+            pinned("a.csv", b"abc", None),
+        ];
+        let raw = locked(files.clone());
+        // the lines `path \t size \t sha256 [\t sha256:<tree>]`, hashed by python
+        assert_eq!(
+            content(&raw).hex(),
+            "466584f74db504f54956ffd6d7886b2f2e8531e707aa80741c02973ce251cae1"
+        );
+        let mut moved = raw.clone();
+        moved.reference = "zenodo:2".to_owned();
+        moved.resolved = "zenodo:2@7".to_owned();
+        moved.spec = "sha256:11".to_owned();
+        moved.title = None;
+        moved.timestamp = "2027-01-01T00:00:00Z".to_owned();
+        moved.files.reverse();
+        for file in &mut moved.files {
+            file.url = format!("https://mirror.example.org/{}", file.path);
+            file.md5 = crate::digest::Md5::from_hex("900150983cd24fb0d6963f7d28e17f72");
+        }
+        assert_eq!(content(&moved), content(&raw));
+        let mut packed = raw.clone();
+        packed.files[0].unpacks_to = None;
+        let mut edited = raw.clone();
+        edited.files[1] = pinned("a.csv", b"abd", None);
+        let mut renamed = raw.clone();
+        renamed.files[1].path = "A.csv".to_owned();
+        for other in [packed, edited, renamed] {
+            assert_ne!(content(&other), content(&raw));
+        }
+    }
+
+    /// a project with the dataset `raw` pinned in data.lock and the recipe `name` made from it
+    /// with the code `code`, each a path below the project and its bytes.
+    fn project(name: &str, code: &[(&str, &[u8])]) -> (tempfile::TempDir, Manifest, Lock) {
+        let root = tempfile::tempdir().unwrap();
+        for (path, bytes) in code {
+            let at = root.path().join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, bytes).unwrap();
+        }
+        let paths: Vec<String> = code.iter().map(|(path, _)| format!("\"{path}\"")).collect();
+        let manifest = Manifest::parse(&format!(
+            "[datasets.raw]\nref = \"zenodo:1\"\n\n[datasets.{name}]\nfrom = [\"raw\"]\nrun = [\"python3\", \"clean.py\", \"{{raw}}\", \"{{out}}\"]\ncode = [{}]\nenv = {{ SEED = \"1\" }}\n",
+            paths.join(", ")
+        ))
+        .unwrap();
+        let lock = Lock {
+            datasets: vec![locked(vec![pinned("a.csv", b"abc", None)])],
+            ..Lock::default()
+        };
+        (root, manifest, lock)
+    }
+
+    /// a moved project, a renamed recipe, code listed in another order or checked out with CRLF
+    /// line endings keep the key, so a result built anywhere stands for any clone.
+    #[test]
+    fn the_key_ignores_paths_names_and_code_order() {
+        let code: [(&str, &[u8]); 2] = [("clean.py", b"print()\n"), ("lib/util.py", b"x = 1\n")];
+        let (here, manifest, lock) = project("clean", &code);
+        let step = Step::read(here.path(), &manifest, &lock, "clean")
+            .unwrap()
+            .unwrap();
+        let key = step.key().unwrap();
+        let mut other: Vec<(&str, &[u8])> =
+            vec![("lib/util.py", b"x = 1\r\n"), ("clean.py", b"print()\r\n")];
+        let (there, renamed, lock) = project("tidy", &other);
+        let moved = Step::read(there.path(), &renamed, &lock, "tidy")
+            .unwrap()
+            .unwrap();
+        assert_ne!(here.path(), there.path());
+        assert_eq!(moved.key(), Some(key));
+        other[0].1 = b"x = 2\n";
+        let (edited, manifest, lock) = project("clean", &other);
+        let changed = Step::read(edited.path(), &manifest, &lock, "clean")
+            .unwrap()
+            .unwrap();
+        assert_ne!(changed.key(), Some(key));
+        assert_eq!(
+            Step::read(here.path(), &manifest, &lock, "raw").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn changes_name_what_moved_since_the_build() {
+        let (root, manifest, lock) = project("clean", &[("clean.py", b"print()\n")]);
+        let step = Step::read(root.path(), &manifest, &lock, "clean")
+            .unwrap()
+            .unwrap();
+        let built = Derived {
+            name: "clean".to_owned(),
+            from: step.from().unwrap(),
+            run: step.run.clone(),
+            code: step.hashed().unwrap(),
+            env: step.env.clone(),
+            key: step.key().unwrap(),
+            timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            tree: crate::cache::tree_hash(&[]),
+            files: Vec::<Member>::new(),
+        };
+        assert_eq!(step.changes(Some(&built)), []);
+        assert_eq!(step.changes(None), [Change::Unbuilt]);
+        let mut old = built.clone();
+        old.from[0].content = digest::sha256(b"older raw");
+        old.run.pop();
+        old.code[0].sha256 = digest::sha256(b"older code");
+        old.env.clear();
+        assert_eq!(
+            step.changes(Some(&old)),
+            [
+                Change::Input("raw".to_owned()),
+                Change::Run,
+                Change::Code("clean.py".to_owned()),
+                Change::Env
+            ]
+        );
+        let mut rekeyed = built.clone();
+        rekeyed.key = digest::sha256(b"another scheme");
+        assert_eq!(step.changes(Some(&rekeyed)), [Change::Key]);
+        std::fs::remove_file(root.path().join("clean.py")).unwrap();
+        let unpinned = Lock::default();
+        let gone = Step::read(root.path(), &manifest, &unpinned, "clean")
+            .unwrap()
+            .unwrap();
+        assert_eq!(gone.key(), None);
+        assert_eq!(
+            gone.changes(Some(&built)),
+            [
+                Change::Unpinned("raw".to_owned()),
+                Change::Gone("clean.py".to_owned())
+            ]
+        );
+        assert_eq!(
+            gone.changes(None)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["not built yet", "raw is not pinned yet"]
+        );
+    }
 
     #[test]
     fn templates_name_folders_and_keep_literal_braces() {
