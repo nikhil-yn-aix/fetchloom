@@ -642,7 +642,7 @@ impl Net {
             };
             let wait = hold.until.saturating_duration_since(now);
             tracing::debug!(host = name, ?wait, "waiting for a rate limit to reset");
-            if hold.announce && wait >= Duration::from_millis(500) {
+            if let Some(wait) = hold.told(now) {
                 (self.notify)(Notice::Waiting {
                     host: host(url).to_owned(),
                     quota: hold.quota,

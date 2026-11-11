@@ -297,6 +297,72 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
     );
 }
 
+/// zenodo's answers once its limit is used up, as a download meets them: a 429 whose limit resets
+/// a second after its date, then 429s sent once that reset came. the first is waited out and told
+/// once, the later ones hold nothing, so no try is spent and no second wait is told. the host's
+/// date decides, whether this machine's clock is behind it or ahead.
+#[test]
+fn a_used_up_limit_is_waited_out_once_and_a_passed_reset_holds_nothing() {
+    let sent = "Fri, 30 Oct 2026 08:55:06 GMT";
+    let second = date(sent).duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let refusal = |reset: u64, retry_after: &str| {
+        headers(&[
+            ("date", sent),
+            ("x-ratelimit-limit", "133"),
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", &reset.to_string()),
+            ("retry-after", retry_after),
+        ])
+    };
+    for clock in [
+        date(sent),
+        date("Fri, 30 Oct 2026 08:36:46 GMT"),
+        date("Fri, 30 Oct 2026 09:13:26 GMT"),
+    ] {
+        let paces = Paces::default();
+        let start = Instant::now();
+        let first = paces.admit("zenodo.org", start).unwrap();
+        let stated = limits(
+            StatusCode::TOO_MANY_REQUESTS,
+            &refusal(second + 1, "1"),
+            clock,
+        );
+        assert_eq!(used_up(&stated), Some(Duration::from_secs(1)));
+        Paces::heard(first, stated, start);
+        let hold = paces.admit("zenodo.org", start).unwrap_err();
+        assert_eq!(hold.until, start + Duration::from_secs(1));
+        assert_eq!(hold.told(start), Some(Duration::from_secs(1)));
+        let mut at = hold.until;
+        for _ in 0..5 {
+            let ticket = paces.admit("zenodo.org", at).unwrap();
+            let stated = limits(StatusCode::TOO_MANY_REQUESTS, &refusal(second, "0"), clock);
+            assert_eq!(used_up(&stated), Some(Duration::ZERO));
+            Paces::heard(ticket, stated, at);
+            at += Duration::from_millis(1);
+        }
+        assert!(paces.admit("zenodo.org", at).is_ok());
+    }
+}
+
+/// a wait is told by the first request to wait for a reset, and only while half a second of it
+/// is left; a wait that short passes without a line.
+#[test]
+fn a_wait_is_told_once_while_half_a_second_is_left() {
+    let paces = Paces::default();
+    let start = Instant::now();
+    let ticket = paces.admit("zenodo.org", start).unwrap();
+    Paces::heard(ticket, vec![limit(0, 2, None)], start);
+    let first = paces.admit("zenodo.org", start).unwrap_err();
+    let reset = start + Duration::from_secs(2);
+    assert_eq!(first.told(start), Some(Duration::from_secs(2)));
+    let late = start + Duration::from_millis(1500);
+    assert_eq!(first.told(late), Some(Duration::from_millis(500)));
+    assert_eq!(first.told(late + Duration::from_millis(1)), None);
+    assert_eq!(first.told(reset + Duration::from_secs(1)), None);
+    let second = paces.admit("zenodo.org", start).unwrap_err();
+    assert_eq!(second.told(start), None, "the same reset is told once");
+}
+
 #[test]
 fn short_waits_just_after_a_reset_pass_quietly() {
     let paces = Paces::default();

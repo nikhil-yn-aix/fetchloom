@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use crate::support::{
     Part, Result, Sandbox, Server, file, json, link_folder, partial_files, reply, text,
@@ -857,13 +857,14 @@ fn fetchloom_retries_sets_how_often_a_request_is_tried_again() -> Result {
     Ok(())
 }
 
-/// zenodo's answer once its limit is used up: a 429 that says when the limit resets.
-fn rate_limited(date: &str, reset: u64, retry_after: u64) -> Vec<Part> {
+/// zenodo's answer once its limit is used up: a 429 that says when the limit resets, by the
+/// host's clock in `Date`, which is fixed here so the machine's own clock decides nothing.
+fn rate_limited(reset: u64, retry_after: u64) -> Vec<Part> {
     reply(
         "429 Too Many Requests",
         &[
             ("Content-Length", "0"),
-            ("Date", date),
+            ("Date", "Fri, 30 Oct 2026 08:55:06 GMT"),
             ("X-RateLimit-Limit", "133"),
             ("X-RateLimit-Remaining", "0"),
             ("X-RateLimit-Reset", &reset.to_string()),
@@ -873,15 +874,16 @@ fn rate_limited(date: &str, reset: u64, retry_after: u64) -> Vec<Part> {
     )
 }
 
+/// more refusals than a request has tries, all but the first with a limit that reset when it
+/// was sent, still end in the file: waits for a limit spend no tries. whether a wait gets a line
+/// depends on how busy the machine is, so `pace::tests` checks that with fixed times.
 #[test]
 fn a_rate_limit_is_waited_out_without_spending_tries() -> Result {
     let sandbox = Sandbox::new()?;
-    let now = SystemTime::now();
-    let date = httpdate::fmt_http_date(now);
-    let second = now.duration_since(UNIX_EPOCH)?.as_secs();
-    // more refusals than a request has tries, all but the first with a limit that resets at once
-    let mut responses = vec![rate_limited(&date, second + 1, 1)];
-    responses.extend((0..5).map(|_| rate_limited(&date, second, 0)));
+    // the second of the date above
+    let second = 1_793_350_506;
+    let mut responses = vec![rate_limited(second + 1, 1)];
+    responses.extend((0..5).map(|_| rate_limited(second, 0)));
     responses.push(file(IRIS, "\"v1\""));
     let server = Server::start(PATH, responses)?;
     let output = sandbox.run(&["get", &server.url])?;
@@ -889,18 +891,10 @@ fn a_rate_limit_is_waited_out_without_spending_tries() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(server.requests().len(), 7);
     assert!(!stderr.contains("trying again"), "{stderr}");
-    // a wait is told only while half a second of it is left, which a busy machine can miss
-    let told: Vec<&str> = stderr
-        .lines()
-        .filter(|line| line.contains("Waiting"))
-        .collect();
-    assert!(told.len() <= 1, "{stderr}");
-    for line in told {
-        assert_eq!(
-            line,
-            "    Waiting 1 s for 127.0.0.1, whose limit of 133 requests is used up"
-        );
-    }
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        IRIS
+    );
     Ok(())
 }
 

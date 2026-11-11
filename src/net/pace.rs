@@ -225,6 +225,19 @@ pub(super) struct Hold {
     pub(super) announce: bool,
 }
 
+/// how much of a wait must be left for it to get a line, so a wait that ends as it starts is not
+/// told.
+const WORTH_TELLING: Duration = Duration::from_millis(500);
+
+impl Hold {
+    /// the wait to tell the person watching at `now`: the first request to wait for a reset tells
+    /// it, while at least half a second of it is left.
+    pub(super) fn told(&self, now: Instant) -> Option<Duration> {
+        let wait = self.until.saturating_duration_since(now);
+        (self.announce && wait >= WORTH_TELLING).then_some(wait)
+    }
+}
+
 /// a request on its way to a host, counted until its answer comes or it fails.
 #[derive(Debug)]
 pub(super) struct Ticket {
