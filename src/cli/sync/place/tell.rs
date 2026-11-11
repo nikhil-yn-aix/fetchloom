@@ -99,6 +99,7 @@ pub(super) fn tell(
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
     warn_put_back(output, manifest, &placement.put_back, "put back");
+    warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(
@@ -128,6 +129,46 @@ fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedC
         .changed_copies
         .iter()
         .find(|copy| copy.path == path)
+}
+
+/// a warning for each dataset exclude that names files inside an archive, which only the
+/// archive's members table reaches, with the drop that leaves them out. `-v` names each file.
+fn warn_unreached(output: &Output, unreached: &[plan::Unreached]) {
+    for found in unreached {
+        let (said, help) = unreached_said(found);
+        output.warn_with(&said, &help);
+        for path in &found.paths {
+            output.detail(path);
+        }
+    }
+}
+
+/// what a dataset exclude that names files inside an archive leaves undone, and the drop that
+/// does it.
+pub(crate) fn unreached_said(found: &plan::Unreached) -> (String, String) {
+    let inside = match found.archives.as_slice() {
+        [one] => one
+            .rsplit_once('/')
+            .map_or(one.as_str(), |(_, name)| name)
+            .to_owned(),
+        many => format!("{} archives", many.len()),
+    };
+    let first = found.paths.first().map_or("", String::as_str);
+    let command = format!("fetchloom drop {}", crate::cli::shell_word(first));
+    let (what, help) = match found.paths.len() {
+        1 => ("a file".to_owned(), format!("run `{command}`")),
+        count => (
+            format!("{count} files"),
+            format!("run `fetchloom drop` with their paths, as `{command}`"),
+        ),
+    };
+    (
+        format!(
+            "exclude \"{}\" in datasets.{} names {what} inside {inside}, which exclude does not reach",
+            found.pattern, found.dataset
+        ),
+        help,
+    )
 }
 
 /// the most files a warning about files put back names; `-v` names each one.
@@ -285,6 +326,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         &placement.put_back,
         "a sync would put back",
     );
+    warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(

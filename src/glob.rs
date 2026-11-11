@@ -180,6 +180,18 @@ impl Set {
         &self.globs
     }
 
+    /// the first pattern, as written, that matches `path`.
+    pub(crate) fn matching(&self, path: &str) -> Option<&Glob> {
+        let found = self.literal.get(path).copied();
+        let tried = self
+            .wild
+            .iter()
+            .copied()
+            .take_while(|at| found.is_none_or(|found| *at < found))
+            .find(|at| self.globs[*at].matches(path));
+        tried.or(found).map(|at| &self.globs[at])
+    }
+
     pub(crate) fn matches(&self, path: &str) -> bool {
         self.literal.contains_key(path) || self.wild.iter().any(|at| self.globs[*at].matches(path))
     }
@@ -471,6 +483,8 @@ mod tests {
                 let path = walk.joined(&names);
                 let expected = globs.iter().any(|glob| glob.matches(&path));
                 assert_eq!(patterns.matches(&path), expected, "{path} by {globs:?}");
+                let first = globs.iter().find(|glob| glob.matches(&path));
+                assert_eq!(patterns.matching(&path), first, "{path} by {globs:?}");
             }
         }
     }

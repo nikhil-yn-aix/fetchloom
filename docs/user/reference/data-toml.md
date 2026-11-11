@@ -139,7 +139,7 @@ a message about `env` cites its line by number only, as one about `ref` does, si
 
 each select pattern must match at least one listed path before exclusions, including a google docs entry in a drive folder. an unmatched pattern shows one example path. a selection that leaves no files fails. listing limits apply before selection.
 
-patterns select the files a source lists, before download and before a server-supplied name replaces a guessed name. they do not reach files inside an archive; a [members table](#files-inside-archives) does. see [archives](../concepts.md#archives) for where those files land.
+patterns select the files a source lists, before download and before a server-supplied name replaces a guessed name. they do not reach files inside an archive; a [members table](#files-inside-archives) does. an `exclude` that names a file inside an archive by the path it lands at below the dataset's folder makes sync warn, and status hint, naming the `fetchloom drop` that leaves it out. see [archives](../concepts.md#archives) for where those files land.
 
 ## files inside archives
 

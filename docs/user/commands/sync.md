@@ -160,6 +160,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
 | status still lists another dataset after `sync <name>` | a named sync leaves the other datasets as they are | run `fetchloom sync` |
+| `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them | run the [`fetchloom drop`](drop.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
 
 ## stopping a sync
 

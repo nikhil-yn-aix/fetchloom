@@ -8,7 +8,7 @@ use crate::archive;
 use crate::cache::{Cache, Member};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::glob::Glob;
+use crate::glob::{self, Glob};
 use crate::name;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, MemberFilter, Members, Source};
@@ -301,6 +301,68 @@ fn selected(
 /// the last part of an archive's path, its file name.
 fn archive_name(path: &str) -> &str {
     path.rsplit_once('/').map_or(path, |(_, name)| name)
+}
+
+/// a dataset exclude pattern that matches files inside an archive. a dataset's own patterns
+/// choose among the files its source lists, so it leaves those files where they are, though a
+/// person who wrote it most likely meant to leave them out.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Unreached {
+    pub(crate) dataset: String,
+    pub(crate) pattern: String,
+    /// the archives the files are inside, by their paths in data.lock, each once.
+    pub(crate) archives: Vec<String>,
+    /// the files, by their paths in the project.
+    pub(crate) paths: Vec<String>,
+}
+
+/// each exclude pattern of a dataset that matches a planned file inside an archive by the
+/// file's path below the dataset's folder, the path a person sees.
+pub(crate) fn unreached(manifest: &Manifest, targets: &[Target]) -> Vec<Unreached> {
+    let mut found: Vec<Unreached> = Vec::new();
+    let mut by_dataset: HashMap<&str, Option<(String, glob::Set)>> = HashMap::new();
+    for target in targets
+        .iter()
+        .filter(|target| target.locked.unpacks_to.is_some())
+    {
+        let Some((inside, excluded)) = by_dataset
+            .entry(target.dataset)
+            .or_insert_with(|| {
+                let source = manifest.datasets.get(target.dataset)?.source()?;
+                let inside = format!("{}/", folder(manifest, target.dataset));
+                (!source.exclude.is_empty())
+                    .then(|| (inside, glob::Set::new(source.exclude.clone())))
+            })
+            .as_ref()
+        else {
+            continue;
+        };
+        let Some(glob) = target
+            .path
+            .strip_prefix(inside.as_str())
+            .and_then(|path| excluded.matching(path))
+        else {
+            continue;
+        };
+        let at = found
+            .iter()
+            .position(|seen| seen.dataset == target.dataset && seen.pattern == glob.as_str())
+            .unwrap_or_else(|| {
+                found.push(Unreached {
+                    dataset: target.dataset.to_owned(),
+                    pattern: glob.as_str().to_owned(),
+                    archives: Vec::new(),
+                    paths: Vec::new(),
+                });
+                found.len() - 1
+            });
+        let unreached = &mut found[at];
+        if !unreached.archives.contains(&target.locked.path) {
+            unreached.archives.push(target.locked.path.clone());
+        }
+        unreached.paths.push(target.path.clone());
+    }
+    found
 }
 
 /// where the patterns that decide a dataset's files are set, so a clash says where to change
@@ -774,6 +836,50 @@ mod tests {
                 "loosen the patterns, or exclude \"pets.zip\" in datasets.a to leave the whole archive out"
             )
         );
+    }
+
+    /// a dataset exclude chooses among the files its source lists, so one written against a
+    /// file inside an archive leaves it where it is; it is found by the path the file lands at
+    /// below the dataset's folder, which is what a person writes.
+    #[test]
+    fn an_exclude_naming_files_inside_an_archive_is_found() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}exclude = [\"images/x.png\", \"labels.txt\", \"images/*.jpg\"]\n"),
+            &[("a", &["pets.zip"])],
+        );
+        let members: &[&str] = &[
+            "pets-v1/images/x.png",
+            "pets-v1/images/y.jpg",
+            "pets-v1/images/z.jpg",
+            "pets-v1/labels.csv",
+        ];
+        let paths = |archive: &str| -> Option<Vec<Member>> {
+            (archive == "pets.zip").then(|| members.iter().map(|path| member(path)).collect())
+        };
+        let planned = plan(&manifest, &locked, &|file| paths(&file.path)).unwrap();
+        assert_eq!(
+            unreached(&manifest, &planned.targets),
+            [
+                Unreached {
+                    dataset: "a".to_owned(),
+                    pattern: "images/x.png".to_owned(),
+                    archives: vec!["pets.zip".to_owned()],
+                    paths: vec!["data/a/images/x.png".to_owned()],
+                },
+                Unreached {
+                    dataset: "a".to_owned(),
+                    pattern: "images/*.jpg".to_owned(),
+                    archives: vec!["pets.zip".to_owned()],
+                    paths: vec![
+                        "data/a/images/y.jpg".to_owned(),
+                        "data/a/images/z.jpg".to_owned()
+                    ],
+                },
+            ]
+        );
+        let (plain, locked) = pinned(ONE, &[("a", &["pets.zip"])]);
+        let planned = plan(&plain, &locked, &|file| paths(&file.path)).unwrap();
+        assert_eq!(unreached(&plain, &planned.targets), []);
     }
 
     #[test]

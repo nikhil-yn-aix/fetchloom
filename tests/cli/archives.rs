@@ -981,3 +981,42 @@ fn gc_frees_a_file_a_members_table_leaves_out() -> Result {
     assert!(object(readme).exists(), "the project places README.md");
     Ok(())
 }
+
+/// the walkthrough: an exclude written against a file inside the zip, as the data folder shows
+/// it, matches no file the source lists, so the file stays. status hints and sync warns, each
+/// naming the drop that leaves it out.
+#[test]
+fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fixture("python.zip")?;
+    let server = Server::start(PATH, vec![file(&zip, "\"z1\""), file(&zip, "\"z1\"")])?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{plain}exclude = [\"data/train.csv\"]\n"),
+    )?;
+    let said = "exclude \"data/train.csv\" in datasets.dataset names a file inside dataset.zip, which exclude does not reach";
+    let help = "run `fetchloom drop data/dataset/data/train.csv`";
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        status.contains(&format!("  hint: {said}; {help}\n")),
+        "{status}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    ok(&synced)?;
+    let stderr = text(&synced.stderr)?;
+    assert!(
+        stderr.contains(&format!("warning: {said}\n  help: {help}\n")),
+        "{stderr}"
+    );
+    let train = sandbox.work().join("data/dataset/data/train.csv");
+    assert!(train.exists(), "exclude does not reach it");
+    ok(&sandbox.run(&["drop", "data/dataset/data/train.csv"])?)?;
+    assert!(!train.exists());
+    let stderr = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(!stderr.contains("warning"), "{stderr}");
+    Ok(())
+}

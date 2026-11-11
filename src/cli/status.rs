@@ -74,6 +74,9 @@ pub(super) struct Status {
     /// `fetchloom build` brings in line.
     #[serde(skip)]
     building: BTreeMap<String, String>,
+    /// exclude patterns that name files inside an archive, which they leave where they are.
+    #[serde(skip)]
+    unreached: Vec<plan::Unreached>,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -102,6 +105,10 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         if !status.building.is_empty() {
             output.hint("`fetchloom build --dry-run` shows the commands that would build them");
         }
+    }
+    for found in &status.unreached {
+        let (said, help) = place::unreached_said(found);
+        output.hint(&format!("{said}; {help}"));
     }
     Ok(status)
 }
@@ -206,6 +213,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned);
+    status.unreached = plan::unreached(&manifest, &planned.targets);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)

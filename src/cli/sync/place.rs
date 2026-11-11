@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use self::put::put_all;
 use self::tell::tell;
-pub(crate) use self::tell::tell_preview;
+pub(crate) use self::tell::{tell_preview, unreached_said};
 use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
@@ -52,6 +52,10 @@ pub(crate) struct Placement {
     /// files fetchloom placed that were gone, deleted or moved by someone, and that it placed
     /// again since data.lock still pins them. `placed` counts them.
     pub(crate) put_back: Vec<String>,
+    /// exclude patterns of datasets in the run that name files inside an archive, which they
+    /// leave where they are.
+    #[serde(skip)]
+    pub(crate) unreached: Vec<plan::Unreached>,
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
     #[serde(skip)]
     pub(crate) repaired: HashSet<String>,
@@ -77,6 +81,33 @@ pub(crate) struct Placement {
     /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
+}
+
+impl Placement {
+    /// notes what a placing tells beside its counts: the files it places that the state records
+    /// as placed, which someone deleted or moved while data.lock still pins them, and the
+    /// excludes of datasets in `scope` that name files inside an archive.
+    fn notice(
+        &mut self,
+        manifest: &Manifest,
+        targets: &[Target],
+        actions: &[Action],
+        survey: &Survey,
+        scope: &Scope,
+    ) {
+        self.put_back = targets
+            .iter()
+            .zip(actions)
+            .filter(|(target, action)| {
+                matches!(action, Action::Place) && survey.state.files.contains_key(&target.path)
+            })
+            .map(|(target, _)| target.path.clone())
+            .collect();
+        self.unreached = plan::unreached(manifest, targets)
+            .into_iter()
+            .filter(|found| scope.includes(&found.dataset))
+            .collect();
+    }
 }
 
 /// a file `--force` moved aside to replace it, which goes once what replaces it is in place and
@@ -439,7 +470,13 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
-        preview.placement.put_back = put_back(&self.targets, &self.actions, &self.survey);
+        preview.placement.notice(
+            self.manifest,
+            &self.targets,
+            &self.actions,
+            &self.survey,
+            &self.scope,
+        );
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
             if matches!(action, Action::Unselected) {
@@ -609,7 +646,7 @@ impl<'a> Placing<'a> {
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
-        placement.put_back = put_back(&targets, &actions, &survey);
+        placement.notice(manifest, &targets, &actions, &survey, &scope);
         let settled = settle(
             project,
             &mut placer,
@@ -798,19 +835,6 @@ pub(crate) fn untouched(
         unchanged: state.files.len() as u64,
         ..Placement::default()
     }))
-}
-
-/// the files `actions` place where the state records a file fetchloom placed: someone deleted
-/// or moved it, and data.lock still pins it.
-fn put_back(targets: &[Target], actions: &[Action], survey: &Survey) -> Vec<String> {
-    targets
-        .iter()
-        .zip(actions)
-        .filter(|(target, action)| {
-            matches!(action, Action::Place) && survey.state.files.contains_key(&target.path)
-        })
-        .map(|(target, _)| target.path.clone())
-        .collect()
 }
 
 /// the files fetchloom did not place that already hold their target's bytes, those sync adopts,
