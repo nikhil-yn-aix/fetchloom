@@ -17,6 +17,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | a cloned project has data.toml but no data/ | `fetchloom sync --json` |
 | a script needs a dataset's path | `fetchloom path <name>`; stdout is the path, or `result.path` with `--json`, and it syncs first if needed. add `--locked` where data.lock must not change |
 | download once, no project files | `fetchloom get <ref> --dir <folder> --json` |
+| one file at a path the user chose | `fetchloom get <url> -o <file> --json`; `result.file` is its absolute path. it needs one link to one file, else exit 2 naming `--dir` |
 | several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json` |
 | words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates`. `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
 | check data/ against the lock | `fetchloom status --json` |
@@ -36,6 +37,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 - a server on this machine or its local network that only data.toml, data.lock or a `get -i` list names is refused with `network.refused`, exit 20, naming `allowed_origins`. do not set `FETCHLOOM_ALLOWED_ORIGINS` or that setting yourself; ask the user whether they trust that server.
 - never put a token in data.toml, code or a command you show. fetchloom reads keys the source's own tools saved; if none exists, ask the user to run `fetchloom auth login <source>` in their terminal.
 - `get` checks every target in an output folder before removing earlier versions; a later conflict leaves earlier files in place.
+- `get -o` leaves a file already at the path as it is: holding the same bytes it exits 0, holding others it exits 50 with `local.not_empty`. `--force` replaces it; use it only with the user's agreement.
 - `sync` keeps files a person edited and says so. `sync --force` replaces them; use it only with the user's agreement.
 - `remove` and `sync` delete only unchanged files fetchloom placed, and only inside the data folder. a warning names each folder they leave holding other files, and the old data folder once `data_dir` changes; tell the user instead of deleting those yourself.
 - a file already at a pinned path that holds the pinned bytes is adopted: sync takes it as placed and, where the drive makes hardlinks, links it to the cache, which makes it read-only. `remove` later deletes it like any placed file and warns that it was already there.

@@ -1,12 +1,12 @@
 ---
 source: tests/cli/get.rs
-assertion_line: 77
 expression: pretty
 ---
 {
   "command": "get",
   "errors": [],
   "result": {
+    "file": null,
     "files": [
       {
         "method": "[method]",

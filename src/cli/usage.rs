@@ -335,7 +335,7 @@ mod tests {
             (
                 "--force",
                 vec!["fetchloom", "--force", "sync"],
-                "--force is an option of sync, so it goes after the command, as in fetchloom sync --force",
+                "--force is an option of sync and get, so it goes after the command, as in fetchloom sync --force",
             ),
         ] {
             let error = problem(&arguments)?;

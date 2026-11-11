@@ -1,4 +1,5 @@
-//! `fetchloom get`: one link into one folder, through the cache.
+//! `fetchloom get`: one link into one folder, or into the one file `-o` names, through the
+//! cache.
 
 use std::fs;
 use std::process::{Child, Stdio};
@@ -149,44 +150,219 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     let length = body.len().to_string();
     let rest = (body.len() - cut).to_string();
     let range = format!("bytes {cut}-{}/{}", body.len() - 1, body.len());
+    // a folder named after the file, then the one file -o names
+    for (options, placed) in [(&[][..], "big/big.bin"), (&["-o", "big.bin"], "big.bin")] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(
+            "/big.bin",
+            vec![
+                reply(
+                    "200 OK",
+                    &[("Content-Length", &length), ("ETag", "\"v1\"")],
+                    &body[..cut],
+                ),
+                reply(
+                    "206 Partial Content",
+                    &[
+                        ("Content-Length", &rest),
+                        ("Content-Range", &range),
+                        ("ETag", "\"v1\""),
+                    ],
+                    &body[cut..],
+                ),
+            ],
+        )?;
+        let output = sandbox.run(&[&["--json", "get", &server.url][..], options].concat())?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        let work = &json(&output)?["work"];
+        assert_eq!(work["requests"], 2, "{placed}");
+        assert_eq!(work["retries"], 1, "{placed}");
+        assert_eq!(work["resumes"], 1, "{placed}");
+        assert_eq!(
+            work["bytes_down"],
+            body.len(),
+            "{placed}: no byte is downloaded twice"
+        );
+        assert_eq!(fs::read(sandbox.work().join(placed))?, body, "{placed}");
+        let resumed = &server.requests()[1];
+        assert!(
+            resumed.contains(&format!("range: bytes={cut}-")),
+            "{resumed}"
+        );
+        assert!(resumed.contains("if-range: \"v1\""), "{resumed}");
+    }
+    Ok(())
+}
+
+/// the files in the cache's object store.
+fn objects(sandbox: &Sandbox) -> usize {
+    fs::read_dir(sandbox.cache().join("objects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .flat_map(|fan| fs::read_dir(fan.path()).into_iter().flatten().flatten())
+        .count()
+}
+
+/// the names in the work folder, sorted.
+fn names(sandbox: &Sandbox) -> Result<Vec<String>> {
+    let mut names = fs::read_dir(sandbox.work())?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<Vec<String>>>()?;
+    names.sort();
+    Ok(names)
+}
+
+#[test]
+fn output_writes_exactly_that_file_writable_and_alone() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(
-        "/big.bin",
-        vec![
-            reply(
-                "200 OK",
-                &[("Content-Length", &length), ("ETag", "\"v1\"")],
-                &body[..cut],
-            ),
-            reply(
-                "206 Partial Content",
-                &[
-                    ("Content-Length", &rest),
-                    ("Content-Range", &range),
-                    ("ETag", "\"v1\""),
-                ],
-                &body[cut..],
-            ),
-        ],
-    )?;
-    let output = sandbox.run(&["--json", "get", &server.url])?;
-    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    let work = &json(&output)?["work"];
-    assert_eq!(work["requests"], 2);
-    assert_eq!(work["retries"], 1);
-    assert_eq!(work["resumes"], 1);
-    assert_eq!(
-        work["bytes_down"],
-        body.len(),
-        "no byte is downloaded twice"
-    );
-    assert_eq!(fs::read(sandbox.work().join("big").join("big.bin"))?, body);
-    let resumed = &server.requests()[1];
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let placed = sandbox.work().join("data.csv");
+    assert_eq!(text(&output.stdout)?, format!("{}\n", placed.display()));
+    assert_eq!(fs::read(&placed)?, IRIS);
+    let metadata = fs::metadata(&placed)?;
     assert!(
-        resumed.contains(&format!("range: bytes={cut}-")),
-        "{resumed}"
+        !metadata.permissions().readonly(),
+        "the file is yours to edit"
     );
-    assert!(resumed.contains("if-range: \"v1\""), "{resumed}");
+    #[cfg(unix)]
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::nlink(&metadata),
+        1,
+        "no other name shares its bytes"
+    );
+    assert_eq!(names(&sandbox)?, ["data.csv"]);
+    assert_eq!(objects(&sandbox), 0, "a one-off keeps no copy in the cache");
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    Ok(())
+}
+
+#[test]
+fn output_keeps_an_archive_packed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    archive.start_file("iris.csv", zip::write::SimpleFileOptions::default())?;
+    std::io::Write::write_all(&mut archive, IRIS)?;
+    let bytes = archive.finish()?.into_inner();
+    let server = Server::start("/iris.zip", vec![file(&bytes, "\"z1\"")])?;
+    let output = sandbox.run(&["get", &server.url, "-o", "packed/iris.zip"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("packed").join("iris.zip"))?,
+        bytes
+    );
+    assert_eq!(
+        names(&sandbox)?,
+        ["packed"],
+        "-o makes the folders it names"
+    );
+    Ok(())
+}
+
+/// a notebook that states the hash it expects makes no request when its file is already there,
+/// and a file holding other bytes is refused before anything downloads.
+#[test]
+fn output_with_a_known_sha256_decides_about_a_file_there_before_any_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    for (bytes, code) in [(IRIS, 0), (&b"mine"[..], 50)] {
+        fs::write(sandbox.work().join("data.csv"), bytes)?;
+        let output = sandbox.run(&[
+            "--json",
+            "get",
+            &server.url,
+            "-o",
+            "data.csv",
+            "--sha256",
+            IRIS_SHA256,
+        ])?;
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}",
+            text(&output.stdout)?
+        );
+        assert_eq!(fs::read(sandbox.work().join("data.csv"))?, bytes);
+    }
+    assert!(server.requests().is_empty(), "{:?}", server.requests());
+    Ok(())
+}
+
+/// a rerun in a notebook finds its file where the last run put it, holding what the link serves,
+/// and leaves it as it is.
+#[test]
+fn output_leaves_a_file_holding_the_same_bytes_as_it_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let first = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let placed = sandbox.work().join("data.csv");
+    let before = fs::metadata(&placed)?;
+    let output = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok data.csv already holds what the link serves"),
+        "{stderr}"
+    );
+    let after = fs::metadata(&placed)?;
+    assert_eq!(after.modified()?, before.modified()?);
+    #[cfg(unix)]
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::ino(&after),
+        std::os::unix::fs::MetadataExt::ino(&before)
+    );
+    assert_eq!(
+        objects(&sandbox),
+        0,
+        "the bytes it compared leave the cache"
+    );
+    Ok(())
+}
+
+#[test]
+fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    let placed = sandbox.work().join("data.csv");
+    fs::write(&placed, "mine")?;
+    let refused = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stdout)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "data.csv already exists and holds other bytes than the link serves now"
+    );
+    assert_eq!(
+        fs::read_to_string(&placed)?,
+        "mine",
+        "nothing of yours is replaced"
+    );
+
+    let forced = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stdout)?);
+    let document = json(&forced)?;
+    let result = &document["result"];
+    assert_eq!(result["file"], placed.display().to_string());
+    assert_eq!(result["folder"], sandbox.work().display().to_string());
+    assert_eq!(result["files"][0]["path"], "data.csv");
+    assert_eq!(
+        document["work"]["bytes_down"], 0,
+        "the bytes the refused run fetched are used"
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
+    assert!(!fs::metadata(&placed)?.permissions().readonly());
+    assert_eq!(names(&sandbox)?, ["data.csv"], "nothing is left beside it");
     Ok(())
 }
 
@@ -786,13 +962,7 @@ fn a_link_that_answers_with_a_web_page_is_refused_before_the_cache() -> Result {
         assert_eq!(document["work"]["objects_written"], 0);
     }
     assert_eq!(server.requests().len(), 2);
-    let stored = fs::read_dir(sandbox.cache().join("objects"))
-        .into_iter()
-        .flatten()
-        .flatten()
-        .flat_map(|fan| fs::read_dir(fan.path()).into_iter().flatten().flatten())
-        .count();
-    assert_eq!(stored, 0);
+    assert_eq!(objects(&sandbox), 0);
     assert!(!sandbox.work().join("data.toml").exists());
     assert!(!sandbox.work().join("shards").exists());
     Ok(())

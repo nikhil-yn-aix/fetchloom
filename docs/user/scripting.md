@@ -60,11 +60,12 @@ kept conflicts do not include unrelated extras. run `fetchloom --json status` an
 ```sh
 fetchloom --json add https://huggingface.co/datasets/scikit-learn/iris
 fetchloom --json get https://zenodo.org/records/3608990 --dir flowers
+fetchloom --json get https://example.org/iris.csv -o iris.csv
 ```
 
 `add` returns `result.project` and added names in `result.datasets`. repeating an identical addition can return an empty name array because the entry already exists.
 
-`get` returns `result.folder` and `result.files`. file paths are relative to that folder, with sizes and complete SHA-256 hashes. extracted members replace archives in the list. `origin` describes where bytes came from; `method` is `reflink`, `hardlink`, `copy`, or null for an already present file.
+`get` returns `result.folder` and `result.files`. file paths are relative to that folder, with sizes and complete SHA-256 hashes. extracted members replace archives in the list. `origin` describes where bytes came from; `method` is `reflink`, `hardlink`, `copy`, or null for an already present file. with `-o`, `result.file` is the file's absolute path and `result.folder` its folder.
 
 `fetchloom --json get -i links.txt` returns one record for each link in `result.items`, with its own `status`, `folder`, `files` and `error`. a run where some links failed still exits nonzero; read `result.items` to see which links arrived. [JSON output](reference/json-output.md#command-results) lists the fields.
 

@@ -1,0 +1,6 @@
+---
+source: tests/cli/get.rs
+expression: stderr
+---
+ Downloaded iris.csv · 81 B in [time]
+      Saved data.csv

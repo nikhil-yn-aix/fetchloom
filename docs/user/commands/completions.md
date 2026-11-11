@@ -62,7 +62,7 @@ open a new terminal afterwards. typing `fetchloom ca` and pressing tab then comp
 
 ## what it completes
 
-the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and folders after options such as `-C` and `--dir`. they are written once from fetchloom's command line, so they do not complete dataset names or references.
+the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and paths after options such as `-C`, `-o` and `--dir`. they are written once from fetchloom's command line, so they do not complete dataset names or references.
 
 ## settings it ignores
 

@@ -13,7 +13,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
-`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you choose. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` downloads once, without a project.
+`fetchloom add iris` does the same from a name: it searches hugging face, kaggle and zenodo and lets you choose. a link, a DOI or an id such as `kaggle:uciml/iris` works too, and `fetchloom get iris` downloads once, without a project. `fetchloom get <link> -o data.csv` writes the one file a link serves at exactly that path, as curl does, checked before it takes the name.
 
 `data.toml` lists the datasets you want. `data.lock` pins them: it records the exact files with their SHA-256 and size. the cache is one folder that keeps each file once for all your projects, and `fetchloom sync` puts the pinned files in `data/` as links to the cache, or as copies where a link cannot work.
 

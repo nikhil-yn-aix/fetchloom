@@ -2,8 +2,9 @@
 //! projects. archives unpack into the folder unless `--no-extract` keeps them packed. a second run
 //! asks the server whether anything changed and moves no bytes when nothing did. several links,
 //! given on the command line or listed in `--input-file`, download together, and one that fails
-//! leaves the others to finish.
+//! leaves the others to finish. `-o` writes the one file a link resolves to instead.
 
+mod file;
 mod folder;
 
 use std::borrow::Cow;
@@ -41,6 +42,8 @@ use crate::units;
 /// what `get` did, as `--json` prints it.
 #[derive(Serialize)]
 pub(super) struct Report {
+    /// the file `-o` names, or none when get filled folders.
+    file: Option<PathBuf>,
     /// the folder of the one link asked for, or none when several were.
     folder: Option<PathBuf>,
     files: Vec<Got>,
@@ -133,6 +136,9 @@ struct Wanted {
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
+    if let Some(path) = &args.output {
+        file::usage(path, args.links.len(), args.input_file.is_some())?;
+    }
     let links = links(context, &args).await?;
     if args.sha256.is_some() && links.len() != 1 {
         return Err(Error::new(
@@ -245,7 +251,8 @@ fn read_list_text(path: &Path) -> Result<(String, String), Error> {
     Ok((name, text))
 }
 
-/// a link or search words alone: into the folder `--dir` names, or one named after the download.
+/// a link or search words alone: into the file `-o` names, the folder `--dir` names, or one named
+/// after the download.
 async fn one(
     context: &Context,
     net: &Arc<Net>,
@@ -264,6 +271,17 @@ async fn one(
     let listing =
         engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
     engine::tell_resolved(&context.output, &listing);
+    if let Some(path) = &args.output {
+        let (file, done) = file::one(context, net, &cache, args, path, &parsed, &listing).await?;
+        context.output.answer(&file.display().to_string());
+        tell_next(context, args, &link);
+        return Ok(Report {
+            file: Some(file),
+            folder: Some(done.folder.clone()),
+            files: done.files.clone(),
+            items: vec![Item::done(&link, &done)],
+        });
+    }
     let mut wanted = prepare(&cache, args, args.dir.as_deref(), None, parsed, listing)?;
     approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
@@ -285,6 +303,7 @@ async fn one(
     context.output.answer(&done.folder.display().to_string());
     tell_next(context, args, &link);
     Ok(Report {
+        file: None,
         folder: Some(done.folder.clone()),
         files: done.files.clone(),
         items: vec![Item::done(&link, &done)],
@@ -358,6 +377,7 @@ async fn many(
     }
     let placed: usize = items.iter().map(|item| item.files.len()).sum();
     let report = Report {
+        file: None,
         folder: None,
         files: Vec::new(),
         items,
@@ -663,19 +683,8 @@ fn vouch(
     sha256: Option<Sha256>,
     taken: &mut Taken,
 ) -> Result<(), Error> {
-    if let (Some(expected), [path], [found]) = (sha256, paths, fetched)
-        && found.digest != expected
-    {
-        return Err(Error::new(
-            Kind::IntegrityMismatch,
-            format!("{path} does not match --sha256"),
-        )
-        .detail(format!(
-            "expected sha256 {}, got {}",
-            expected.short(),
-            found.digest.short()
-        ))
-        .help(SHA256_HELP));
+    if let ([path], [found]) = (paths, fetched) {
+        matches_sha256(path, &found.digest, sha256)?;
     }
     // a folder another link filled could hold files of the same name, which its bytes in the
     // cache would let this link replace
@@ -690,6 +699,23 @@ fn vouch(
         .help("fetch these links in separate runs, each with its own --dir folder"));
     }
     Ok(())
+}
+
+/// refuses the bytes of the file at `path` when `--sha256` asked for others.
+fn matches_sha256(path: &str, digest: &Sha256, expected: Option<Sha256>) -> Result<(), Error> {
+    match expected {
+        Some(expected) if expected != *digest => Err(Error::new(
+            Kind::IntegrityMismatch,
+            format!("{path} does not match --sha256"),
+        )
+        .detail(format!(
+            "expected sha256 {}, got {}",
+            expected.short(),
+            digest.short()
+        ))
+        .help(SHA256_HELP)),
+        _ => Ok(()),
+    }
 }
 
 /// the folders the links of one run filled. windows and macos see `Data` and `data` as one
@@ -1332,6 +1358,8 @@ mod tests {
     fn the_pin_hint_keeps_filters_and_extraction_settings() {
         let args = Get {
             links: vec!["https://example.org/data.zip".to_owned()],
+            output: None,
+            force: false,
             dir: Some(PathBuf::from("chosen")),
             input_file: None,
             sha256: None,

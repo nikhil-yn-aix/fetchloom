@@ -40,6 +40,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: this sync needs at least 170.0 GiB on the disk holding the cache at /home/ada/.cache/fetchloom, which has 150.0 GiB free` | the downloads, and the archives they unpack, need more than the cache's disk has free | free space there, or set `FETCHLOOM_CACHE` to a folder on a bigger disk. downloads already in the cache are kept. `--yes` goes on anyway, as on a disk that compresses |
 | `error: the cache at /media/usb/fetchloom is on a FAT32 disk, which holds no file of 4 GiB or more, and scans.zip is 5.2 GiB` | FAT32 keeps a file's size in 32 bits, so the file cannot be stored there; fetchloom refuses before downloading, copying or unpacking it | set `FETCHLOOM_CACHE` to a folder on a disk formatted as exFAT, NTFS, APFS or ext4. a project on a FAT32 disk gets the same refusal for its data folder: move the project |
 | `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `--dir` |
+| `error: data.csv already exists and holds other bytes than the link serves now` | `get -o` never replaces a file without being asked | choose another name with `-o`, or add `--force` to replace it |
 | `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
 
 for a size mismatch, the full stderr answer can be:

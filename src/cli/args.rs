@@ -96,11 +96,11 @@ on disk: notes changed cached files, which are downloaded again when next needed
 
     pub(super) const GET: &str = "examples:
   fetchloom get iris
-  fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
+  fetchloom get https://example.org/iris.csv -o iris.csv
   fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
   fetchloom get -i links.txt
 
-on disk: writes one folder for each link, through the cache. does not create data.toml or data.lock";
+on disk: writes one folder for each link, or with -o the one file it names, through the cache. does not create data.toml or data.lock";
 
     pub(super) const SEARCH: &str = "examples:
   fetchloom search iris
@@ -764,6 +764,27 @@ pub(crate) struct Get {
     )]
     pub(crate) links: Vec<String>,
 
+    /// write the downloaded file to <file> as it came, never unpacked. needs one link to one
+    /// file
+    #[arg(
+        short,
+        long,
+        value_name = "file",
+        conflicts_with = "dir",
+        help_heading = "options"
+    )]
+    pub(crate) output: Option<PathBuf>,
+
+    /// replace a file already at <file> that holds other bytes. it stays whole until the new
+    /// file takes its name
+    #[arg(
+        long,
+        requires = "output",
+        conflicts_with = "dir",
+        help_heading = "options"
+    )]
+    pub(crate) force: bool,
+
     /// put the download in <folder> instead of a new folder named after it. with several
     /// links, each gets its own folder inside <folder>
     #[arg(short, long, value_name = "folder", help_heading = "options")]
@@ -774,8 +795,8 @@ pub(crate) struct Get {
     #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 
-    /// check that the file has this SHA-256 before putting it in the folder. needs one link to
-    /// one file
+    /// check that the file has this SHA-256 before it takes its name or goes in the folder.
+    /// needs one link to one file
     #[arg(long, value_name = "hex", value_parser = sha256, help_heading = "options")]
     pub(crate) sha256: Option<Sha256>,
 
@@ -871,6 +892,36 @@ mod tests {
         ] {
             assert_eq!(super::help_option(&root, get, word), expected, "{word}");
         }
+    }
+
+    /// -o writes one file and --dir fills a folder, so a get takes one of them, and --force
+    /// replaces only the file -o names.
+    #[test]
+    fn output_and_dir_exclude_each_other_and_force_needs_output() {
+        for (line, kind) in [
+            (
+                &["fetchloom", "get", "zenodo:1", "-o", "a.csv", "--dir", "a"][..],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+            (
+                &["fetchloom", "get", "zenodo:1", "--force"],
+                clap::error::ErrorKind::MissingRequiredArgument,
+            ),
+            (
+                &["fetchloom", "get", "zenodo:1", "--dir", "a", "--force"],
+                clap::error::ErrorKind::ArgumentConflict,
+            ),
+        ] {
+            assert_eq!(
+                Args::try_parse_from(line).unwrap_err().kind(),
+                kind,
+                "{line:?}"
+            );
+        }
+        assert!(
+            Args::try_parse_from(["fetchloom", "get", "zenodo:1", "-o", "a.csv", "--force"])
+                .is_ok()
+        );
     }
 
     #[test]

@@ -12,14 +12,20 @@ arguments:
              alone, in quotes
 
 options:
+  -o, --output <file>      write the downloaded file to <file> as it came, never
+                           unpacked. needs one link to one file
+      --force              replace a file already at <file> that holds other
+                           bytes. it stays whole until the new file takes its
+                           name
   -d, --dir <folder>       put the download in <folder> instead of a new folder
                            named after it. with several links, each gets its own
                            folder inside <folder>
   -i, --input-file <file>  read links from <file>, one per line, or from stdin
                            for -. blank lines and lines starting with # are
                            skipped
-      --sha256 <hex>       check that the file has this SHA-256 before putting
-                           it in the folder. needs one link to one file
+      --sha256 <hex>       check that the file has this SHA-256 before it takes
+                           its name or goes in the folder. needs one link to one
+                           file
       --select <glob>      keep only files matching this pattern, such as
                            "**/*.csv". repeat it for more
       --exclude <glob>     leave out files matching this pattern. repeat it for
@@ -40,11 +46,11 @@ options:
 
 examples:
   fetchloom get iris
-  fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
+  fetchloom get https://example.org/iris.csv -o iris.csv
   fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
   fetchloom get -i links.txt
 
-on disk: writes one folder for each link, through the cache. does not create
-data.toml or data.lock
+on disk: writes one folder for each link, or with -o the one file it names,
+through the cache. does not create data.toml or data.lock
 
 docs: https://nikhil-yn-aix.github.io/fetchloom/user/commands/get.html

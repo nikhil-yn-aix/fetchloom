@@ -15,6 +15,8 @@ fn listed(fixture: &str) -> (Parsed, Listing) {
 fn args(exclude: &[&str]) -> Get {
     Get {
         links: vec!["drive:folders/12zxlvJtuHFV6awc3AINaNHnfvRttPv0i".to_owned()],
+        output: None,
+        force: false,
         dir: None,
         input_file: None,
         sha256: None,

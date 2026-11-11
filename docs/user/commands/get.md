@@ -1,14 +1,15 @@
 # get
 
-`get` downloads into a folder through the shared cache without creating a project.
+`get` downloads data once, without creating a project: into a folder, or with `-o` into the one file you name. the bytes pass through the shared cache.
 
 ```sh
 fetchloom get iris
+fetchloom get https://example.org/iris.csv -o iris.csv
 fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
 fetchloom get https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz --no-extract
 fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
 fetchloom get -i links.txt
-fetchloom get https://example.org/iris.csv --sha256 d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
+fetchloom get https://example.org/iris.csv -o iris.csv --sha256 d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
 ```
 
 ## usage
@@ -19,9 +20,11 @@ fetchloom get [options] <link>...
 
 | option | effect |
 |---|---|
+| `-o <file>`, `--output <file>` | write the one downloaded file at exactly `<file>`, as it came, never unpacked; see [one file](#one-file) |
+| `--force` | with `-o`, replace a file at `<file>` that holds other bytes |
 | `-d <folder>`, `--dir <folder>` | choose the output folder; with several links, the folder that holds one folder for each |
 | `-i <file>`, `--input-file <file>` | read links from a file, one per line, or from stdin for `-` |
-| `--sha256 <hex>` | check the one downloaded file against this SHA-256 before putting it in the folder |
+| `--sha256 <hex>` | check the one downloaded file against this SHA-256 before it takes its name or goes in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed |
@@ -29,6 +32,8 @@ fetchloom get [options] <link>...
 [global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
 ## what happens
+
+without `-o`:
 
 1. resolve the reference and filter the source's listed files.
 2. reuse checksummed cached bytes or fetch the missing data. unpinned URLs can be checked with `ETag` or `Last-Modified`.
@@ -59,6 +64,48 @@ when a dataset has several files, the `Fetched` line is followed by the folder's
 a download that went on from bytes an earlier run kept says how much came from that run, and its speed counts only the bytes moved this time, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`.
 
 an unchanged direct URL can return a 304 response, avoiding its file-body download. without validators, bytes may download again. source listings can still need requests even when payloads are cached. a later `get` accepts changed upstream bytes; use [add](add.md) for pinned inputs.
+
+## one file
+
+`-o <file>` writes the one file a link resolves to at exactly that path, as `curl -o` does, and prints the file's absolute path on stdout. stderr, then stdout, of a run against a server on the same machine, with the working folder shortened to `/home/me/work`:
+
+```text
+ Downloaded iris.csv · 81 B in 20 ms
+      Saved data.csv
+/home/me/work/data.csv
+```
+
+- the file is yours: writable, and no other name shares its bytes. it is a clone of the downloaded bytes where the drive makes clones, else a copy. archives stay packed.
+- it takes its name only after its size, any MD5 its source states and any `--sha256` are checked, and only once its bytes are on disk. it is written under a hidden name in the same folder, then named in a step that fails rather than replace a file that appeared meanwhile.
+- missing folders on the path are made. the folder you name may be a link to a folder elsewhere.
+- bytes this run downloaded leave the cache once the file holds them, unless a project on this machine pins them, so the file is their only copy. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them.
+
+`-o` takes one link that resolves to one file. several links, `-i`, a dataset with several files left after `--select` and a path that names a folder are usage errors, exit 2, before any file downloads, and they say to use `--dir`. so is a file its source sends inside a zip, as kaggle may send a competition's file, once its bytes show it. `-o -` is refused too, since the file is checked before it appears and stdout cannot wait for that.
+
+### a file already there
+
+a file already at the path stays as it is unless `--force` asks to replace it:
+
+| the file there | without `--force` | with `--force` |
+|---|---|---|
+| holds what the link serves | `Ok`, exit 0, untouched | the same |
+| holds other bytes | `local.not_empty`, exit 50, untouched | replaced |
+| is a link to nothing, or a special file such as a pipe | `local.not_empty`, exit 50, untouched | replaced |
+
+a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
+
+with `--sha256`, or a SHA-256 the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. without one, the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
+
+```text
+$ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv
+ Downloaded iris.csv · 81 B in 20 ms
+error: other.csv already exists and holds other bytes than the link serves now
+  help: add --force to replace it, or choose another name with -o
+$ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv --force
+    Checked iris.csv · unchanged on 127.0.0.1
+   Replaced other.csv
+/home/me/work/other.csv
+```
 
 ## several links
 
@@ -93,19 +140,19 @@ a list always runs as several links, even when it holds one, so `--dir` names th
 
 ## checking a hash
 
-`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed. the details show the first 12 digits of the expected and received hashes.
+`--sha256 <hex>` takes the 64 hex digits a publisher states for a file, in either case, with surrounding whitespace ignored. it needs exactly one link that keeps exactly one file; use `--select` to keep one file of a dataset. a source that states another SHA-256 for the file fails before the download. otherwise fetchloom hashes the bytes as they arrive, and bytes with another hash fail with `integrity.mismatch` and exit 30 before anything is placed or written. the details show the first 12 digits of the expected and received hashes.
 
 ## existing folders
 
 unrelated top-level entries are refused. fetchloom ignores its own leftover copy files; nested extras below an expected folder can remain. matching files stay.
 
-before removing any earlier version, get checks every target in that output folder and the cached bytes it needs. a later conflict or a missing cached object leaves earlier files in place. other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. there is no `get --force`. choose a different folder to protect your files.
+before removing any earlier version, get checks every target in that output folder and the cached bytes it needs. a later conflict or a missing cached object leaves earlier files in place. other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. `--force` works only with `-o`, so choose a different folder to protect your files.
 
 the output folder explicitly chosen with `--dir` for a single link may itself link elsewhere. automatically named folders, including each link's folder inside a multi-link `--dir` parent, must be real folders. links below an output folder are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
 
 ## exit codes
 
-0 returns an output folder for every link. missing approval exits 1; invalid usage exits 2; an occupied destination can exit 50 with `local.not_empty`; a `--sha256` mismatch exits 30 with `integrity.mismatch`. source, download, access and integrity errors use the [shared exit codes](../reference/exit-codes.md). with several links, the first failed link decides the code, and `--json` keeps every link's result in [`result.items`](../reference/json-output.md#command-results).
+0 returns an output folder for every link, or with `-o` the file. missing approval exits 1; invalid usage exits 2; an occupied destination, including a file `-o` will not replace without `--force`, exits 50 with `local.not_empty`; a `--sha256` mismatch exits 30 with `integrity.mismatch`. source, download, access and integrity errors use the [shared exit codes](../reference/exit-codes.md). with several links, the first failed link decides the code, and `--json` keeps every link's result in [`result.items`](../reference/json-output.md#command-results).
 
 ## common mistakes
 
@@ -118,3 +165,5 @@ the output folder explicitly chosen with `--dir` for a single link may itself li
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |
 | `"fashion" is not a link, a DOI or an id` | unquoted search words read as several links | quote the words of one search, as in `fetchloom get "fashion mnist"`, or get one dataset at a time |
 | `--sha256 checks one file` | several links, or a dataset with several files | pass one link, and keep one file with `--select` |
+| `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
+| `data.csv already exists and holds other bytes than the link serves now` | `-o` never replaces a file without being asked | choose another name with `-o`, or add `--force` |
