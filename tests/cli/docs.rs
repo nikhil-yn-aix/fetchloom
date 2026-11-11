@@ -1,5 +1,6 @@
-//! the documentation against the binary: every option is on its command's page, every command
-//! line in a shell example uses real commands and options, and every setting is listed.
+//! the documentation against the binary: every option is on its command's page, the agent guides
+//! name every command and option, every command line in a shell example uses real commands and
+//! options, and every setting is listed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -149,6 +150,91 @@ fn every_option_is_on_its_command_page() -> Result {
                 missing.push(format!(
                     "{family}.md does not mention {word} of `fetchloom {name}`"
                 ));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "{}", missing.join("\n"));
+    Ok(())
+}
+
+/// whether `line` holds `option` as a word of its own, so `-o` is not found inside `--offline`.
+fn names_option(line: &str, option: &str) -> bool {
+    line.match_indices(option).any(|(at, _)| {
+        let before = line[..at].chars().next_back();
+        let after = line[at + option.len()..].chars().next();
+        before.is_none_or(|c| !c.is_alphanumeric() && c != '-')
+            && after.is_none_or(|c| !c.is_alphanumeric() && c != '-')
+    })
+}
+
+/// an agent may read only its skill or llms.txt, so both name every command and option `help`
+/// lists, each command's options on a line that names the command.
+#[test]
+fn the_agent_guides_name_every_command_and_option() -> Result {
+    let document = json(&Sandbox::new()?.run(&["help", "--json"])?)?;
+    let result = &document["result"];
+    let spellings = |argument: &serde_json::Value| -> Vec<String> {
+        let mut names: Vec<String> = ["name", "short"]
+            .iter()
+            .filter_map(|key| argument[*key].as_str())
+            .filter(|name| name.starts_with('-'))
+            .map(str::to_owned)
+            .collect();
+        names.dedup();
+        names
+    };
+    let global: Vec<Vec<String>> = result["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(spellings)
+        .filter(|names| {
+            !names
+                .iter()
+                .any(|name| name == "--help" || name == "--version")
+        })
+        .collect();
+    let mut missing = Vec::new();
+    for guide in ["skills/fetchloom/SKILL.md", "llms.txt"] {
+        let text = fs::read_to_string(repository().join(guide))?;
+        for names in &global {
+            if !names.iter().any(|name| names_option(&text, name)) {
+                missing.push(format!("{guide} names no {}", names.join(" or ")));
+            }
+        }
+        for command in result["commands"].as_array().into_iter().flatten() {
+            let name = command["name"].as_str().ok_or("a command without a name")?;
+            let forms = [
+                format!("fetchloom {name}"),
+                format!("`{name}"),
+                format!("[{name}]"),
+            ];
+            let lines: Vec<&str> = text
+                .lines()
+                .filter(|line| forms.iter().any(|form| line.contains(form.as_str())))
+                .collect();
+            if lines.is_empty() {
+                missing.push(format!("{guide} does not name `fetchloom {name}`"));
+                continue;
+            }
+            for names in command["arguments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(spellings)
+            {
+                if names.is_empty() || global.contains(&names) {
+                    continue;
+                }
+                let named = lines
+                    .iter()
+                    .any(|line| names.iter().any(|option| names_option(line, option)));
+                if !named {
+                    missing.push(format!(
+                        "{guide} names no {} on a line about `fetchloom {name}`",
+                        names.join(" or ")
+                    ));
+                }
             }
         }
     }

@@ -30,7 +30,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
 
 | option | effect |
 |---|---|
@@ -43,7 +43,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running; help, version and completions ignore it |
 | `--mirror <url>` | ask the [mirror](../mirrors.md) at this web address or folder for pinned files before their sources; repeat it for more. these come before the mirrors the settings name |
-| `-n`, `--dry-run` | with `add`, `remove`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
+| `-n`, `--dry-run` | with `add`, `remove`, `drop`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 
