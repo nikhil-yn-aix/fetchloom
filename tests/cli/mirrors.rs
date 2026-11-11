@@ -7,7 +7,7 @@ use std::process::Output;
 
 use crate::add::sha256_hex as sha256;
 use crate::caps::shown;
-use crate::support::{Result, Routes, Sandbox, edit, file, json, text};
+use crate::support::{Result, Routes, Sandbox, edit, file, json, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
 
@@ -67,6 +67,29 @@ fn mirror_of(sandbox: &Sandbox, root: &Path) -> Result {
         fs::write(to.join(&hex[2..]), bytes)?;
     }
     Ok(())
+}
+
+/// a web mirror under `/m` holding what [`mirror_of`] puts in a folder mirror.
+fn web_mirror_of(sandbox: &Sandbox) -> Result<Routes> {
+    let root = sandbox.folder("web-mirror")?;
+    mirror_of(sandbox, &root)?;
+    let mut routes = Vec::new();
+    let mut folders = vec![root.clone()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path);
+                continue;
+            }
+            let below = path
+                .strip_prefix(&root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            routes.push((format!("/m/{below}"), file(&fs::read(&path)?, "\"m\"")));
+        }
+    }
+    Routes::start(routes)
 }
 
 /// a fresh clone of the project in the sandbox's work folder, with a cache of its own.
@@ -253,4 +276,77 @@ fn mirror_only_mode_needs_a_mirror() -> Result {
         .env("FETCHLOOM_MIRRORS_ONLY", "1")
         .output()?;
     ok(&output)
+}
+
+#[test]
+fn a_reviewer_restores_from_a_web_mirror_when_the_source_is_gone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let mirror = web_mirror_of(&sandbox)?;
+    drop(source);
+    let base = format!("{}/m", mirror.url);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    // offline asks no web mirror
+    let offline = sandbox
+        .command_in(&folder, &["--offline", "sync", "--mirror", &base])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(
+        offline.status.code(),
+        Some(20),
+        "{}",
+        text(&offline.stderr)?
+    );
+    assert_eq!(mirror.targets(), Vec::<String>::new());
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--locked", "--mirror", &base])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    let document = json(&output)?;
+    assert_eq!(document["work"]["mirror_objects"], 6);
+    let targets = mirror.targets();
+    // one look at the marker, the zip's tree, then each file once
+    assert_eq!(targets[0], "/m/fetchloom-mirror");
+    assert_eq!(targets.len(), 8, "{targets:?}");
+    assert_eq!(
+        targets
+            .iter()
+            .filter(|target| target.starts_with("/m/trees/"))
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+/// a web mirror that does not answer is asked once, then skipped for the rest of the run. one on
+/// this machine, named in the settings, is reached as a typed link is.
+#[test]
+fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let asked = source.requests().len();
+    let mirror = Routes::start(vec![(
+        "/m/fetchloom-mirror".to_owned(),
+        reply("503 Service Unavailable", &[("Content-Length", "0")], b""),
+    )])?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["sync"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS", format!("{}/m", mirror.url))
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    assert_eq!(mirror.targets(), ["/m/fetchloom-mirror"]);
+    let stderr = text(&output.stderr)?;
+    assert_eq!(
+        stderr.matches("so this run skips it").count(),
+        1,
+        "{stderr}"
+    );
+    assert_eq!(source.requests().len(), asked + 2);
+    Ok(())
 }

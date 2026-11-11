@@ -11,6 +11,7 @@
 //! ```
 
 pub(crate) mod folder;
+pub(crate) mod web;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -131,6 +132,14 @@ impl Mirrors {
             }
         }
         Mirrors { list, only }
+    }
+
+    /// the web mirrors' addresses.
+    pub(crate) fn web(&self) -> impl Iterator<Item = &Url> {
+        self.list.iter().filter_map(|location| match location {
+            Location::Web(base) => Some(base),
+            Location::Folder(_) => None,
+        })
     }
 }
 

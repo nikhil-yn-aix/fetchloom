@@ -3,15 +3,17 @@
 //! and every file a mirror gives is checked against its pin before the cache keeps it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use super::Job;
 use crate::cache::Cache;
 use crate::cli::Context;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::mirror::folder::{self, Gave, Missing, Tree};
-use crate::mirror::{Location, Mirrors, Wanted};
+use crate::mirror::folder::{self, Gave, Missing};
+use crate::mirror::{Location, Mirrors, Wanted, web};
+use crate::net::Net;
 use crate::project::lock::LockedFile;
 use crate::settings::{Origin, Settings};
 use crate::stop::Stop;
@@ -33,10 +35,17 @@ pub(in crate::cli) struct Mirrored {
 struct Answers {
     /// mirrors found there this run, by their place in the list.
     up: HashSet<usize>,
-    /// mirrors this run skips, with why.
+    /// mirrors this run skips, with what they answered.
     down: HashMap<usize, String>,
-    /// what a mirror said of a file or tree it did not give.
+    /// what a mirror answered for a file or tree it did not give.
     lacked: HashMap<(usize, Sha256), String>,
+}
+
+/// why a mirror is skipped for the rest of the run: what to warn, the help, and its answer in
+/// short. no warning for one a person chose to skip, as a web mirror while offline.
+struct Skip {
+    warning: Option<(String, String)>,
+    said: String,
 }
 
 impl Mirrored {
@@ -60,60 +69,126 @@ impl Mirrored {
         self.answers().lacked.insert((index, digest), said);
     }
 
-    /// whether mirror `index` may be asked: a folder whose marker is there, checked once a run.
-    /// one that is not there is told once and skipped from then on.
-    fn usable(&self, context: &Context, index: usize, location: &Location) -> bool {
+    /// skips mirror `index` for the rest of the run, warning once.
+    fn skip(&self, context: &Context, index: usize, skip: Skip) {
+        let mut answers = self.answers();
+        if answers.down.contains_key(&index) {
+            return;
+        }
+        if let Some((warning, help)) = &skip.warning {
+            context.output.warn_with(warning, help);
+        }
+        answers.down.insert(index, skip.said);
+    }
+
+    /// whether mirror `index` may be asked: its marker was found, once a run. one without it is
+    /// told once and skipped from then on, and a web mirror is never asked offline.
+    ///
+    /// # Errors
+    ///
+    /// a stop while a web mirror is asked.
+    async fn usable(
+        &self,
+        context: &Context,
+        net: &Net,
+        index: usize,
+        location: &Location,
+    ) -> Result<bool, Error> {
         {
             let answers = self.answers();
             if answers.up.contains(&index) {
-                return true;
+                return Ok(true);
             }
             if answers.down.contains_key(&index) {
-                return false;
+                return Ok(false);
             }
         }
-        let skipped = match location {
-            Location::Folder(root) => match folder::probe(root) {
-                Ok(()) => None,
-                Err(Missing::Folder) => Some((
-                    format!("the mirror {location} is not there, so this run skips it"),
-                    "mount it, or check the mirrors setting and --mirror".to_owned(),
-                    "not there".to_owned(),
-                )),
-                Err(Missing::Marker) => Some((
-                    format!(
-                        "the mirror {location} holds no fetchloom-mirror file, so this run skips it"
-                    ),
-                    format!(
-                        "check that {location} is a mirror's top folder, and that its disk is mounted"
-                    ),
-                    "no fetchloom-mirror file".to_owned(),
-                )),
-                Err(Missing::Unreadable(err)) => Some((
-                    format!(
-                        "could not read the mirror {location}: {}, so this run skips it",
-                        crate::error::said(&err)
-                    ),
-                    "check that this account may read it".to_owned(),
-                    crate::error::said(&err),
-                )),
-            },
-            Location::Web(_) => Some((String::new(), String::new(), "not asked".to_owned())),
+        let skip = match location {
+            Location::Folder(root) => folder_missing(location, folder::probe(root).err()),
+            Location::Web(_) if net.offline().enabled() => Some(Skip {
+                warning: None,
+                said: "not asked offline".to_owned(),
+            }),
+            Location::Web(base) => web_missing(location, web::probe(net, base).await?),
         };
-        let mut answers = self.answers();
-        match skipped {
+        match skip {
             None => {
-                answers.up.insert(index);
-                true
+                self.answers().up.insert(index);
+                Ok(true)
             }
-            Some((warning, help, said)) => {
-                if !warning.is_empty() {
-                    context.output.warn_with(&warning, &help);
-                }
-                answers.down.insert(index, said);
-                false
+            Some(skip) => {
+                self.skip(context, index, skip);
+                Ok(false)
             }
         }
+    }
+}
+
+/// why the folder mirror at `location` is skipped, when its look found it `missing`.
+fn folder_missing(location: &Location, missing: Option<Missing>) -> Option<Skip> {
+    let (warning, help, said) = match missing? {
+        Missing::Folder => (
+            format!("the mirror {location} is not there, so this run skips it"),
+            "mount it, or check the mirrors setting and --mirror".to_owned(),
+            "not there".to_owned(),
+        ),
+        Missing::Marker => (
+            format!("the mirror {location} holds no fetchloom-mirror file, so this run skips it"),
+            format!("check that {location} is a mirror's top folder, and that its disk is mounted"),
+            "no fetchloom-mirror file".to_owned(),
+        ),
+        Missing::Unreadable(err) => (
+            format!(
+                "could not read the mirror {location}: {}, so this run skips it",
+                crate::error::said(&err)
+            ),
+            "check that this account may read it".to_owned(),
+            crate::error::said(&err),
+        ),
+    };
+    Some(Skip {
+        warning: Some((warning, help)),
+        said,
+    })
+}
+
+/// why the web mirror at `location` is skipped, after its marker was asked for.
+fn web_missing(location: &Location, look: web::Look) -> Option<Skip> {
+    let (warning, help, said) = match look {
+        web::Look::There => return None,
+        web::Look::NoMarker => (
+            format!("the mirror {location} holds no fetchloom-mirror file, so this run skips it"),
+            "check that the address names a mirror's top folder".to_owned(),
+            "no fetchloom-mirror file".to_owned(),
+        ),
+        web::Look::Answered(status) => (
+            format!("the mirror {location} answered {status}, so this run skips it"),
+            refused_help(location, status),
+            format!("answered {status}"),
+        ),
+        web::Look::Failed(error) => (
+            format!(
+                "could not reach the mirror {location}: {}, so this run skips it",
+                error.message
+            ),
+            "check the address, and that this machine can reach it".to_owned(),
+            error.message,
+        ),
+    };
+    Some(Skip {
+        warning: Some((warning, help)),
+        said,
+    })
+}
+
+/// what to do about a web mirror that answered `status` instead of a file.
+fn refused_help(location: &Location, status: u16) -> String {
+    match (status, location) {
+        (401 | 403, Location::Web(base)) => format!(
+            "if it needs a login, sign in with `fetchloom auth login {}`",
+            crate::net::host(base)
+        ),
+        _ => "ask whoever keeps the mirror, or check its address".to_owned(),
     }
 }
 
@@ -177,15 +252,17 @@ pub(in crate::cli) fn pinned(jobs: &[Job], cache: &Cache) -> Vec<Wanted> {
         .collect()
 }
 
-/// copies into the cache what the mirrors hold of `wanted`, asking each in order for the files
-/// the ones before it lacked. a damaged copy is told and left, so a later mirror or the source
-/// gives the file.
+/// puts into the cache what the mirrors hold of `wanted`, asking each in order for the files the
+/// ones before it lacked. a damaged copy is told and left, so a later mirror or the source gives
+/// the file.
 ///
 /// # Errors
 ///
-/// a failure to write the cache, and a stop.
+/// a failure to write the cache, a stop, and `unconfirmed` when a web mirror's files are more
+/// than a person agreed to download.
 pub(in crate::cli) async fn fill(
     context: &Context,
+    net: &Arc<Net>,
     cache: &Cache,
     wanted: Vec<Wanted>,
 ) -> Result<(), Error> {
@@ -204,56 +281,170 @@ pub(in crate::cli) async fn fill(
             .filter(|want| !mirrored.lacks(index, &want.digest))
             .cloned()
             .collect();
-        if ask.is_empty() || !mirrored.usable(context, index, location) {
+        if ask.is_empty() || !mirrored.usable(context, net, index, location).await? {
             continue;
         }
-        let Location::Folder(root) = location else {
-            continue;
-        };
-        let (asked, gave) = copy_from_folder(context, cache, root, ask).await?;
-        let mut copied = (0, 0);
-        let mut stored = HashSet::new();
-        let mut damaged = Vec::new();
-        for (want, gave) in asked.into_iter().zip(gave) {
-            match gave {
-                Gave::Stored(object) => {
-                    if object.new {
-                        context.work.wrote(&object.digest);
-                    }
-                    Work::add(&context.work.mirror_objects, 1);
-                    Work::add(&context.work.mirror_bytes, object.size);
-                    copied = (copied.0 + 1, copied.1 + object.size);
-                    stored.insert(want.digest);
-                }
-                Gave::Absent => mirrored.lacked(index, want.digest, "not there".to_owned()),
-                Gave::Damaged => {
-                    mirrored.lacked(index, want.digest, "a damaged copy".to_owned());
-                    damaged.push(want.label);
-                }
-                Gave::Unreadable(err) => {
-                    let said = crate::error::said(&err);
-                    mirrored.lacked(index, want.digest, format!("unreadable: {said}"));
-                    damaged.push(format!("{} ({said})", want.label));
-                }
+        let stored = match location {
+            Location::Folder(root) => {
+                from_folder(context, cache, index, location, root, ask).await?
             }
-        }
+            Location::Web(base) => {
+                from_web(context, net, cache, index, location, base, ask).await?
+            }
+        };
         wanted.retain(|want| !stored.contains(&want.digest));
-        tell_damaged(context, location, &damaged);
-        if copied.0 > 0 {
-            context.output.step(
-                "Copied",
-                &format!(
-                    "{} \u{b7} {} from {location}",
-                    units::count(copied.0, "file", "files"),
-                    units::size(copied.1)
-                ),
-            );
-        }
         if wanted.is_empty() {
             break;
         }
     }
     Ok(())
+}
+
+/// copies `ask` from the folder mirror `index` at `root`, and says which files it stored.
+async fn from_folder(
+    context: &Context,
+    cache: &Cache,
+    index: usize,
+    location: &Location,
+    root: &std::path::Path,
+    ask: Vec<Wanted>,
+) -> Result<HashSet<Sha256>, Error> {
+    let mirrored = &context.mirrors;
+    let (asked, gave) = copy_from_folder(context, cache, root, ask).await?;
+    let mut copied = (0, 0);
+    let mut stored = HashSet::new();
+    let mut damaged = Vec::new();
+    for (want, gave) in asked.into_iter().zip(gave) {
+        match gave {
+            Gave::Stored(object) => {
+                if object.new {
+                    context.work.wrote(&object.digest);
+                }
+                Work::add(&context.work.mirror_objects, 1);
+                Work::add(&context.work.mirror_bytes, object.size);
+                copied = (copied.0 + 1, copied.1 + object.size);
+                stored.insert(want.digest);
+            }
+            Gave::Absent => mirrored.lacked(index, want.digest, "not there".to_owned()),
+            Gave::Damaged => {
+                mirrored.lacked(index, want.digest, "a damaged copy".to_owned());
+                damaged.push(want.label);
+            }
+            Gave::Unreadable(err) => {
+                let said = crate::error::said(&err);
+                mirrored.lacked(index, want.digest, format!("unreadable: {said}"));
+                damaged.push(format!("{} ({said})", want.label));
+            }
+        }
+    }
+    tell_damaged(context, location, &damaged);
+    if copied.0 > 0 {
+        context.output.step(
+            "Copied",
+            &format!(
+                "{} \u{b7} {} from {location}",
+                units::count(copied.0, "file", "files"),
+                units::size(copied.1)
+            ),
+        );
+    }
+    Ok(stored)
+}
+
+/// downloads `ask` from the web mirror `index` at `base` through the download pipeline, after
+/// the question a download of their size asks, and says which files it stored. a mirror that
+/// refuses or fails is skipped for the rest of the run.
+async fn from_web(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    index: usize,
+    location: &Location,
+    base: &url::Url,
+    ask: Vec<Wanted>,
+) -> Result<HashSet<Sha256>, Error> {
+    let mirrored = &context.mirrors;
+    let total = ask
+        .iter()
+        .map(|want| want.size)
+        .fold(0, u64::saturating_add);
+    crate::cli::confirm(
+        &context.output,
+        context.yes,
+        context.settings.ask_above.value,
+        &units::count(ask.len() as u64, "file", "files"),
+        total,
+        Some((cache.root(), total)),
+    )?;
+    let jobs = ask
+        .iter()
+        .map(|want| Job {
+            fetch: web::object(base, want),
+            label: want.label.clone(),
+            dataset: None,
+            again: None,
+        })
+        .collect();
+    let started = Instant::now();
+    let results = super::apart(context, net, cache, jobs).await?;
+    let mut stored = HashSet::new();
+    let mut fetched = Vec::new();
+    let mut damaged = Vec::new();
+    let mut trouble = None;
+    for (want, result) in ask.into_iter().zip(results) {
+        let error = match result {
+            Ok(found) => {
+                Work::add(&context.work.mirror_objects, 1);
+                Work::add(&context.work.mirror_bytes, found.size);
+                fetched.push((found.size, found.moved));
+                stored.insert(want.digest);
+                continue;
+            }
+            Err(error) => error,
+        };
+        match error.kind {
+            Kind::ReferenceUnresolved => {
+                mirrored.lacked(index, want.digest, "not there".to_owned());
+            }
+            Kind::IntegrityMismatch => {
+                mirrored.lacked(index, want.digest, "a damaged copy".to_owned());
+                damaged.push(want.label);
+            }
+            Kind::LocalIo => return Err(error),
+            _ => {
+                mirrored.lacked(index, want.digest, error.message.clone());
+                trouble.get_or_insert(error);
+            }
+        }
+    }
+    tell_damaged(context, location, &damaged);
+    if !fetched.is_empty() {
+        context.output.step(
+            "Downloaded",
+            &format!(
+                "{} \u{b7} {} from {location}",
+                units::count(fetched.len() as u64, "file", "files"),
+                units::downloaded(fetched, started.elapsed())
+            ),
+        );
+    }
+    if let Some(error) = trouble {
+        mirrored.skip(
+            context,
+            index,
+            Skip {
+                warning: Some((
+                    format!(
+                        "the mirror {location} failed: {}, so this run skips it",
+                        error.message
+                    ),
+                    "check the address, and that this machine can reach it".to_owned(),
+                )),
+                said: error.message,
+            },
+        );
+    }
+    Ok(stored)
 }
 
 /// the archives among `unknown` whose trees no mirror gave. a tree a mirror gives that hashes to
@@ -265,6 +456,7 @@ pub(in crate::cli) async fn fill(
 /// a failure to write the cache, and a stop.
 pub(in crate::cli) async fn trees<'f>(
     context: &Context,
+    net: &Net,
     cache: &Cache,
     unknown: Vec<(String, &'f LockedFile)>,
 ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
@@ -275,7 +467,7 @@ pub(in crate::cli) async fn trees<'f>(
     let mut rest = Vec::with_capacity(unknown.len());
     for (dataset, file) in unknown {
         let found = match file.unpacks_to {
-            Some(tree) => tree_from_mirrors(context, cache, &dataset, file, tree).await?,
+            Some(tree) => tree_from_mirrors(context, net, cache, &dataset, file, tree).await?,
             None => false,
         };
         if !found {
@@ -285,73 +477,88 @@ pub(in crate::cli) async fn trees<'f>(
     Ok(rest)
 }
 
-/// asks each mirror in order for the tree `tree` that `file` of `dataset` unpacks to, and
-/// records the first that matches. says whether one did.
+/// what a mirror gave when asked for a tree.
+enum Got {
+    Bytes(Vec<u8>),
+    Absent,
+    Damaged,
+    /// the mirror failed, with its answer in short.
+    Trouble(String),
+}
+
+/// asks each mirror in order for the tree `tree` that `file` of `dataset` unpacks to, and records
+/// the first that matches. says whether one did.
 async fn tree_from_mirrors(
     context: &Context,
+    net: &Net,
     cache: &Cache,
     dataset: &str,
     file: &LockedFile,
     tree: Sha256,
 ) -> Result<bool, Error> {
     let mirrored = &context.mirrors;
+    let label = format!("the list of files {dataset}/{} holds", file.path);
     for (index, location) in mirrored.mirrors.list.iter().enumerate() {
-        if mirrored.lacks(index, &tree) || !mirrored.usable(context, index, location) {
+        if mirrored.lacks(index, &tree) || !mirrored.usable(context, net, index, location).await? {
             continue;
         }
-        let Location::Folder(root) = location else {
-            continue;
+        let got = match location {
+            Location::Folder(root) => {
+                let (root, stop) = (root.clone(), context.stop.clone());
+                match blocking(move || folder::read_tree(&root, &tree, &stop)).await {
+                    Ok(folder::Tree::Bytes(bytes)) => Got::Bytes(bytes),
+                    Ok(folder::Tree::Absent) => Got::Absent,
+                    Ok(folder::Tree::Damaged) => Got::Damaged,
+                    Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
+                        return Err(Stop::stopped());
+                    }
+                    Err(err) => Got::Trouble(crate::error::said(&err)),
+                }
+            }
+            Location::Web(base) => match web::read_tree(net, base, &tree).await? {
+                web::Tree::Bytes(bytes) => Got::Bytes(bytes),
+                web::Tree::Absent => Got::Absent,
+                web::Tree::Answered(status) => Got::Trouble(format!("answered {status}")),
+                web::Tree::Failed(error) => Got::Trouble(error.message),
+            },
         };
-        let read = {
-            let (root, stop) = (root.clone(), context.stop.clone());
-            blocking(move || folder::read_tree(&root, &tree, &stop)).await
-        };
-        let bytes = match read {
-            Ok(Tree::Bytes(bytes)) => bytes,
-            Ok(Tree::Absent) => {
+        let bytes = match got {
+            Got::Bytes(bytes) => bytes,
+            Got::Absent => {
                 mirrored.lacked(index, tree, "not there".to_owned());
                 continue;
             }
-            Ok(Tree::Damaged) => {
-                mirrored.lacked(index, tree, "a damaged copy".to_owned());
-                tell_damaged(
+            Got::Damaged => Vec::new(),
+            Got::Trouble(said) => {
+                mirrored.lacked(index, tree, said.clone());
+                mirrored.skip(
                     context,
-                    location,
-                    &[format!("the list of files {dataset}/{} holds", file.path)],
-                );
-                continue;
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
-                return Err(Stop::stopped());
-            }
-            Err(err) => {
-                let said = crate::error::said(&err);
-                mirrored.lacked(index, tree, format!("unreadable: {said}"));
-                tell_damaged(
-                    context,
-                    location,
-                    &[format!("the files {dataset}/{} holds ({said})", file.path)],
+                    index,
+                    Skip {
+                        warning: Some((
+                            format!("the mirror {location} failed: {said}, so this run skips it"),
+                            "check the mirror, and that this machine can reach it".to_owned(),
+                        )),
+                        said,
+                    },
                 );
                 continue;
             }
         };
-        let recorded = cache
-            .record_tree_bytes(&file.sha256, &tree, &bytes)
-            .map_err(|err| {
-                Error::io(
-                    format_args!("could not record what {dataset}/{} holds", file.path),
-                    &err,
-                )
-            })?;
+        let recorded = !bytes.is_empty()
+            && cache
+                .record_tree_bytes(&file.sha256, &tree, &bytes)
+                .map_err(|err| {
+                    Error::io(
+                        format_args!("could not record what {dataset}/{} holds", file.path),
+                        &err,
+                    )
+                })?;
         if recorded {
             return Ok(true);
         }
         mirrored.lacked(index, tree, "a damaged copy".to_owned());
-        tell_damaged(
-            context,
-            location,
-            &[format!("the list of files {dataset}/{} holds", file.path)],
-        );
+        tell_damaged(context, location, std::slice::from_ref(&label));
     }
     Ok(false)
 }

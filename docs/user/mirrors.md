@@ -1,6 +1,6 @@
 # mirrors
 
-a mirror is a folder or a web server that holds pinned files under their SHA-256, so a lab disk or a usb drive can give a project's files instead of their sources.
+a mirror is a folder or a web server that holds pinned files under their SHA-256, so a lab disk, a usb drive or a company server can give a project's files instead of their sources.
 
 data.lock names every file by its SHA-256, so any copy with that hash is the same file. fetchloom looks in the cache first, then asks each mirror in the order given, then the file's source. every file a mirror gives is checked against its pin before the cache keeps it, so a mirror can withhold a file but never change one.
 
@@ -9,7 +9,7 @@ data.lock names every file by its SHA-256, so any copy with that hash is the sam
 mirrors come from you alone: the `mirrors` setting in the [settings file](reference/environment.md#settings-file), the `FETCHLOOM_MIRRORS` variable or `--mirror` on the command line. data.toml and data.lock cannot name one, since a cloned project could then send your requests, and the hashes you ask for, to a server nobody chose.
 
 ```toml
-mirrors = ["/mnt/lab/fetchloom"]
+mirrors = ["/mnt/lab/fetchloom", "https://data.lab.example/fetchloom"]
 ```
 
 ```sh
@@ -49,13 +49,34 @@ stderr:
 
 no request went to a source. with `--json`, `work.mirror_objects` and `work.mirror_bytes` count what mirrors gave, as [JSON output](reference/json-output.md#work-counters) describes.
 
+## a web mirror
+
+a web mirror is the same layout on a web server, at an `http://` or `https://` address, so any server of static files works, such as nginx over a folder mirror. fetchloom asks for its `fetchloom-mirror` file once a run, then for each file it lacks at `<address>/objects/<2 hex>/<62 hex>`. the files come through the same downloads as files from sources: resumed after a stop, retried while the server says to try again, split over several connections when slow, and checked against their pins. a tree is read whole, up to 64 MiB, about 600,000 files; an archive with a longer list comes as itself. files a mirror gives over the network count in `work.requests` and `work.bytes_down` too, and the question before a download larger than `ask_above` covers them.
+
+a reviewer whose copy of a paper's data is gone from its source restores it from the lab's server:
+
+```sh
+fetchloom sync --locked --mirror https://data.lab.example/fetchloom
+```
+
+stderr:
+
+```text
+ Downloaded 6 files · 91 B in 27 ms from https://data.lab.example/fetchloom
+     Placed data/dataset · 5 files linked to the cache
+     Placed data/iris · 1 file linked to the cache
+     Synced 2 datasets into data
+```
+
+a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its host may be reached whatever its address, other ports included. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
+
 ## what goes wrong
 
 | a mirror | what fetchloom does |
 |---|---|
-| lacks a file | asks the next mirror, then the source |
+| lacks a file, 404 or 410 on the web | asks the next mirror, then the source |
 | holds a copy of another size or with other bytes, or a link or a special file in its place | warns, naming the mirror and the file, and asks the next mirror, then the source |
-| is not there, or holds no `fetchloom-mirror` file | warns once and skips the mirror for the rest of the run |
+| is not there, holds no `fetchloom-mirror` file, cannot be reached, refuses with 401 or 403, or fails with 5xx after the retries | warns once and skips the mirror for the rest of the run |
 
 a warning for a damaged copy, on stderr:
 
@@ -68,7 +89,7 @@ after five such warnings for one mirror, the rest are counted on one line.
 
 ## offline
 
-`--offline` reads folder mirrors, since a folder needs no network, so a machine without one restores a project from a usb drive:
+`--offline` reads folder mirrors, since a folder needs no network, and never asks a web mirror, so a machine without one restores a project from a usb drive:
 
 ```sh
 fetchloom --offline sync --mirror /media/usb/fetchloom
@@ -95,7 +116,7 @@ a cache holds the files of every project that used it, so copy only what you may
 
 ## privacy
 
-a mirror is asked only for files the cache lacks, by their SHA-256 alone: no project name, path or link goes with the request. still, a mirror learns which hashes you ask for, and the hash of a public file names its dataset; whoever runs a folder mirror's file server can see the same in its logs.
+a mirror is asked only for files the cache lacks, by their SHA-256 alone: no project name, path or link goes with the request. still, a web mirror learns which hashes you ask for, and the hash of a public file names its dataset; whoever runs a folder mirror's file server can see the same in its logs.
 
 ## a mirror is not an archive
 
