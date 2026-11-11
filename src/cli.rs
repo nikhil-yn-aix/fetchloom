@@ -834,21 +834,17 @@ fn ask_room(
 ) -> Result<(), Error> {
     let (needs, has) = (units::size(needed), units::size(free));
     let cancel = format!("{doing} ({needs})");
+    let shortage = format!(
+        "{doing} needs at least {needs} on the disk holding the cache at {}, which has {has} free",
+        cache.display()
+    );
     match output
-        .confirm(&format!(
-            "{doing} needs at least {needs} on the disk holding the cache, which has {has} free. go on anyway?"
-        ))
+        .confirm(&format!("{shortage}. go on anyway?"))
         .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
         Some(false) => Err(Error::new(Kind::Unconfirmed, format!("did not start {doing}")).cancelled(cancel)),
-        None => Err(Error::new(
-            Kind::Unconfirmed,
-            format!(
-                "{doing} needs at least {needs} on the disk holding the cache at {}, which has {has} free",
-                cache.display()
-            ),
-        )
+        None => Err(Error::new(Kind::Unconfirmed, shortage)
         .help("free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores")),
     }
 }

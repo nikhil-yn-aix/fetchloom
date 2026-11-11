@@ -2040,6 +2040,29 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
     Ok(())
 }
 
+/// at a terminal, the question about a download the cache's disk cannot hold says where the
+/// cache is, as the error without a terminal does.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_question_about_room_names_the_cache_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&[b'x'; 2048], "\"v1\"")])?;
+    let mut command = sandbox.command(&["get", &server.url]);
+    command.env("FETCHLOOM_TEST_FREE", "1000");
+    let Some((exit, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "", "go on anyway?", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(exit, Some(1), "{screen}");
+    let asked = format!(
+        "downloading iris.csv needs at least 2.0 KiB on the disk holding the cache at {}, which has 1000 B free. go on anyway? [y/N]",
+        sandbox.cache().display()
+    );
+    assert!(screen.contains(&asked), "{screen}");
+    Ok(())
+}
+
 /// a file only its server says is 4 GiB is refused before any byte moves when the cache's disk
 /// is FAT32, which holds no file that large. exFAT holds it, so that run goes on to ask about the
 /// size.
