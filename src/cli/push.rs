@@ -7,7 +7,7 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 
@@ -148,7 +148,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let datasets = selected(&manifest, &args.names, args.inputs);
     if datasets.is_empty() {
         context.output.done("Ok", &everything(&datasets));
-        let target = std::path::absolute(&target).unwrap_or(target);
+        let target = reached(target);
         return Ok(Report::empty(target, args.dry.dry_run));
     }
     let lock = project.lock()?;
@@ -226,6 +226,24 @@ fn target(context: &Context, args: &args::Push) -> Result<PathBuf, Error> {
     }
 }
 
+/// `target` as an absolute path without `.` or `..`: the folder the system reaches through it.
+/// unix keeps `..` in an absolute path, and a link before it makes that path reach another folder
+/// than the same path without both, so the part up to the last `..` is resolved as the system
+/// resolves it.
+fn reached(target: PathBuf) -> PathBuf {
+    let absolute = std::path::absolute(&target).unwrap_or(target);
+    let parts: Vec<Component<'_>> = absolute.components().collect();
+    let Some(last) = parts.iter().rposition(|part| *part == Component::ParentDir) else {
+        return absolute;
+    };
+    match std::fs::canonicalize(parts[..=last].iter().collect::<PathBuf>()) {
+        Ok(real) => parts[last + 1..]
+            .iter()
+            .fold(real, |path, part| path.join(part)),
+        Err(_) => absolute,
+    }
+}
+
 /// the datasets a push sends: those `names` gives, else every dataset sync places. with
 /// `inputs`, also what those are made from, all the way down, and with no names what every
 /// recipe is made from.
@@ -265,7 +283,7 @@ fn plan(
     selected: Option<Vec<String>>,
     datasets: Vec<String>,
 ) -> Result<Planned, Error> {
-    let target = std::path::absolute(&target).unwrap_or(target);
+    let target = reached(target);
     let Wanted { needed, unknown } = needed(manifest, lock, cache, &datasets)?;
     let state = folder::look(&target).map_err(|refused| refusal(&target, refused))?;
     let items: Vec<Item> = needed.iter().map(|needed| needed.item).collect();

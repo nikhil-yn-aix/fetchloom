@@ -263,6 +263,29 @@ fn a_folder_that_is_not_a_mirror_is_refused() -> Result {
     Ok(())
 }
 
+/// a `--to` with `..` in it is named by the folder it leads to, in the lines and in `--json`.
+#[test]
+fn a_target_is_named_without_dots() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox.run(&["--json", "push", "--to", "../lab/./mirror", "--dry-run"])?;
+    ok(&output)?;
+    assert_eq!(
+        json(&output)?["result"]["target"],
+        root.display().to_string()
+    );
+    let output = sandbox.run(&["push", "--to", "../lab/../lab/mirror", "--dry-run"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains(&format!("Would start a mirror in {}\n", root.display())),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(".."), "{stderr}");
+    Ok(())
+}
+
 /// push copies what the cache holds and never downloads: a clone that never synced is told
 /// what is missing and what to run, and nothing is written.
 #[test]
