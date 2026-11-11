@@ -258,7 +258,14 @@ fn misplaced_option(argument: &str, parent: Option<&str>) -> Option<String> {
         (last, rest) => format!("{} and {last}", rest.join(", ")),
     };
     let mut example = format!("fetchloom {first_name}");
-    for arg in first.get_positionals().filter(|arg| arg.is_required_set()) {
+    // a positional also counts when the command needs it or an option in its place
+    let needed = |arg: &clap::Arg| {
+        arg.is_required_set()
+            || first.get_groups().any(|group| {
+                group.is_required_set() && group.get_args().any(|id| id == arg.get_id())
+            })
+    };
+    for arg in first.get_positionals().filter(|arg| needed(arg)) {
         let name = arg
             .get_value_names()
             .and_then(|names| names.first())

@@ -16,7 +16,7 @@ use tracing::Instrument as _;
 use super::args;
 use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
-use super::sync::{self as engine, Loop, Scope, Upgrade};
+use super::sync::{self as engine, Given, Loop, Scope, Upgrade};
 use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
@@ -392,7 +392,7 @@ async fn preview_sync(
         old,
         args.force,
         args.verify,
-        None,
+        Vec::new(),
         Some(seen),
     )
     .await?;
@@ -446,7 +446,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         return preview_lock(context, &project, &manifest, old, &upgrade).await;
     }
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
-    let (lock, before) = work.relock(&manifest, old, &upgrade, None).await?;
+    let (lock, before) = work.relock(&manifest, old, &upgrade, Vec::new()).await?;
     // a stop asked while the datasets were resolved leaves data.lock as it was
     context.stop.check()?;
     context.stop.finish();
@@ -492,7 +492,7 @@ async fn preview_lock(
     upgrade: &Upgrade,
 ) -> Result<Report, Error> {
     let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
-    let dry = work.relock_dry(manifest, old, upgrade, None).await?;
+    let dry = work.relock_dry(manifest, old, upgrade, Vec::new()).await?;
     let output = &context.output;
     let changed = !dry.before.holds(&dry.lock);
     if changed {
@@ -711,7 +711,15 @@ pub(super) async fn sync_all(
         Read::Planned(seen) => seen,
     };
     let (lock, before) = work
-        .relock(manifest, old, &upgrade, given)
+        .relock(
+            manifest,
+            old,
+            &upgrade,
+            given
+                .into_iter()
+                .map(|(name, listing)| Given::Listing(name, listing))
+                .collect(),
+        )
         .instrument(tracing::debug_span!("relock"))
         .await
         .map_err(|error| work.before_placing(error))?;
@@ -754,7 +762,7 @@ pub(super) async fn preview_all(
     old: Option<Lock>,
     force: bool,
     verify: bool,
-    given: Option<(String, Listing)>,
+    given: Vec<Given>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);

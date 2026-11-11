@@ -180,7 +180,7 @@ pub(super) fn checked(
 }
 
 /// `error`, about the link on `at`, a line such as `line 2 of links.txt`, saying so.
-fn on_line(mut error: Error, at: &str) -> Error {
+pub(super) fn on_line(mut error: Error, at: &str) -> Error {
     error.message = format!("{at}: {}", error.message);
     error
 }

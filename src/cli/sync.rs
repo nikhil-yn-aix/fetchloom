@@ -79,6 +79,12 @@ impl serde::Serialize for Scope {
     }
 }
 
+/// a dataset a command has in hand already, so relocking need not resolve it.
+pub(super) enum Given {
+    /// what a source listed for the dataset named first.
+    Listing(String, Listing),
+}
+
 /// a project and what working on it needs.
 pub(super) struct Loop<'a> {
     pub(super) context: &'a Context,
@@ -216,14 +222,14 @@ impl<'a> Loop<'a> {
 
     /// the lock data.toml asks for, beside data.lock as it was. datasets of the run's scope
     /// whose entry changed are resolved again, and files whose hash no source states are
-    /// downloaded to learn it; every other entry stays as data.lock has it. `given` is a
-    /// listing already resolved for one dataset.
+    /// downloaded to learn it; every other entry stays as data.lock has it. `given` holds what a
+    /// command already has for some datasets.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
         old: Option<Lock>,
         upgrade: &Upgrade,
-        given: Option<(String, Listing)>,
+        given: Vec<Given>,
     ) -> Result<(Lock, Before), Error> {
         let existed = old.is_some();
         let Drafted {
@@ -280,7 +286,7 @@ impl<'a> Loop<'a> {
         manifest: &Manifest,
         old: Option<Lock>,
         upgrade: &Upgrade,
-        given: Option<(String, Listing)>,
+        given: Vec<Given>,
     ) -> Result<DryRelock, Error> {
         let existed = old.is_some();
         let Drafted {
@@ -333,7 +339,7 @@ impl<'a> Loop<'a> {
         manifest: &Manifest,
         old: Lock,
         upgrade: &Upgrade,
-        given: Option<(String, Listing)>,
+        given: Vec<Given>,
     ) -> Result<Drafted, Error> {
         let mut kept: Vec<Locked> = Vec::new();
         let mut others = Vec::new();
@@ -375,7 +381,11 @@ impl<'a> Loop<'a> {
                 ));
             }
         }
-        let listings = self.resolve_all(manifest, asks, given).await?;
+        let listed = given
+            .into_iter()
+            .map(|Given::Listing(name, listing)| (name, listing))
+            .collect();
+        let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
             let draft = Draft::new(
                 &name,
@@ -523,16 +533,14 @@ impl<'a> Loop<'a> {
         &self,
         manifest: &Manifest,
         asks: Vec<(String, String)>,
-        given: Option<(String, Listing)>,
+        mut given: Vec<(String, Listing)>,
     ) -> Result<Vec<(String, Listing)>, Error> {
         let mut listings = Vec::with_capacity(asks.len());
         let mut tasks = JoinSet::new();
         let mut asked = Vec::new();
         for (name, text) in asks {
-            if let Some((given_name, listing)) = &given
-                && *given_name == name
-            {
-                listings.push((name, listing.clone()));
+            if let Some(at) = given.iter().position(|(given_name, _)| *given_name == name) {
+                listings.push(given.swap_remove(at));
                 continue;
             }
             if self.net.offline().enabled() {
@@ -1634,7 +1642,7 @@ mod tests {
             let error = block_on(runner.resolve_all(
                 &manifest,
                 vec![("set".to_owned(), reference.to_owned())],
-                None,
+                Vec::new(),
             ))
             .unwrap_err();
             assert_eq!(error.kind, Kind::ReferenceInvalid);
@@ -1682,12 +1690,13 @@ mod tests {
             block_on(runner.relock(&manifest, Some(old.clone()), &Upgrade::Nothing, given))
         };
 
-        let (alone, before) = relock(&["a"], None).unwrap();
+        let (alone, before) = relock(&["a"], Vec::new()).unwrap();
         let listing = listed(
             "https://example.org/d",
             vec![stated("d.csv", "https://example.org/d", b"d")],
         );
-        let (with_d, before_d) = relock(&["a", "d"], Some(("d".to_owned(), listing))).unwrap();
+        let (with_d, before_d) =
+            relock(&["a", "d"], vec![Given::Listing("d".to_owned(), listing)]).unwrap();
 
         assert_eq!(alone, old);
         assert!(before.holds(&alone));

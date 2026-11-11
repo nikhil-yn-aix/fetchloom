@@ -15,9 +15,9 @@ const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 mod examples {
     pub(super) const ADD: &str = "examples:
   fetchloom add iris    # at a terminal, pick one from a list
-  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   fetchloom add https://zenodo.org/records/3608990 --as flowers
   fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run
+  fetchloom add -i links.txt    # a dataset for each link in a list
 
 on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git project's .gitignore. --dry-run writes nothing";
 
@@ -451,7 +451,7 @@ pub(crate) struct Global {
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum Command {
     /// add a dataset to the project and download it into the data folder
-    #[command(override_usage = "fetchloom add [options] <link>", help_template = TEMPLATE, after_help = examples::ADD)]
+    #[command(override_usage = "fetchloom add [options] <link>\n       fetchloom add [options] -i <file>", help_template = TEMPLATE, after_help = examples::ADD)]
     Add(Add),
 
     /// remove a dataset and the unchanged files fetchloom placed for it
@@ -669,14 +669,26 @@ pub(crate) struct DryRun {
 
 /// add a dataset to the project and download it into the data folder
 #[derive(Clone, Debug, clap::Args)]
+#[command(group(clap::ArgGroup::new("what").required(true).args(["link", "input_file"])))]
 pub(crate) struct Add {
     /// search words, a link, a DOI, or an id such as zenodo:3608990
     #[arg(value_name = "link", help_heading = "arguments")]
-    pub(crate) link: String,
+    pub(crate) link: Option<String>,
 
     /// the dataset's name in data.toml and its folder's name
     #[arg(long = "as", value_name = "name", help_heading = "options")]
     pub(crate) name: Option<String>,
+
+    /// add a dataset for each link in <file>, one per line, or in stdin for -. a SHA-256
+    /// after a link checks its one file. blank lines and lines starting with # are skipped
+    #[arg(
+        short,
+        long,
+        value_name = "file",
+        conflicts_with_all = ["name", "select", "exclude"],
+        help_heading = "options"
+    )]
+    pub(crate) input_file: Option<PathBuf>,
 
     #[command(flatten)]
     pub(crate) filter: Filter,

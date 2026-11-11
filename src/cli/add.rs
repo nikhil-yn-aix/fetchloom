@@ -6,16 +6,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use tokio::task::JoinSet;
 use tracing::Instrument as _;
 
 use super::args::Add;
+use super::links::{self, Line};
 use super::project::{
     Outcome, Report, committed, dry_run_done, hold, ignore_data, preview_all, preview_ignore,
     register,
 };
 use super::sync::disk::{self, Survey};
 use super::sync::place::Placement;
-use super::sync::{self as engine, Loop, Upgrade};
+use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
@@ -27,7 +29,8 @@ use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Project};
-use crate::source::{Listing, Parsed, Reference};
+use crate::source::{Listing, Parsed, Reference, Remote};
+use crate::units;
 
 struct AddProject {
     project: Project,
@@ -187,11 +190,24 @@ impl Drop for BeforeAdd<'_> {
     }
 }
 
+/// what an add adds: what one link or search words name, or a dataset for each link of a list.
+enum Request {
+    Link(String),
+    List(List),
+}
+
+/// a list of links `add -i` read, each line checked.
+struct List {
+    /// the name messages give the list, such as `links.txt`.
+    name: String,
+    lines: Vec<(Line, Parsed)>,
+}
+
 pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Error> {
     let dry_run = args.dry.dry_run;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    super::search::refuse_local(&args.link)?;
+    let mut request = request(context, &mut args).await?;
     let found = Project::find(&here);
     let starting = found.is_none();
     let project = found.unwrap_or_else(|| Project { root: here.clone() });
@@ -200,7 +216,7 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
             .output
             .aside(&format!("using the project in {}", project.root.display()));
     }
-    before_holding(context, &mut args, &project.root, starting && !dry_run)
+    before_holding(context, &mut request, &project.root, starting && !dry_run)
         .await
         .map_err(|error| stopped(context, error, true))?;
     let fresh = starting.then(|| Fresh::look(&project));
@@ -222,9 +238,14 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         lock_text: None,
         unrestored: AtomicBool::new(false),
     };
-    let added = match adding.read() {
-        Ok(()) => add_held(context, &mut adding, args, &here, starting).await,
-        Err(error) => Err(error),
+    let added = match (adding.read(), request) {
+        (Ok(()), Request::Link(link)) => {
+            add_held(context, &mut adding, args, &link, &here, starting).await
+        }
+        (Ok(()), Request::List(list)) => {
+            add_list_held(context, &mut adding, &args, list, &here, starting).await
+        }
+        (Err(error), _) => Err(error),
     };
     added.map_err(|error| {
         let restored = !adding.unrestored.load(Ordering::Relaxed);
@@ -235,20 +256,40 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
     })
 }
 
+/// what `args` ask to add: a list of links, read and checked whole before any request, or one
+/// link or search words, refused when they name something on this machine.
+async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
+    if let Some(path) = args.input_file.take() {
+        let (name, text) = links::read(&path, &context.stop).await?;
+        let lines = links::checked(&name, links::parse(&name, &text)?, true)?;
+        return Ok(Request::List(List { name, lines }));
+    }
+    let Some(link) = args.link.take() else {
+        return Err(
+            Error::new(Kind::Usage, "add needs a link, or a list of links with -i")
+                .help("run `fetchloom add <link>`, or `fetchloom add -i links.txt`"),
+        );
+    };
+    super::search::refuse_local(&link)?;
+    Ok(Request::Link(link))
+}
+
 /// what an add settles before it holds the project: whether to start a project in `root`, and
 /// which dataset search words name. a question answered no, q at the list or ctrl-c then leaves
 /// nothing behind.
 async fn before_holding(
     context: &Context,
-    args: &mut Add,
+    request: &mut Request,
     root: &Path,
     starting: bool,
 ) -> Result<(), Error> {
     if starting {
         start_here(context, root, std::env::home_dir().as_deref())?;
     }
-    if crate::source::search::is_search(&args.link) {
-        args.link = super::search::pick(context, &context.net(), &args.link, "add").await?;
+    if let Request::Link(link) = request
+        && crate::source::search::is_search(link)
+    {
+        *link = super::search::pick(context, &context.net(), link, "add").await?;
     }
     Ok(())
 }
@@ -340,6 +381,7 @@ async fn add_held(
     context: &Context,
     adding: &mut AddProject,
     mut args: Add,
+    link: &str,
     here: &Path,
     starting: bool,
 ) -> Result<Report, Error> {
@@ -352,13 +394,13 @@ async fn add_held(
     }
     let manifest = &adding.manifest;
     let net = Arc::new(context.net());
-    let parsed = validate_add(context, manifest, &net, &args)?;
+    let parsed = validate_add(context, manifest, &net, &args, link)?;
     let cache = if dry_run {
         peek_cache()?
     } else {
         open_cache()?
     };
-    let mut addition = resolve_add(context, &net, &args, &parsed).await?;
+    let mut addition = resolve_add(context, &net, &args, link, &parsed).await?;
     if args.name.is_none()
         && let Some(name) = present(manifest, old.as_ref(), &addition.entry, &addition.listing)
     {
@@ -374,11 +416,11 @@ async fn add_held(
     // written against the link's own name, which the server's name would replace before they apply
     let patterns = !args.filter.select.is_empty() || !args.filter.exclude.is_empty();
     if args.name.is_none() && !dry_run && !patterns {
-        learn_name(
+        learn_names(
             context,
             &net,
             &cache,
-            &mut addition.listing,
+            vec![&mut addition.listing],
             !args.no_extract,
         )
         .await?;
@@ -391,17 +433,24 @@ async fn add_held(
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
     let work = Loop::new(context, project, net, cache).telling(&name);
     if dry_run {
-        return preview_add(&work, &new_manifest, old, name, addition.listing, here).await;
+        let given = vec![Given::Listing(name.clone(), addition.listing)];
+        return preview_add(&work, &new_manifest, old, (vec![name], given), here, None).await;
     }
+    let names = [name];
     let outcome = sync_add(
         &work,
         adding,
         &new_manifest,
         Some(&updated),
         old,
-        (&name, Some(addition.listing)),
+        (
+            &names,
+            vec![Given::Listing(names[0].clone(), addition.listing)],
+        ),
+        &[],
     )
     .await?;
+    let [name] = names;
     render_add(&work, &new_manifest, &name, here, starting)?;
     Ok(Report {
         project: project.root.clone(),
@@ -412,14 +461,358 @@ async fn add_held(
     })
 }
 
+/// `add -i`: a dataset for each link of a list, resolved, downloaded and placed together, with
+/// data.toml and data.lock each written once. a link data.toml has already stays as it is.
+async fn add_list_held(
+    context: &Context,
+    adding: &mut AddProject,
+    args: &Add,
+    list: List,
+    here: &Path,
+    starting: bool,
+) -> Result<Report, Error> {
+    let dry_run = args.dry.dry_run;
+    let old = adding.old.take();
+    let adding = &*adding;
+    let project = &adding.project;
+    if !dry_run {
+        project.check_writable()?;
+    }
+    let extract = !args.no_extract;
+    // a list is a file anyone could have written, as data.toml is, so no host it names is trusted
+    let net = Arc::new(context.net());
+    let cache = if dry_run {
+        peek_cache()?
+    } else {
+        open_cache()?
+    };
+    let mut listings = resolve_lines(context, &net, &list).await?;
+    let entries = list
+        .lines
+        .iter()
+        .zip(&listings)
+        .map(|((line, parsed), listing)| listed_entry(&list.name, line, parsed, listing, extract))
+        .collect::<Result<Vec<_>, _>>()?;
+    if !dry_run {
+        learn_names(
+            context,
+            &net,
+            &cache,
+            listings.iter_mut().collect(),
+            extract,
+        )
+        .await?;
+    }
+    let mut text = adding.text.clone().unwrap_or_default();
+    let mut manifest = adding.manifest.clone();
+    let (mut names, mut given, mut promised, mut already) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (((line, parsed), listing), listed) in list.lines.iter().zip(listings).zip(entries) {
+        let at = line.named(&list.name);
+        if let Some(name) = present(&adding.manifest, old.as_ref(), &listed.entry, &listing) {
+            same_settings(&adding.manifest.datasets[&name], &listed.entry, &name, &at)?;
+            already.push(name);
+            continue;
+        }
+        let name = choose_name(&context.output, &listing, parsed, &manifest)?;
+        text = manifest::with_dataset(
+            &text,
+            &name,
+            &listed.reference,
+            &listed.select,
+            &[],
+            extract,
+        )?;
+        manifest = Manifest::parse(&text)?;
+        if let Some(sha256) = line.sha256 {
+            promised.push(Promised {
+                dataset: name.clone(),
+                sha256,
+                line: at,
+            });
+        }
+        given.push(Given::Listing(name.clone(), listing));
+        names.push(name);
+    }
+    let work = Loop::new(context, project, net, cache);
+    if dry_run {
+        let nothing = format!("each link of {} is in data.toml already", list.name);
+        return preview_add(&work, &manifest, old, (names, given), here, Some(&nothing)).await;
+    }
+    let updated = (!names.is_empty()).then_some(text.as_str());
+    let outcome = sync_add(
+        &work,
+        adding,
+        &manifest,
+        updated,
+        old,
+        (&names, given),
+        &promised,
+    )
+    .await?;
+    if starting {
+        context.output.step(
+            "Started",
+            &format!("a project in {}", project.root.display()),
+        );
+    }
+    ignore_data(&work, &manifest)?;
+    tell_list(&work, &manifest, &names, &already, here)?;
+    Ok(Report {
+        project: project.root.clone(),
+        datasets: names,
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
+        ..Report::default()
+    })
+}
+
+/// a dataset a line of a list names, as data.toml records it.
+struct Listed {
+    reference: String,
+    select: Vec<String>,
+    /// the entry as data.toml reads it back.
+    entry: manifest::Entry,
+}
+
+/// how data.toml records what `line` of the list `list` names, once the files its listing keeps
+/// are checked: a file or folder the link points at is selected, and a SHA-256 on the line must
+/// name the one file left, unless its source states another.
+fn listed_entry(
+    list: &str,
+    line: &Line,
+    parsed: &Parsed,
+    listing: &Listing,
+    extract: bool,
+) -> Result<Listed, Error> {
+    let at = line.named(list);
+    let select = parsed.select();
+    let reference = stored_reference(&line.link, parsed);
+    let alone = Manifest::parse(&manifest::with_dataset(
+        "",
+        "new",
+        &reference,
+        &select,
+        &[],
+        extract,
+    )?)?;
+    let mut entry = alone.datasets["new"].clone();
+    entry.lines.clear();
+    let files = engine::filter(&parsed.reference.shown(), &entry, listing)
+        .map_err(|error| links::on_line(error, &at))?;
+    if let Some(sha256) = line.sha256 {
+        let [file] = files.as_slice() else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "the SHA-256 on {at} checks one file, and {} has {}",
+                    parsed.reference.shown(),
+                    units::count(files.len() as u64, "file", "files")
+                ),
+            )
+            .help("list a link to one file there, or leave its SHA-256 off"));
+        };
+        if let Some(stated) = file.sha256.filter(|stated| *stated != sha256) {
+            return Err(Error::new(
+                Kind::IntegrityMismatch,
+                format!("{} is not the file the SHA-256 on {at} names", file.path),
+            )
+            .detail(format!(
+                "expected sha256 {}, the source states {}",
+                sha256.short(),
+                stated.short()
+            ))
+            .help(format!(
+                "check the hash on {at}, or ask the file's owner which bytes are right"
+            )));
+        }
+    }
+    Ok(Listed {
+        reference,
+        select,
+        entry,
+    })
+}
+
+/// refuses a line of a list, `at`, that names `name`, a dataset data.toml has already, with other
+/// settings than the line's own: adding it again would place the same data twice.
+fn same_settings(
+    existing: &manifest::Entry,
+    wanted: &manifest::Entry,
+    name: &str,
+    at: &str,
+) -> Result<(), Error> {
+    if existing.select == wanted.select
+        && existing.exclude == wanted.exclude
+        && existing.extract == wanted.extract
+    {
+        return Ok(());
+    }
+    Err(Error::new(
+        Kind::Usage,
+        format!("{at} names {name}, which data.toml has already with other settings"),
+    )
+    .help("leave that line out, or add its link on its own with --as <name> to have it twice"))
+}
+
+/// resolves every line of `list` at once, within the network's limits, in the lines' order. the
+/// first line that fails stops the add, so a list adds all its datasets or none.
+async fn resolve_lines(
+    context: &Context,
+    net: &Arc<Net>,
+    list: &List,
+) -> Result<Vec<Listing>, Error> {
+    let mut tasks = JoinSet::new();
+    let mut asked = 0_u64;
+    for (index, (line, parsed)) in list.lines.iter().enumerate() {
+        engine::tell_raw(&context.output, &line.link, &parsed.reference);
+        if !engine::resolves_locally(&parsed.reference) {
+            asked += 1;
+        }
+        let reference = parsed.reference.clone();
+        let folders = crate::glob::folders_of(&parsed.select());
+        let net = net.clone();
+        tasks.spawn(async move {
+            let listing = reference.resolve_in(&*net, folders.as_deref()).await;
+            (index, listing)
+        });
+    }
+    let _waiting = (asked > 0).then(|| {
+        context
+            .output
+            .wait("Resolving", units::count(asked, "link", "links"))
+    });
+    let mut listings: Vec<Option<Listing>> = list.lines.iter().map(|_| None).collect();
+    let mut failed: Option<(usize, Error)> = None;
+    while let Some(joined) = tasks.join_next().await {
+        let (index, listing) = joined.map_err(|err| {
+            Error::new(
+                Kind::LocalIo,
+                format!("resolving stopped unexpectedly: {err}"),
+            )
+        })?;
+        match listing {
+            Ok(listing) => {
+                engine::tell_resolved(&context.output, &listing);
+                listings[index] = Some(listing);
+            }
+            Err(error) if error.kind == Kind::Interrupted => {
+                tasks.abort_all();
+                return Err(error);
+            }
+            Err(error) => {
+                if failed.as_ref().is_none_or(|(first, _)| index < *first) {
+                    failed = Some((index, error));
+                }
+            }
+        }
+    }
+    if let Some((index, error)) = failed {
+        let at = list.lines[index].0.named(&list.name);
+        return Err(links::on_line(error, &at));
+    }
+    Ok(listings.into_iter().flatten().collect())
+}
+
+/// a SHA-256 a line of a list gave for its dataset's one file, checked once relocking knows the
+/// bytes and before anything is written.
+struct Promised {
+    dataset: String,
+    sha256: Sha256,
+    /// the line that gave it, as `line 2 of links.txt`.
+    line: String,
+}
+
+impl Promised {
+    /// refuses `lock` when it pins other bytes for the dataset than the hash names.
+    fn kept(&self, lock: &Lock) -> Result<(), Error> {
+        let files = lock
+            .get(&self.dataset)
+            .map_or(&[][..], |locked| locked.files.as_slice());
+        match files {
+            [file] if file.sha256 == self.sha256 => Ok(()),
+            [file] => Err(Error::new(
+                Kind::IntegrityMismatch,
+                format!(
+                    "{}/{} does not match the SHA-256 on {}",
+                    self.dataset, file.path, self.line
+                ),
+            )
+            .detail(format!(
+                "expected sha256 {}, got {}",
+                self.sha256.short(),
+                file.sha256.short()
+            ))
+            .help(format!(
+                "check the hash on {}, or ask the file's owner which bytes are right",
+                self.line
+            ))),
+            files => Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "the SHA-256 on {} checks one file, and {} has {}",
+                    self.line,
+                    self.dataset,
+                    units::count(files.len() as u64, "file", "files")
+                ),
+            )
+            .help("list a link to one file there, or leave its SHA-256 off")),
+        }
+    }
+}
+
+/// the last lines of `add -i`: each dataset added and where its files are, from `here`, then
+/// each one data.toml had already.
+fn tell_list(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    names: &[String],
+    already: &[String],
+    here: &Path,
+) -> Result<(), Error> {
+    let output = &work.context.output;
+    let lock = work.project.lock()?.unwrap_or_default();
+    let placed: std::collections::BTreeSet<String> =
+        plan::from_cache(manifest, &lock, &work.cache)?
+            .targets
+            .iter()
+            .map(|target| target.dataset.to_owned())
+            .collect();
+    for name in names {
+        if placed.contains(name) {
+            let folder = from_here(work.project, here, &plan::folder(manifest, name));
+            output.done("Added", &format!("{name}, its files are in {folder}"));
+        } else {
+            output.done(
+                "Added",
+                &format!("{name}, its archives contain no regular files"),
+            );
+        }
+    }
+    for name in already {
+        output.done("Ok", &format!("{name} is already in data.toml"));
+    }
+    match names {
+        [] => return Ok(()),
+        [name] => output.hint(&format!("scripts can find it with `fetchloom path {name}`")),
+        _ => output.hint("scripts can find each with `fetchloom path <name>`"),
+    }
+    output.next(&format!(
+        "commit {}; anyone who clones runs `fetchloom sync`",
+        committed(work.project)
+    ));
+    Ok(())
+}
+
 fn validate_add(
     context: &Context,
     manifest: &Manifest,
     net: &Net,
     args: &Add,
+    link: &str,
 ) -> Result<Parsed, Error> {
-    let parsed = Reference::parse(&args.link)?;
-    engine::tell_raw(&context.output, &args.link, &parsed.reference);
+    let parsed = Reference::parse(link)?;
+    engine::tell_raw(&context.output, link, &parsed.reference);
     parsed.reference.check_shareable()?;
     // no answer from the source changes whether the name --as gives is usable
     if let Some(asked) = args.name.as_deref() {
@@ -434,6 +827,7 @@ async fn resolve_add(
     context: &Context,
     net: &Net,
     args: &Add,
+    link: &str,
     parsed: &Parsed,
 ) -> Result<Addition, Error> {
     let select = if args.filter.select.is_empty() {
@@ -445,7 +839,7 @@ async fn resolve_add(
     let listing =
         engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
     engine::tell_resolved(&context.output, &listing);
-    let reference = stored_reference(&args.link, parsed);
+    let reference = stored_reference(link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of
     // data.toml is to blame for them
     let alone = Manifest::parse(&manifest::with_dataset(
@@ -486,55 +880,62 @@ fn added(
     Ok((updated, manifest))
 }
 
-/// `add --dry-run`: what adding the dataset would change, with data.toml as it would be, told
-/// from `here`.
+/// `add --dry-run`: what adding the datasets `names` would change, with data.toml as it would
+/// be, told from `here`. `given` holds what their sources listed, and `nothing` what to say when
+/// there is nothing to add.
 async fn preview_add(
     work: &Loop<'_>,
     manifest: &Manifest,
     old: Option<Lock>,
-    name: String,
-    listing: Listing,
+    (names, given): (Vec<String>, Vec<Given>),
     here: &Path,
+    nothing: Option<&str>,
 ) -> Result<Report, Error> {
-    let given = Some((name.clone(), listing));
     let outcome = preview_all(work, manifest, old, false, false, given, None).await?;
     let output = &work.context.output;
     preview_ignore(work, manifest)?;
-    output.step(
-        "Would add",
-        &format!(
-            "{name} to data.toml, its files in {}",
-            from_here(work.project, here, &plan::folder(manifest, &name))
-        ),
-    );
-    dry_run_done(output, None);
-    Ok(Report::dry(work.project.root.clone(), vec![name], outcome))
+    for name in &names {
+        output.step(
+            "Would add",
+            &format!(
+                "{name} to data.toml, its files in {}",
+                from_here(work.project, here, &plan::folder(manifest, name))
+            ),
+        );
+    }
+    let nothing = nothing.filter(|_| names.is_empty() && !outcome.lock_changed);
+    dry_run_done(output, nothing);
+    Ok(Report::dry(work.project.root.clone(), names, outcome))
 }
 
 /// brings the project in line with `manifest`, an add's data.toml, whose text is `updated`
-/// when the add changes data.toml, with data.lock as read, `old`. `dataset` names the dataset
-/// added and gives its listing when that was resolved already. every byte the project needs goes
-/// into the cache first, and only then are data.toml and data.lock written and the files placed,
-/// so an add cut off while it downloads, even killed, has changed nothing. a failure or a stop
-/// once the project is changing puts data.toml and data.lock back.
+/// when the add changes data.toml, with data.lock as read, `old`. `datasets` names the datasets
+/// added, with what the add already has of them. every byte the project needs goes into the cache
+/// first, and only then are data.toml and data.lock written and the files placed, so an add cut
+/// off while it downloads, even killed, has changed nothing. a hash the person `promised` for a
+/// dataset's one file is checked before anything is written. a failure or a stop once the project
+/// is changing puts data.toml and data.lock back.
 async fn sync_add(
     work: &Loop<'_>,
     adding: &AddProject,
     manifest: &Manifest,
     updated: Option<&str>,
     old: Option<Lock>,
-    dataset: (&str, Option<Listing>),
+    datasets: (&[String], Vec<Given>),
+    promised: &[Promised],
 ) -> Result<Outcome<Placement>, Error> {
-    let (name, listing) = dataset;
+    let (names, given) = datasets;
     let project = work.project;
     let mut survey = Survey::read(project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&project.root, &work.cache)?;
     disk::audit(project, &survey, &work.cache)?;
-    let given = listing.map(|listing| (name.to_owned(), listing));
     let (lock, before) = work
         .relock(manifest, old, &Upgrade::Nothing, given)
         .instrument(tracing::debug_span!("relock"))
         .await?;
+    for promise in promised {
+        promise.kept(&lock)?;
+    }
     // a lock whose files cannot all land is refused before anything is written, so data.lock
     // never pins what no sync can place
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;
@@ -615,7 +1016,7 @@ async fn sync_add(
         }
         Err(error) => Err(match saved.as_mut() {
             Some(saved) => {
-                let error = restore(project, saved, name, error);
+                let error = restore(project, saved, names, error);
                 if saved.keep {
                     adding.unrestored.store(true, Ordering::Relaxed);
                 }
@@ -666,11 +1067,23 @@ fn render_add(
     tell_added(work, manifest, name, here)
 }
 
-/// restores both project files after a failed add, including their original absence. a file the
-/// add never wrote needs nothing restored, so a failure to write it again is no failure. a file
-/// someone changed after the add wrote it stays as they left it, with the steps that put it back
-/// by hand, since restoring it would lose their change.
-fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure: Error) -> Error {
+/// restores both project files after a failed add of the datasets `names`, including their
+/// original absence. a file the add never wrote needs nothing restored, so a failure to write it
+/// again is no failure. a file someone changed after the add wrote it stays as they left it, with
+/// the steps that put it back by hand, since restoring it would lose their change.
+fn restore(
+    project: &Project,
+    saved: &mut BeforeAdd<'_>,
+    names: &[String],
+    mut failure: Error,
+) -> Error {
+    let entries = match names {
+        [name] => format!("the {name} dataset entry"),
+        [first @ .., last] if !first.is_empty() => {
+            format!("the {} and {last} dataset entries", first.join(", "))
+        }
+        _ => "the new dataset entries".to_owned(),
+    };
     let mut complete = true;
     let mut restored = Vec::new();
     for file in &saved.files {
@@ -718,7 +1131,7 @@ fn restore(project: &Project, saved: &mut BeforeAdd<'_>, name: &str, mut failure
                 backup.display()
             )),
             BeforeFile::Absent => failure.detail(format!(
-                "remove the {name} dataset entry from {0}, or remove {0} if it holds nothing else",
+                "remove {entries} from {0}, or remove {0} if it holds nothing else",
                 file.name
             )),
         };
@@ -806,7 +1219,7 @@ async fn again(
         )));
     }
     if dry_run {
-        let outcome = preview_all(work, manifest, old, false, false, None, None).await?;
+        let outcome = preview_all(work, manifest, old, false, false, Vec::new(), None).await?;
         preview_ignore(work, manifest)?;
         dry_run_done(
             &work.context.output,
@@ -814,7 +1227,8 @@ async fn again(
         );
         return Ok(Report::dry(work.project.root.clone(), Vec::new(), outcome));
     }
-    let outcome = sync_add(work, adding, manifest, None, old, (name, None)).await?;
+    let names = [name.to_owned()];
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
     // a project that became a git repository after its first add gets its ignore rule now
     ignore_data(work, manifest)?;
     let contents = if has_files(work, manifest, name)? {
@@ -875,45 +1289,58 @@ fn has_files(work: &Loop<'_>, manifest: &Manifest, name: &str) -> Result<bool, E
         .any(|target| target.dataset == name))
 }
 
-/// downloads a lone file whose name only the server knows, so the dataset can be named after it.
-async fn learn_name(
+/// downloads each lone file whose name only its server knows, so each dataset can be named after
+/// its file. they download together.
+async fn learn_names(
     context: &Context,
     net: &Arc<Net>,
     cache: &crate::cache::Cache,
-    listing: &mut Listing,
+    listings: Vec<&mut Listing>,
     extract: bool,
 ) -> Result<(), Error> {
-    let [remote] = listing.files.as_mut_slice() else {
-        return Ok(());
-    };
-    if !remote.named_by_server {
+    let mut lone: Vec<&mut Remote> = listings
+        .into_iter()
+        .filter_map(|listing| match listing.files.as_mut_slice() {
+            [remote] if remote.named_by_server => Some(remote),
+            _ => None,
+        })
+        .collect();
+    if lone.is_empty() {
         return Ok(());
     }
-
-    let job = fetch::listed_job(remote, &remote.path, extract);
+    let jobs = lone
+        .iter()
+        .map(|remote| fetch::listed_job(remote, &remote.path, extract))
+        .collect();
     let started = std::time::Instant::now();
     // the add changes nothing before its downloads are done
-    let fetched = fetch::all(context, net, cache, vec![job])
+    let fetched = fetch::all(context, net, cache, jobs)
         .await
         .map_err(Error::unchanged)?;
-    if let Some(fetched) = fetched.first() {
+    let mut downloaded = Vec::new();
+    for (remote, fetched) in lone.iter_mut().zip(&fetched) {
         if let Some(given) = fetched.name.as_deref().and_then(name::sanitize) {
             remote.path = given;
         }
         if fetched.origin == crate::net::Origin::Network {
-            context.output.step(
-                "Downloaded",
-                &format!(
-                    "{} · {}",
-                    remote.path,
-                    crate::units::downloaded([(fetched.size, fetched.moved)], started.elapsed())
-                ),
-            );
+            downloaded.push((remote.path.clone(), (fetched.size, fetched.moved)));
         }
         remote.sha256 = Some(fetched.digest);
         remote.size = Some(fetched.size);
         remote.named_by_server = false;
     }
+    let what = match downloaded.as_slice() {
+        [] => return Ok(()),
+        [(path, _)] => path.clone(),
+        several => units::count(several.len() as u64, "file", "files"),
+    };
+    let moved = units::downloaded(
+        downloaded.iter().map(|(_, moved)| *moved),
+        started.elapsed(),
+    );
+    context
+        .output
+        .step("Downloaded", &format!("{what} · {moved}"));
     Ok(())
 }
 
@@ -1079,7 +1506,7 @@ mod tests {
         std::fs::write(&manifest_path, "[datasets]\n").unwrap();
         let failure = || Error::new(Kind::LocalIo, "could not write data.toml");
         let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
-        let untouched = restore(&project, &mut saved, "iris", failure());
+        let untouched = restore(&project, &mut saved, &["iris".to_owned()], failure());
         assert!(untouched.details.is_empty(), "{:?}", untouched.details);
         assert!(!saved.keep);
         drop(saved);
@@ -1088,7 +1515,7 @@ mod tests {
         let mut saved = BeforeAdd::save(&project, (Some("[datasets]\n"), None)).unwrap();
         saved.writing(manifest::FILE, b"[datasets.iris]\nref = 'x'\n");
         saved.writing(lock::FILE, b"version = 1\n");
-        let restored = restore(&project, &mut saved, "iris", failure());
+        let restored = restore(&project, &mut saved, &["iris".to_owned()], failure());
         assert_eq!(
             restored.details,
             ["restored data.toml and data.lock to their state before add"]
@@ -1126,7 +1553,7 @@ mod tests {
         let theirs = format!("{added}# a note made meanwhile\n");
         std::fs::write(&manifest_path, &theirs).unwrap();
         let failure = Error::new(Kind::LocalIo, "could not place a file");
-        let restored = restore(&project, &mut saved, "iris", failure);
+        let restored = restore(&project, &mut saved, &["iris".to_owned()], failure);
         assert_eq!(std::fs::read_to_string(&manifest_path).unwrap(), theirs);
         assert!(!project.root.join(lock::FILE).exists());
         assert!(saved.keep);
@@ -1176,7 +1603,7 @@ mod tests {
         let mode = |mode| std::fs::Permissions::from_mode(mode);
         std::fs::set_permissions(&project.root, mode(0o555)).unwrap();
         let failure = Error::new(Kind::LocalIo, "could not place a file");
-        let restored = restore(&project, &mut saved, "a", failure);
+        let restored = restore(&project, &mut saved, &["a".to_owned()], failure);
         std::fs::set_permissions(&project.root, mode(0o755)).unwrap();
         let shown = format!("{}\n{}", restored.message, restored.details.join("\n"));
         assert!(
@@ -1296,13 +1723,15 @@ mod tests {
         let old = adding.old.take();
         let work = Loop::new(&context, &adding.project, Arc::new(context.net()), cache);
         EDIT_AT.set(Some((point, edit)));
+        let names = ["b".to_owned()];
         let outcome = block_on(sync_add(
             &work,
             &adding,
             &manifest,
             Some(&updated),
             old,
-            ("b", Some(listing)),
+            (&names, vec![Given::Listing("b".to_owned(), listing)]),
+            &[],
         ));
         EDIT_AT.set(None);
         drop(work);

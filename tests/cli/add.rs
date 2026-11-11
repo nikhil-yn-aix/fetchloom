@@ -940,3 +940,88 @@ fn a_cancelled_download_of_an_add_says_nothing_changed() -> Result {
     }
     Ok(())
 }
+
+const WINE: &[u8] = b"alcohol,class\n14.23,1\n";
+
+#[test]
+fn a_list_adds_one_dataset_per_line_and_checks_hashes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let wine = Server::start("/wine.csv", vec![file(WINE, "\"w1\"")])?;
+    // the hosts come from a file, so a person allows them as data.toml's would be
+    sandbox.allow(&iris.url);
+    sandbox.allow(&wine.url);
+    let work = sandbox.work();
+    fs::write(
+        work.join("links.txt"),
+        format!(
+            "# inputs\n{} sha256:{}\n\n{}\n",
+            iris.url,
+            sha256_hex(IRIS),
+            wine.url
+        ),
+    )?;
+    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["result"]["datasets"],
+        serde_json::json!(["iris", "wine"])
+    );
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        format!(
+            "[datasets.iris]\nref = \"{}\"\n\n[datasets.wine]\nref = \"{}\"\n",
+            iris.url, wine.url
+        )
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
+    assert!(lock.contains(&sha256_hex(WINE)), "{lock}");
+    assert_eq!(fs::read(work.join("data/iris/iris.csv"))?, IRIS);
+    assert_eq!(fs::read(work.join("data/wine/wine.csv"))?, WINE);
+
+    let other = Server::start("/other.csv", vec![file(b"other\n", "\"o1\"")])?;
+    sandbox.allow(&other.url);
+    fs::write(
+        work.join("more.txt"),
+        format!("{} {}\n", other.url, sha256_hex(IRIS)),
+    )?;
+    let (manifest, pins) = (fs::read(work.join("data.toml"))?, lock.into_bytes());
+    let wrong = sandbox.run(&["--json", "add", "-i", "more.txt"])?;
+    assert_eq!(wrong.status.code(), Some(30), "{}", text(&wrong.stdout)?);
+    assert_eq!(
+        json(&wrong)?["errors"][0]["message"],
+        "other/other.csv does not match the SHA-256 on line 1 of more.txt"
+    );
+    assert_eq!(fs::read(work.join("data.toml"))?, manifest);
+    assert_eq!(fs::read(work.join("data.lock"))?, pins);
+    assert!(!work.join("data/other").exists());
+    Ok(())
+}
+
+#[test]
+fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&iris.url);
+    let work = sandbox.work();
+    fs::write(
+        work.join("links.txt"),
+        format!("{}\n{}?token=hunter2\n", iris.url, iris.url),
+    )?;
+    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["errors"][0]["message"],
+        "line 2 of links.txt: this link carries token, a secret that data.toml and data.lock would keep and share"
+    );
+    assert!(!document.to_string().contains("hunter2"), "{document}");
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(iris.requests(), Vec::<String>::new());
+    assert!(!work.join("data.toml").exists());
+    assert!(!work.join(".fetchloom").exists());
+    let named = sandbox.run(&["add", "-i", "links.txt", "--as", "flowers"])?;
+    assert_eq!(named.status.code(), Some(2), "--as names one dataset");
+    Ok(())
+}

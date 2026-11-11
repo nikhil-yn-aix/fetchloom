@@ -7,12 +7,14 @@ fetchloom add iris    # at a terminal, pick one from a list
 fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 fetchloom add https://zenodo.org/records/3608990 --as flowers
 fetchloom add hf:datasets/scikit-learn/iris --select "*.csv" --dry-run
+fetchloom add -i links.txt    # a dataset for each link in a list
 ```
 
 ## usage
 
 ```sh
 fetchloom add [options] <link>
+fetchloom add [options] -i <file>
 ```
 
 | option | effect |
@@ -21,6 +23,7 @@ fetchloom add [options] <link>
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
 | `--no-extract` | keep archives packed and record `extract = false` |
+| `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
 [global options](README.md#global-options) also apply. [sources](../sources/README.md) lists accepted links and references. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote several words, as in `fetchloom add "fashion mnist"`. the manifest stores the chosen canonical id, not the search words.
@@ -51,6 +54,18 @@ commit `data.toml` and `data.lock`, not `data/`. names follow the [manifest rule
 adding an existing reference with identical filters and extraction settings syncs it without another entry, and in a git repository adds the data folder to `.gitignore` if needed. a resolved reference from an old lock identifies that entry only while its manifest reference is unchanged; editing `ref` does not make the old source count as already added. different settings fail unless you supply an unused `--as` name. edit `data.toml` to change an existing entry.
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads stay, so running the add again reuses them, while the files it placed for the new dataset are removed with it.
+
+## a list of links
+
+`-i <file>` adds a dataset for each link in a list, as `get -i` reads one: one link a line, blank lines and lines starting with `#` skipped, and after a link, optionally, the SHA-256 of its one file, as 64 hex digits or `sha256:` and 64 hex digits:
+
+```text
+# inputs for the paper
+https://example.org/iris.csv sha256:d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
+zenodo:3608990
+```
+
+the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a link fetchloom cannot read, and a link carrying a secret data.toml and data.lock would keep, stop the add naming the line, the secret masked. the links resolve together, then each dataset gets a name as a single add would, the next number when one is taken, and every file downloads together. a line with a SHA-256 must keep one file, and the bytes must have that hash, or the add stops with `integrity.mismatch`, exit 30, naming the line. a link data.toml has already stays as it is. data.toml and data.lock are each written once, and any failure leaves both as they were. hosts a list names are not trusted as typed ones are, so a server on this machine or your network needs the [`allowed_origins` setting](../reference/environment.md). `--as`, `--select` and `--exclude` are usage errors with `-i`; `--no-extract` applies to every dataset.
 
 ## stopping an add
 
