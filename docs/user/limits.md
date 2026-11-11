@@ -33,7 +33,7 @@ a stopped download keeps what it fetched and goes on from there in the next run,
 
 ## commands and integrations not implemented
 
-`cite`, archive-service fallbacks and lab administration are not implemented. google cloud storage buckets are listed anonymously over HTTPS; S3 buckets anonymously, or signed with AWS keys for [buckets you list](sources/buckets.md#private-s3-buckets). AWS keys from roles, IAM identity center or `credential_process`, and azure blob storage, are not implemented. the python module provides `path()` and `sync()`; there is no R wrapper or other language or workflow wrapper.
+`cite`, archive-service fallbacks and lab administration are not implemented. google cloud storage buckets are listed anonymously over HTTPS; S3 buckets anonymously, or signed with AWS keys for [buckets you list](sources/buckets.md#private-s3-buckets). AWS keys from roles, IAM identity center or `credential_process`, and azure blob storage, are not implemented. the python module provides [`path()`, `sync()` and `get()`](scripting.md); there is no R wrapper or other language or workflow wrapper.
 
 see the [developer roadmap](../dev/roadmap.md) for future work. current commands are listed in the [command guide](commands/README.md).
 
