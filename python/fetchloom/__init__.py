@@ -12,6 +12,7 @@ import subprocess
 import sys
 import sysconfig
 import warnings
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,7 @@ def path(
 def sync(
     project: str | os.PathLike[str] = ".",
     *,
+    names: str | Iterable[str] = (),
     yes: bool = False,
     offline: bool = False,
     strict: bool = False,
@@ -97,27 +99,35 @@ def sync(
 ) -> Path:
     """make the project's data folder match data.lock and return the project's path.
 
-    ``project`` is the project folder or any folder inside it. files edited by hand stay,
-    and each one fetchloom keeps is reported as a python warning; ``strict=True`` also raises
-    :class:`Error` with kind ``conflict.kept``, listing them in ``details``, so a notebook
-    never runs on inputs that differ from the lock. a file fetchloom put back as pinned, such
-    as one linked to the cache's copy that was edited in place, matches the lock again: its
-    warning says so and names the file that keeps the changed copy, and nothing is raised. a
-    download above 1 GiB raises :class:`Error` with kind ``unconfirmed`` unless ``yes=True``
-    approves it. ``offline=True`` prevents network requests. ``locked=True`` raises
-    :class:`Error` with kind ``lock.outdated`` instead of updating a data.lock that is
-    missing or out of date with data.toml.
+    ``project`` is the project folder or any folder inside it. ``names``, such as ``["iris"]``
+    or ``"iris"``, syncs those datasets alone: the others keep their entries in data.lock and
+    their files as they are, and the next sync without names still checks them all. files
+    edited by hand stay, and each one fetchloom keeps is reported as a python warning;
+    ``strict=True`` also raises :class:`Error` with kind ``conflict.kept``, listing them in
+    ``details``, so a notebook never runs on inputs that differ from the lock. a file
+    fetchloom put back as pinned, such as one linked to the cache's copy that was edited in
+    place, matches the lock again: its warning says so and names the file that keeps the
+    changed copy, and nothing is raised. a download above 1 GiB raises :class:`Error` with
+    kind ``unconfirmed`` unless ``yes=True`` approves it. ``offline=True`` prevents network
+    requests. ``locked=True`` raises :class:`Error` with kind ``lock.outdated`` instead of
+    updating a data.lock that is missing or out of date with data.toml, for the named
+    datasets alone when ``names`` names some.
     """
-    result = _run(_options(["sync"], yes, offline, locked), project)
+    arguments = _options(["sync"], yes, offline, locked)
+    named = [names] if isinstance(names, str) else list(names)
+    if named:
+        arguments += ["--", *named]
+    result = _run(arguments, project)
     placement = result.get("placement") or {}
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
         files = "1 file in the data folder differs" if len(kept) == 1 else f"{len(kept)} files in the data folder differ"
+        force = " ".join(["fetchloom sync --force", *named])
         raise Error(
             "conflict.kept",
             f"{files} from data.lock",
             kept,
-            "save any changes you need, then run `fetchloom sync --force`",
+            f"save any changes you need, then run `{force}`",
         )
     return Path(result["project"])
 

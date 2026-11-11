@@ -45,6 +45,27 @@ class HelperOptions(unittest.TestCase):
             fetchloom.path("iris", ".", True)
         with self.assertRaises(TypeError):
             fetchloom.sync(".", True)
+        with self.assertRaises(TypeError):
+            fetchloom.sync(".", ["iris"])
+
+    def test_sync_names_the_datasets_it_asks_for_after_its_flags(self):
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": {"project": "p"}, "warnings": []}), ""
+        )
+        for names, named in [
+            ((), []),
+            (["small", "large"], ["--", "small", "large"]),
+            ("small", ["--", "small"]),
+            (iter(["-small"]), ["--", "-small"]),
+        ]:
+            with self.subTest(names=names):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                        self.assertEqual(fetchloom.sync("p", names=names, yes=True), Path("p"))
+                self.assertEqual(
+                    run.call_args.args[0],
+                    ["fetchloom", "--json", "-C", "p", "sync", "--yes", *named],
+                )
 
     def test_strict_sync_raises_on_kept_files(self):
         kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
@@ -61,6 +82,21 @@ class HelperOptions(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "conflict.kept")
         self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])
         self.assertEqual(raised.exception.message, "1 file in the data folder differs from data.lock")
+        self.assertEqual(raised.exception.help, "save any changes you need, then run `fetchloom sync --force`")
+
+    def test_strict_help_forces_only_the_named_datasets(self):
+        kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": []}), ""
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.sync("p", names=["iris", "flowers"], strict=True)
+        self.assertEqual(
+            raised.exception.help,
+            "save any changes you need, then run `fetchloom sync --force iris flowers`",
+        )
 
     def test_strict_names_several_files_in_the_plural(self):
         files = [{"path": f"data/iris/{name}", "reason": "changed"} for name in ["a.csv", "b.csv"]]

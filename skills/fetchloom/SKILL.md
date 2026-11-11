@@ -77,5 +77,6 @@ a reporting failure does not roll back command effects. JSON encoding failures a
 ```python
 import fetchloom
 path = fetchloom.path("iris")  # syncs iris alone if needed and returns its folder
+fetchloom.sync(names=["iris"])  # syncs iris alone and returns the project folder
 iris = fetchloom.get("https://example.org/iris.csv", "iris.csv")  # one file, no project
 ```
