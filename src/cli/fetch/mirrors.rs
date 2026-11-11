@@ -326,9 +326,10 @@ pub(in crate::cli) fn pinned(jobs: &[Job], cache: &Cache) -> Vec<Wanted> {
         .collect()
 }
 
-/// puts into the cache what the mirrors hold of `wanted`, asking each in order for the files the
-/// ones before it lacked. a damaged copy is told and left, so a later mirror or the source gives
-/// the file.
+/// puts into the cache what the mirrors hold of the files `wanted` lists, asking each in order
+/// for the files the ones before it lacked. a damaged copy is told and left, so a later mirror or
+/// the source gives the file. `wanted` runs only when there is a mirror to ask, since listing what
+/// the cache lacks looks at every file.
 ///
 /// # Errors
 ///
@@ -338,14 +339,14 @@ pub(in crate::cli) async fn fill(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    wanted: Vec<Wanted>,
+    wanted: impl FnOnce() -> Vec<Wanted>,
 ) -> Result<(), Error> {
     let mirrored = &context.mirrors;
-    if mirrored.mirrors.list.is_empty() || wanted.is_empty() {
+    if mirrored.mirrors.list.is_empty() {
         return Ok(());
     }
     let mut seen = HashSet::new();
-    let mut wanted: Vec<Wanted> = wanted
+    let mut wanted: Vec<Wanted> = wanted()
         .into_iter()
         .filter(|want| seen.insert(want.digest))
         .collect();
@@ -691,5 +692,41 @@ fn tell_damaged(context: &Context, location: &Location, labels: &[String]) {
             "the mirror {location} holds {} more damaged copies, so they were not used",
             labels.len() - NAMED
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+    use crate::output::{Level, Output, Style};
+    use crate::source::recorded::block_on;
+
+    /// listing what the cache lacks looks at every file, so a run without a mirror never does.
+    #[test]
+    fn a_run_without_a_mirror_lists_nothing_to_ask_for() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let net = Arc::new(context.net());
+        let listed = AtomicBool::new(false);
+        block_on(fill(&context, &net, &cache, || {
+            listed.store(true, Ordering::Relaxed);
+            Vec::new()
+        }))
+        .unwrap();
+        assert!(!listed.load(Ordering::Relaxed));
     }
 }

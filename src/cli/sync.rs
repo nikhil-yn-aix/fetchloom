@@ -184,12 +184,9 @@ impl<'a> Loop<'a> {
                 survey,
             )?;
         }
-        fetch::mirrors::fill(
-            self.context,
-            &self.net,
-            &self.cache,
-            placing.wanted(&self.cache),
-        )
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+            placing.wanted(&self.cache)
+        })
         .await
         .map_err(|error| self.as_left(error))?;
         let (archives, files): (Vec<_>, Vec<_>) = placing
@@ -600,21 +597,20 @@ impl<'a> Loop<'a> {
         if jobs.is_empty() {
             return Ok(Vec::new());
         }
-        fetch::mirrors::fill(
-            self.context,
-            &self.net,
-            &self.cache,
-            fetch::mirrors::pinned(&jobs, &self.cache),
-        )
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+            fetch::mirrors::pinned(&jobs, &self.cache)
+        })
         .await
         .map_err(|error| self.as_left(error))?;
         self.refuse_offline(&jobs)?;
-        let lacking: Vec<(String, Option<Sha256>)> = jobs
-            .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch))
-            .map(|job| (job.label.clone(), job.fetch.expect.sha256))
-            .collect();
-        fetch::mirrors::sources_allowed(self.context, &lacking)?;
+        if self.context.mirrors.mirrors.only {
+            let lacking: Vec<(String, Option<Sha256>)> = jobs
+                .iter()
+                .filter(|job| !in_cache(&self.cache, &job.fetch))
+                .map(|job| (job.label.clone(), job.fetch.expect.sha256))
+                .collect();
+            fetch::mirrors::sources_allowed(self.context, &lacking)?;
+        }
         crate::space::cache_holds(
             self.cache.root(),
             jobs.iter()
@@ -753,12 +749,14 @@ impl<'a> Loop<'a> {
                 return Err(self.offline_missing(&missing));
             }
         }
-        let lacking: Vec<(String, Option<Sha256>)> = files
-            .iter()
-            .filter(|(_, file)| !available(file))
-            .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
-            .collect();
-        fetch::mirrors::sources_allowed(self.context, &lacking)?;
+        if self.context.mirrors.mirrors.only {
+            let lacking: Vec<(String, Option<Sha256>)> = files
+                .iter()
+                .filter(|(_, file)| !available(file))
+                .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
+                .collect();
+            fetch::mirrors::sources_allowed(self.context, &lacking)?;
+        }
         crate::space::cache_holds(
             self.cache.root(),
             files
