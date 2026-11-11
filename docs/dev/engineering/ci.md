@@ -63,7 +63,7 @@ the benchmark itself never runs here. cargo-deny's three migration notices remai
 
 two required jobs retain the release-mode musl builds on ubuntu-24.04 and ubuntu-24.04-arm, with musl-tools and mimalloc, then check `--version`. this checks startup, not a release journey. all six target artifacts, installed wheels and installer journeys belong to the next CI slice; this gate does not pretend they already ran. [releasing](releasing.md) owns the current tag workflow and package inventory.
 
-the musl compiler installation depends on Ubuntu's apt archives in both CI and release. a resolver or archive outage fails provisioning, not a product test; the required gate still does not waive that job. mitigation belongs to the next slice.
+every apt install in CI and release goes through `.github/scripts/apt-install.sh`, which retries and, when the runner's resolver cannot find Ubuntu's archive, asks public resolvers instead; apt verifies the signed package lists, so the resolver cannot change what installs. an outage of the archive itself still fails provisioning, and the required gate still does not waive that job.
 
 ## documentation site
 
