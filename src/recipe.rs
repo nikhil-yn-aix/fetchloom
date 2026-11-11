@@ -207,21 +207,22 @@ pub(crate) fn closure<'a>(datasets: &'a BTreeMap<String, Entry>, names: &[&str])
         .collect()
 }
 
-/// what a recipe reads of a dataset fetched from a source: each file data.lock pins, an archive
-/// that unpacks with the tree of what it unpacks to, so the lines decide which files the step
-/// finds and where. links, versions and when it was pinned stay out, so a source that moves or
-/// renames a version keeps the content. member filters, once data.toml has them, follow the
-/// files as lines of their own, so a dataset without one keeps its content.
+/// what a recipe reads of a dataset fetched from a source: each file data.lock pins, and an
+/// archive that unpacks by the tree of what it unpacks to, never its own bytes, since the step
+/// finds its files and not it: a source that packs the same files again keeps the content. the
+/// lines decide which files the step finds and where. links, versions and when it was pinned
+/// stay out, so a source that moves or renames a version keeps the content. member filters, once
+/// data.toml has them, follow the files as lines of their own, so a dataset without one keeps
+/// its content.
 pub(crate) fn content(locked: &Locked) -> Sha256 {
     let mut files: Vec<_> = locked.files.iter().collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let mut text = String::new();
     for file in files {
-        let _ = write!(text, "{}\t{}\t{}", file.path, file.size, file.sha256);
-        if let Some(tree) = file.unpacks_to {
-            let _ = write!(text, "\tsha256:{tree}");
-        }
-        text.push('\n');
+        let _ = match file.unpacks_to {
+            Some(tree) => writeln!(text, "{}\tsha256:{tree}", file.path),
+            None => writeln!(text, "{}\t{}\t{}", file.path, file.size, file.sha256),
+        };
     }
     digest::sha256(text.as_bytes())
 }
@@ -637,10 +638,11 @@ mod tests {
             pinned("a.csv", b"abc", None),
         ];
         let raw = locked(files.clone());
-        // the lines `path \t size \t sha256 [\t sha256:<tree>]`, hashed by python
+        // the lines `path \t size \t sha256`, or `path \t sha256:<tree>` for an archive that
+        // unpacks, hashed by python
         assert_eq!(
             content(&raw).hex(),
-            "466584f74db504f54956ffd6d7886b2f2e8531e707aa80741c02973ce251cae1"
+            "44f9f9781b9da7e9e6ab6aca1196d45e10f048968b6f5e2c994f47b0be1bc8a6"
         );
         let mut moved = raw.clone();
         moved.reference = "zenodo:2".to_owned();
@@ -654,6 +656,11 @@ mod tests {
             file.md5 = crate::digest::Md5::from_hex("900150983cd24fb0d6963f7d28e17f72");
         }
         assert_eq!(content(&moved), content(&raw));
+        // the step reads the archive's files, so the same files packed again keep the content
+        let mut rezipped = raw.clone();
+        let tree = rezipped.files[0].unpacks_to;
+        rezipped.files[0] = pinned("b/x.zip", b"zipped again", tree);
+        assert_eq!(content(&rezipped), content(&raw));
         let mut packed = raw.clone();
         packed.files[0].unpacks_to = None;
         let mut edited = raw.clone();
