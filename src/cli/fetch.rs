@@ -226,6 +226,11 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
+    /// for a download nobody stated the size of, what the disk holding the cache had free when
+    /// it started, or `u64::MAX` when nothing is to be watched, and what `received` was then.
+    /// bytes that arrive past that free space stop it, as a known size stops before it starts.
+    free: AtomicU64,
+    free_from: AtomicU64,
     /// what this download holds for the next run. the batch owns it, to say what a stop kept.
     held: &'a Held,
     /// the bytes an earlier run kept, so a start from the first byte can say they were lost.
@@ -260,6 +265,8 @@ impl<'a> Watch<'a> {
             sized: AtomicBool::new(false),
             unbounded: AtomicBool::new(false),
             received: AtomicU64::new(0),
+            free: AtomicU64::new(u64::MAX),
+            free_from: AtomicU64::new(0),
             held,
             earlier: AtomicU64::new(0),
             restarted: AtomicBool::new(false),
@@ -289,6 +296,40 @@ impl<'a> Watch<'a> {
         } else {
             decide()
         }
+    }
+
+    /// says once that the download starts over when it goes on from `resumed`, before the bytes
+    /// an earlier run kept, which are then lost.
+    fn restarting(&self, resumed: u64) {
+        let earlier = self.earlier.load(Ordering::Relaxed);
+        if resumed < earlier && !self.restarted.swap(true, Ordering::Relaxed) {
+            self.output.mark(
+                "Restarting",
+                &format!(
+                    "{} · the {} an earlier run kept cannot be continued",
+                    self.job.label,
+                    units::size(earlier)
+                ),
+            );
+        }
+    }
+
+    /// stops a download nobody stated the size of once `received`, the bytes it holds, passes
+    /// what the disk holding the cache had free when it started: the bytes that just arrived are
+    /// not written, so the disk is left near full rather than full. a person may go on anyway.
+    fn room(&self, received: u64) -> Result<(), Error> {
+        let free = self.free.load(Ordering::Relaxed);
+        let arrived = received.saturating_sub(self.free_from.load(Ordering::Relaxed));
+        let Some(cache) = self.approval.cache.as_deref() else {
+            return Ok(());
+        };
+        if free == u64::MAX || crate::space::short(arrived, Some(free)).is_none() {
+            return Ok(());
+        }
+        let doing = format!("downloading {}", self.job.label);
+        self.approve(|| super::ask_room(self.output, &doing, arrived, free, cache))?;
+        self.free.store(u64::MAX, Ordering::Relaxed);
+        Ok(())
     }
 
     fn waited(&self) -> std::sync::MutexGuard<'_, Option<Ticker>> {
@@ -331,10 +372,10 @@ impl<'a> Watch<'a> {
                 self.overall.begin(self.output);
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 let unknown = self.job.fetch.expect.size.is_none();
+                let free = self.approval.cache.as_deref().map(crate::space::free);
                 // a download that may have found its bytes unchanged was not asked about before
                 if unknown || self.job.fetch.held.is_some() {
                     // a disk without room asks instead, and its question names the size too
-                    let free = self.approval.cache.as_deref().map(crate::space::free);
                     if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
                         && !self.yes
                         && crate::space::short(left, free).is_some()
@@ -355,17 +396,12 @@ impl<'a> Watch<'a> {
                     }
                     self.unbounded.store(total.is_none(), Ordering::Relaxed);
                     self.received.store(resumed, Ordering::Relaxed);
+                    let watched = free.flatten().filter(|_| total.is_none() && !self.yes);
+                    self.free
+                        .store(watched.unwrap_or(u64::MAX), Ordering::Relaxed);
+                    self.free_from.store(resumed, Ordering::Relaxed);
                 }
-                let earlier = self.earlier.load(Ordering::Relaxed);
-                if resumed < earlier && !self.restarted.swap(true, Ordering::Relaxed) {
-                    self.output.mark(
-                        "Restarting",
-                        &format!(
-                            "{label} · the {} an earlier run kept cannot be continued",
-                            units::size(earlier)
-                        ),
-                    );
-                }
+                self.restarting(resumed);
                 let bar = self.bar();
                 bar.message("Downloading", label.clone());
                 bar.start(total, resumed);
@@ -420,6 +456,7 @@ impl<'a> Watch<'a> {
                     self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
                     self.unbounded.store(false, Ordering::Relaxed);
                 }
+                self.room(received)?;
             }
         }
         Ok(())

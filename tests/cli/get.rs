@@ -1988,6 +1988,58 @@ fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
+/// a download whose size neither its source nor its server states is checked as its bytes
+/// arrive: once more has arrived than the cache's disk had free, it stops before the disk fills,
+/// as one of known size stops before it starts, and `--yes` goes on anyway.
+#[test]
+fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 4096];
+    // without a length, the body ends when the server hangs up
+    let server = Server::start(
+        PATH,
+        vec![reply("200 OK", &[], &body), reply("200 OK", &[], &body)],
+    )?;
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed", "{error}");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("downloading iris.csv needs at least ")
+            && message.ends_with(&format!(
+                " on the disk holding the cache at {}, which has 1000 B free",
+                sandbox.cache().display()
+            )),
+        "{message}"
+    );
+    assert!(!sandbox.work().join("iris").exists());
+    let kept: u64 = partial_files(&sandbox.cache())
+        .iter()
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "part")
+        })
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|metadata| metadata.len())
+        .sum();
+    assert!(kept <= 1000, "{kept} bytes went to a disk with 1000 B free");
+    let output = sandbox
+        .command(&["get", "--yes", &server.url])
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("iris").join("iris.csv"))?,
+        body
+    );
+    Ok(())
+}
+
 /// a file only its server says is 4 GiB is refused before any byte moves when the cache's disk
 /// is FAT32, which holds no file that large. exFAT holds it, so that run goes on to ask about the
 /// size.
