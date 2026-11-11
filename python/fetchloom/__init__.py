@@ -96,6 +96,7 @@ def sync(
     offline: bool = False,
     strict: bool = False,
     locked: bool = False,
+    verify: bool = False,
 ) -> Path:
     """make the project's data folder match data.lock and return the project's path.
 
@@ -113,9 +114,12 @@ def sync(
     updating a data.lock that is missing or out of date with data.toml, for the named
     datasets alone when ``names`` names some, and with kind ``build.needed`` when data.lock
     does not pin a recipe as building it now would make, which only ``fetchloom build``
-    changes.
+    changes. ``verify=True`` checks the SHA-256 of every placed file, as ``sync --verify``
+    does, and puts back one whose bytes changed though its size and time did not.
     """
     arguments = _options(["sync"], yes, offline, locked)
+    if verify:
+        arguments.append("--verify")
     named = [names] if isinstance(names, str) else list(names)
     if named:
         arguments += ["--", *named]

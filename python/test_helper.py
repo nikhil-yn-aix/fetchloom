@@ -51,6 +51,20 @@ class HelperOptions(unittest.TestCase):
         with self.assertRaises(TypeError):
             fetchloom.sync(".", ["iris"])
 
+    def test_sync_verify_hashes_every_placed_file_as_the_cli_does(self):
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": {"project": "p"}, "warnings": []}), ""
+        )
+        for verify, flags in [(False, ["--locked"]), (True, ["--locked", "--verify"])]:
+            with self.subTest(verify=verify):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                        fetchloom.sync("p", names="iris", locked=True, verify=verify)
+                self.assertEqual(
+                    run.call_args.args[0],
+                    ["fetchloom", "--json", "-C", "p", "sync", *flags, "--", "iris"],
+                )
+
     def test_sync_names_the_datasets_it_asks_for_after_its_flags(self):
         response = subprocess.CompletedProcess(
             [], 0, json.dumps({"status": "ok", "result": {"project": "p"}, "warnings": []}), ""

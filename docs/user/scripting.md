@@ -137,7 +137,7 @@ frame = pd.read_csv(fetchloom.get("https://example.org/iris.csv", "data.csv"))
 
 | function | return |
 |---|---|
-| `fetchloom.sync(project=".", *, names=(), yes=False, offline=False, strict=False, locked=False)` | absolute project root as `pathlib.Path` |
+| `fetchloom.sync(project=".", *, names=(), yes=False, offline=False, strict=False, locked=False, verify=False)` | absolute project root as `pathlib.Path` |
 | `fetchloom.path(name, project=".", *, yes=False, offline=False, locked=False)` | dataset, file or subfolder as `pathlib.Path` |
 | `fetchloom.get(link, path=None, *, folder=None, sha256=None, force=False, yes=False, offline=False)` | with `path`, the file written there; otherwise the folder, `folder` or a new one named after the download; as `pathlib.Path` |
 
@@ -149,7 +149,7 @@ the helper first looks for the executable beside the imported package or in its 
 
 the helpers run the installed executable with `--json` and forward warnings as python warnings. `sync()` preserves edits and forwards the CLI warnings. `strict=True` raises `fetchloom.Error` with kind `conflict.kept` if sync kept any conflicts; `details` contains their project-relative paths, `help` the `fetchloom sync --force` command for the same names, and `code` is `None`. it does not overwrite them or audit unrelated extras. a file sync put back as pinned matches the lock again, so it raises nothing; its warning says what was put back. use CLI JSON when you need status arrays. `fetchloom.__version__` is the installed package's version.
 
-`yes`, `offline`, `locked`, sync's `strict` and get's `force` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`. `locked=True` passes `--locked`, so a data.lock that is missing or out of date with data.toml raises `lock.outdated` instead of being updated; use it in pipelines that must run on committed pins.
+`yes`, `offline`, `locked`, sync's `strict` and `verify` and get's `force` are keyword-only booleans, all false by default. `yes=True` approves downloads. without approval, a large download can raise `unconfirmed`. `offline=True` forbids requests, including an implicit sync from `path()`. `locked=True` passes `--locked`, so a data.lock that is missing or out of date with data.toml raises `lock.outdated` instead of being updated; use it in pipelines that must run on committed pins. `verify=True` passes `--verify`, so sync checks the SHA-256 of every placed file and puts back one whose bytes changed though its size and time did not, as a CI job's `sync --locked --verify` does.
 
 `path()` and `sync()` do not expose `--force`; `get(force=True)` replaces only the file `path` names. all three inherit [environment settings](reference/environment.md), including `FETCHLOOM_CACHE` and `FETCHLOOM_OFFLINE`.
 
