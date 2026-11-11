@@ -209,25 +209,9 @@ impl Location {
         }
     }
 
-    pub(super) fn serializes(&self) -> bool {
-        let disks =
-            sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing());
-        disks
-            .list()
-            .iter()
-            .filter_map(|disk| {
-                let mount = fs::canonicalize(disk.mount_point()).ok()?;
-                self.root
-                    .path
-                    .starts_with(&mount)
-                    .then_some((mount.components().count(), disk))
-            })
-            .max_by_key(|(length, _)| *length)
-            .is_some_and(|(_, disk)| {
-                disk.file_system()
-                    .to_str()
-                    .is_some_and(super::schedule::serializes_name)
-            })
+    /// the filesystem the root is on.
+    pub(super) fn filesystem(&self) -> crate::space::Filesystem {
+        crate::space::Filesystem::of(&self.root.path)
     }
 
     pub(super) fn can_hardlink(&self) -> Option<bool> {

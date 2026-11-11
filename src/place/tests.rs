@@ -746,6 +746,7 @@ fn only_a_placement_of_many_copies_waits_for_one_flush() {
                 object: object.clone(),
                 destination: destinations[index].clone(),
                 writable: false,
+                size: CONTENTS.len() as u64,
             },
             Metadata::len,
         );
@@ -967,6 +968,7 @@ fn many_files_are_placed_on_several_threads_and_reported_in_order() {
             object: object.clone(),
             destination: destinations[index].clone(),
             writable: false,
+            size: CONTENTS.len() as u64,
         },
         |_| (),
     );
@@ -1006,6 +1008,7 @@ fn many_copies_are_placed_and_named_whole() {
             object: object.clone(),
             destination: destinations[index].clone(),
             writable: false,
+            size: CONTENTS.len() as u64,
         },
         Metadata::len,
     );
@@ -1271,6 +1274,7 @@ fn a_stop_after_the_first_placement_starts_no_later_file() {
             object: object.clone(),
             destination: root.join(format!("{index}.csv")),
             writable: false,
+            size: CONTENTS.len() as u64,
         },
         |_| {
             seen.fetch_add(1, Ordering::Relaxed);
@@ -1425,7 +1429,7 @@ fn folder_aware_placement_preserves_results_and_probes_its_filesystem() {
     let (folder, object) = cache(true);
     let root = folder.path().join("data");
     let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
-    assert!(placer.serial.get().is_none());
+    assert!(placer.filesystem.get().is_none());
     for batch in 0..2 {
         let results = placer.place_all(
             256,
@@ -1433,6 +1437,7 @@ fn folder_aware_placement_preserves_results_and_probes_its_filesystem() {
                 object: object.clone(),
                 destination: root.join(format!("{}/{batch}-{index}", index % 3)),
                 writable: true,
+                size: CONTENTS.len() as u64,
             },
             Metadata::len,
         );
@@ -1444,7 +1449,7 @@ fn folder_aware_placement_preserves_results_and_probes_its_filesystem() {
                 CONTENTS
             );
         }
-        assert!(placer.serial.get().is_some());
+        assert!(placer.filesystem.get().is_some());
     }
 }
 
@@ -1454,7 +1459,7 @@ fn an_empty_placement_does_not_latch_a_failed_filesystem_probe() {
     let mut placer = Placer::new(&folder.path().join("missing"));
     let results = placer.place_all(0, |_| panic!("no order"), |_| ());
     assert_eq!(results.len(), 0);
-    assert!(placer.serial.get().is_none());
+    assert!(placer.filesystem.get().is_none());
 }
 
 #[test]
@@ -1504,6 +1509,7 @@ fn macos_copy_batches_finish_flushing_before_they_return() {
             object: object.clone(),
             destination: root.join(format!("{index}")),
             writable: false,
+            size: CONTENTS.len() as u64,
         },
         Metadata::len,
     );
@@ -1589,6 +1595,7 @@ fn placing_records_what_each_new_name_holds() {
                 object: object.clone(),
                 destination: destinations[index].clone(),
                 writable: false,
+                size: CONTENTS.len() as u64,
             },
             |metadata| (metadata.len(), metadata.modified().unwrap()),
         );
@@ -1618,4 +1625,45 @@ fn a_hardlink_still_refuses_an_object_swapped_for_a_symlink() {
 
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(fs::symlink_metadata(&destination).is_err());
+}
+
+/// FAT32 holds no file of 4 GiB or more, so a file that large is refused before any of its bytes
+/// are copied there, while one a byte smaller is placed, as is the larger one on exFAT. the order
+/// says how large the file is, so the object here can stay small.
+#[test]
+fn a_file_fat32_cannot_hold_is_refused_before_it_is_copied() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let largest = crate::space::FAT_LARGEST;
+    for (filesystem, size, refused) in [
+        (Filesystem::Fat, largest + 1, true),
+        (Filesystem::Fat, largest, false),
+        (Filesystem::Exfat, largest + 1, false),
+    ] {
+        let mut placer = Placer::starting_at(root.clone(), Method::Copy, None);
+        placer.filesystem = OnceLock::from(filesystem);
+        let destination = root.join(format!("{filesystem:?}-{size}.csv"));
+        let results = placer.place_all(
+            1,
+            |_| Order {
+                object: object.clone(),
+                destination: destination.clone(),
+                writable: false,
+                size,
+            },
+            |_| (),
+        );
+        match &results[0] {
+            Err(error) if refused => {
+                assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+                assert!(error.to_string().contains("FAT32"), "{error}");
+                assert!(!destination.exists());
+            }
+            Ok((method, ())) if !refused => {
+                assert_eq!(*method, Method::Copy);
+                assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+            }
+            other => panic!("{filesystem:?} {size}: {other:?}"),
+        }
+    }
 }

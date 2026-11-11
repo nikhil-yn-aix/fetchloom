@@ -26,7 +26,7 @@ put that line in `~/.zshrc` to keep it in later sessions. changing the variable 
 
 ## clones and links
 
-apfs supports copy-on-write clones: a clone shares its blocks with the cached file until either file is written. `copy = true` requests writable clones. hfs+ cannot clone, so fetchloom tries hardlinks there. exFAT and FAT32 drives make neither, so every file is copied. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
+apfs supports copy-on-write clones: a clone shares its blocks with the cached file until either file is written. `copy = true` requests writable clones. hfs+ cannot clone, so fetchloom tries hardlinks there. exFAT and FAT32 drives make neither, so every file is copied, and FAT32 holds no file of 4 GiB or more, which fetchloom refuses before copying, as [limits](limits.md#scale) lists. a project on another volume than the cache gets copies too; a cache on the same drive, chosen with `FETCHLOOM_CACHE`, lets fetchloom link again.
 
 stderr excerpt when the project and cache share an apfs disk:
 

@@ -139,6 +139,7 @@ pub(super) fn put_all(
             object: orders[order].1.clone(),
             destination: orders[order].2.clone(),
             writable: false,
+            size: targets[orders[order].0].size,
         },
         |_| (),
     );

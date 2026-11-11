@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
+use super::guard::{Guard, Meter};
 use super::samples::{Scratch, compress, seven_zip, tar_of, zip_of, zstd_asking_for};
 use super::{Detected, Format, Limits, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
@@ -439,5 +440,46 @@ fn refused_archive_workers_keep_every_member_without_a_queue_wait() {
             let (_, expected) = FILES.iter().find(|(path, _)| *path == member.path).unwrap();
             scratch.assert_stored(member, expected);
         }
+    }
+}
+
+/// a member larger than the cache's disk holds, as FAT32 holds no file of 4 GiB or more, is
+/// refused by the size the archive declares for it, before any of its bytes are written.
+#[test]
+fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
+    let limits = Limits::default();
+    for format in FAMILIES {
+        let scratch = Scratch::new();
+        let files: &[(&str, &[u8])] = &[("small.csv", b"abc"), ("large.csv", b"abcd")];
+        let path = scratch.file("archive", &archive(format, files));
+        let meter = Meter::default();
+        let mut guard =
+            Guard::new(&limits, &|_| false, &meter).holding_at_most(scratch.cache.root(), 3);
+        let mut kept = Vec::new();
+        let mut keep = |_: &mut Guard<'_>, path: String, from: &mut dyn std::io::Read| {
+            std::io::copy(from, &mut std::io::sink()).unwrap();
+            kept.push(path);
+            Ok(())
+        };
+        let refused = match format {
+            Format::Zip => super::zip::unpack(&path, &mut guard, &mut keep),
+            Format::SevenZ => super::sevenz::unpack(&path, &mut guard, &mut keep),
+            tar => super::tar::unpack(&path, tar, &mut guard, &mut keep),
+        }
+        .unwrap_err();
+        assert_eq!(
+            refused.kind,
+            Kind::LocalIo,
+            "{format:?}: {}",
+            refused.message
+        );
+        assert!(
+            refused
+                .message
+                .contains("and \"large.csv\" in the archive is 4 B"),
+            "{}",
+            refused.message
+        );
+        assert_eq!(kept, ["small.csv"], "{format:?}");
     }
 }

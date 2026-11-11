@@ -1989,3 +1989,47 @@ fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
     assert!(!fresh.join("data").join("one").exists());
     Ok(())
 }
+
+/// FAT32 holds no file of 4 GiB or more, so a sync refuses a pinned file that large before it
+/// asks or downloads anything, while a file one byte smaller, or exFAT, goes on to ask about the
+/// size.
+#[test]
+fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let fresh = clone(&sandbox, "fresh")?;
+    let lock = fresh.join("data.lock");
+    let text = fs::read_to_string(&lock)?;
+    let pinned = format!("size = {}", IRIS.len());
+    assert!(text.contains(&pinned), "{text}");
+    let largest: u64 = (1 << 32) - 1;
+    for (size, filesystem, kind) in [
+        (largest + 1, "fat32", "local.io"),
+        (largest, "fat32", "unconfirmed"),
+        (largest + 1, "exfat", "unconfirmed"),
+    ] {
+        fs::write(&lock, text.replace(&pinned, &format!("size = {size}")))?;
+        let cache = sandbox.folder(&format!("cache-{size}-{filesystem}"))?;
+        let output = sandbox
+            .command_in(&fresh, &["--json", "sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_TEST_FILESYSTEM", filesystem)
+            .output()?;
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], kind, "{size} on {filesystem}: {error}");
+        assert_eq!(document["work"]["requests"], 0, "{size} on {filesystem}");
+        if kind == "local.io" {
+            assert_eq!(
+                error["message"],
+                format!(
+                    "the cache at {} is on a FAT32 disk, which holds no file of 4 GiB or more, and iris/iris.csv is 4.0 GiB",
+                    cache.display()
+                )
+            );
+        }
+    }
+    assert_eq!(server.requests().len(), 1, "the add alone downloaded");
+    Ok(())
+}

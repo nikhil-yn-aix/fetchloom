@@ -22,6 +22,7 @@ use std::sync::{Arc, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::cache::read_unfollowed;
+use crate::space::Filesystem;
 use crate::stop::Stop;
 use crate::threads::Threads;
 #[cfg(windows)]
@@ -69,7 +70,7 @@ pub(crate) struct Placer {
     volume: Volume,
     parents: Parents,
     links: OnceLock<bool>,
-    serial: OnceLock<bool>,
+    filesystem: OnceLock<Filesystem>,
     #[cfg(test)]
     observed: Option<Box<Observation>>,
     /// what every hardlink fails with instead, as a disk would refuse it.
@@ -89,11 +90,13 @@ pub(crate) struct Placer {
 #[cfg(test)]
 type Observation = dyn Fn(&Metadata) + Send + Sync;
 
-/// one file to place: the object, where it goes, and whether it must be a writable copy.
+/// one file to place: the object, where it goes, whether it must be a writable copy, and how many
+/// bytes it holds.
 pub(crate) struct Order {
     pub(crate) object: PathBuf,
     pub(crate) destination: PathBuf,
     pub(crate) writable: bool,
+    pub(crate) size: u64,
 }
 
 /// what putting one file in place did.
@@ -198,7 +201,7 @@ impl Placer {
             volume: Volume::new(root.clone()),
             parents: Parents::default(),
             links: OnceLock::new(),
-            serial: OnceLock::new(),
+            filesystem: OnceLock::new(),
             #[cfg(test)]
             observed: None,
             #[cfg(test)]
@@ -297,19 +300,19 @@ impl Placer {
             if first {
                 checked.push(false);
             }
-            if checked[group] {
-                return Some((index, group));
-            }
-            match self.check_folders(&order.destination, true) {
-                Ok(()) => {
-                    checked[group] = true;
-                    Some((index, group))
-                }
-                Err(err) => {
+            if !checked[group] {
+                if let Err(err) = self.check_folders(&order.destination, true) {
                     results.push((index, Err(err)));
-                    None
+                    return None;
                 }
+                checked[group] = true;
             }
+            // refused before any byte is copied, rather than failing at the disk's limit
+            if !self.filesystem().holds(order.size) {
+                results.push((index, Err(self.too_large(order.size))));
+                return None;
+            }
+            Some((index, group))
         }));
         let this = &*self;
         let observe = |metadata: &Metadata| {
@@ -319,11 +322,7 @@ impl Placer {
             }
             seen(metadata)
         };
-        let serial = !ready.is_empty()
-            && *this.serial.get_or_init(|| {
-                this.location(&this.root.join(".filesystem"), false)
-                    .is_ok_and(|location| location.serializes())
-            });
+        let serial = !ready.is_empty() && this.filesystem().serializes();
         let grouped = folders.finish(serial);
         let threads = grouped.threads(this.threads);
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
@@ -720,6 +719,27 @@ impl Placer {
             return Err(refusal());
         }
         link_object(location, object, checked)
+    }
+
+    /// the filesystem under the root, read once the root exists.
+    fn filesystem(&self) -> Filesystem {
+        *self.filesystem.get_or_init(|| {
+            Filesystem::chosen().unwrap_or_else(|| {
+                self.location(&self.root.join(".filesystem"), false)
+                    .map_or(Filesystem::Other, |location| location.filesystem())
+            })
+        })
+    }
+
+    /// why a file of `size` bytes cannot be placed on the root's FAT disk.
+    fn too_large(&self, size: u64) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            format!(
+                "{}; use a folder on a disk formatted as exFAT, NTFS, APFS or ext4",
+                crate::space::too_large(self.root.display(), "this file", size)
+            ),
+        )
     }
 
     fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {

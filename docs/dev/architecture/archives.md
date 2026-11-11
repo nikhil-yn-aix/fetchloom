@@ -57,6 +57,7 @@ on linux 5.8 and later, `Cache::batch` can flush the cache filesystem once with 
 |---|---|
 | 10,000,000 entries, `FETCHLOOM_ARCHIVE_FILES` | files and folders exposed by the decoder |
 | 16 TiB unpacked, `FETCHLOOM_ARCHIVE_SIZE` | actual member bytes across one archive |
+| the cache disk's largest file, 4 GiB less one byte on FAT32 | the size each member's header declares, checked before any of its bytes are written, since staging is on the cache's disk |
 | 1000:1 expansion, `FETCHLOOM_ARCHIVE_RATIO` | output, plus tar data read only to be skipped (folder contents, pax global headers, padding) and 7z data under an entry no file keeps, against compressed bytes read, after 4 MiB; zip and 7z rereads cannot raise the denominator past the physical archive size |
 | 16 MiB tar metadata per member | headers, long names and pax records outside the member body |
 | xz decoder memory: a quarter of `FETCHLOOM_MEMORY`, at least 256 MiB | what an xz header asks for, checked before decoding |

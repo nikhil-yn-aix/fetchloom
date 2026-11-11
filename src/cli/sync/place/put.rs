@@ -41,6 +41,7 @@ pub(super) fn put_all<'t>(
             object: cache.object_path(&target.sha256),
             destination: project.root.join(&target.path),
             writable: target.copy,
+            size: target.size,
         }
     };
     let results = placer.place_all(todo.len(), order, Look::of);

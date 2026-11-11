@@ -40,6 +40,7 @@ pub(super) fn unpack(
         let mut file = zip
             .by_index(index)
             .map_err(|err| damaged(Some(&path), &err))?;
+        guard.fits(&path, file.size())?;
         keep(guard, path, &mut file)?;
     }
     Ok(())

@@ -1306,3 +1306,38 @@ fn a_download_the_cache_disk_cannot_hold_asks_first() -> Result {
     assert!(output.status.success(), "{}", text(&output.stderr)?);
     Ok(())
 }
+
+/// a file only its server says is 4 GiB is refused before any byte moves when the cache's disk
+/// is FAT32, which holds no file that large. exFAT holds it, so that run goes on to ask about the
+/// size.
+#[test]
+fn a_download_fat32_cannot_hold_is_refused_before_any_byte_moves() -> Result {
+    let sandbox = Sandbox::new()?;
+    let stated = [("Content-Length", "4294967296")];
+    let server = Server::start(
+        PATH,
+        vec![reply("200 OK", &stated, b""), reply("200 OK", &stated, b"")],
+    )?;
+    let mut kinds = Vec::new();
+    for filesystem in ["fat32", "exfat"] {
+        let output = sandbox
+            .command(&["--json", "get", &server.url])
+            .env("FETCHLOOM_TEST_FILESYSTEM", filesystem)
+            .output()?;
+        let document = json(&output)?;
+        kinds.push(document["errors"][0]["kind"].clone());
+        assert_eq!(document["work"]["bytes_down"], 0, "{filesystem}");
+        if filesystem == "fat32" {
+            assert_eq!(output.status.code(), Some(50));
+            assert_eq!(
+                document["errors"][0]["message"],
+                format!(
+                    "the cache at {} is on a FAT32 disk, which holds no file of 4 GiB or more, and iris.csv is 4.0 GiB",
+                    sandbox.cache().display()
+                )
+            );
+        }
+    }
+    assert_eq!(kinds, ["local.io", "unconfirmed"]);
+    Ok(())
+}

@@ -1,7 +1,165 @@
 //! free space on the disk a run downloads to, so a download bigger than its disk is told before it
-//! starts rather than once the disk fills.
+//! starts rather than once the disk fills, and the largest file a disk holds, so a file FAT32
+//! cannot hold is refused before it is copied there.
 
 use std::path::Path;
+
+use crate::error::{Error, Kind};
+
+/// the most bytes one file holds on FAT32, which keeps a file's size in 32 bits: 4 GiB less one
+/// byte. exFAT keeps it in 64.
+pub(crate) const FAT_LARGEST: u64 = (1 << 32) - 1;
+
+/// what a disk is formatted as, as far as fetchloom's work changes with it: FAT and exFAT make
+/// no links and change one folder at a time, and FAT holds no file past [`FAT_LARGEST`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Filesystem {
+    /// FAT32, or FAT12 and FAT16 on smaller disks.
+    Fat,
+    Exfat,
+    Other,
+}
+
+impl Filesystem {
+    /// the filesystem a name from macos or windows stands for: "msdos" and "FAT32" are FAT.
+    #[cfg(any(not(target_os = "linux"), debug_assertions, test))]
+    pub(crate) fn named(name: &str) -> Filesystem {
+        let is = |names: &[&str]| names.iter().any(|known| name.eq_ignore_ascii_case(known));
+        if is(&["exfat"]) {
+            Filesystem::Exfat
+        } else if is(&["vfat", "fat", "fat12", "fat16", "fat32", "msdos", "msdosfs"]) {
+            Filesystem::Fat
+        } else {
+            Filesystem::Other
+        }
+    }
+
+    /// the filesystem a linux `statfs` magic number stands for. vfat and msdos share one.
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn from_magic(magic: i128) -> Filesystem {
+        match magic {
+            0x4d44 => Filesystem::Fat,
+            0x2011_bab0 => Filesystem::Exfat,
+            _ => Filesystem::Other,
+        }
+    }
+
+    /// the filesystem holding `path`, which must exist. one the system does not name is
+    /// `Other`.
+    pub(crate) fn of(path: &Path) -> Filesystem {
+        Filesystem::chosen().unwrap_or_else(|| probed(path))
+    }
+
+    /// a disk of a chosen format, for CLI tests. release builds never read it.
+    pub(crate) fn chosen() -> Option<Filesystem> {
+        #[cfg(debug_assertions)]
+        if let Ok(name) = std::env::var("FETCHLOOM_TEST_FILESYSTEM") {
+            return Some(Filesystem::named(&name));
+        }
+        None
+    }
+
+    /// the filesystem `stat`, from `statfs` or `fstatfs`, describes.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn of_stat(stat: &rustix::fs::StatFs) -> Filesystem {
+        #[cfg(target_os = "linux")]
+        {
+            Filesystem::from_magic(i128::from(stat.f_type))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let name: Vec<u8> = stat
+                .f_fstypename
+                .iter()
+                .take_while(|&&byte| byte != 0)
+                .map(|byte| byte.cast_unsigned())
+                .collect();
+            Filesystem::named(&String::from_utf8_lossy(&name))
+        }
+    }
+
+    /// whether its folders change one at a time, as on FAT and exFAT, so changing several at
+    /// once only queues the changes.
+    pub(crate) fn serializes(self) -> bool {
+        self != Filesystem::Other
+    }
+
+    /// the most bytes one file holds on this filesystem, when that is less than any disk holds.
+    pub(crate) fn largest_file(self) -> Option<u64> {
+        (self == Filesystem::Fat).then_some(FAT_LARGEST)
+    }
+
+    /// whether a file of `size` bytes fits on this filesystem.
+    pub(crate) fn holds(self, size: u64) -> bool {
+        self.largest_file().is_none_or(|largest| size <= largest)
+    }
+}
+
+/// refuses the first of `files`, by name and size, that the disk holding the cache at `cache`
+/// cannot hold, before any of them downloads.
+///
+/// # Errors
+///
+/// `local.io` naming the file, its size and what to do.
+pub(crate) fn cache_holds<'f>(
+    cache: &Path,
+    files: impl IntoIterator<Item = (&'f str, u64)>,
+) -> Result<(), Error> {
+    let mut large = files
+        .into_iter()
+        .filter(|(_, size)| *size > FAT_LARGEST)
+        .peekable();
+    if large.peek().is_none() {
+        return Ok(());
+    }
+    let filesystem = Filesystem::of(cache);
+    match large.find(|(_, size)| !filesystem.holds(*size)) {
+        Some((what, size)) => Err(Error::new(
+            Kind::LocalIo,
+            too_large(format_args!("the cache at {}", cache.display()), what, size),
+        )
+        .help("set FETCHLOOM_CACHE to a folder on a disk formatted as exFAT, NTFS, APFS or ext4")),
+        None => Ok(()),
+    }
+}
+
+/// why `what`, a file of `size` bytes, cannot go to `place`, which is on a FAT disk.
+pub(crate) fn too_large(place: impl std::fmt::Display, what: &str, size: u64) -> String {
+    format!(
+        "{place} is on a FAT32 disk, which holds no file of 4 GiB or more, and {what} is {}",
+        crate::units::size(size)
+    )
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn probed(path: &Path) -> Filesystem {
+    rustix::fs::statfs(path).map_or(Filesystem::Other, |stat| Filesystem::of_stat(&stat))
+}
+
+#[cfg(windows)]
+fn probed(path: &Path) -> Filesystem {
+    let Ok(path) = std::fs::canonicalize(path) else {
+        return Filesystem::Other;
+    };
+    let disks =
+        sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing());
+    disks
+        .list()
+        .iter()
+        .filter_map(|disk| {
+            let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
+            path.starts_with(&mount)
+                .then_some((mount.components().count(), disk))
+        })
+        .max_by_key(|(length, _)| *length)
+        .and_then(|(_, disk)| disk.file_system().to_str().map(Filesystem::named))
+        .unwrap_or(Filesystem::Other)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn probed(_: &Path) -> Filesystem {
+    Filesystem::Other
+}
 
 /// the bytes this user may still write on the disk holding `path`, which must exist. none when the
 /// system does not say.
@@ -55,6 +213,40 @@ pub(crate) fn short(needed: u64, free: Option<u64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FAT32 holds a file of 4 GiB less one byte and nothing larger; exFAT holds larger ones.
+    #[test]
+    fn fat32_holds_files_up_to_4_gib_less_one_byte() {
+        for (filesystem, size, holds) in [
+            (Filesystem::Fat, FAT_LARGEST - 1, true),
+            (Filesystem::Fat, FAT_LARGEST, true),
+            (Filesystem::Fat, FAT_LARGEST + 1, false),
+            (Filesystem::Fat, u64::MAX, false),
+            (Filesystem::Exfat, FAT_LARGEST + 1, true),
+            (Filesystem::Other, u64::MAX, true),
+        ] {
+            assert_eq!(filesystem.holds(size), holds, "{filesystem:?} {size}");
+        }
+        assert_eq!(FAT_LARGEST, 4_294_967_295);
+    }
+
+    #[test]
+    fn filesystems_are_told_apart_by_name_and_magic() {
+        for name in ["vfat", "msdos", "FAT32", "fat", "FAT16", "msdosfs"] {
+            assert_eq!(Filesystem::named(name), Filesystem::Fat, "{name}");
+        }
+        for name in ["exfat", "exFAT"] {
+            assert_eq!(Filesystem::named(name), Filesystem::Exfat, "{name}");
+        }
+        for name in ["ntfs", "refs", "apfs", "ext4", "xfs", "not-exfat", ""] {
+            assert_eq!(Filesystem::named(name), Filesystem::Other, "{name}");
+        }
+        assert_eq!(Filesystem::from_magic(0x4d44), Filesystem::Fat);
+        assert_eq!(Filesystem::from_magic(0x2011_bab0), Filesystem::Exfat);
+        for magic in [-1, 0, 0xef53, 0x5846_5342] {
+            assert_eq!(Filesystem::from_magic(magic), Filesystem::Other);
+        }
+    }
 
     #[test]
     fn only_bytes_past_what_is_free_fall_short() {

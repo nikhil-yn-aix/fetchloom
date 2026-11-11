@@ -118,37 +118,10 @@ impl Drop for Permit<'_> {
     }
 }
 
-#[cfg(any(target_os = "macos", windows, test))]
-pub(super) fn serializes_name(name: &str) -> bool {
-    ["exfat", "vfat", "fat", "fat32", "msdos", "msdosfs"]
-        .iter()
-        .any(|known| name.eq_ignore_ascii_case(known))
-}
-
-#[cfg(any(target_os = "linux", test))]
-pub(super) fn serializes_magic(magic: i128) -> bool {
-    matches!(magic, 0x2011_bab0 | 0x4d44)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[test]
-    fn filesystem_classification_is_exact() {
-        for name in ["exfat", "EXFAT", "fat32", "MSDOS", "vfat", "msdosfs"] {
-            assert!(serializes_name(name), "{name}");
-        }
-        for name in ["ntfs", "refs", "apfs", "ext4", "xfs", "not-exfat", ""] {
-            assert!(!serializes_name(name), "{name}");
-        }
-        assert!(serializes_magic(0x2011_bab0));
-        assert!(serializes_magic(0x4d44));
-        for magic in [-1, 0, 0xef53, 0x5846_5342] {
-            assert!(!serializes_magic(magic));
-        }
-    }
 
     #[test]
     fn parent_and_volume_caps_respect_the_commands_ceiling() {

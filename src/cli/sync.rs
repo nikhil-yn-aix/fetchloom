@@ -510,6 +510,13 @@ impl<'a> Loop<'a> {
             return Ok(Vec::new());
         }
         self.refuse_offline(&jobs)?;
+        crate::space::cache_holds(
+            self.cache.root(),
+            jobs.iter()
+                .filter(|job| !in_cache(&self.cache, &job.fetch))
+                .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
+        )
+        .map_err(|error| self.as_left(error))?;
         let size: u64 = jobs
             .iter()
             .filter(|job| !in_cache(&self.cache, &job.fetch))
@@ -627,6 +634,17 @@ impl<'a> Loop<'a> {
                 return Err(self.offline_missing(&missing));
             }
         }
+        crate::space::cache_holds(
+            self.cache.root(),
+            files
+                .iter()
+                .zip(&descriptions)
+                .filter(|((_, file), _)| !available(file))
+                .filter_map(|(_, description)| {
+                    Some((description.label.as_str(), description.size?))
+                }),
+        )
+        .map_err(|error| self.as_left(error))?;
         let size = files
             .iter()
             .zip(&descriptions)

@@ -157,7 +157,8 @@ pub(crate) fn unpack(
     writers: Option<usize>,
 ) -> Result<Unpacked, Error> {
     let meter = Meter::default();
-    let mut guard = Guard::new(limits, watch, &meter);
+    let filesystem = crate::space::Filesystem::of(&cache.root().join("tmp"));
+    let mut guard = Guard::new(limits, watch, &meter).writing_to(cache.root(), filesystem);
     let (mut members, added) = store::store_all(cache, writers, |writers| {
         let mut buffer = vec![0; BUFFER];
         let mut keep = |guard: &mut Guard<'_>, path: String, from: &mut dyn Read| {

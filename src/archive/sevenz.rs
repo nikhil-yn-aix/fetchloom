@@ -77,7 +77,10 @@ fn take(
         ));
     }
     match guard.name(&raw, entry.is_directory)? {
-        Named::File(path) => keep(guard, path, read),
+        Named::File(path) => {
+            guard.fits(&path, entry.size)?;
+            keep(guard, path, read)
+        }
         // a name such as `data/` makes a folder of an entry that holds bytes
         Named::Folder => skip(guard, &raw, read),
     }

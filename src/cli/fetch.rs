@@ -307,6 +307,10 @@ impl<'a> Watch<'a> {
             Event::Kept(bytes) => self.position.store(bytes, Ordering::Relaxed),
             Event::Started { total, resumed, .. } => {
                 self.waited().take();
+                // a size only the server states is checked here, before any byte is written
+                if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
+                    crate::space::cache_holds(cache, [(self.job.label.as_str(), total)])?;
+                }
                 self.overall.begin(self.output);
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
                 if self.job.fetch.expect.size.is_none() {

@@ -831,6 +831,13 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         .iter()
         .filter(|job| job.fetch.cached(cache).is_none())
         .collect();
+    crate::space::cache_holds(
+        cache.root(),
+        missing
+            .iter()
+            .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
+    )
+    .map_err(Error::unchanged)?;
     let size = missing
         .iter()
         .filter_map(|job| job.fetch.expect.size)
