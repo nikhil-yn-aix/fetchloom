@@ -245,6 +245,16 @@ pub(crate) struct Unpacked {
     pub(crate) tree: Sha256,
     /// the files new to the cache, by digest.
     pub(crate) added: Vec<Sha256>,
+    /// the files a system writes by itself that it held, left out of `members` and the tree.
+    pub(crate) skipped: Skipped,
+}
+
+/// the files a system writes by itself that an archive held, such as finder's `.DS_Store` and
+/// the `._` twins under `__MACOSX`: how many, and the first, by its path in the archive.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Skipped {
+    pub(crate) files: u64,
+    pub(crate) first: Option<String>,
 }
 
 /// stores one file the guard let through, reading it from the archive.
@@ -289,6 +299,7 @@ pub(crate) fn unpack(
         members,
         tree,
         added,
+        skipped: guard.left_out(),
     })
 }
 

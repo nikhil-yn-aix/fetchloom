@@ -137,12 +137,23 @@ pub(super) fn unpack(
         if is_sparse(&mut entry) {
             return Err(refused_member(&raw, "it is a sparse file"));
         }
-        if let Named::File(path) = guard.name(&raw, is_folder)? {
-            guard.fits(&path, entry.size())?;
-            headers.in_member.set(true);
-            let kept = keep(guard, path, &mut entry);
-            headers.in_member.set(false);
-            kept?;
+        match guard.name(&raw, is_folder)? {
+            Named::File(path) => {
+                guard.fits(&path, entry.size())?;
+                headers.in_member.set(true);
+                let kept = keep(guard, path, &mut entry);
+                headers.in_member.set(false);
+                kept?;
+            }
+            Named::System(path) => {
+                // read here rather than by the tar crate, so its bytes are no headers
+                headers.in_member.set(true);
+                let passed = guard.pass(&path, &mut entry);
+                headers.in_member.set(false);
+                passed?;
+                guard.leave_out(path);
+            }
+            Named::Folder => {}
         }
     }
     guard.skip(headers.read.replace(0))?;

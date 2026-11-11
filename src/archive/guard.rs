@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::names::{Named, Names};
 use super::tar::unreadable_stream;
-use super::{Limits, not_written, past};
+use super::{Limits, Skipped, not_written, past};
 use crate::error::{Error, Kind};
 use crate::space::Filesystem;
 use crate::units;
@@ -46,6 +46,8 @@ pub(super) struct Guard<'a> {
     /// bytes the archive decompressed to that no member holds, such as the declared contents of
     /// a tar folder entry, which the reader reads only to skip.
     skipped: u64,
+    /// the files a system writes by itself that the archive holds, left out.
+    system: Skipped,
     /// the cache the members are written to, and the most bytes one file holds on its disk.
     disk: Option<(&'a Path, u64)>,
 }
@@ -64,6 +66,7 @@ impl<'a> Guard<'a> {
             entries: 0,
             written: 0,
             skipped: 0,
+            system: Skipped::default(),
             disk: None,
         }
     }
@@ -163,6 +166,32 @@ impl<'a> Guard<'a> {
     pub(super) fn skip(&mut self, bytes: u64) -> Result<(), Error> {
         self.skipped = self.skipped.saturating_add(bytes);
         self.check_ratio(None)
+    }
+
+    /// reads to the end of the entry at `path`, which no file keeps, counting what it decoded as
+    /// [`Guard::skip`] does.
+    pub(super) fn pass(&mut self, path: &str, read: &mut dyn Read) -> Result<(), Error> {
+        let mut buffer = [0; 16 << 10];
+        loop {
+            match read.read(&mut buffer) {
+                Ok(0) => return Ok(()),
+                Ok(passed) => self.skip(passed as u64)?,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(unreadable_stream(Some(path), &err)),
+            }
+            self.check_stopped()?;
+        }
+    }
+
+    /// notes the file at `path`, one a system writes by itself, as left out.
+    pub(super) fn leave_out(&mut self, path: String) {
+        self.system.files += 1;
+        self.system.first.get_or_insert(path);
+    }
+
+    /// what [`Guard::leave_out`] noted.
+    pub(super) fn left_out(&mut self) -> Skipped {
+        std::mem::take(&mut self.system)
     }
 
     pub(super) fn check_stopped(&self) -> Result<(), Error> {

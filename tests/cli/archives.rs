@@ -137,6 +137,37 @@ fn extract_false_keeps_the_zip_as_it_is() -> Result {
     Ok(())
 }
 
+/// a zip macos finder made carries `__MACOSX` twins and `.DS_Store`, which are no data: they
+/// are left out, told once, and the one real top folder goes, as for the zip made elsewhere.
+#[test]
+fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (path, bytes) in [
+        ("recordings/a.wav", &b"RIFF"[..]),
+        ("recordings/.DS_Store", b"finder"),
+        ("__MACOSX/recordings/._a.wav", b"appledouble"),
+    ] {
+        zip.start_file(path, zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut zip, bytes)?;
+    }
+    let bytes = zip.finish()?.into_inner();
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/finder.zip", vec![file(&bytes, "\"f1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    ok(&added)?;
+    let stderr = text(&added.stderr)?;
+    assert!(
+        stderr.contains(
+            "    Skipped recordings/.DS_Store and 1 more the system makes in finder/finder.zip\n"
+        ),
+        "{stderr}"
+    );
+    let folder = sandbox.work().join("data").join("finder");
+    assert_eq!(fs::read(folder.join("a.wav"))?, b"RIFF");
+    assert_eq!(fs::read_dir(&folder)?.count(), 1, "only a.wav");
+    Ok(())
+}
+
 #[test]
 fn an_unsafe_archive_is_refused_whole() -> Result {
     let sandbox = Sandbox::new()?;

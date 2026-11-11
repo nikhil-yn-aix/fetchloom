@@ -115,6 +115,41 @@ fn archive(format: Format, files: &[(&str, &[u8])]) -> Vec<u8> {
 
 const FILES: &[(&str, &[u8])] = &[("a.csv", b"1"), ("b.csv", b"2"), ("c/d.csv", b"3")];
 
+/// what a system writes by itself is no data, so every format leaves it out as a folder import
+/// does: finder's `__MACOSX` twins and `.DS_Store`, and the `._` files a mac's own tar adds.
+/// none of it is stored or recorded, so the tree and a members table see only the data.
+#[test]
+fn what_a_system_makes_is_left_out_and_counted() {
+    let files: &[(&str, &[u8])] = &[
+        ("recordings/a.wav", b"RIFF"),
+        ("recordings/.DS_Store", b"finder"),
+        ("__MACOSX/recordings/._a.wav", b"appledouble"),
+        ("recordings/._b.png", b"appledouble"),
+        ("recordings/b.png", b"PNG"),
+    ];
+    for format in FAMILIES {
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(format, &archive(format, files)).unwrap();
+        let paths: Vec<&str> = unpacked
+            .members
+            .iter()
+            .map(|member| member.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            ["recordings/a.wav", "recordings/b.png"],
+            "{format:?}"
+        );
+        assert_eq!(unpacked.skipped.files, 3, "{format:?}");
+        assert_eq!(
+            unpacked.skipped.first.as_deref(),
+            Some("recordings/.DS_Store"),
+            "{format:?}"
+        );
+        assert_eq!(scratch.cache.objects().len(), 2, "{format:?}");
+    }
+}
+
 #[test]
 fn large_archives_with_modest_expansion_unpack() {
     let mut bytes = vec![0; 5 << 20];

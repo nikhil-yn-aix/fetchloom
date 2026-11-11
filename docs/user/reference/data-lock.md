@@ -206,7 +206,7 @@ fetchloom parts
 
 a [recipe result](#recipe-results)'s `tree` hashes its files the same way, so the cache can keep both kinds of tree alike.
 
-paths in this record retain their archive folders; placement may strip a shared top folder. directory entries, times and permissions are absent. empty directories are not placed.
+paths in this record retain their archive folders; placement may strip a shared top folder. directory entries, times and permissions are absent. empty directories are not placed. files a system writes by itself, such as finder's `.DS_Store` and the `._` files under `__MACOSX`, are left out of the record, so they are in neither the tree nor what a [members table](data-toml.md#files-inside-archives) matches.
 
 ## encoding and validation
 

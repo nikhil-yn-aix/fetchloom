@@ -213,6 +213,7 @@ fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
             members,
             tree,
             added: Vec::new(),
+            skipped: archive::Skipped::default(),
         })
 }
 
@@ -604,6 +605,8 @@ fn tell_lone(output: &Output, label: &str) {
     );
 }
 
+/// says what `label` unpacked to, and what it held that a system writes by itself, which was
+/// left out as a folder import leaves it out.
 fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Duration) {
     let bytes: u64 = unpacked.members.iter().map(|member| member.size).sum();
     output.step(
@@ -615,6 +618,14 @@ fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Dur
             units::duration(elapsed)
         ),
     );
+    let skipped = &unpacked.skipped;
+    if let Some(first) = &skipped.first {
+        let said = match skipped.files {
+            1 => format!("{first} in {label}, which the system makes"),
+            files => format!("{first} and {} more the system makes in {label}", files - 1),
+        };
+        output.step("Skipped", &said);
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@ use sevenz_rust2::{ArchiveEntry, ArchiveReader, EncoderMethod, Password};
 use super::guard::Guard;
 use super::input::{Input, Source};
 use super::names::Named;
-use super::tar::unreadable_stream;
 use super::{Keep, damaged, past, refused, refused_member, unreadable};
 use crate::error::Error;
 use crate::units;
@@ -67,7 +66,7 @@ fn take(
     guard.entry()?;
     let raw = name(entry);
     if entry.is_anti_item {
-        return skip(guard, &raw, read);
+        return guard.pass(&raw, read);
     }
     if is_link(entry) {
         return Err(refused_member(
@@ -75,28 +74,19 @@ fn take(
             "it is a link, which could point outside its folder",
         ));
     }
+    // the crate decodes an entry no file keeps anyway, so passing it counts toward the ratio
     match guard.name(&raw, entry.is_directory)? {
         Named::File(path) => {
             guard.fits(&path, entry.size)?;
             keep(guard, path, read)
         }
-        // a name such as `data/` makes a folder of an entry that holds bytes
-        Named::Folder => skip(guard, &raw, read),
-    }
-}
-
-/// reads to the end of an entry no file keeps. the crate would decode it anyway, so it counts
-/// toward the ratio as written bytes do.
-fn skip(guard: &mut Guard<'_>, path: &str, read: &mut dyn Read) -> Result<(), Error> {
-    let mut buffer = [0; 16 << 10];
-    loop {
-        match read.read(&mut buffer) {
-            Ok(0) => return Ok(()),
-            Ok(skipped) => guard.skip(skipped as u64)?,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(err) => return Err(unreadable_stream(Some(path), &err)),
+        Named::System(path) => {
+            guard.pass(&raw, read)?;
+            guard.leave_out(path);
+            Ok(())
         }
-        guard.check_stopped()?;
+        // a name such as `data/` makes a folder of an entry that holds bytes
+        Named::Folder => guard.pass(&raw, read),
     }
 }
 

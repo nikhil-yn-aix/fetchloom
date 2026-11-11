@@ -62,8 +62,10 @@ fn checked(
         if let Some(reason) = refusal(&entry, is_folder) {
             return Err(refused_member(&raw, &reason));
         }
-        if let Named::File(path) = guard.name(&raw, is_folder)? {
-            files.push((index, path));
+        match guard.name(&raw, is_folder)? {
+            Named::File(path) => files.push((index, path)),
+            Named::System(path) => guard.leave_out(path),
+            Named::Folder => {}
         }
     }
     Ok(files)

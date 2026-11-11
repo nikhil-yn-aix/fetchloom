@@ -25,6 +25,9 @@ const PER_NAME: u64 = 64;
 pub(super) enum Named {
     /// a file to unpack, at this path: NFC, with `/` between folders.
     File(String),
+    /// a file a system writes by itself, such as finder's `.DS_Store` or one under `__MACOSX`,
+    /// at this path. it is no data, so it is left out, as a folder import leaves it out.
+    System(String),
     /// a folder. folders are implied by the paths of the files inside them.
     Folder,
 }
@@ -66,7 +69,8 @@ impl Names {
     }
 
     /// checks an entry's name. `is_folder` is what the archive says the entry is; a name that
-    /// ends with `/` is a folder too.
+    /// ends with `/` is a folder too. a name a system writes by itself takes no place in the tree,
+    /// since nothing is unpacked at it.
     pub(super) fn add(&mut self, raw: &str, is_folder: bool) -> Result<Named, Error> {
         if raw.len() > LONGEST_PATH {
             return Err(too_long(raw));
@@ -94,6 +98,15 @@ impl Names {
         }
         if let Some(reason) = name::escapes(&nfc) {
             return Err(refused_member(raw, reason));
+        }
+        if nfc.split('/').any(name::made_by_system) {
+            self.kept = self.kept.saturating_add(nfc.len() as u64);
+            self.check_budget()?;
+            return Ok(if is_folder {
+                Named::Folder
+            } else {
+                Named::System(nfc)
+            });
         }
         if let Some(reason) = name::unstorable(&nfc) {
             return Err(refused(format!(
@@ -202,6 +215,23 @@ mod tests {
 
     fn file(path: &str) -> Named {
         Named::File(path.to_owned())
+    }
+
+    /// what a system makes is named apart only once the checks every name passes let it through,
+    /// and takes no place in the tree, so it clashes with nothing.
+    #[test]
+    fn what_a_system_makes_is_named_apart_after_the_checks() {
+        assert_eq!(
+            add_all(&["__MACOSX/", "__MACOSX/a/._b.csv", "a/.DS_Store", "a/b.csv"]),
+            Ok(vec![
+                Named::Folder,
+                Named::System("__MACOSX/a/._b.csv".to_owned()),
+                Named::System("a/.DS_Store".to_owned()),
+                file("a/b.csv"),
+            ])
+        );
+        assert!(add_all(&["__MACOSX/../../x"]).is_err());
+        assert!(add_all(&["a/.DS_Store", "a/.DS_Store", "A/x.csv"]).is_ok());
     }
 
     #[test]
