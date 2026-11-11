@@ -1,7 +1,7 @@
 //! placing files in the data folder: what fetchloom may delete or replace, and what it keeps.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -1589,6 +1589,56 @@ fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
     Ok(())
 }
 
+/// after a pull that took a dataset out of data.toml and data.lock, its folder holds the file
+/// fetchloom placed, which the next sync removes, and notes of the person's own, which it keeps.
+/// status tells them apart, and sync does as status said.
+#[test]
+fn status_tells_the_files_sync_removes_from_your_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        ("/tips.csv".to_owned(), file(b"tip,1\n", "\"1\"")),
+        ("/penguins.csv".to_owned(), file(b"bill,39\n", "\"1\"")),
+    ])?;
+    let work = sandbox.work();
+    let add = |name: &str| -> Result {
+        let added = sandbox.run(&["add", &format!("{}/{name}.csv", routes.url)])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        Ok(())
+    };
+    add("tips")?;
+    let pulled: Vec<(PathBuf, Vec<u8>)> = ["data.toml", "data.lock"]
+        .iter()
+        .map(|name| Ok((work.join(name), fs::read(work.join(name))?)))
+        .collect::<Result<_>>()?;
+    add("penguins")?;
+    let folder = work.join("data").join("penguins");
+    fs::write(folder.join("notes.txt"), b"mine\n")?;
+    for (path, bytes) in &pulled {
+        fs::write(path, bytes)?;
+    }
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    for line in [
+        "      Extra data/penguins/notes.txt\n",
+        "      Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
+        "  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n",
+    ] {
+        assert!(told.contains(line), "{line:?} in\n{told}");
+    }
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        (&status["result"]["extra"], &status["result"]["unneeded"]),
+        (
+            &serde_json::json!(["data/penguins/notes.txt"]),
+            &serde_json::json!(["data/penguins/penguins.csv"])
+        )
+    );
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(!folder.join("penguins.csv").exists());
+    assert_eq!(fs::read(folder.join("notes.txt"))?, b"mine\n");
+    Ok(())
+}
+
 /// removing a dataset deletes a file sync took as placed when it was already there, as it
 /// deletes the files sync placed, and says so, in a dry run too, since the person put it there.
 #[test]
@@ -2160,14 +2210,14 @@ fn a_file_that_becomes_a_folder_and_back_is_placed_in_one_sync() -> Result {
 }
 
 /// status agrees with sync: a file fetchloom placed that sync removes before it places anything,
-/// or a folder of only such files, is extra rather than in the way, and the file behind it is
+/// or a folder of only such files, is unneeded rather than in the way, and the file behind it is
 /// missing rather than blocked.
 #[test]
-fn status_lists_what_sync_removes_as_extra_rather_than_blocking() -> Result {
+fn status_lists_what_sync_removes_as_unneeded_rather_than_blocking() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let (lock, as_file, as_folder) = reshaped(&sandbox, &server)?;
-    for (pins, missing, extra) in [
+    for (pins, missing, unneeded) in [
         (
             &as_folder,
             "data/iris/iris.csv/iris.csv",
@@ -2193,10 +2243,11 @@ fn status_lists_what_sync_removes_as_extra_rather_than_blocking() -> Result {
             "{report}"
         );
         assert_eq!(
-            report["result"]["extra"],
-            serde_json::json!([extra]),
+            report["result"]["unneeded"],
+            serde_json::json!([unneeded]),
             "{report}"
         );
+        assert_eq!(report["result"]["extra"], serde_json::json!([]), "{report}");
         // --force places it either way, so the next round starts from it in place
         let forced = sandbox.run(&["sync", "--force"])?;
         assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
@@ -2609,7 +2660,7 @@ fn sync_fetches_nothing_for_a_pinned_unplaced_dataset() -> Result {
 }
 
 /// status tells a dataset with `place = false` apart from a difference, and lists what sync
-/// placed of it before as extra, until a sync retires it.
+/// placed of it before as a file the next sync removes, until a sync retires it.
 #[test]
 fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2623,7 +2674,7 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     let told = text(&output.stderr)?;
     for line in [
         " Not placed flowers · place = false in data.toml\n",
-        "      Extra data/flowers/petals.csv\n",
+        "      Extra data/flowers/petals.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
         "hint: `fetchloom sync` places missing or updated files",
     ] {
         assert!(told.contains(line), "{line:?} in\n{told}");

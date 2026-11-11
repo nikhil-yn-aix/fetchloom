@@ -64,7 +64,8 @@ an `exclude` in a dataset that names a file inside an archive leaves the file wh
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again |
 | `damaged` | a managed file holds other bytes, though no edit of this project's shows: a hardlink to the cache's copy, still shared with it or with other projects, after an edit through a link, here or in another project, changed that shared copy; or a file that shares its bytes with nothing, a copy, a reflink or a link left with a name of its own, whose size and modification time are unchanged, which hashing every placed file finds and a change mark puts in doubt too |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
-| `extra` | a scanned path is outside known targets, such as a file sync placed of a dataset that now has `place = false`, which the next sync removes |
+| `extra` | a file in the data folder that no dataset places, which fetchloom did not place or which changed since, such as notes of your own: sync keeps it |
+| `unneeded` | a file fetchloom placed that no dataset needs now and that nobody changed, as one of a dataset gone from data.toml or one with `place = false`: the next sync removes it. its line says so, as `Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so \`fetchloom sync\` removes it` |
 | `not_unpacked` | an archive's member record is unavailable here |
 | `unbuilt` | a recipe's pinned result has files missing from the data folder, or placed for an older pin, whose bytes neither the cache, another file in place in the data folder nor a folder [mirror](../mirrors.md) holds, so a sync leaves it out and only [`fetchloom build`](build.md) makes it here. its files are in no other list; the line names the datasets it is made from that neither the cache nor the data folder holds, which the build fetches first, and a hint names the build. status asks no web mirror, so with one set it lists the files as missing, since sync asks it |
 | `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line names it |
@@ -85,7 +86,7 @@ an entry in a file's way is listed once as blocked, rather than each file behind
     Blocked data/iris · a file is where a folder belongs
 ```
 
-a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as extra, and the files behind it as missing.
+a plain `fetchloom sync` leaves it and warns. `fetchloom sync --force` removes it, a link itself and never what it points to, then places the files; a folder that holds anything stays even then, since its files may be your work. a file fetchloom placed that no dataset needs now, which sync removes anyway, blocks nothing: it is listed as unneeded, and the files behind it as missing.
 
 human output shows at most 20 paths per file category. unlocked or removed datasets and not-unpacked archives are not truncated. JSON includes every difference. once something changed since the last complete sync, files placed from an archive this machine has no record of can also appear as extra.
 

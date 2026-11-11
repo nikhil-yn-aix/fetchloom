@@ -48,8 +48,12 @@ pub(super) struct Status {
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files in the data folder that no dataset places.
+    /// files in the data folder that no dataset places, and that fetchloom did not place or that
+    /// changed since, which `sync` keeps.
     extra: Vec<String>,
+    /// files fetchloom placed that no dataset needs now and that nobody changed, which the next
+    /// `sync` removes.
+    unneeded: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
     /// recipes whose pinned result the data folder lacks files of that neither the cache nor a
@@ -98,10 +102,6 @@ pub(super) struct Status {
     /// building it reads first.
     #[serde(skip)]
     lacking: BTreeMap<String, Vec<String>>,
-    /// whether the data folder still holds files fetchloom placed of an `unplaced` dataset,
-    /// which `sync` removes.
-    #[serde(skip)]
-    retiring: bool,
     /// the objects of the files in place with the bytes data.lock pins there, which a sync or a
     /// build takes into the cache from the data folder when it lacks them.
     #[serde(skip)]
@@ -308,13 +308,6 @@ fn check(
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned);
     unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
-    status.retiring = status.extra.iter().any(|path| {
-        survey
-            .state
-            .files
-            .get(path)
-            .is_some_and(|placed| status.unplaced.contains(&placed.dataset))
-    });
     status.unreached = plan::unreached(&manifest, &planned.targets);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -537,7 +530,11 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
     let mut wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
     // a file in the way is listed as blocking, not also as extra
     wanted.extend(status.blocked.iter().map(|blocker| blocker.path.as_str()));
-    status.extra = extra(survey, &wanted);
+    let going =
+        going.get_or_insert_with(|| place::going(survey, targets, &planned.unknown, &project.root));
+    (status.unneeded, status.extra) = extra(survey, &wanted)
+        .into_iter()
+        .partition(|path| going.contains(path));
 }
 
 /// the files in the data folder that no dataset places, sorted. what an interrupted placement
@@ -578,7 +575,7 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 impl Status {
     /// each kind of file difference, under the verb that marks it, with what follows each path
     /// of it, if anything.
-    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 6] {
+    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 7] {
         [
             ("Missing", &self.missing, None),
             ("Edited", &self.edited, None),
@@ -590,11 +587,18 @@ impl Status {
             ),
             ("Outdated", &self.outdated, None),
             ("Extra", &self.extra, None),
+            (
+                "Extra",
+                &self.unneeded,
+                Some(
+                    "fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it",
+                ),
+            ),
         ]
     }
 
     fn needs_sync(&self) -> bool {
-        self.retiring
+        !self.unneeded.is_empty()
             || !self.removed.is_empty()
             || self
                 .unlocked
@@ -784,7 +788,7 @@ mod tests {
         let clean = Status::default();
         assert!(!clean.needs_sync());
         assert!(!sum_up(&output, &clean));
-        for category in 0..9 {
+        for category in 0..10 {
             let mut status = Status::default();
             let paths = match category {
                 0 => &mut status.removed,
@@ -794,11 +798,12 @@ mod tests {
                 4 => &mut status.outdated,
                 5 => &mut status.untracked,
                 6 => &mut status.adoptable,
-                7 => &mut status.edited,
+                7 => &mut status.unneeded,
+                8 => &mut status.edited,
                 _ => &mut status.extra,
             };
             paths.push("data/set/file.csv".to_owned());
-            assert_eq!(status.needs_sync(), category < 7, "category {category}");
+            assert_eq!(status.needs_sync(), category < 8, "category {category}");
             assert!(sum_up(&output, &status), "category {category}");
         }
         let mut damaged = Status::default();
