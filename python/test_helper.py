@@ -184,6 +184,18 @@ class GetOptions(unittest.TestCase):
         with self.assertRaises(TypeError):
             fetchloom.get("zenodo:3608990", "iris.csv", "iris")
 
+    def test_force_needs_a_path_to_replace(self):
+        with patch.object(fetchloom.subprocess, "run") as run:
+            for folder in [None, "iris"]:
+                with self.subTest(folder=folder):
+                    with self.assertRaises(fetchloom.Error) as raised:
+                        fetchloom.get("zenodo:3608990", folder=folder, force=True)
+                    self.assertEqual(
+                        str(raised.exception),
+                        "usage: force=True replaces only the file at path, so it needs path",
+                    )
+        run.assert_not_called()
+
     def test_a_refused_file_raises_the_kind_fetchloom_gave(self):
         answer = {
             "status": "error",
@@ -251,6 +263,89 @@ class Errors(unittest.TestCase):
                         with self.assertRaises(fetchloom.Error) as raised:
                             fetchloom.path("iris", project)
                 self.assertEqual(raised.exception.help, shown)
+
+    def test_help_names_the_keywords_a_python_caller_sets(self):
+        # help is written for a person at a terminal; a command in backticks stays one they type
+        for helper, help, shown in [
+            (
+                "get",
+                "add --force to replace it, or choose another name with -o",
+                "pass force=True to replace it, or choose another name with the path argument",
+            ),
+            (
+                "get",
+                "choose another folder with --dir, or empty this one",
+                "choose another folder with the folder argument, or empty this one",
+            ),
+            (
+                "get",
+                "check the hash given to --sha256, or ask the file's owner which bytes are right",
+                "check the hash given to the sha256 argument, or ask the file's owner which bytes are right",
+            ),
+            (
+                "get",
+                "name the file inside it, as in `-o results/iris.csv`",
+                "name the file inside it, as in `path='results/iris.csv'`",
+            ),
+            (
+                "get",
+                "run it again without --offline to download it once. "
+                "after that, `fetchloom get <link> --offline` reuses it",
+                "run it again without offline=True to download it once. "
+                "after that, `fetchloom get <link> --offline` reuses it",
+            ),
+            (
+                "sync",
+                "add --yes to download it without being asked, or --locked-ish words stay",
+                "pass yes=True to download it without being asked, or --locked-ish words stay",
+            ),
+            ("path", "add --force to replace it", "add --force to replace it"),
+        ]:
+            answer = {
+                "status": "error",
+                "errors": [{"kind": "usage", "message": "refused", "details": [], "help": help}],
+                "warnings": [],
+            }
+            response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+            with self.subTest(helper=helper, help=help):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            if helper == "get":
+                                fetchloom.get("https://example.org/iris.csv", "data.csv")
+                            elif helper == "sync":
+                                fetchloom.sync()
+                            else:
+                                fetchloom.path("iris")
+                self.assertEqual(raised.exception.help, shown)
+
+    def test_messages_details_and_warnings_name_the_keywords_too(self):
+        answer = {
+            "status": "error",
+            "errors": [{
+                "kind": "local.not_empty",
+                "message": "data.csv already exists, and its bytes are not the ones --sha256 names",
+                "details": ["--sha256 names 000000000000, data.csv holds d144ff83495e"],
+                "help": "check the hash first, or add --force to replace the file",
+            }],
+            "warnings": ["x.csv holds the archive x.zip; use `--dir x` to unpack it into a folder"],
+        }
+        response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response):
+                with self.assertWarns(UserWarning) as warned:
+                    with self.assertRaises(fetchloom.Error) as raised:
+                        fetchloom.get("https://example.org/x.zip", "x.csv", sha256="0" * 64)
+        self.assertEqual(
+            str(warned.warning),
+            "x.csv holds the archive x.zip; use `folder='x'` to unpack it into a folder",
+        )
+        self.assertEqual(
+            str(raised.exception),
+            "local.not_empty: data.csv already exists, and its bytes are not the ones the sha256 argument names\n"
+            "  the sha256 argument names 000000000000, data.csv holds d144ff83495e\n"
+            "  help: check the hash first, or pass force=True to replace the file",
+        )
 
     def test_an_error_without_details_or_help_is_one_line(self):
         self.assertEqual(str(fetchloom.Error("usage", "no data.toml here")), "usage: no data.toml here")

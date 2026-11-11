@@ -568,7 +568,7 @@ fn refuse_zipped(cache: &Cache, remote: &Remote, digest: &Sha256) -> Result<(), 
         ),
     )
     .help(format!(
-        "use --dir {} to unpack it into a folder",
+        "use `--dir {}` to unpack it into a folder",
         crate::name::folder_for(&remote.path)
     )))
 }
@@ -591,7 +591,7 @@ fn only(mut files: Vec<Remote>, parsed: &Parsed, listing: &Listing) -> Result<Re
         ),
     )
     .help(format!(
-        "keep one with --select, or use --dir {} for all of them",
+        "keep one with --select, or use `--dir {}` for all of them",
         folder.display()
     )))
 }
@@ -984,7 +984,7 @@ mod tests {
         );
         assert_eq!(
             error.help.as_deref(),
-            Some("keep one with --select, or use --dir iris for all of them")
+            Some("keep one with --select, or use `--dir iris` for all of them")
         );
         assert_eq!(
             only(vec![remote("a.csv")], &parsed, &listing).unwrap().path,
@@ -1150,7 +1150,7 @@ mod tests {
         assert_eq!(error.kind, Kind::Usage);
         assert_eq!(
             error.help.as_deref(),
-            Some("use --dir train to unpack it into a folder")
+            Some("use `--dir train` to unpack it into a folder")
         );
         refuse_zipped(&cache, &remote, &plain.digest).unwrap();
     }

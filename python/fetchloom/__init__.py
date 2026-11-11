@@ -7,6 +7,7 @@ https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/scripting.md.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +18,17 @@ from pathlib import Path
 from typing import Any
 
 __all__ = ["Error", "get", "path", "sync"]
+
+# the flags the helpers pass for their keywords: a switch, as --force for force=True, and a flag
+# that takes a value, as -o for path
+_SWITCHES = {
+    "--force": "force",
+    "--yes": "yes",
+    "--offline": "offline",
+    "--locked": "locked",
+    "--verify": "verify",
+}
+_VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256"}
 
 
 def __dir__() -> list[str]:
@@ -85,7 +97,8 @@ def path(
     ``locked=True`` never changes data.lock: when that sync would, it raises :class:`Error`
     with kind ``lock.outdated``.
     """
-    return Path(_run(_options(["path", name], yes, offline, locked), project)["path"])
+    arguments = _options(["path", name], yes, offline, locked)
+    return Path(_run(arguments, project, {"yes", "offline", "locked"})["path"])
 
 
 def sync(
@@ -123,7 +136,7 @@ def sync(
     named = [names] if isinstance(names, str) else list(names)
     if named:
         arguments += ["--", *named]
-    result = _run(arguments, project)
+    result = _run(arguments, project, {"yes", "offline", "locked", "verify"})
     placement = result.get("placement") or {}
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
@@ -153,11 +166,11 @@ def get(
     ``link`` is a link, a DOI or an id such as ``zenodo:3608990``. with ``path``, the one
     file the link resolves to is written at exactly that path, writable, and that path is
     returned, so ``pd.read_csv(fetchloom.get(url, "data.csv"))`` works. a leading ``~`` in
-    ``path`` or ``folder`` is your home folder, as pandas reads it. a file already
-    there that holds the same bytes stays as it is; one holding other bytes raises
-    :class:`Error` with kind ``local.not_empty`` unless ``force=True`` replaces it. without
-    ``path``, the download goes into a new folder named after it, or into ``folder``, and
-    the folder is returned. ``sha256`` is the hash the one file must have; with ``path``, a
+    ``path`` or ``folder`` is your home folder, as pandas reads it. a file already there that
+    holds the same bytes stays as it is; one holding other bytes raises :class:`Error` with
+    kind ``local.not_empty`` unless ``force=True``, which needs ``path``, replaces it.
+    without ``path``, the download goes into a new folder named after it, or into
+    ``folder``, and the folder is returned. ``sha256`` is the hash the one file must have; with ``path``, a
     file already holding it is kept without a download. ``yes=True`` approves large
     downloads; ``offline=True`` prevents network requests, and keeps a file at ``path`` that
     still holds what the link served last time.
@@ -167,6 +180,8 @@ def get(
             "usage",
             "get writes one file at path or fills a folder, so it takes path or folder, not both",
         )
+    if force and path is None:
+        raise Error("usage", "force=True replaces only the file at path, so it needs path")
     arguments = ["get"]
     if path is not None:
         arguments.append(f"--output={_local(path)}")
@@ -177,7 +192,8 @@ def get(
     if force:
         arguments.append("--force")
     _options(arguments, yes, offline, False)
-    result = _run([*arguments, "--", link], ".")
+    keywords = {"path", "folder", "sha256", "force", "yes", "offline"}
+    result = _run([*arguments, "--", link], ".", keywords)
     return Path(result["file"] if path is not None else result["folder"])
 
 
@@ -193,7 +209,7 @@ def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> li
     return arguments
 
 
-def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
+def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[str]) -> Any:
     finished = subprocess.run(
         [_program(), "--json", "-C", _local(project), *arguments],
         stdin=subprocess.DEVNULL,
@@ -212,7 +228,7 @@ def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
             code=finished.returncode,
         ) from None
     for warning in answer["warnings"]:
-        warnings.warn(warning, stacklevel=3)
+        warnings.warn(_spoken(warning, keywords), stacklevel=3)
     if answer["status"] != "ok":
         error = answer["errors"][0]
         help = error["help"]
@@ -221,8 +237,55 @@ def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
             help = help.replace("`fetchloom --json ", "`fetchloom ")
             if os.fspath(project) == ".":
                 help = help.replace("`fetchloom -C . ", "`fetchloom ")
-        raise Error(error["kind"], error["message"], error["details"], help, finished.returncode)
+            help = _spoken(help, keywords)
+        message = _spoken(error["message"], keywords)
+        details = [_spoken(detail, keywords) for detail in error["details"]]
+        raise Error(error["kind"], message, details, help, finished.returncode)
     return answer["result"]
+
+
+def _spoken(text: str, keywords: set[str]) -> str:
+    """``text`` with each flag a helper sets for one of ``keywords`` named as a python caller
+    sets it: ``add --force`` reads ``pass force=True``, ``-o`` reads ``the path argument``, and
+    an example in backticks, as `` `-o results/iris.csv` ``, reads `` `path='results/iris.csv'` ``.
+    a command in backticks stays as a person types it at a terminal.
+    """
+    switches = {flag: name for flag, name in _SWITCHES.items() if name in keywords}
+    values = {flag: name for flag, name in _VALUES.items() if name in keywords}
+    if not switches and not values:
+        return text
+    longest = sorted([*switches, *values], key=len, reverse=True)
+    found = re.compile(rf"(add )?(?<![\w-])({'|'.join(map(re.escape, longest))})(?![\w-])")
+
+    def named(match: re.Match[str]) -> str:
+        added, flag = match.group(1), match.group(2)
+        if flag in switches:
+            return f"{'pass ' if added else ''}{switches[flag]}=True"
+        return f"{added or ''}the {values[flag]} argument"
+
+    # backticks alternate prose and code, so every second part is code
+    parts = text.split("`")
+    for index, part in enumerate(parts):
+        if index % 2:
+            parts[index] = _example(part, switches, values)
+        else:
+            parts[index] = found.sub(named, part)
+    return "`".join(parts)
+
+
+def _example(code: str, switches: dict[str, str], values: dict[str, str]) -> str:
+    """``code`` from backticks as keyword arguments when it is flags alone, else as it is."""
+    words = code.split()
+    spoken = []
+    while words:
+        word = words.pop(0)
+        if word in switches:
+            spoken.append(f"{switches[word]}=True")
+        elif word in values and words:
+            spoken.append(f"{values[word]}={words.pop(0)!r}")
+        else:
+            return code
+    return ", ".join(spoken) if spoken else code
 
 
 def _program() -> str:
