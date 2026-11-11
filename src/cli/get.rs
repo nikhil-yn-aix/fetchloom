@@ -536,22 +536,30 @@ fn prepare(
     let extract = !args.no_extract;
     let (names, foreseen) = foresee(cache, &files, extract);
     // a batch's final folder can gain a suffix or a server-provided name after downloading.
-    if args.input_file.is_none() && args.links.len() == 1 {
-        check(
-            &folder_for(
-                chosen,
-                parent,
-                &listing,
-                &parsed,
-                &unwrapped(&files, &names),
-            ),
-            foreseen.as_deref(),
-        )?;
+    let lone = (args.input_file.is_none() && args.links.len() == 1).then(|| {
+        folder_for(
+            chosen,
+            parent,
+            &listing,
+            &parsed,
+            &unwrapped(&files, &names),
+        )
+    });
+    if let Some(lone) = &lone {
+        check(lone, foreseen.as_deref())?;
     }
     let jobs: Vec<Job> = files
         .iter()
         .zip(&names)
-        .map(|(remote, name)| fetch::listed_job(remote, name, extract))
+        .map(|(remote, name)| {
+            let mut job = fetch::listed_job(remote, name, extract);
+            let placed = lone
+                .as_deref()
+                .filter(|_| !job.fetch.unpack)
+                .map(|lone| folder::within(lone, name));
+            job.fetch.held = held(cache, &job, placed.as_deref());
+            job
+        })
         .collect();
     vet(cache, &files, &names, extract)?;
     Ok(Wanted {
@@ -564,6 +572,23 @@ fn prepare(
         extract,
         expected,
     })
+}
+
+/// the bytes a download that asks whether its link changed may find unchanged: what the link
+/// served last time, while the cache holds them, or the file at `placed`, where the download
+/// would go.
+fn held(cache: &Cache, job: &Job, placed: Option<&Path>) -> Option<Sha256> {
+    if !job.fetch.revalidate {
+        return None;
+    }
+    let record = cache.url_record(job.fetch.url.as_str())?;
+    let there = || {
+        placed.is_some_and(|path| {
+            std::fs::metadata(path).is_ok_and(|found| found.is_file() && found.len() == record.size)
+                && Sha256::of_file(path).is_ok_and(|digest| digest == record.sha256)
+        })
+    };
+    (job.fetch.remembered(cache).is_some() || there()).then_some(record.sha256)
 }
 
 /// hints `--no-extract` before anything downloads when the files a link keeps are numbered tar
@@ -911,14 +936,15 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
 }
 
 /// asks before the run's downloads when they are large. nothing is placed yet, so a cancel there
-/// changed nothing.
+/// changed nothing. a download that may find its bytes unchanged asks only once its server sends
+/// them, so an unchanged rerun asks nothing.
 fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
     if context.offline.enabled() {
         return Ok(());
     }
     let missing: Vec<&Job> = jobs
         .iter()
-        .filter(|job| job.fetch.cached(cache).is_none())
+        .filter(|job| job.fetch.held.is_none() && job.fetch.cached(cache).is_none())
         .collect();
     crate::space::cache_holds(
         cache.root(),
@@ -1441,6 +1467,30 @@ mod tests {
             approve(&context, &cache, &jobs).unwrap_err().kind,
             Kind::Unconfirmed
         );
+    }
+
+    /// a large file whose bytes may turn out unchanged is asked about only once its server sends
+    /// it, so a rerun answered 304 asks nothing.
+    #[test]
+    fn get_approval_leaves_a_file_that_may_be_unchanged_to_its_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let remote = Remote {
+            path: "large.bin".to_owned(),
+            size: Some(crate::settings::ASK_ABOVE + 1),
+            sha256: None,
+            md5: None,
+            url: url::Url::parse("https://example.org/large.bin").unwrap(),
+            named_by_server: false,
+        };
+        let mut jobs = vec![fetch::listed_job(&remote, &remote.path, false)];
+        let context = approval_context();
+        assert_eq!(
+            approve(&context, &cache, &jobs).unwrap_err().kind,
+            Kind::Unconfirmed
+        );
+        jobs[0].fetch.held = Some(crate::digest::sha256(b"the bytes fetched before"));
+        approve(&context, &cache, &jobs).unwrap();
     }
 
     #[test]

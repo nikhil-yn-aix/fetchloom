@@ -63,7 +63,7 @@ when a dataset has several files, the `Fetched` line is followed by the folder's
 
 a download that went on from bytes an earlier run kept says how much came from that run, and its speed counts only the bytes moved this time, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`. the time and speed end when the last byte arrived. a slow disk can take a while longer to keep the file, and progress says so meanwhile: a bar shows `waiting for the disk`, and where no bar shows, a line every 10 s reads `Waiting for the disk to finish writing iris.csv · 10 s`.
 
-an unchanged direct URL can return a 304 response, avoiding its file-body download. without validators, bytes may download again. source listings can still need requests even when payloads are cached. a later `get` accepts changed upstream bytes; use [add](add.md) for pinned inputs.
+an unchanged direct URL can return a 304 response, avoiding its file-body download, while the cache or the file already in the folder holds what it served last. a large file then asks about its size only when its server sends new bytes. without validators, bytes may download again. source listings can still need requests even when payloads are cached. a later `get` accepts changed upstream bytes; use [add](add.md) for pinned inputs.
 
 ## one file
 
@@ -95,7 +95,7 @@ a file already at the path stays as it is unless `--force` asks to replace it:
 
 a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
 
-with `--sha256`, or a SHA-256 the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. offline, the bytes the link served the last time this machine fetched it count instead, so a run without a network keeps a file that still holds them. otherwise the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
+with `--sha256`, or a hash the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. a stated MD5 counts once this machine has downloaded bytes that match it. without such a hash, the bytes the link served the last time this machine fetched it stand in. offline they decide, so a run without a network keeps a file that still holds them. online, a file that still holds them makes the run ask the server whether they changed, even after they left the cache for the file: an unchanged answer leaves the file as it is, and a large file asks about its size only when new bytes come. otherwise the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
 
 ```text
 $ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv

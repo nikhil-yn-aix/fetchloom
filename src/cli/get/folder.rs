@@ -402,7 +402,7 @@ fn local(path: &Path, err: &io::Error) -> Error {
 
 /// `path`, a dataset path with `/` between its parts, inside `folder` with the system's own
 /// separators, as people see paths on windows.
-fn within(folder: &Path, path: &str) -> std::path::PathBuf {
+pub(super) fn within(folder: &Path, path: &str) -> std::path::PathBuf {
     path.split('/')
         .fold(folder.to_path_buf(), |inside, part| inside.join(part))
 }

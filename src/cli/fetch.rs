@@ -315,7 +315,9 @@ impl<'a> Watch<'a> {
                 }
                 self.overall.begin(self.output);
                 let left = total.map_or(0, |total| total.saturating_sub(resumed));
-                if self.job.fetch.expect.size.is_none() {
+                let unknown = self.job.fetch.expect.size.is_none();
+                // a download that may have found its bytes unchanged was not asked about before
+                if unknown || self.job.fetch.held.is_some() {
                     // a disk without room asks instead, and its question names the size too
                     let free = self.approval.cache.as_deref().map(crate::space::free);
                     if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
@@ -329,6 +331,8 @@ impl<'a> Watch<'a> {
                         let size = units::size(left);
                         self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
                     }
+                }
+                if unknown {
                     if let Some(total) = total
                         && !self.sized.swap(true, Ordering::Relaxed)
                     {
@@ -1109,6 +1113,46 @@ mod tests {
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
         let second = Watch::new(&second, &output, &overall, &approval, false, &position);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
+    }
+
+    /// a download whose bytes may turn out unchanged is not asked about before it starts, so a
+    /// large one asks once the server sends it, though its size was known before.
+    #[test]
+    fn a_download_that_may_be_unchanged_asks_once_the_server_sends_it() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let mut job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        job.fetch.expect.size = Some(crate::settings::ASK_ABOVE + 1);
+        let started = Event::Started {
+            total: Some(crate::settings::ASK_ABOVE + 1),
+            resumed: 0,
+        };
+        let overall = overall();
+        let position = AtomicU64::new(0);
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        // a known size was asked about before the download started
+        Watch::new(&job, &output, &overall, &approval, false, &position)
+            .on(&started)
+            .unwrap();
+        job.fetch.held = Some(crate::digest::sha256(b"the bytes fetched before"));
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+        assert_eq!(watch.on(&started).unwrap_err().kind, Kind::Unconfirmed);
     }
 
     #[test]

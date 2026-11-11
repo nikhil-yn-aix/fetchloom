@@ -79,6 +79,11 @@ pub(crate) struct Fetch {
     /// ask the server whether the file changed since the last download, instead of trusting the
     /// cache. for links fetched outside a project, where nothing pins the bytes.
     pub(crate) revalidate: bool,
+    /// the bytes a revalidated download may find unchanged, which the cache or a file of the
+    /// caller's holds, such as the one `get -o` wrote: when the url's record names them, the
+    /// server is asked whether they changed, though the cache lacks them, and a large file asks
+    /// about its size only once the server sends it.
+    pub(crate) held: Option<Sha256>,
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
     pub(crate) unpack: bool,
@@ -127,9 +132,18 @@ impl Fetch {
             expired: None,
             expect: Expect::default(),
             revalidate: false,
+            held: None,
             unpack: false,
             mirror: false,
         }
+    }
+
+    /// what the url served the last time it was downloaded, when those bytes are at hand: in the
+    /// cache, or as the ones `held` names.
+    pub(crate) fn remembered(&self, cache: &Cache) -> Option<UrlRecord> {
+        let record = cache.url_record(self.url.as_str())?;
+        (self.held == Some(record.sha256) || holds(cache, self, &record.sha256, Some(record.size)))
+            .then_some(record)
     }
 }
 
@@ -344,7 +358,7 @@ impl Net {
             return Ok(found);
         }
         let known = if fetch.revalidate {
-            remembered(cache, fetch)
+            fetch.remembered(cache)
         } else {
             None
         };
@@ -377,6 +391,7 @@ impl Net {
             expired: fetch.expired,
             expect: fetch.expect,
             revalidate: false,
+            held: None,
             unpack: fetch.unpack,
             mirror: fetch.mirror,
         };
@@ -438,7 +453,7 @@ impl Net {
         if let Some(found) = self.in_cache(fetch, cache) {
             return Ok(found);
         }
-        if waited && let Some(record) = fetch.revalidate.then(|| remembered(cache, fetch)).flatten()
+        if waited && let Some(record) = fetch.revalidate.then(|| fetch.remembered(cache)).flatten()
         {
             return Ok(fetched(record, Origin::Cache));
         }
@@ -1266,13 +1281,6 @@ fn unread(error: Error, refused: Error, version: &str) -> Error {
     } else {
         refused
     }
-}
-
-/// what the cache holds for the fetch's URL from an earlier download, when the bytes are still
-/// there.
-fn remembered(cache: &Cache, fetch: &Fetch) -> Option<UrlRecord> {
-    let record = cache.url_record(fetch.url.as_str())?;
-    holds(cache, fetch, &record.sha256, Some(record.size)).then_some(record)
 }
 
 /// whether the cache holds these bytes: as an object, or, for an archive the caller unpacks, as

@@ -368,6 +368,56 @@ fn output_leaves_a_file_holding_the_same_bytes_as_it_is() -> Result {
     Ok(())
 }
 
+/// the bytes left the cache for the file, yet a rerun whose file still holds them asks whether
+/// they changed, and a 304 leaves the file as it is: no download, and no question about a size
+/// that asks first.
+#[test]
+fn output_asks_whether_the_bytes_its_file_holds_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    // every download of more than a byte asks first
+    let get = |extra: &[&str]| {
+        sandbox
+            .command(&[&["--json", "get", &server.url, "-o", "data.csv"], extra].concat())
+            .env("FETCHLOOM_ASK_ABOVE", "1")
+            .output()
+    };
+    let first = get(&["--yes"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stdout)?);
+    assert_eq!(objects(&sandbox), 0, "the bytes left the cache");
+    let output = get(&[])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let asked = &server.requests()[1];
+    assert!(asked.contains("if-none-match: \"v1\""), "{asked}");
+    let document = json(&output)?;
+    assert_eq!(document["work"]["bytes_down"], 0, "{document}");
+    assert_eq!(document["result"]["files"][0]["origin"], "not_modified");
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    Ok(())
+}
+
+/// a folder whose file holds what the link served last asks whether that changed, though those
+/// bytes left the cache for a file `-o` wrote.
+#[test]
+fn a_folder_asks_whether_the_bytes_its_file_holds_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
+    let first = sandbox.run(&["get", &server.url, "-o", "data/iris.csv"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let output = sandbox.run(&["get", &server.url, "--dir", "data"])?;
+    let stderr = text(&output.stderr)?.replace('\\', "/");
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let asked = &server.requests()[1];
+    assert!(asked.contains("if-none-match: \"v1\""), "{asked}");
+    assert!(
+        stderr.contains("Ok data/iris.csv is already up to date"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// offline, the bytes a link served last time stand for what it serves, so a notebook run again
 /// without a network keeps its file.
 #[test]

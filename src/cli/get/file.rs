@@ -16,7 +16,7 @@ use super::{
     Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, selected,
     tell_fetched, vet,
 };
-use crate::cache::Cache;
+use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::net::{Fetched, Net, Origin};
@@ -189,41 +189,66 @@ pub(super) async fn one(
             .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
         shown,
     };
-    if let Some(kept) = decided_early(context, cache, &remote, args, &destination)? {
-        return Ok(kept);
-    }
-    let fetched = download(context, net, cache, &remote).await?;
+    let known = match decided_early(context, cache, &remote, args, &destination)? {
+        Early::Kept(kept) => return Ok(kept),
+        Early::Download(known) => known,
+    };
+    let fetched = download(context, net, cache, &remote, known.held).await?;
     if let Some(expected) = &expected {
         matches_sha256(&remote.path, &fetched.digest, expected)?;
     }
     refuse_zipped(cache, &remote, &fetched.digest)?;
-    settle(context, cache, &remote, &fetched, args.force, &destination)
+    settle(
+        context,
+        cache,
+        &remote,
+        &fetched,
+        args.force,
+        &destination,
+        known,
+    )
+}
+
+/// what a run decided before downloading: the file there kept, or what it learned for the
+/// download.
+enum Early {
+    Kept((PathBuf, Done)),
+    Download(Known),
+}
+
+/// what a run learned before downloading.
+#[derive(Default)]
+struct Known {
+    /// what is at the path, when it was looked at.
+    found: Option<Existing>,
+    /// the bytes the link served last time, when the cache or the file at the path still holds
+    /// them, so the server is asked whether they changed.
+    held: Option<Sha256>,
 }
 
 /// what a hash known before downloading decides about a file already at the path, with no
-/// request: none when it decides nothing, as when the path is free or the file must go.
+/// request, or what the run learned for the download, as when the path is free or the file must
+/// go. a link whose source states no hash stands for the bytes it served last time: offline they
+/// decide, and online the server is asked whether they changed.
 fn decided_early(
     context: &Context,
     cache: &Cache,
     remote: &Remote,
     args: &Get,
     destination: &Destination,
-) -> Result<Option<(PathBuf, Done)>, Error> {
-    let recorded = || {
-        context
-            .offline
-            .enabled()
-            .then(|| cache.url_record(remote.url.as_str()))
-            .flatten()
-            .map(|record| (record.sha256, Wanted::Recorded))
-    };
-    let known = match (args.sha256, remote.sha256) {
-        (Some(named), _) => Some((named, Wanted::Named)),
-        (None, Some(stated)) => Some((stated, Wanted::Stated)),
-        (None, None) => recorded(),
-    };
-    let Some((digest, wanted)) = known else {
-        return Ok(None);
+) -> Result<Early, Error> {
+    let (digest, wanted) = match (args.sha256, stated(cache, remote)) {
+        (Some(named), _) => (named, Wanted::Named),
+        (None, Some(stated)) => (stated, Wanted::Stated),
+        (None, None) => {
+            let Some(record) = recorded(cache, remote) else {
+                return Ok(Early::Download(Known::default()));
+            };
+            if !context.offline.enabled() {
+                return held(cache, &record, destination).map(Early::Download);
+            }
+            (record.sha256, Wanted::Recorded)
+        }
     };
     let found = existing(&destination.path)?;
     match decide(&found, &digest, args.force) {
@@ -234,11 +259,52 @@ fn decided_early(
                 })?
                 .len();
             let got = got(destination, remote, digest, size, Origin::Cache, None);
-            Ok(Some(kept(context, wanted, destination, got)))
+            Ok(Early::Kept(kept(context, wanted, destination, got)))
         }
         Step::Refuse => Err(refused(&destination.shown, &found, wanted)),
-        Step::Write | Step::Replace => Ok(None),
+        Step::Write | Step::Replace => Ok(Early::Download(Known {
+            found: Some(found),
+            held: None,
+        })),
     }
+}
+
+/// what the link served the last time it was downloaded here, for a link whose source states
+/// no hash.
+fn recorded(cache: &Cache, remote: &Remote) -> Option<UrlRecord> {
+    if remote.sha256.is_some() || remote.md5.is_some() {
+        return None;
+    }
+    cache.url_record(remote.url.as_str())
+}
+
+/// what the run learned of the bytes the link served last time, `record`, which the server is
+/// asked about while the cache or the file at the path still holds them.
+fn held(cache: &Cache, record: &UrlRecord, destination: &Destination) -> Result<Known, Error> {
+    if cache.find(&record.sha256, Some(record.size)).is_some() {
+        return Ok(Known {
+            found: None,
+            held: Some(record.sha256),
+        });
+    }
+    let found = existing(&destination.path)?;
+    let held = matches!(found, Existing::Holds(digest) if digest == record.sha256)
+        .then_some(record.sha256);
+    Ok(Known {
+        found: Some(found),
+        held,
+    })
+}
+
+/// the SHA-256 the link's source states for its file: itself, or through the MD5 it states, the
+/// hash of the bytes an earlier download found to match it.
+fn stated(cache: &Cache, remote: &Remote) -> Option<Sha256> {
+    remote.sha256.or_else(|| {
+        let md5 = remote.md5?;
+        cache
+            .stated_md5(&md5, remote.url.as_str())
+            .map(|(digest, _)| digest)
+    })
 }
 
 /// downloads the one file into the cache, or finds it there, and says so.
@@ -247,8 +313,10 @@ async fn download(
     net: &Arc<Net>,
     cache: &Cache,
     remote: &Remote,
+    held: Option<Sha256>,
 ) -> Result<Fetched, Error> {
-    let job = fetch::listed_job(remote, &remote.path, false);
+    let mut job = fetch::listed_job(remote, &remote.path, false);
+    job.fetch.held = held;
     vet(
         cache,
         std::slice::from_ref(remote),
@@ -275,7 +343,9 @@ async fn download(
     Ok(fetched)
 }
 
-/// keeps, refuses or writes the file once the bytes the link serves are in the cache.
+/// keeps, refuses or writes the file once the bytes the link serves are in the cache, or the
+/// server said those the file holds are unchanged. a file looked at before a download that took
+/// its time is looked at again.
 fn settle(
     context: &Context,
     cache: &Cache,
@@ -283,8 +353,12 @@ fn settle(
     fetched: &Fetched,
     force: bool,
     destination: &Destination,
+    known: Known,
 ) -> Result<(PathBuf, Done), Error> {
-    let found = existing(&destination.path)?;
+    let found = match known.found {
+        Some(found) if fetched.origin != Origin::Network => found,
+        _ => existing(&destination.path)?,
+    };
     let step = decide(&found, &fetched.digest, force);
     let record = |method| {
         got(
