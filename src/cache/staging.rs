@@ -384,6 +384,13 @@ pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
 
 /// gives the folder at `path`, which `found` describes, back its owner's access, which a step
 /// may have taken.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "only a unix folder can lose its owner's access"
+    )
+)]
 pub(crate) fn enterable(path: &Path, found: &fs::Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {

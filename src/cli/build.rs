@@ -959,6 +959,7 @@ fn failed(name: &str, program: &str, ended: Ended, ran: &Ran, folder: &str) -> E
         log_shown(name)
     );
     let (message, help) = match ended {
+        #[cfg(unix)]
         Ended::Signaled(signal) => (
             format!("{name} stopped: {program} was ended by signal {signal} after {took}"),
             format!("the system may have run out of memory; {unchanged}"),

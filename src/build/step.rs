@@ -56,6 +56,7 @@ pub(crate) enum Ended {
     /// it exited with this code.
     Exited(i32),
     /// a signal ended it, as when the system runs out of memory.
+    #[cfg(unix)]
     Signaled(i32),
     /// a stop was asked, so fetchloom ended it.
     Stopped,

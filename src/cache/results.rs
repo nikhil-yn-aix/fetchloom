@@ -230,6 +230,7 @@ pub(crate) fn seal_captured(path: &Path, seen: &Seen, flush: bool) -> io::Result
 }
 
 /// the error for a file a step wrote that changed while fetchloom took it in.
+#[cfg(unix)]
 fn changed(path: &Path) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,

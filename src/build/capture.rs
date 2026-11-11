@@ -76,6 +76,9 @@ pub(crate) struct Found {
 struct Taken {
     disk: PathBuf,
     member: Member,
+    /// unix moves a file into the cache and checks it is still the file hashed; windows copies
+    /// every file, checking its bytes as it copies.
+    #[cfg(unix)]
     seen: Seen,
 }
 
@@ -244,6 +247,7 @@ fn take(
             size,
             sha256: hasher.finish().0,
         },
+        #[cfg(unix)]
         seen: before,
     })
 }
