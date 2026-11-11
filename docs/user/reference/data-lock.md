@@ -44,7 +44,7 @@ hashes are written in lowercase. datasets sort by name and files by path. the wr
 
 `lock` can record a file without downloading it when its SHA-256 and size are known. an archive needs a tree hash before the lock can mark it for extraction.
 
-fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data.
+fetchloom reads and writes format 1 only. a lock with a higher `version` comes from a newer fetchloom and asks you to update. any other version, or a lock that does not parse, is broken: restore it from git, or delete it before `fetchloom lock` rebuilds it. rebuilding can pin newer data. a `version` that is no whole number names no format, so the error says what it holds instead; for `version = "1"` that is `data.lock cannot be read: version is text in quotes, not a whole number such as 1`.
 
 ## a git merge conflict
 

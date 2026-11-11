@@ -349,9 +349,10 @@ impl StoredDataset {
     }
 }
 
+/// a lock's `version` alone, of any type: a lock in another format may not read as this one.
 #[derive(Deserialize)]
 struct VersionOnly {
-    version: Option<u32>,
+    version: Option<toml::Value>,
 }
 
 impl Lock {
@@ -562,14 +563,11 @@ fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
 fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     let stored = match toml::from_str::<Stored>(text) {
         Ok(stored) if stored.version == VERSION => stored,
-        Ok(stored) => return Err(other_version(stored.version)),
+        Ok(stored) => return Err(other_version(stored.version.into())),
         Err(err) => {
-            return Err(match toml::from_str::<VersionOnly>(text) {
-                Ok(VersionOnly {
-                    version: Some(version),
-                }) if version != VERSION => other_version(version),
-                _ => broken(format!("data.lock cannot be read: {}", err.message())),
-            });
+            return Err(unread_version(text).unwrap_or_else(|| {
+                broken(format!("data.lock cannot be read: {}", err.message()))
+            }));
         }
     };
     let mut parsed = stored
@@ -713,13 +711,32 @@ fn quoted(text: &str) -> String {
     out
 }
 
-fn other_version(version: u32) -> Error {
+/// why the lock in `text` cannot be read, when its `version` is not this fetchloom's format: a
+/// whole number is another format, and anything else is none, which the error says without the
+/// rest of the lock. none when the version is this format or missing, or the text is no TOML.
+fn unread_version(text: &str) -> Option<Error> {
+    let what = match toml::from_str::<VersionOnly>(text).ok()?.version? {
+        toml::Value::Integer(version) if version == i64::from(VERSION) => return None,
+        toml::Value::Integer(version) => return Some(other_version(version)),
+        toml::Value::String(_) => "text in quotes",
+        toml::Value::Float(_) => "a decimal number",
+        toml::Value::Boolean(_) => "true or false",
+        toml::Value::Datetime(_) => "a date",
+        toml::Value::Array(_) => "a list",
+        toml::Value::Table(_) => "a table",
+    };
+    Some(broken(format!(
+        "data.lock cannot be read: version is {what}, not a whole number such as {VERSION}"
+    )))
+}
+
+fn other_version(version: i64) -> Error {
     let error = Error::new(
         Kind::ProjectInvalid,
         format!("data.lock is in format {version}, and this fetchloom reads format {VERSION}"),
     );
     // no fetchloom ever wrote an older format, so one is a broken file
-    if version > VERSION {
+    if version > i64::from(VERSION) {
         error.help("install a newer fetchloom, then run the same command again")
     } else {
         error.help(BROKEN)
@@ -1083,10 +1100,50 @@ mod tests {
             assert_eq!(broken.kind, Kind::ProjectInvalid);
             assert_eq!(broken.help.as_deref(), Some(BROKEN), "{text}");
         }
+        for (version, help) in [
+            (
+                "4294967296",
+                "install a newer fetchloom, then run the same command again",
+            ),
+            ("-1", BROKEN),
+        ] {
+            let error = Lock::parse(&format!("version = {version}\n")).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                format!("data.lock is in format {version}, and this fetchloom reads format 1")
+            );
+            assert_eq!(error.help.as_deref(), Some(help));
+        }
         assert!(
             BROKEN.contains("delete it and run `fetchloom lock`, which resolves every dataset")
         );
         assert_eq!(Lock::parse("version = 1\n").unwrap(), Lock::default());
+    }
+
+    /// a version that is no whole number names no format, so the error says what the field holds
+    /// and what it takes, and leaves the rest of the lock out.
+    #[test]
+    fn a_version_that_is_no_whole_number_says_what_it_takes() {
+        let rest = sample().render().replacen("version = 1\n", "", 1);
+        for (version, what) in [
+            ("\"1\"", "text in quotes"),
+            ("1.0", "a decimal number"),
+            ("true", "true or false"),
+            ("1979-05-27", "a date"),
+            ("[1]", "a list"),
+            ("{ format = 1 }", "a table"),
+        ] {
+            let error = Lock::parse(&format!("version = {version}\n{rest}")).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{version}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "data.lock cannot be read: version is {what}, not a whole number such as 1"
+                )
+            );
+            assert_eq!(error.help.as_deref(), Some(BROKEN), "{version}");
+        }
     }
 
     /// the result `clean` of a recipe made from `iris`, holding two files.
