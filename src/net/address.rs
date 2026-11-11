@@ -211,6 +211,25 @@ pub(super) type LookupFuture =
 #[cfg(test)]
 type TestLookup = Arc<dyn Fn(String, u16) -> LookupFuture + Send + Sync>;
 
+/// the proxy this machine sends `url` through, as its scheme, host and port, without any login
+/// its address holds. none when the request goes straight to the host.
+pub(crate) fn proxy_of(url: &Url) -> Option<String> {
+    shown_proxy(&Matcher::from_system(), url)
+}
+
+/// the proxy `matcher` picks for `url`, as [`proxy_of`] shows it.
+fn shown_proxy(matcher: &Matcher, url: &Url) -> Option<String> {
+    let uri = url.as_str().parse::<http::Uri>().ok()?;
+    let intercept = matcher.intercept(&uri)?;
+    let proxy = intercept.uri();
+    let scheme = proxy.scheme_str().unwrap_or("http");
+    let host = proxy.host()?;
+    Some(match proxy.port_u16() {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
 #[cfg(test)]
 mod proxy_tests;
 

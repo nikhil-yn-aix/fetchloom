@@ -217,12 +217,47 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
                 None => error.help("check that the link opens in a browser. if it needs a login, ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"),
             }
         }
+        StatusCode::PROXY_AUTHENTICATION_REQUIRED => proxy_login(
+            url,
+            headers
+                .get(header::PROXY_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+        ),
         _ => Error::new(
             Kind::NetworkStatus,
             format!("{} answered {code} for {}", host(url), Shown(url)),
         ),
     };
     Failure::Final(error)
+}
+
+/// a proxy on the way to `url` asked for a login, which no other try would give it. a proxy
+/// whose `scheme` asks for a name and password takes them in its address; any other, as one
+/// asking for NTLM or Negotiate, or a tunnel's refusal, which names none, most likely wants a
+/// windows sign-in.
+fn proxy_login(url: &Url, scheme: Option<&str>) -> Error {
+    let message = match address::proxy_of(url) {
+        Some(proxy) => format!(
+            "the proxy at {proxy} asked for a login before it would reach {}",
+            host(url)
+        ),
+        None => format!(
+            "a proxy asked for a login before it would reach {}",
+            host(url)
+        ),
+    };
+    let basic = scheme.is_some_and(|scheme| {
+        scheme
+            .trim_start()
+            .get(..5)
+            .is_some_and(|word| word.eq_ignore_ascii_case("basic"))
+    });
+    let help = if basic {
+        "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY"
+    } else {
+        "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it"
+    };
+    Error::new(Kind::NetworkUnreachable, message).help(help)
 }
 
 /// the certificate error inside `error`, however many `io::Error`s wrap it. a direct connection
@@ -254,6 +289,11 @@ pub(super) fn classify(url: &Url, err: &reqwest::Error, mode: Offline) -> Failur
                 )
                 .help("check the link for a typo, and that this machine is online"),
             );
+        }
+        // a proxy refusing a tunnel without a login does so on every try. hyper-util keeps that
+        // error's type private, so its own words are matched, never the link's
+        if current.to_string() == "tunnel error: proxy authorization required" {
+            return Failure::Final(proxy_login(url, None));
         }
         // a certificate the system does not trust fails the same way on every try. matched by
         // type: the text of the outer error holds the link, which may well say "certificate"

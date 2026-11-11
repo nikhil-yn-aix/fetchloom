@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use crate::support::{Proxy, Result, Sandbox, Server, file, reply, text};
+use crate::support::{Proxy, Result, Sandbox, Server, file, json, reply, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
@@ -88,5 +88,60 @@ fn a_proxy_on_this_machine_carries_a_host_that_was_typed() -> Result {
         fs::read(sandbox.work().join("iris").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+/// a proxy that wants a login answers 407, to a tunnel for https and to a plain http request
+/// alike. fetchloom names the proxy rather than the site, and stops there: another try gets no
+/// further, and the help says what each kind of login needs.
+#[test]
+fn a_proxy_that_wants_a_login_is_named_and_asked_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (link, variable, scheme, help) in [
+        (
+            "https://data.example.org/iris.csv",
+            "HTTPS_PROXY",
+            "NTLM",
+            "it likely wants your windows sign-in, which fetchloom cannot send: run a local relay such as px or cntlm, and point HTTPS_PROXY and HTTP_PROXY at it",
+        ),
+        (
+            "http://data.example.org/iris.csv",
+            "HTTP_PROXY",
+            "Basic realm=\"lab\"",
+            "give it a name and password in its address, as http://name:password@proxy.example.org:8080, in HTTPS_PROXY and HTTP_PROXY",
+        ),
+    ] {
+        let login = || {
+            reply(
+                "407 Proxy Authentication Required",
+                &[("Proxy-Authenticate", scheme), ("Content-Length", "0")],
+                b"",
+            )
+        };
+        let proxy = Server::start("", vec![login(), login()])?;
+        let output = sandbox
+            .command(&["--json", "get", link])
+            .env(variable, &proxy.url)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .env("FETCHLOOM_RETRIES", "1")
+            .output()?;
+        assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "network.unreachable", "{error}");
+        assert_eq!(
+            error["message"],
+            format!(
+                "the proxy at {} asked for a login before it would reach data.example.org",
+                proxy.url
+            )
+        );
+        assert_eq!(error["help"], help);
+        assert_eq!(
+            proxy.requests().len(),
+            1,
+            "{link}: another try gets no further"
+        );
+    }
     Ok(())
 }

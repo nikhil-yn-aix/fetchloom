@@ -29,3 +29,17 @@ fn proxy_verdicts_are_cached_and_typed_hosts_skip_preflight() {
         });
     }
 }
+
+/// a proxy is named by where it is, never by the login its address may hold.
+#[test]
+fn a_proxy_is_shown_without_its_login() {
+    let url = Url::parse("https://data.example.org/iris.csv").unwrap();
+    let matcher = Matcher::builder()
+        .all("http://name:secret@proxy.example.org:8080".to_owned())
+        .build();
+    assert_eq!(
+        shown_proxy(&matcher, &url).as_deref(),
+        Some("http://proxy.example.org:8080")
+    );
+    assert_eq!(shown_proxy(&Matcher::builder().build(), &url), None);
+}
