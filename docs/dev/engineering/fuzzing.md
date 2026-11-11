@@ -32,10 +32,10 @@ this short pass is useful for local and CI checks; it is not a substitute for su
 install the pinned nightly and cargo-bolero when preparing a longer run:
 
 ```sh
-rustup toolchain install nightly-2026-11-01 --profile minimal
+rustup toolchain install nightly-2026-11-03 --profile minimal
 cargo install --locked cargo-bolero --version 0.13.5 --no-default-features --features libfuzzer
 mkdir -p .fuzz/manifest .fuzz/manifest-crashes
-cargo bolero test --toolchain nightly-2026-11-01 --target x86_64-unknown-linux-gnu -T 10min --corpus-dir .fuzz/manifest --crashes-dir .fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
+cargo bolero test --toolchain nightly-2026-11-03 --target x86_64-unknown-linux-gnu -T 10min --corpus-dir .fuzz/manifest --crashes-dir .fuzz/manifest-crashes project::manifest::tests::fuzz_manifest
 ```
 
 [Cargo.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/Cargo.toml) defines the `fuzz` profile: optimized builds with debug assertions and overflow checks retained. explicit corpus and crash folders keep the run's files together. without those arguments bolero keeps its corpus in `__fuzz__` beside the source, which git ignores. the explicit `.fuzz` folder is local run data; do not stage it.

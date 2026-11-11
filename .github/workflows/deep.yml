@@ -99,16 +99,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install nightly-2026-11-01 --profile minimal
+      - run: rustup toolchain install nightly-2026-11-03 --profile minimal
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-bolero@0.13.5
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: fuzz-${{ matrix.name }}-nightly-2026-11-01
+          shared-key: fuzz-${{ matrix.name }}-nightly-2026-11-03
           workspaces: . -> target/fuzz-build
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo +nightly-2026-11-01 fetch --locked
+      - run: cargo +nightly-2026-11-03 fetch --locked
       - name: five minutes of libFuzzer
         env:
           CARGO_NET_OFFLINE: 'true'
@@ -116,7 +116,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p target/fuzz-corpus target/fuzz-results/crashes
-          timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-01 \
+          timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-03 \
             --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
             --corpus-dir target/fuzz-corpus --crashes-dir target/fuzz-results/crashes \
             "$FUZZ_TARGET" 2>&1 | tee target/fuzz-results/run.log
