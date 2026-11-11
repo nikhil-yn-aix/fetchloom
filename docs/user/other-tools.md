@@ -23,13 +23,13 @@ each row is a command people run to fetch dataset files, and what does that job 
 
 ### a list of files and their hashes
 
-a readme often gives a base link and a `SHA256SUMS` file, with the hash before each name. `add -i` reads a link, then its SHA-256, so one `awk` line turns one into the other. from a real run against files on github, in a new folder shortened here to `/home/me/paper`, with stderr shown:
+a readme often gives a base link and a `SHA256SUMS` file, with the hash before each name. `add -i` reads a link, then its SHA-256, so one `awk` line turns one into the other; it drops the `*` that `sha256sum -b` writes before a name. from a real run against files on github, in a new folder shortened here to `/home/me/paper`, with stderr shown:
 
 ```sh
 $ cat SHA256SUMS
 9cc1c345c71bcc9b486b74cbf6063fa66f4bb5e0f603a4b3c3471ec2e5e8e355  iris.csv
 e54cc4d2ce1bff65d32ca60b3e4b802e06bde1d7e7caf6f796f6bf7370e863b0  tips.csv
-$ awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ 'NF {print base $2, $1}' SHA256SUMS > links.txt
+$ awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ 'NF {sub(/^\*/, "", $2); print base $2, $1}' SHA256SUMS > links.txt
 $ fetchloom add -i links.txt
  Downloaded 2 files · 13.3 KiB in 124 ms
      Pinned iris, new in data.lock: https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv · 1 file · 3.8 KiB
@@ -42,19 +42,22 @@ $ fetchloom add -i links.txt
   hint: scripts can find each with `fetchloom path <name>`
 ```
 
-a pooch registry gives the name first, then the hash, which may be `md5:`. a list for `add -i` takes only a SHA-256, and any other hash stops the add, naming the line:
+a pooch registry gives the name first, then the hash, which may be `md5:`, and may give a file its own link third. a list for `add -i` takes only a SHA-256, and any other hash stops the add, naming the line:
 
 ```text
 error: "md5:0123456789abcdef0123456789abcdef" on line 2 of links.txt is not a SHA-256
   help: a line is a link, or a link and its SHA-256: 64 hex digits, or sha256: and 64 hex digits. blank lines and lines starting with # are skipped
 ```
 
-so leave such hashes out, and fetchloom pins the SHA-256 of what it downloads:
+so leave such hashes out of the list, take a file's own link where the registry gives one, and check the md5 hashes once the files are in place, so a file that changed since the registry was written is not pinned unseen:
 
 ```sh
-awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ '!/^#/ && NF {print base $1, ($2 ~ /^md5:/ ? "" : $2)}' registry.txt > links.txt
+awk -v base=https://raw.githubusercontent.com/mwaskom/seaborn-data/master/ '!/^#/ && NF {print ($3 != "" ? $3 : base $1), ($2 ~ /^md5:/ ? "" : $2)}' registry.txt > links.txt
 fetchloom add -i links.txt
+awk '!/^#/ && $2 ~ /^md5:/ {d = $1; sub(/\.[^.]*$/, "", d); print substr($2, 5) "  data/" d "/" $1}' registry.txt | md5sum -c
 ```
+
+the last line finds each file where `add -i` puts a link ending in its name, as `data/tips/tips.csv` for `tips.csv`; check a file named otherwise at the path `fetchloom path` gives. a line md5sum calls `FAILED` is a file other than the registry's: run `fetchloom remove <name>` rather than commit `data.lock`, and ask whoever keeps the registry.
 
 ### files in one folder
 
@@ -120,7 +123,7 @@ fetchloom export -o data.sha256
 fetchloom export --format aria2 -o sources.aria2
 ```
 
-then, on any machine with aria2c, in an empty folder holding both files, from the project above:
+then, on any machine with aria2c, in an empty folder holding both files, from the project above. `-d data` names the data folder, since `data.sha256` lists paths from the project's folder; give the folder `data_dir` names in data.toml when it is not `data`, as [export](commands/export.md#what-it-writes) says:
 
 ```sh
 $ aria2c -q -i sources.aria2 -d data --check-integrity=true
