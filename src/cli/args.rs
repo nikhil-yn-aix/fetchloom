@@ -71,7 +71,7 @@ on disk: nothing, or the one file -o names, which it never replaces without --fo
   fetchloom path iris -q
   fetchloom path iris --locked
 
-on disk: nothing when the dataset is ready. otherwise it syncs first, as `fetchloom sync` does, or with --locked fails rather than change data.lock";
+on disk: nothing when the dataset is ready. otherwise it syncs that dataset alone first, as `fetchloom sync <name>` does, or with --locked fails rather than change data.lock";
 
     pub(super) const SETTINGS: &str = "examples:
   fetchloom settings
@@ -473,7 +473,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom export [options] [name]...", help_template = TEMPLATE, after_help = examples::EXPORT)]
     Export(Export),
 
-    /// print where a dataset or a file in it is, syncing first if needed
+    /// print where a dataset or a file in it is, syncing it if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
 

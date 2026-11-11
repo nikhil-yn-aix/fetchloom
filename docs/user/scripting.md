@@ -81,7 +81,7 @@ fetchloom -q path iris
 fetchloom --json path iris --locked
 ```
 
-JSON `result.path` is the absolute path. the quiet form prints only the path on stdout. either can sync the whole project when the requested dataset is not ready. neither proves that an edited file was replaced. `--locked` keeps that sync from changing data.lock: when data.lock is missing or out of date with data.toml, it fails with `lock.outdated`, exit 1, before any request.
+JSON `result.path` is the absolute path. the quiet form prints only the path on stdout. either syncs the requested dataset alone when it is not ready. neither proves that an edited file was replaced. `--locked` keeps that sync from changing data.lock: when data.lock is missing or the dataset's entry is out of date with data.toml, it fails with `lock.outdated`, exit 1, before any request.
 
 `-C` chooses the folder where project discovery starts. the search includes its parents, up to the top of the git repository it starts in. quiet mode keeps stdout answers and errors; JSON warnings remain in the document.
 
@@ -138,7 +138,7 @@ frame = pd.read_csv(fetchloom.get("https://example.org/iris.csv", "data.csv"))
 | `fetchloom.path(name, project=".", *, yes=False, offline=False, locked=False)` | dataset, file or subfolder as `pathlib.Path` |
 | `fetchloom.get(link, path=None, *, folder=None, sha256=None, force=False, yes=False, offline=False)` | with `path`, the file written there; otherwise the folder, `folder` or a new one named after the download; as `pathlib.Path` |
 
-`project` accepts a string or path-like object naming any folder in the project and defaults to the current directory. `path()` may sync the whole project and download data when the dataset is not ready.
+`project` accepts a string or path-like object naming any folder in the project and defaults to the current directory. `path()` may sync the dataset it names and download that dataset's data when it is not ready.
 
 `get()` passes `path` as `-o`, `folder` as `--dir`, and `sha256`, `force`, `yes` and `offline` as their flags; relative paths start at the current directory. `path` and `folder` cannot both be given: that raises `fetchloom.Error` with kind `usage` before anything runs. a file already at `path` holding the same bytes stays and is returned, so running a notebook cell again is safe; one holding other bytes raises kind `local.not_empty` unless `force=True` replaces it. with `sha256`, a file already holding those bytes is returned without a download, and so is, with `offline=True`, a file still holding what the link served last time.
 

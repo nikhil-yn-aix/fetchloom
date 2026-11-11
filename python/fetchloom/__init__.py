@@ -78,7 +78,8 @@ def path(
 
     ``name`` is a dataset name such as ``iris``, or a path inside a dataset such as
     ``iris/Iris.csv``. ``project`` is the project folder or any folder inside it. when the
-    dataset is not in place yet, fetchloom syncs the project first and may download data.
+    dataset is not in place yet, fetchloom syncs that dataset alone first and may download its
+    data.
     ``yes=True`` approves large downloads; ``offline=True`` prevents network requests.
     ``locked=True`` never changes data.lock: when that sync would, it raises :class:`Error`
     with kind ``lock.outdated``.

@@ -1,6 +1,8 @@
 //! `fetchloom path`: where a dataset, or a file or folder in it, is. it answers from data.lock and
-//! the data folder when the files are in place, and syncs first when they are not.
+//! the data folder when the files are in place, and syncs that dataset alone first when they are
+//! not.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -70,20 +72,22 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                 )? {
                     path
                 } else {
+                    let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
                     if args.locked {
                         locked(
                             &project,
                             &manifest,
                             read.as_ref().map(|(lock, _)| lock),
                             "run path without --locked",
-                            &Scope::All,
+                            &scope,
                         )?;
                     }
                     let cache = match cache {
                         Some(cache) => cache,
                         None => open_cache()?,
                     };
-                    let work = Loop::new(context, &project, Arc::new(context.net()), cache);
+                    let work =
+                        Loop::new(context, &project, Arc::new(context.net()), cache).within(scope);
                     let seen = Seen {
                         manifest: digest::sha256(text.as_bytes()),
                         lock: read

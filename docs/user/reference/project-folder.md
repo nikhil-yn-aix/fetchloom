@@ -19,7 +19,7 @@ a first `add` that adds nothing removes the `.fetchloom` it made, unless somethi
 
 on unix, metadata replacement flushes the new file before rename, then flushes the destination and staging directories. an error after rename says that the file was replaced but its directory changes could not be flushed. check the reported file before retrying; failure at this point does not mean the old contents remain.
 
-inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
+inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs its dataset first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself separately.
 
 inside the data folder, a file being copied or cloned into place is first written to a hidden `.fetchloom-<16 hex digits>.copy` beside its destination and then renamed. a hard kill can leave one behind; `status` does not list it, and the next `sync` deletes it.
 

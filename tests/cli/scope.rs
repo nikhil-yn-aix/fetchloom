@@ -1,6 +1,6 @@
-//! `sync` with dataset names, against servers on this machine: the named datasets are resolved,
-//! downloaded, placed and cleaned up, and every other dataset stays as data.lock and the data
-//! folder have it.
+//! `sync` with dataset names, and `path`, which syncs its dataset alone, against servers on this
+//! machine: the named datasets are resolved, downloaded, placed and cleaned up, and every other
+//! dataset stays as data.lock and the data folder have it.
 
 use std::fs;
 use std::path::PathBuf;
@@ -237,5 +237,58 @@ fn a_locked_named_sync_checks_only_named_entries() -> Result {
         "nothing asks either of large's links after the add"
     );
     assert_eq!(fs::read(work.join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// `path` in a fresh clone downloads and places its own dataset alone before it answers.
+#[test]
+fn path_on_a_cold_cache_fetches_only_its_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (small, large) = small_and_large(&sandbox, 2)?;
+    let fresh = Fresh::new(&sandbox)?;
+
+    let output = fresh.run(&sandbox, &["path", "small"])?;
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let folder = fresh.folder.join("data").join("small");
+    assert_eq!(text(&output.stdout)?, format!("{}\n", folder.display()));
+    assert_eq!(fs::read(fresh.placed("small"))?, SMALL);
+    assert_eq!(
+        (small.requests().len(), large.requests().len()),
+        (2, 1),
+        "one download for small after the adds, none for large"
+    );
+    assert!(!fresh.folder.join("data").join("large").exists());
+    Ok(())
+}
+
+/// `path --locked` checks its own dataset's entry alone: large's stale entry does not stop it,
+/// and nothing asks large's links.
+#[test]
+fn a_locked_path_checks_only_its_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (small, large) = small_and_large(&sandbox, 2)?;
+    let moved = Server::start("/files/large.csv", vec![file(LARGE, "\"v2\"")])?;
+    sandbox.allow(&moved.url);
+    let fresh = Fresh::new(&sandbox)?;
+    fs::write(
+        fresh.folder.join("data.toml"),
+        format!(
+            "[datasets.large]\nref = \"{}\"\n\n[datasets.small]\nref = \"{}\"\n",
+            moved.url, small.url
+        ),
+    )?;
+    let lock = fs::read(fresh.folder.join("data.lock"))?;
+
+    let output = fresh.run(&sandbox, &["path", "small", "--locked"])?;
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(fresh.placed("small"))?, SMALL);
+    assert_eq!(
+        (moved.requests().len(), large.requests().len()),
+        (0, 1),
+        "nothing asks either of large's links after the add"
+    );
+    assert_eq!(fs::read(fresh.folder.join("data.lock"))?, lock);
     Ok(())
 }
