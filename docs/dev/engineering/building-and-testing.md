@@ -129,6 +129,8 @@ rmdir "$scratch/xfs" "$scratch"
 
 unmount even if tests fail. do not delete an image while it is mounted. [CI](ci.md) reruns the tests that touch the disk on xfs and btrfs, on ReFS, exFAT and FAT32 on windows, and on hfs+ on macos; the full suite runs once on each default filesystem.
 
+a fat image that root mounts with `sudo mount -o loop,umask=000` lets every user write but refuses chmod to all but root, as some shared drives do. `FETCHLOOM_TEST_NOOP_CHMOD=<mount> cargo test --locked --lib place::tests::a_writable_copy_works_where_the_mount_refuses_chmod -- --exact` checks that a writable copy still works there, as linux CI does; without the variable that test returns at once.
+
 on nfs 4.2 from a linux server that hands out delegated timestamps (RFC 9754), as 7.0 does, the tests that fake an edit a coarse clock hides, by writing a file and putting its old time back, fail by design: the server keeps a time the client sets under a write delegation only if it is newer than the file's times when the delegation began, and stamps the file when the delegation ends. run those on a local filesystem.
 
 ## adding coverage

@@ -175,6 +175,17 @@ jobs:
             echo "::endgroup::"
           done
           if [ -n "$failed" ]; then echo "tests failed on$failed"; exit 1; fi
+      # a fat drive that root mounted for every user refuses chmod to everyone else, as shared
+      # drives can. a writable copy needs no chmod, so placing one must still work there
+      - name: cargo test on a drive that refuses chmod
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install -y -qq dosfstools > /dev/null
+          truncate -s 64M "$RUNNER_TEMP/fat.img"
+          mkfs.vfat "$RUNNER_TEMP/fat.img" > /dev/null
+          sudo mkdir -p /mnt/fat
+          sudo mount -o loop,umask=000 "$RUNNER_TEMP/fat.img" /mnt/fat
+          FETCHLOOM_TEST_NOOP_CHMOD=/mnt/fat cargo test --locked --lib place::tests::a_writable_copy_works_where_the_mount_refuses_chmod -- --exact
       # apfs keeps a name in the unicode composition it was given, while hfs+, on many older
       # external drives, lists every name decomposed. both see the two compositions as one name
       - name: cargo test on hfs+

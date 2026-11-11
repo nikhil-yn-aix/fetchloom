@@ -33,6 +33,7 @@ one `test` job expands to five required runners, each with a 45-minute timeout. 
 | `python3 -m unittest discover -s bench` | x86_64 linux | benchmark harness: fixtures, runs, live comparison and report rendering |
 | disk-touching tests on ReFS, exFAT and FAT32 | x86_64 windows | block cloning, absence of links and read-only removal behavior |
 | disk-touching tests on btrfs and xfs | x86_64 linux | reflink behavior absent from the default ext4 filesystem |
+| a writable copy onto a fat drive that refuses chmod | x86_64 linux | a copy that needs no permission change still works where only root may change permissions |
 | disk-touching tests on hfs+ | macos | a disk that lists every name decomposed and cannot clone files |
 
 [deny.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/deny.toml) rejects open advisories, licenses outside its allowlist and sources outside crates.io. duplicate crate versions warn. three advisories are ignored, each with its reason: zvariant, zvariant_derive and zbus_names were folded into zbus 6, which keyring's linux secret service store does not use yet. they are notices that the crates moved, not flaws, and go once keyring moves.
@@ -45,7 +46,7 @@ the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-m
 
 windows creates 4096 MB expandable VHDX images with diskpart and assigns R, X and Y. it points `TMP` and `TEMP` at a folder on each volume and runs `cargo test --locked --no-fail-fast`. runner admin access permits diskpart; normal contributor tests should not require admin access.
 
-linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. arm64 linux and windows runners run the ordinary full tests, not these extra mount loops.
+linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. it then mounts a 64 MB fat image as root with `umask=000`, where every user may write but only root may change permissions, and runs `place::tests::a_writable_copy_works_where_the_mount_refuses_chmod` with `FETCHLOOM_TEST_NOOP_CHMOD` naming that mount; without the variable the test returns at once. arm64 linux and windows runners run the ordinary full tests, not these extra mount loops.
 
 macos makes a 4 GB hfs+ disk image with `hdiutil`, attaches it without showing it in finder and points `TMPDIR` at it. apfs, the default disk, keeps each name in the unicode composition it was given, while hfs+ lists every name decomposed; both ignore case by default. tests that need such a disk return early on a disk that tells the spellings apart.
 
