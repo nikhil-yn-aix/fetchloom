@@ -1288,7 +1288,7 @@ fn first_pin(output: &Output, locked: &Locked, sizeless: &HashSet<String>) -> St
     )
 }
 
-pub(super) use draft::filter;
+pub(super) use draft::{filter, without_files};
 
 /// resolves a reference, with progress or plain lines while its source takes its time, listing
 /// only `folders` where they hold every file wanted.

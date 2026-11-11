@@ -18,6 +18,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [status](commands/status.md) | find missing, edited and extra files |
 | [path](commands/path.md) | locate a dataset, file or subfolder |
 | [remove](commands/remove.md) | remove an entry without discarding edited files |
+| [drop](commands/drop.md) | leave bad samples or unwanted files out of a dataset for good |
 | [get](commands/get.md) | fetch data once without project files |
 | [cache](commands/cache.md) | inspect, collect or verify cached bytes |
 | [settings](commands/settings.md) | see each setting and where it came from |

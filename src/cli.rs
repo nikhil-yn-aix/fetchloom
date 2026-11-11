@@ -6,6 +6,7 @@ mod auth;
 mod build;
 mod cache;
 mod completions;
+mod drop;
 mod export;
 mod fetch;
 mod get;
@@ -626,6 +627,7 @@ fn reminds(command: &args::Command) -> bool {
     match command {
         args::Command::Add(args) => !args.dry.dry_run,
         args::Command::Remove(args) => !args.dry.dry_run,
+        args::Command::Drop(args) => !args.dry.dry_run,
         args::Command::Sync(args) => !args.dry.dry_run,
         args::Command::Get(_) => true,
         _ => false,
@@ -641,6 +643,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Remove(args) => {
             let outcome = block_on(context, remove::remove(context, args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Drop(args) => {
+            let outcome = block_on(context, drop::run(context, args));
             finish(context, name, outcome, started)
         }
         args::Command::Sync(args) => {

@@ -14,6 +14,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`status`](status.md) | list missing, edited and extra files | check local inputs without downloads |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
 | [`remove`](remove.md) | remove an entry and unchanged managed files | stop using a dataset |
+| [`drop`](drop.md) | leave files out of their dataset for good, as patterns in data.toml, and delete them from data/ | take bad samples, or a part you do not use, out of a dataset |
 | [`get`](get.md) | fetch once without project files: one link, a list, or one file at a path you name | inspect a source before adding it, download a list of links, or put one file where a script reads it |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |

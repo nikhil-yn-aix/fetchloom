@@ -39,6 +39,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | command | result fields |
 |---|---|
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; for `sync`, `selected`: the dataset names it was given, or null when it was given none; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); for a `lock` that merged both sides of a git merge, also `merge`, below |
+| `drop` | `project`: absolute path; `dropped`: one `{path, dataset, archive, pattern}` record for each file left out, by project-relative path, with `archive` the path in data.lock of the archive the file is inside, or null for a file the source lists, and `pattern` the one written for it; `lock_changed`: boolean; `placement`: object below; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); [drop](../commands/drop.md#json) |
 | `build` | with `--dry-run`, the only build this version runs: `project`: absolute path; `selected`: the recipes named, or every recipe; `dry_run`: `true`; `steps`: one record a step in build order, with `name`, `action` (`would_run`, `may_run` or `up_to_date`), nullable `key`, `changes`, `run`, `env`, `inputs` of `name` and `folder`, `code` and `output`; [build](../commands/build.md#json) |
 | `get` | `file`: the absolute path of the file `-o` wrote or found, else null; `folder`: absolute path, the file's folder with `-o`, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
@@ -90,9 +91,9 @@ successful sync still exits 0 if its cache registration cannot be written. human
 
 ## dry runs
 
-`add`, `remove`, `sync`, `lock` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
+`add`, `remove`, `drop`, `sync`, `lock` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
 
-for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
+for `add`, `remove`, `drop` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
 
 | field | entries |
 |---|---|

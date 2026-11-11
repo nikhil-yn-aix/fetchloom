@@ -1175,6 +1175,156 @@ pub(crate) fn without_dataset(text: &str, name: &str) -> Result<String, Error> {
     Ok(document.to_string().trim_start_matches('\n').to_owned())
 }
 
+/// data.toml's text with `patterns` in the `exclude` of the dataset `name`, or of its members
+/// table for `archive`, each once, keeping comments, order and spacing. a table for an archive
+/// gets a header of its own under the dataset's, as `[datasets.pets.members."pets.zip"]`.
+///
+/// # Errors
+///
+/// `project.invalid` for a dataset or a members table written inline, which gets no new keys,
+/// as `add` refuses to add to inline datasets.
+pub(crate) fn with_exclusions(
+    text: &str,
+    name: &str,
+    archive: Option<&str>,
+    patterns: &[String],
+) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    let inline = |what: &str| {
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("data.toml writes {what} inline, so fetchloom cannot add to it"),
+        )
+        .help(format!(
+            "write it as a [{what}] table, then run the same command again"
+        ))
+    };
+    let dataset = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| inline(&format!("datasets.{name}")))?;
+    let table = match archive {
+        None => dataset,
+        Some(archive) => {
+            let dotted = dataset.is_dotted();
+            let members = dataset
+                .entry("members")
+                .or_insert_with(|| {
+                    let mut members = Table::new();
+                    members.set_implicit(true);
+                    members.set_dotted(dotted);
+                    Item::Table(members)
+                })
+                .as_table_mut()
+                .ok_or_else(|| inline(&format!("datasets.{name}.members")))?;
+            let dotted = members.is_dotted();
+            members
+                .entry(archive)
+                .or_insert_with(|| {
+                    let mut table = Table::new();
+                    table.set_dotted(dotted);
+                    Item::Table(table)
+                })
+                .as_table_mut()
+                .ok_or_else(|| inline(&format!("datasets.{name}.members.\"{archive}\"")))?
+        }
+    };
+    exclude_once(table, patterns);
+    Ok(document.to_string())
+}
+
+/// adds each of `patterns` that `exclude` in `table` lacks, a list of more than one written a
+/// pattern per line.
+fn exclude_once(table: &mut Table, patterns: &[String]) {
+    let mut list = match table.get("exclude").and_then(Item::as_value) {
+        Some(Value::Array(list)) => list.clone(),
+        Some(Value::String(one)) => {
+            let mut list: Array = std::iter::once(one.value().clone()).collect();
+            *list.decor_mut() = one.decor().clone();
+            list
+        }
+        _ => Array::new(),
+    };
+    let mut seen: std::collections::HashSet<String> = list
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    for pattern in patterns {
+        if seen.insert(pattern.clone()) {
+            list.push(pattern.as_str());
+        }
+    }
+    if list.len() > 1 {
+        one_per_line(&mut list);
+    }
+    match table.get_mut("exclude") {
+        Some(item) => *item = toml_edit::value(list),
+        None => {
+            table.insert("exclude", toml_edit::value(list));
+        }
+    }
+}
+
+/// writes each value of `list` on a line of its own, keeping the lines and comments of one
+/// written that way already and indenting new values as its last.
+fn one_per_line(list: &mut Array) {
+    let raw = |value: &Value| {
+        value
+            .decor()
+            .prefix()
+            .and_then(|prefix| prefix.as_str())
+            .map(str::to_owned)
+    };
+    let last_line = list
+        .iter()
+        .filter_map(raw)
+        .filter_map(|prefix| prefix.rfind('\n').map(|at| prefix[at..].to_owned()))
+        .last();
+    let open = last_line.is_some();
+    let indent = last_line.unwrap_or_else(|| "\n  ".to_owned());
+    for value in list.iter_mut() {
+        if !open || value.decor().prefix().is_none() {
+            value.decor_mut().set_prefix(indent.clone());
+            value.decor_mut().set_suffix("");
+        }
+    }
+    list.set_trailing_comma(true);
+    if !list
+        .trailing()
+        .as_str()
+        .is_some_and(|trailing| trailing.contains('\n'))
+    {
+        list.set_trailing("\n");
+    }
+}
+
+/// data.toml's text without the members table of the dataset `name` for `archive`, as when the
+/// whole archive is left out, and without `members` once it is empty.
+pub(crate) fn without_members(text: &str, name: &str, archive: &str) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    if let Some(dataset) = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_like_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_like_mut)
+    {
+        let emptied = dataset
+            .get_mut("members")
+            .and_then(Item::as_table_like_mut)
+            .is_some_and(|members| {
+                members.remove(archive);
+                members.is_empty()
+            });
+        if emptied {
+            dataset.remove("members");
+        }
+    }
+    Ok(document.to_string())
+}
+
 /// takes the dataset `name` out of `document`, as [`without_dataset`] says.
 fn remove(document: &mut DocumentMut, name: &str) {
     let Some(datasets) = document
@@ -1819,6 +1969,52 @@ mod tests {
             outside(text).unwrap(),
             "blank lines do not count"
         );
+    }
+
+    /// drop adds each pattern once, under the dataset's own header or one of its own for the
+    /// archive, and leaves every other line as written.
+    #[test]
+    fn an_exclusion_is_added_once_keeping_comments() {
+        let text = "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n";
+        let dog = "pets-v1/images/dog_010.png".to_owned();
+        let blurry = "pets-v1/images/blurry_011.png".to_owned();
+        let once =
+            with_exclusions(text, "pets", Some("pets.zip"), std::slice::from_ref(&dog)).unwrap();
+        assert_eq!(
+            once,
+            "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/dog_010.png\"]\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n"
+        );
+        let twice =
+            with_exclusions(&once, "pets", Some("pets.zip"), &[blurry.clone(), dog]).unwrap();
+        assert_eq!(
+            twice,
+            "# pets for the study\n[datasets.pets]\nref = \"https://example.org/pets.zip\" # v1\n\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\n  \"pets-v1/images/dog_010.png\",\n  \"pets-v1/images/blurry_011.png\",\n]\n\n[datasets.zoo]\nref = \"zenodo:1\"\nexclude = \"*.tmp\" # scratch\n"
+        );
+        let read = parse(&twice);
+        let zip = &read.datasets["pets"].source().unwrap().members["pets.zip"];
+        assert!(!zip.keeps(&blurry) && zip.keeps("pets-v1/images/cat.png"));
+        let listed = with_exclusions(text, "zoo", None, &["b[[]1].csv".to_owned()]).unwrap();
+        assert!(
+            listed.ends_with(
+                "[datasets.zoo]\nref = \"zenodo:1\"\nexclude = [\n  \"*.tmp\",\n  \"b[[]1].csv\",\n] # scratch\n"
+            ),
+            "{listed}"
+        );
+        assert_eq!(without_members(&twice, "pets", "pets.zip").unwrap(), text);
+        for inline in [
+            "datasets.pets = { ref = \"x\" }\n",
+            "[datasets.pets]\nref = \"x\"\nmembers = { \"pets.zip\" = { exclude = \"a\" } }\n",
+        ] {
+            let error = with_exclusions(
+                inline,
+                "pets",
+                Some("pets.zip"),
+                std::slice::from_ref(&blurry),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{inline}");
+            assert!(error.message.contains("inline"), "{}", error.message);
+        }
     }
 
     #[test]

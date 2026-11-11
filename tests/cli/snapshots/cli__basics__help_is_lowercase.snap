@@ -23,6 +23,7 @@ usage: fetchloom [options] <command>
 commands:
   add          add a dataset to the project and download it into the data folder
   remove       remove a dataset and the unchanged files fetchloom placed for it
+  drop         leave files out of their dataset for good, such as bad samples
   sync         put the files data.lock lists into the data folder
   lock         update data.lock from data.toml, without changing the data folder
   build        show what the recipes in data.toml would run

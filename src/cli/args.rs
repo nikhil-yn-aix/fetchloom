@@ -28,6 +28,13 @@ on disk: writes data.toml, data.lock and data/<name>, and adds data/ to a git pr
 
 on disk: edits data.toml and data.lock, and deletes the unchanged files it placed in data/. --dry-run writes nothing";
 
+    pub(super) const DROP: &str = "examples:
+  fetchloom drop data/pets/images/dog_010_corrupt.png
+  fetchloom drop data/pets/images/blurry --dry-run
+  fetchloom drop data/eeg/sub-07 --json
+
+on disk: edits data.toml, and data.lock for files a source lists, and deletes the unchanged files it names from data/. --dry-run writes nothing";
+
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
   fetchloom sync iris
@@ -465,6 +472,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom remove [options] <name>", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
     Remove(Remove),
 
+    /// leave files out of their dataset for good, such as bad samples
+    #[command(override_usage = "fetchloom drop [options] <path>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::DROP)]
+    Drop(Drop),
+
     /// put the files data.lock lists into the data folder
     #[command(override_usage = "fetchloom sync [options] [name]...", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
@@ -527,6 +538,7 @@ impl Command {
         match self {
             Command::Add(_) => "add",
             Command::Remove(_) => "remove",
+            Command::Drop(_) => "drop",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
             Command::Build(_) => "build",
@@ -724,6 +736,18 @@ pub(crate) struct Remove {
     /// the dataset's name in data.toml
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) name: String,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
+}
+
+/// leave files out of their dataset for good, such as bad samples
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Drop {
+    /// files or folders in the data folder, from the current folder. a file may be deleted
+    /// already
+    #[arg(value_name = "path", required = true, help_heading = "arguments")]
+    pub(crate) paths: Vec<PathBuf>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

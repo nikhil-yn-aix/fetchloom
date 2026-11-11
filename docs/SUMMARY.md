@@ -19,6 +19,7 @@
     - [status](user/commands/status.md)
     - [path](user/commands/path.md)
     - [remove](user/commands/remove.md)
+    - [drop](user/commands/drop.md)
     - [get](user/commands/get.md)
     - [cache](user/commands/cache.md)
     - [settings](user/commands/settings.md)

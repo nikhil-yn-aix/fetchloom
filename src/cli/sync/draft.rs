@@ -481,6 +481,23 @@ pub(super) fn switched_import(source: &Source, locked: &Locked) -> Locked {
     switched
 }
 
+/// the pin of `locked` once `source`'s exclude leaves out the files at `paths`, made without a
+/// listing: those files go and the spec follows `source`. it is what relocking the same listing
+/// pins, since a source listing more than one file pins each at its listing path.
+pub(in crate::cli) fn without_files(
+    locked: &Locked,
+    source: &Source,
+    paths: &HashSet<&str>,
+    now: &str,
+) -> Locked {
+    let mut kept = locked.clone();
+    kept.files
+        .retain(|file| !paths.contains(file.path.as_str()));
+    kept.spec = lock::spec(source);
+    now.clone_into(&mut kept.timestamp);
+    kept
+}
+
 /// fills in what each archive of `locked`, an import pinned whole, unpacks to, for a dry run: as
 /// this machine recorded it, or a stand-in. returns the archives, as `<dataset>/<path>`, that a
 /// run would unpack to learn it.
@@ -845,6 +862,70 @@ mod tests {
             Some(recorded),
             "an upgrade pins what this fetchloom unpacks"
         );
+    }
+
+    /// drop rewrites a dataset's pin offline when it leaves out a file its source lists: the
+    /// same pin a relock of the same listing makes with the exclude drop writes.
+    #[test]
+    fn a_source_drop_rewrites_the_lock_as_a_relock_would() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let remote = |path: &str| Remote {
+            path: path.to_owned(),
+            size: Some(path.len() as u64),
+            sha256: Some(digest::sha256(path.as_bytes())),
+            md5: None,
+            url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
+            named_by_server: false,
+        };
+        let listing = || Listing {
+            within: Vec::new(),
+            access: Access::Public,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            resolved: Reference::parse("zenodo:2").unwrap().reference,
+            title: Some("eeg".to_owned()),
+            license: None,
+            doi: None,
+            files: ["a.csv", "sub/b[1].csv", "c.csv"].map(remote).to_vec(),
+        };
+        let pinned = |text: &str, previous: Option<&Locked>| {
+            let manifest = Manifest::parse(text).unwrap();
+            let entry = &manifest.datasets["eeg"];
+            let draft = Draft::new(
+                "eeg",
+                entry,
+                entry.source().unwrap(),
+                listing(),
+                previous,
+                false,
+                &cache,
+            )
+            .unwrap();
+            draft.finish("2026-11-11T00:00:00Z").unwrap()
+        };
+        let text = "[datasets.eeg]\nref = \"zenodo:1\"\nexclude = \"*.tmp\"\n";
+        let before = pinned(text, None);
+        let left_out = "sub/b[1].csv";
+        let dropped = crate::project::manifest::with_exclusions(
+            text,
+            "eeg",
+            None,
+            &[crate::glob::escape(left_out)],
+        )
+        .unwrap();
+        let manifest = Manifest::parse(&dropped).unwrap();
+        let rewritten = without_files(
+            &before,
+            manifest.datasets["eeg"].source().unwrap(),
+            &HashSet::from([left_out]),
+            "2026-11-11T09:00:00Z",
+        );
+        let mut relocked = pinned(&dropped, Some(&before));
+        relocked.timestamp = "2026-11-11T09:00:00Z".to_owned();
+        assert_eq!(rewritten, relocked);
+        assert_eq!(rewritten.files.len(), 2);
+        assert_ne!(rewritten.spec, before.spec);
     }
 
     /// a switch of extract keeps every pin data.lock has and learns only what archives unpack

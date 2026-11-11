@@ -11,6 +11,7 @@ mod caps;
 mod completions;
 mod concurrent;
 mod docs;
+mod drop;
 mod dry_run;
 mod export;
 mod get;
