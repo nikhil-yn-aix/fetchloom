@@ -1,6 +1,6 @@
 # recipes
 
-a recipe makes a dataset from other datasets with a command a person writes in `data.toml`. this page covers what the code reads, how a result is keyed, how a stale pin is found, and how `fetchloom build` runs a step, takes in what it wrote, pins it and places it.
+a recipe makes a dataset from other datasets with a command a person writes in `data.toml`. this page covers what the code reads, how a result is keyed, how a stale pin is found, and how `fetchloom build` runs a step, takes in what it wrote, pins it and places it, checks a step against its pin, keeps a rebuild that differs and prepares a build for a machine without the network.
 
 ## where it lives
 
@@ -17,6 +17,8 @@ a recipe makes a dataset from other datasets with a command a person writes in `
 | [build/capture.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/capture.rs) | taking in what a step wrote: the walk, the names, the hashes, the publication |
 | [build/compare.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/compare.rs) | a rerun's files beside the ones data.lock pins: matching, changed, missing and extra |
 | [cli/build/accept.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/accept.rs) | `build --accept`: the checks a kept rebuild must pass, its pin and its placing |
+| [cli/build/room.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/room.rs) | the room the steps that run may take, said before the first one, and the question when the disk is short |
+| [space.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/space.rs) | `Needs` and `peak`, `floor`, and the free and total bytes of a disk |
 | [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | `State.candidates`, the rebuild of each recipe that differs from its pin |
 | [cache/results.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/results.rs) | `builds/<key>/<tree>` records, key locks, and moving a captured file into `objects/` |
 | [examples/recipe_step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/examples/recipe_step.rs) | the step program the cli tests put in recipes |
