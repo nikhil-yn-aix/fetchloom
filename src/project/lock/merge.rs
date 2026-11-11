@@ -1,9 +1,12 @@
 //! `fetchloom lock` after a git merge it could not finish: data.toml and data.lock merged one
 //! dataset at a time, as pnpm merges a lockfile both of whose sides read. a dataset only one side
 //! changed takes that side, one both sides have alike stays, and one each side changed its own way
-//! waits for a person to choose a side. without a merge base, every dataset the sides disagree on
-//! needs a choice, since an addition on one side looks like a removal on the other. nothing is
-//! resolved or downloaded: data.lock keeps a pin only when it answers the merged data.toml.
+//! waits for a person to choose a side, as does a removal on one side of a dataset whose pin the
+//! other side changed, even when git merged data.toml by itself. without a merge base, every
+//! dataset the sides disagree on needs a choice, since an addition on one side looks like a
+//! removal on the other. a choice takes its side whole, entry and pin, as git holds that side when
+//! it can tell. nothing is resolved or downloaded: data.lock keeps a pin only when it answers the
+//! merged data.toml.
 
 pub(crate) mod markers;
 #[cfg(test)]
@@ -209,6 +212,16 @@ struct Manifests<'a> {
     /// each dataset's own text on each side and at the base, when the base reads.
     texts: [BTreeMap<String, String>; 2],
     base: Option<BTreeMap<String, String>>,
+    /// each side whole, as git holds it, with each dataset's own text, when git gives both sides
+    /// and they read.
+    whole: Option<[Whole<'a>; 2]>,
+}
+
+/// one side of data.toml whole, as its branch has it.
+struct Whole<'a> {
+    text: &'a str,
+    manifest: Manifest,
+    tables: BTreeMap<String, String>,
 }
 
 impl Manifests<'_> {
@@ -224,6 +237,15 @@ impl Manifests<'_> {
             Side::Ours => &self.sides.ours,
             Side::Theirs => &self.sides.theirs,
         }
+    }
+
+    /// `side` whole, as its branch has it, when git gave it.
+    fn whole(&self, side: Side) -> Option<&Whole<'_>> {
+        let [ours, theirs] = self.whole.as_ref()?;
+        Some(match side {
+            Side::Ours => ours,
+            Side::Theirs => theirs,
+        })
     }
 }
 
@@ -248,19 +270,30 @@ pub(crate) fn merge(
     let mut decided = Decided::default();
     decide_entries(&manifests, frame, choices, &mut decided);
     let text = merged_text(&manifests, frame, &decided.entries)?;
-    let merged = Manifest::parse(&text).map_err(|error| {
-        Error::new(
-            Kind::ProjectInvalid,
-            format!("the merged data.toml would not read: {}", error.message),
-        )
-        .help("merge data.toml by hand, then run `fetchloom lock`")
-    })?;
+    let merged = read_merged(&text)?;
     check_merged(&manifests, &merged, &decided.entries)?;
     let locks = lock.map(read_locks).transpose()?;
-    let records = locks
-        .as_ref()
-        .map(|locks| pick_records(locks, &merged, choices, &mut decided));
+    let mut records = match &locks {
+        Some(locks) => {
+            let records = pick_records(locks, &merged, choices, &mut decided);
+            decide_removals(&manifests, locks, &merged, choices, &mut decided)?;
+            Some(records)
+        }
+        None => None,
+    };
     check_choices(choices, &decided, &manifests)?;
+    let (text, merged) = match &manifests.whole {
+        Some(_) if !decided.chosen.is_empty() => {
+            let text = chosen_whole(&manifests, choices, &decided, text)?;
+            let merged = read_merged(&text)?;
+            check_chosen(&manifests, &merged, choices, &decided)?;
+            if let (Some(locks), Some(records)) = (&locks, &mut records) {
+                chosen_records(records, locks, &merged, choices, &decided);
+            }
+            (text, merged)
+        }
+        _ => (text, merged),
+    };
     let summary = summarize(&decided, &merged, records.as_deref());
     if !decided.conflicts.is_empty() {
         let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
@@ -270,15 +303,27 @@ pub(crate) fn merge(
         (Some(locks), Some(records)) => repinned(&locks.ours, records),
         _ => Vec::new(),
     };
-    let lock = records
-        .map(|records| resolve(records, Some(root)))
-        .transpose()?;
+    let lock = match (records, &locks) {
+        (Some(records), Some(locks)) => Some(kept(records, locks, &decided, root)?),
+        _ => None,
+    };
     Ok(Merged {
         manifest: text,
         lock,
         summary,
         repinned,
         warnings: decided.warnings,
+    })
+}
+
+/// the merged data.toml, read.
+fn read_merged(text: &str) -> Result<Manifest, Error> {
+    Manifest::parse(text).map_err(|error| {
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("the merged data.toml would not read: {}", error.message),
+        )
+        .help("merge data.toml by hand, then run `fetchloom lock`")
     })
 }
 
@@ -395,7 +440,7 @@ fn repinned(ours: &[Parsed], records: &[Parsed]) -> Vec<String> {
 
 /// each side of data.toml, read, with each dataset's own text. a side that does not read stops
 /// the merge; a base that does not read is no base.
-fn read_manifests(sides: &Sides) -> Result<Manifests<'_>, Error> {
+fn read_manifests<'a>(sides: &'a Sides) -> Result<Manifests<'a>, Error> {
     let side = |text: &str, side: Side| {
         Manifest::parse(text)
             .and_then(|read| Ok((read, manifest::tables(text)?)))
@@ -408,12 +453,24 @@ fn read_manifests(sides: &Sides) -> Result<Manifests<'_>, Error> {
         .as_deref()
         .filter(|base| Manifest::parse(base).is_ok())
         .and_then(|base| manifest::tables(base).ok());
+    let whole = |text: &'a str| {
+        Some(Whole {
+            text,
+            manifest: Manifest::parse(text).ok()?,
+            tables: manifest::tables(text).ok()?,
+        })
+    };
+    let whole = sides
+        .whole
+        .as_ref()
+        .and_then(|[ours, theirs]| Some([whole(ours)?, whole(theirs)?]));
     Ok(Manifests {
         sides,
         ours,
         theirs,
         texts: [ours_texts, theirs_texts],
         base,
+        whole,
     })
 }
 
@@ -534,15 +591,35 @@ struct Locks {
     ours: Vec<Parsed>,
     theirs: Vec<Parsed>,
     base: Option<Vec<Parsed>>,
+    /// whether each side is whole, as git holds it, rather than read from the conflict lines.
+    whole: bool,
 }
 
+impl Locks {
+    fn of(&self, side: Side) -> &[Parsed] {
+        match side {
+            Side::Ours => &self.ours,
+            Side::Theirs => &self.theirs,
+        }
+    }
+}
+
+/// data.lock's sides: whole as git holds them when it gave them, so no pin mixes the lines of
+/// both, else as the conflict lines give them.
 fn read_locks(sides: &Sides) -> Result<Locks, Error> {
     let side =
         |text: &str, side: Side| parse(text).map_err(|error| unreadable(super::FILE, side, &error));
+    let [ours, theirs] = sides
+        .whole
+        .as_ref()
+        .map_or([&sides.ours, &sides.theirs], |[ours, theirs]| {
+            [ours, theirs]
+        });
     Ok(Locks {
-        ours: side(&sides.ours, Side::Ours)?,
-        theirs: side(&sides.theirs, Side::Theirs)?,
+        ours: side(ours, Side::Ours)?,
+        theirs: side(theirs, Side::Theirs)?,
         base: sides.base.as_deref().and_then(|base| parse(base).ok()),
+        whole: sides.whole.is_some(),
     })
 }
 
@@ -590,6 +667,204 @@ fn pick_records(
     }
     kept.sort_by(|a, b| a.name().cmp(b.name()));
     kept
+}
+
+/// decides each dataset data.lock pins on a side that the merged data.toml no longer has. it goes
+/// with its entry, unless its pin changed or came on one side since the base while the other
+/// side removed it: that removal would drop the change unseen, so it waits for a person, as it
+/// does without a base when only one side pins it. a choice of the side that pins it takes back
+/// that side's entry whole, which needs git to give each side whole.
+fn decide_removals(
+    manifests: &Manifests<'_>,
+    locks: &Locks,
+    merged: &Manifest,
+    choices: &Choices,
+    decided: &mut Decided,
+) -> Result<(), Error> {
+    let names: BTreeSet<&str> = locks
+        .ours
+        .iter()
+        .chain(&locks.theirs)
+        .map(Parsed::name)
+        .collect();
+    for name in names {
+        if merged.datasets.contains_key(name) || decided.conflicts.contains_key(name) {
+            continue;
+        }
+        let (ours, theirs) = (find(&locks.ours, name), find(&locks.theirs, name));
+        let verdict = match decide(ours, theirs, base_of(locks, name, find), alike) {
+            Ok(Take::Same) => continue,
+            Ok(Take::Side(side)) if pick(Take::Side(side), ours, theirs).is_some() => {
+                Err(Why::ChangedAndRemoved)
+            }
+            verdict => verdict,
+        };
+        let Some(take) = decided.settle(name, verdict, choices.get(name).copied()) else {
+            continue;
+        };
+        if let Take::Side(side) = take
+            && pick(take, ours, theirs).is_some()
+            && manifests
+                .whole(side)
+                .is_none_or(|whole| !whole.manifest.datasets.contains_key(name))
+        {
+            return Err(entry_gone(name, side));
+        }
+        decided.records.insert(name.to_owned(), take);
+    }
+    Ok(())
+}
+
+/// the error for a choice of `side` for `name`, whose entry neither the conflict lines nor git
+/// can give back.
+fn entry_gone(name: &str, side: Side) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{name} is not in the merged data.toml, and fetchloom cannot read its entry on {} side",
+            side.whose()
+        ),
+    )
+    .detail("git on PATH gives fetchloom each side of data.toml whole while the merge is under way")
+    .help(format!(
+        "copy [datasets.{name}] from {} side's data.toml into data.toml by hand, then run `fetchloom lock`",
+        side.whose()
+    ))
+}
+
+/// `text`, the merged data.toml, with each dataset a person chose a side for as that side's
+/// branch writes it, whole: a choice keeps one side of a dataset, not lines git merged into it
+/// from the other, nor its removal by the other.
+fn chosen_whole(
+    manifests: &Manifests<'_>,
+    choices: &Choices,
+    decided: &Decided,
+    mut text: String,
+) -> Result<String, Error> {
+    let now = manifest::tables(&text)?;
+    for name in &decided.chosen {
+        let Some(whole) = choices.get(name).and_then(|side| manifests.whole(*side)) else {
+            continue;
+        };
+        text = match (now.get(name), whole.tables.get(name)) {
+            (now, Some(wanted)) if now != Some(wanted) => {
+                manifest::with_dataset_from(&text, whole.text, name)?
+            }
+            (Some(_), None) => manifest::without_dataset(&text, name)?,
+            _ => continue,
+        };
+    }
+    Ok(text)
+}
+
+/// refuses a merged data.toml that does not hold a chosen side's entry as that side's branch
+/// writes it, as [`check_merged`] refuses one that does not say what the merge decided.
+fn check_chosen(
+    manifests: &Manifests<'_>,
+    merged: &Manifest,
+    choices: &Choices,
+    decided: &Decided,
+) -> Result<(), Error> {
+    for name in &decided.chosen {
+        let Some(whole) = choices.get(name).and_then(|side| manifests.whole(*side)) else {
+            continue;
+        };
+        let agrees = match (whole.manifest.datasets.get(name), merged.datasets.get(name)) {
+            (None, None) => true,
+            (Some(expected), Some(wrote)) => values(expected) == values(wrote),
+            _ => false,
+        };
+        if !agrees {
+            return Err(unmergeable());
+        }
+    }
+    Ok(())
+}
+
+/// `records` with the pin of each dataset a person chose a side for as that side has it, when
+/// it answers the dataset's entry in `merged`.
+fn chosen_records(
+    records: &mut Vec<Parsed>,
+    locks: &Locks,
+    merged: &Manifest,
+    choices: &Choices,
+    decided: &Decided,
+) {
+    for name in &decided.chosen {
+        let Some(side) = choices.get(name) else {
+            continue;
+        };
+        let pins = locks.of(*side);
+        let pin = merged
+            .datasets
+            .get(name)
+            .and_then(|entry| match entry.source() {
+                Some(source) => answering(pins, name, &spec(source)),
+                None => result(pins, name),
+            });
+        records.retain(|record| record.name() != name);
+        records.extend(pin.cloned());
+    }
+    records.sort_by(|a, b| a.name().cmp(b.name()));
+}
+
+/// the merged data.lock of `records`, the pins a merge keeps, with each list read below `root`.
+/// a pin that does not read stops the merge with how to put back the side it came from, never
+/// with advice to pin anew.
+fn kept(
+    records: Vec<Parsed>,
+    locks: &Locks,
+    decided: &Decided,
+    root: &Path,
+) -> Result<Lock, Error> {
+    let mut lock = Lock::default();
+    for record in records {
+        let name = record.name().to_owned();
+        let side = match decided.records.get(&name) {
+            Some(Take::Side(side)) => *side,
+            _ => Side::Ours,
+        };
+        let read = resolve(vec![record], Some(root)).map_err(|error| {
+            let broken = [super::BROKEN, super::lists::BROKEN];
+            if error
+                .help
+                .as_deref()
+                .is_some_and(|help| broken.contains(&help))
+            {
+                unreadable_pin(&name, side, locks.whole, &error)
+            } else {
+                error
+            }
+        })?;
+        lock.datasets.extend(read.datasets);
+        lock.derived.extend(read.derived);
+    }
+    Ok(lock)
+}
+
+/// the error for `name`'s pin on `side`, which did not read whole as `error` says. `whole` says
+/// the side came whole from git rather than from the conflict lines.
+fn unreadable_pin(name: &str, side: Side, whole: bool, error: &Error) -> Error {
+    let mut unread = Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{name} on {} side of data.lock cannot be read whole",
+            side.whose()
+        ),
+    )
+    .detail(error.message.clone());
+    for detail in &error.details {
+        unread = unread.detail(detail.clone());
+    }
+    if !whole {
+        unread = unread.detail(
+            "this side comes from git's conflict lines, which can hold lines git merged from the other side; with git on PATH, fetchloom reads each side whole",
+        );
+    }
+    unread.help(format!(
+        "copy the whole [[dataset]] table of {name} from {} side's data.lock, and the files of data.lock.d it names, by hand, then run `fetchloom lock`",
+        side.whose()
+    ))
 }
 
 /// the version `take` keeps, of `ours` and `theirs`.
@@ -736,9 +1011,9 @@ fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) 
         .any(|why| matches!(why, Why::NoBase | Why::OneSided(_)))
     {
         error = error.detail(if shown {
-            "no merge base fetchloom can read was found: git 2.45 or later lets fetchloom see what each side changed"
+            "no merge base fetchloom can read was found: git on PATH, before `git add` marks the files resolved, lets fetchloom see what each side changed"
         } else {
-            "no merge base was found: git 2.45 or later, or `git config merge.conflictStyle zdiff3` before merging, lets fetchloom see what each side changed"
+            "no merge base was found: git on PATH, before `git add` marks the files resolved, or `git config merge.conflictStyle zdiff3` before merging or rebasing, lets fetchloom see what each side changed"
         });
     }
     let error = error.help(

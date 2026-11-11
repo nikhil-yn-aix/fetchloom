@@ -1,7 +1,6 @@
 //! `fetchloom lock` in a project where a git merge left both sides in data.toml or data.lock:
-//! both merged a dataset at a time, with the merge base from git's conflict lines, else from
-//! git's index, else from the conflict lines read around what zdiff3 moved out of them, and
-//! nothing resolved or downloaded.
+//! both merged a dataset at a time, each side whole from git where it can tell, else from the
+//! conflict lines, and nothing resolved or downloaded.
 
 use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
@@ -131,43 +130,63 @@ fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
     }))
 }
 
-/// the sides of data.toml and of data.lock, each with its merge base: the one its conflict lines
-/// show when it reads, else git's index's, which is exact, else the one read around the lines
-/// zdiff3 moved out of the conflicts. a file without conflict lines is the same on both sides.
+/// the sides of data.toml and of data.lock. data.lock's come whole from git's index when git gives
+/// them, base and all, so no pin mixes lines of both sides; else from its conflict lines. data.toml
+/// keeps the sides its conflict lines give, which hold what git merged by itself and edits made
+/// since, with git's whole sides beside them for a choice to take an entry from. its base is the
+/// one its conflict lines show when it reads, else git's index's, else the one read around the
+/// lines zdiff3 moved out of the conflicts. a file without conflict lines is the same on both
+/// sides, data.toml with whole sides from the commits being merged.
 fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
     let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
-    let based = |sides: Option<&Sides>, file: &str, text: &str| match sides {
+    let git = program.as_deref();
+    let root = &project.root;
+    let reads = |file: &'static str| move |base: &String| merge::reads(file, base);
+    let manifest = match &conflicted.manifest_sides {
         Some(sides) => {
+            let stages = git.and_then(|git| git::stages(git, root, manifest::FILE));
             let mut sides = sides.clone();
-            if !sides
-                .base
-                .as_deref()
-                .is_some_and(|base| merge::reads(file, base))
-            {
-                let trimmed = sides.trimmed.take().filter(|base| merge::reads(file, base));
-                sides.base = program
-                    .as_deref()
-                    .and_then(|program| git::base(program, &project.root, file))
+            if !sides.base.as_ref().is_some_and(reads(manifest::FILE)) {
+                let trimmed = sides.trimmed.take().filter(reads(manifest::FILE));
+                sides.base = stages
+                    .as_ref()
+                    .and_then(|stages| stages.base.clone())
+                    .filter(reads(manifest::FILE))
                     .or(trimmed);
             }
+            sides.whole = stages.map(|stages| [stages.ours, stages.theirs]);
             sides
         }
-        None => Sides {
-            ours: text.to_owned(),
-            theirs: text.to_owned(),
-            ..Sides::default()
-        },
+        None => same(
+            &conflicted.manifest,
+            git.and_then(|git| git::committed(git, root, manifest::FILE)),
+        ),
     };
-    let manifest = based(
-        conflicted.manifest_sides.as_ref(),
-        manifest::FILE,
-        &conflicted.manifest,
-    );
-    let lock = conflicted
-        .lock
-        .as_deref()
-        .map(|text| based(conflicted.lock_sides.as_ref(), lock::FILE, text));
+    let lock = conflicted.lock.as_deref().map(|text| {
+        let Some(sides) = &conflicted.lock_sides else {
+            return same(text, None);
+        };
+        let mut sides = sides.clone();
+        if let Some(stages) = git.and_then(|git| git::stages(git, root, lock::FILE)) {
+            sides.base = stages.base.filter(reads(lock::FILE));
+            sides.whole = Some([stages.ours, stages.theirs]);
+        } else if !sides.base.as_ref().is_some_and(reads(lock::FILE)) {
+            sides.base = sides.trimmed.take().filter(reads(lock::FILE));
+        }
+        sides
+    });
     (manifest, lock)
+}
+
+/// a file without conflict lines, the same on both sides, with each side whole as `whole` gives
+/// it.
+fn same(text: &str, whole: Option<[String; 2]>) -> Sides {
+    Sides {
+        ours: text.to_owned(),
+        theirs: text.to_owned(),
+        whole,
+        ..Sides::default()
+    }
 }
 
 /// `error` with the project beside what the merge found, so `--json` names both.

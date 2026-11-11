@@ -21,6 +21,10 @@ pub(crate) struct Sides {
     pub(crate) trimmed: Option<String>,
     /// whether every conflict showed git's merge base, as the diff3 and zdiff3 styles do.
     pub(crate) shows_base: bool,
+    /// each side's file whole, ours then theirs, as git holds it for the merge, rebase,
+    /// cherry-pick or revert: lines git merged by itself belong to the side that wrote them, not
+    /// to both, as they do in `ours` and `theirs`. none when git cannot tell.
+    pub(crate) whole: Option<[String; 2]>,
 }
 
 /// a stretch of a file with conflict lines, as the base sees it: lines outside every conflict, or

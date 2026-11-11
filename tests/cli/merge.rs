@@ -61,14 +61,6 @@ pub(crate) fn ok(sandbox: &Sandbox, args: &[&str]) -> Result<Option<()>> {
     Ok(Some(()))
 }
 
-/// whether the git here reads a merge base for fetchloom: 2.45 or later.
-fn reads_bases(sandbox: &Sandbox) -> Result<bool> {
-    Ok(
-        git(sandbox, &sandbox.work(), &["--no-lazy-fetch", "version"])?
-            .is_some_and(|output| output.status.success()),
-    )
-}
-
 /// fetchloom in the work folder, where git was given no settings of the machine's.
 fn run(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
     let mut command = sandbox.command(args);
@@ -208,8 +200,9 @@ fn lock_merges_independent_additions_offline() -> Result {
     Ok(())
 }
 
-/// git's usual conflict lines show no merge base. git 2.45 and later give fetchloom the base
-/// from its index; with an older git each dataset only one side has needs a choice.
+/// git's usual conflict lines show no merge base. git gives fetchloom the base from its index,
+/// whatever its version, so the two additions merge by themselves. where fetchloom finds no git,
+/// each dataset only one side has needs a choice, which gives the same data.lock.
 #[test]
 fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     let sandbox = Sandbox::new()?;
@@ -218,29 +211,43 @@ fn lock_reads_the_merge_base_from_git_or_asks_for_choices() -> Result {
     if two_additions(&sandbox, &routes, "merge")?.is_none() {
         return Ok(());
     }
-    if reads_bases(&sandbox)? {
-        succeeded(&run(&sandbox, &["lock"])?)?;
-    } else {
-        let output = run(&sandbox, &["--json", "lock"])?;
-        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-        let error = &json(&output)?["errors"][0];
-        assert_eq!(error["kind"], "unconfirmed");
-        assert!(
-            error["details"][2]
-                .as_str()
-                .is_some_and(|detail| detail.starts_with("no merge base was found")),
-            "{error}"
-        );
-        succeeded(&run(
-            &sandbox,
-            &["lock", "--ours", "alpha", "--theirs", "beta"],
-        )?)?;
-    }
-    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let conflicted = metadata(&sandbox)?;
+    let nowhere = sandbox.folder("no-git")?;
+    let without_git = |args: &[&str]| -> Result<Output> {
+        let mut command = sandbox.command(args);
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("GIT_") {
+                command.env_remove(name);
+            }
+        }
+        Ok(command.env("PATH", &nowhere).output()?)
+    };
+    let output = without_git(&["--json", "lock"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert!(
+        error["details"][2]
+            .as_str()
+            .is_some_and(|detail| detail.starts_with("no merge base was found")),
+        "{error}"
+    );
+    assert_eq!(metadata(&sandbox)?, conflicted, "nothing is written");
+    succeeded(&without_git(&[
+        "lock", "--ours", "alpha", "--theirs", "beta",
+    ])?)?;
+    let chosen = metadata(&sandbox)?;
     for name in ["alpha", "beta", "core"] {
-        assert!(lock.contains(&format!("name = \"{name}\"")), "{lock}");
+        assert!(
+            chosen.1.contains(&format!("name = \"{name}\"")),
+            "{}",
+            chosen.1
+        );
     }
-    assert!(!lock.contains("<<<<<<<"), "{lock}");
+    abandon(&sandbox)?;
+    stopped(&sandbox, &["merge", "-q", "theirs"])?;
+    succeeded(&run(&sandbox, &["lock"])?)?;
+    assert_eq!(metadata(&sandbox)?, chosen);
     Ok(())
 }
 
@@ -445,5 +452,388 @@ fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
     succeeded(&run(&sandbox, &["lock", "--theirs", "labels"])?)?;
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
     assert!(lock.contains(&sha256(b"wolf")), "{lock}");
+    Ok(())
+}
+
+/// runs `fetchloom build` in the work folder, with the step program recipes run on PATH and git
+/// given no settings of the machine's.
+fn building(sandbox: &Sandbox, args: &[&str]) -> Result<Output> {
+    let mut command = crate::build::building_in(sandbox, &sandbox.work(), args)?;
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    Ok(command.output()?)
+}
+
+/// a git merge or rebase in the work folder, as `args` asks, which must stop at a conflict.
+fn stopped(sandbox: &Sandbox, args: &[&str]) -> Result {
+    let output = git(sandbox, &sandbox.work(), args)?.ok_or("git went away")?;
+    assert!(!output.status.success(), "{args:?} finished by itself");
+    Ok(())
+}
+
+/// gives up the merge or rebase in the work folder, leaving the branch as it was committed.
+fn abandon(sandbox: &Sandbox) -> Result {
+    for args in [["merge", "--abort"], ["rebase", "--abort"]] {
+        // only one of them is under way
+        git(sandbox, &sandbox.work(), &args)?;
+    }
+    ok(sandbox, &["reset", "-q", "--hard"])?;
+    ok(sandbox, &["clean", "-qfd", "--", "data.lock.d"])?;
+    Ok(())
+}
+
+/// what `git show` prints for `what`, such as `main:data.lock`.
+fn shown(sandbox: &Sandbox, what: &str) -> Result<String> {
+    let output = git(sandbox, &sandbox.work(), &["show", what])?.ok_or("git went away")?;
+    assert!(output.status.success(), "{what}: {}", text(&output.stderr)?);
+    text(&output.stdout)
+}
+
+/// data.toml and data.lock in the work folder.
+fn metadata(sandbox: &Sandbox) -> Result<(String, String)> {
+    Ok((
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        fs::read_to_string(sandbox.work().join("data.lock"))?,
+    ))
+}
+
+/// branch kept changes only the pin of `name`, as `change` does, while branch removed removes
+/// it: git merges data.toml by itself, taking the removal, and stops in data.lock alone. for each
+/// way of meeting the two, `fetchloom lock` must ask, then write the side a person names: the
+/// kept side's entry, as its branch writes it, with its pin, or neither. none without git.
+fn removal_meets_a_new_pin(
+    sandbox: &Sandbox,
+    name: &str,
+    change: impl Fn() -> Result,
+    meetings: &[(&str, &[&str], &str)],
+) -> Result<Option<()>> {
+    if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
+        return Ok(None);
+    }
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "base"])?;
+    ok(sandbox, &["checkout", "-qb", "removed"])?;
+    succeeded(&run(sandbox, &["remove", name])?)?;
+    ok(sandbox, &["commit", "-qam", "remove it"])?;
+    ok(sandbox, &["checkout", "-qb", "kept", "main"])?;
+    change()?;
+    ok(sandbox, &["commit", "-qam", "pin other files for it"])?;
+    let kept = (
+        shown(sandbox, "kept:data.toml")?,
+        shown(sandbox, "kept:data.lock")?,
+    );
+    let removed = (
+        shown(sandbox, "removed:data.toml")?,
+        shown(sandbox, "removed:data.lock")?,
+    );
+    for (on, meeting, kept_side) in meetings {
+        let removal_side = if *kept_side == "ours" {
+            "theirs"
+        } else {
+            "ours"
+        };
+        ok(sandbox, &["checkout", "-q", on])?;
+        stopped(sandbox, meeting)?;
+        let conflicted = metadata(sandbox)?;
+        assert!(
+            !conflicted.0.contains("<<<<<<<"),
+            "{meeting:?}: {}",
+            conflicted.0
+        );
+        assert!(
+            conflicted.1.contains("<<<<<<<"),
+            "{meeting:?}: {}",
+            conflicted.1
+        );
+
+        let asked = run(sandbox, &["--json", "lock"])?;
+        assert_eq!(
+            asked.status.code(),
+            Some(1),
+            "{meeting:?}: {}",
+            text(&asked.stderr)?
+        );
+        let document = json(&asked)?;
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "unconfirmed", "{meeting:?}: {error}");
+        assert_eq!(
+            error["details"],
+            serde_json::json!([format!(
+                "{name}: one side changed it and the other removed it"
+            )]),
+            "{meeting:?}"
+        );
+        assert_eq!(error["fix"], serde_json::Value::Null, "only a person picks");
+        let merge = &document["result"]["merge"];
+        assert_eq!(merge["conflicts"], serde_json::json!([name]), "{meeting:?}");
+        assert_eq!(merge["same"], serde_json::json!(["kappa"]), "{meeting:?}");
+        for array in ["from_ours", "from_theirs", "removed", "unpinned"] {
+            assert_eq!(merge[array], serde_json::json!([]), "{meeting:?} {array}");
+        }
+        assert_eq!(
+            metadata(sandbox)?,
+            conflicted,
+            "{meeting:?}: nothing is written"
+        );
+
+        let chosen = run(
+            sandbox,
+            &["--json", "lock", &format!("--{kept_side}"), name],
+        )?;
+        succeeded(&chosen)?;
+        let merge = &json(&chosen)?["result"]["merge"];
+        assert_eq!(
+            merge[format!("from_{kept_side}")],
+            serde_json::json!([name])
+        );
+        assert_eq!(merge["removed"], serde_json::json!([]), "{meeting:?}");
+        assert_eq!(
+            metadata(sandbox)?,
+            kept,
+            "{meeting:?}: the kept side's entry, all of it, and its pin"
+        );
+        succeeded(&run(sandbox, &["lock", "--check"])?)?;
+        abandon(sandbox)?;
+
+        stopped(sandbox, meeting)?;
+        let chosen = run(
+            sandbox,
+            &["--json", "lock", &format!("--{removal_side}"), name],
+        )?;
+        succeeded(&chosen)?;
+        let merge = &json(&chosen)?["result"]["merge"];
+        assert_eq!(merge["removed"], serde_json::json!([name]), "{meeting:?}");
+        assert_eq!(metadata(sandbox)?, removed, "{meeting:?}");
+        abandon(sandbox)?;
+    }
+    Ok(Some(()))
+}
+
+/// j3's merge of a removal and a re-import: one branch removes labels, the other pins other files
+/// for it the way add's docs say, with remove and add, which writes its entry in data.toml as it
+/// was. the other branch's new pin must not vanish without a choice, whichever branch is
+/// checked out, in a rebase too, where the branch replayed is theirs.
+#[test]
+fn lock_asks_before_a_removal_drops_a_reimported_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (folder, bytes) in [("base", "base"), ("cats", "cat"), ("wolves", "wolf")] {
+        fs::write(sandbox.folder(folder)?.join("l.txt"), bytes)?;
+    }
+    let add = |folder: &str, name: &str| -> Result {
+        succeeded(&run(
+            &sandbox,
+            &["add", &format!("../{folder}"), "--as", name],
+        )?)
+    };
+    add("base", "kappa")?;
+    add("cats", "labels")?;
+    let reimport = || -> Result {
+        succeeded(&run(&sandbox, &["remove", "labels"])?)?;
+        add("wolves", "labels")
+    };
+    let zdiff3 = ["-c", "merge.conflictStyle=zdiff3", "merge", "-q", "kept"];
+    let meetings: [(&str, &[&str], &str); 3] = [
+        ("removed", &zdiff3, "theirs"),
+        ("kept", &["merge", "-q", "removed"], "ours"),
+        ("kept", &["rebase", "-q", "removed"], "theirs"),
+    ];
+    if removal_meets_a_new_pin(&sandbox, "labels", reimport, &meetings)?.is_none() {
+        return Ok(());
+    }
+    // the bytes the kept pin names are the ones a sync places
+    ok(&sandbox, &["checkout", "-q", "removed"])?;
+    stopped(&sandbox, &zdiff3)?;
+    succeeded(&run(&sandbox, &["lock", "--theirs", "labels"])?)?;
+    succeeded(&run(&sandbox, &["--offline", "sync"])?)?;
+    assert_eq!(fs::read(sandbox.work().join("data/labels/l.txt"))?, b"wolf");
+    Ok(())
+}
+
+/// j3's merge of a removal and an upgrade: one branch removes series, the other pins what its
+/// link serves now. its entry holds more than the link, a note and the folder its files go to,
+/// and the kept side brings all of it back, without asking the server.
+#[test]
+fn lock_asks_before_a_removal_drops_an_upgraded_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/u.csv",
+        vec![file(b"v1\n", "\"1\""), file(b"v2 changed\n", "\"2\"")],
+    )?;
+    sandbox.allow(&server.url);
+    fs::write(sandbox.folder("base")?.join("k.csv"), "k")?;
+    succeeded(&run(&sandbox, &["add", "../base", "--as", "kappa"])?)?;
+    succeeded(&run(&sandbox, &["add", &server.url, "--as", "series"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?.replace(
+        "[datasets.series]\n",
+        "# the series the paper reads\n[datasets.series]\n",
+    );
+    fs::write(&manifest, format!("{text}path = \"tables\"\n"))?;
+    let upgrade = || succeeded(&run(&sandbox, &["lock", "--upgrade", "series"])?);
+    let diff3 = ["-c", "merge.conflictStyle=diff3", "merge", "-q", "removed"];
+    let meetings: [(&str, &[&str], &str); 2] = [
+        ("removed", &["merge", "-q", "kept"], "theirs"),
+        ("kept", &diff3, "ours"),
+    ];
+    let pinned = server.requests().len();
+    if removal_meets_a_new_pin(&sandbox, "series", upgrade, &meetings)?.is_none() {
+        return Ok(());
+    }
+    assert_eq!(
+        server.requests().len(),
+        pinned + 1,
+        "only the upgrade asks the server"
+    );
+    Ok(())
+}
+
+/// a project pinning in.txt from `server` as a-src and making b-mk from it with a recipe, built
+/// and committed on main. branch b upgrades a-src to what the server serves next and builds b-mk
+/// again; branch a starts from main. none without git.
+fn rebuilt_on_b(sandbox: &Sandbox, server: &Server) -> Result<Option<()>> {
+    if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
+        return Ok(None);
+    }
+    succeeded(&run(sandbox, &["add", &server.url, "--as", "a-src"])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{text}\n[datasets.b-mk]\nfrom = [\"a-src\"]\nrun = [\"recipe-step\", \"copy\", \"{{a-src}}\", \"{{out}}\"]\n"
+        ),
+    )?;
+    succeeded(&building(sandbox, &["build"])?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(sandbox, &["commit", "-qm", "recipe"])?;
+    ok(sandbox, &["checkout", "-qb", "b"])?;
+    succeeded(&run(sandbox, &["lock", "--upgrade", "a-src"])?)?;
+    succeeded(&building(sandbox, &["build"])?)?;
+    ok(sandbox, &["add", "."])?;
+    ok(
+        sandbox,
+        &["commit", "-qm", "upgrade a-src and build b-mk again"],
+    )?;
+    ok(sandbox, &["checkout", "-qb", "a", "main"])?;
+    Ok(Some(()))
+}
+
+fn upstream() -> Result<Server> {
+    Server::start(
+        "/in.txt",
+        vec![
+            file(b"one\n", "\"1\""),
+            file(b"one, changed upstream\n", "\"2\""),
+        ],
+    )
+}
+
+/// wft's merge: branch b builds b-mk again from an upgraded input while branch a adds c-new,
+/// which data.lock holds right after b-mk. git merges some of the lines of b-mk's entry by itself
+/// and stops at the others, so the conflict lines hold neither side's entry whole. read whole,
+/// with the base, b-mk changed on b alone, so the merge needs no choice: whichever branch is
+/// checked out, with git's usual conflict lines or zdiff3's, and in a rebase.
+#[test]
+fn lock_merges_a_rebuilt_recipe_beside_a_new_dataset_by_itself() -> Result {
+    let sandbox = Sandbox::new()?;
+    let input = upstream()?;
+    let extra = Server::start("/extra.txt", vec![file(b"extra\n", "\"e\"")])?;
+    sandbox.allow(&input.url);
+    sandbox.allow(&extra.url);
+    if rebuilt_on_b(&sandbox, &input)?.is_none() {
+        return Ok(());
+    }
+    succeeded(&run(&sandbox, &["add", &extra.url, "--as", "c-new"])?)?;
+    ok(&sandbox, &["commit", "-qam", "add c-new"])?;
+    let (a, b) = (
+        shown(&sandbox, "a:data.lock")?,
+        shown(&sandbox, "b:data.lock")?,
+    );
+    let asked = (input.requests().len(), extra.requests().len());
+    let zdiff3 = ["-c", "merge.conflictStyle=zdiff3", "merge", "-q", "a"];
+    let meetings: [(&str, &[&str], &str); 3] = [
+        ("a", &["merge", "-q", "b"], "ours"),
+        ("b", &zdiff3, "theirs"),
+        ("b", &["rebase", "-q", "a"], "ours"),
+    ];
+    for (on, meeting, a_side) in meetings {
+        let b_side = if a_side == "ours" { "theirs" } else { "ours" };
+        ok(&sandbox, &["checkout", "-q", on])?;
+        stopped(&sandbox, meeting)?;
+        let output = run(&sandbox, &["--json", "lock"])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{meeting:?}: {}",
+            text(&output.stderr)?
+        );
+        let merge = &json(&output)?["result"]["merge"];
+        assert_eq!(
+            merge[format!("from_{a_side}")],
+            serde_json::json!(["c-new"])
+        );
+        assert_eq!(
+            merge[format!("from_{b_side}")],
+            serde_json::json!(["a-src", "b-mk"]),
+            "{meeting:?}"
+        );
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        for name in ["a-src", "b-mk"] {
+            assert_eq!(table(&lock, name)?, table(&b, name)?, "{meeting:?}");
+        }
+        assert_eq!(table(&lock, "c-new")?, table(&a, "c-new")?, "{meeting:?}");
+        succeeded(&run(&sandbox, &["lock", "--check"])?)?;
+        abandon(&sandbox)?;
+    }
+    assert_eq!(
+        (input.requests().len(), extra.requests().len()),
+        asked,
+        "a merge asks no server"
+    );
+    Ok(())
+}
+
+/// both branches build b-mk again their own way: a after changing its command, b after
+/// upgrading its input. git merges b's new input into a's side of the conflict lines, which would
+/// pin a's files as made from b's input. each choice takes its side's pin whole, as its branch
+/// committed it, and asks no server.
+#[test]
+fn a_choice_takes_the_whole_pin_its_branch_committed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let input = upstream()?;
+    sandbox.allow(&input.url);
+    if rebuilt_on_b(&sandbox, &input)?.is_none() {
+        return Ok(());
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?.replace(
+        "\"copy\", \"{a-src}\"",
+        "\"write\", \"made.txt\", \"by a\", \"{a-src}\"",
+    );
+    fs::write(&manifest, text)?;
+    succeeded(&building(&sandbox, &["build"])?)?;
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "make b-mk another way"])?;
+    let asked = input.requests().len();
+    for (side, branch) in [("ours", "a"), ("theirs", "b")] {
+        stopped(&sandbox, &["merge", "-q", "b"])?;
+        let output = run(&sandbox, &["--json", "lock", &format!("--{side}"), "b-mk"])?;
+        succeeded(&output)?;
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        assert_eq!(
+            table(&lock, "b-mk")?,
+            table(&shown(&sandbox, &format!("{branch}:data.lock"))?, "b-mk")?,
+            "--{side}"
+        );
+        assert_eq!(
+            table(&lock, "a-src")?,
+            table(&shown(&sandbox, "b:data.lock")?, "a-src")?
+        );
+        abandon(&sandbox)?;
+    }
+    assert_eq!(input.requests().len(), asked, "a merge asks no server");
     Ok(())
 }

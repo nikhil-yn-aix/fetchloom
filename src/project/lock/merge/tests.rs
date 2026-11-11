@@ -154,7 +154,7 @@ fn a_removal_survives_with_a_base() {
 }
 
 /// a base git's conflict lines showed but fetchloom could not read leaves the conflict style
-/// alone: the style that shows a base is in use already, so the help names only git 2.45.
+/// alone: the style that shows a base is in use already, so the help names only git.
 #[test]
 fn a_base_shown_but_unread_names_no_conflict_style() {
     let (mut manifest, mut locks) = two_additions(false);
@@ -163,7 +163,7 @@ fn a_base_shown_but_unread_names_no_conflict_style() {
     let error = merged(&manifest, &locks, &[]).unwrap_err();
     assert_eq!(
         error.details[2],
-        "no merge base fetchloom can read was found: git 2.45 or later lets fetchloom see what each side changed"
+        "no merge base fetchloom can read was found: git on PATH, before `git add` marks the files resolved, lets fetchloom see what each side changed"
     );
 }
 
@@ -441,11 +441,26 @@ fn recipe_results_merge_by_name() {
     let both = sides(with_result.render(), rebuilt.render(), None);
     let error = merge(&manifest, Some(&both), &choices, root.path()).unwrap_err();
     assert_eq!(error.message, "the merge needs a choice for clean");
-    // a result goes with its recipe, as a fetched dataset's pin goes with its entry
+    // a result goes with its recipe, as a fetched dataset's pin goes with its entry, unless the
+    // other side built it anew: then removing the recipe waits for a choice
     let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
-    let merged = merge(&dropped, Some(&added), &choices, root.path()).unwrap();
+    let error = merge(&dropped, Some(&added), &choices, root.path()).unwrap_err();
+    assert_eq!(
+        error.details,
+        ["clean: one side changed it and the other removed it"]
+    );
+    let removal = Choices::from([("clean".to_owned(), Side::Theirs)]);
+    let merged = merge(&dropped, Some(&added), &removal, root.path()).unwrap();
     assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
     assert_eq!(merged.lock.unwrap().derived, []);
+    let built_before = sides(
+        with_result.render(),
+        lock(vec![core.clone()]),
+        Some(with_result.render()),
+    );
+    let merged = merge(&dropped, Some(&built_before), &choices, root.path()).unwrap();
+    assert_eq!(merged.lock.unwrap().derived, []);
+    assert_eq!(merged.summary.removed, ["clean"]);
 }
 
 /// each side's recipes read, yet the merge of them does not: a person merges data.toml, told
@@ -543,4 +558,138 @@ fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
             "kept datasets.a as our side writes it in data.toml; their side differs only in comments or spacing"
         ]
     );
+}
+
+/// one side removed beta, entry and pin, while the other pinned other files for it and left its
+/// entry as it was, so git merged data.toml by itself, without beta. the new pin is not dropped
+/// unasked. a choice of the side that pinned it takes back that side's entry whole, note and
+/// folder too, which needs each side whole from git; a choice of the other side removes it. a pin
+/// the other side left as it was goes with the removal.
+#[test]
+fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
+    let core = toml(&[("core", "zenodo:3")]);
+    let kept_toml = format!(
+        "# what the labels are\n[datasets.beta]\nref = \"zenodo:2\"\npath = \"tags\"\n\n{core}"
+    );
+    let manifest = sides(core.clone(), core.clone(), None);
+    let core_pin = pin("core", "zenodo:3", b"core");
+    let beta = |bytes: &[u8]| pin("beta", "zenodo:2", bytes);
+    let locks = sides(
+        lock(vec![core_pin.clone()]),
+        lock(vec![beta(b"new"), core_pin.clone()]),
+        Some(lock(vec![beta(b"old"), core_pin.clone()])),
+    );
+    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    assert_eq!(error.kind, Kind::Unconfirmed);
+    assert_eq!(
+        error.details,
+        ["beta: one side changed it and the other removed it"]
+    );
+    let result = error.result.unwrap();
+    assert_eq!(result["merge"]["conflicts"], serde_json::json!(["beta"]));
+    assert_eq!(result["merge"]["same"], serde_json::json!(["core"]));
+    assert_eq!(result["merge"]["removed"], serde_json::json!([]));
+
+    let removed = merged(&manifest, &locks, &[("beta", Side::Ours)]).unwrap();
+    assert_eq!(removed.manifest, core);
+    assert_eq!(names(&removed.lock.unwrap()), ["core"]);
+    assert_eq!(removed.summary.removed, ["beta"]);
+
+    let without_git = merged(&manifest, &locks, &[("beta", Side::Theirs)]).unwrap_err();
+    assert_eq!(without_git.kind, Kind::ProjectInvalid);
+    assert_eq!(
+        without_git.help.as_deref(),
+        Some(
+            "copy [datasets.beta] from their side's data.toml into data.toml by hand, then run `fetchloom lock`"
+        )
+    );
+    let whole = Sides {
+        whole: Some([core.clone(), kept_toml.clone()]),
+        ..manifest.clone()
+    };
+    let kept = merged(&whole, &locks, &[("beta", Side::Theirs)]).unwrap();
+    assert_eq!(
+        manifest::tables(&kept.manifest).unwrap(),
+        manifest::tables(&kept_toml).unwrap()
+    );
+    assert_eq!(
+        kept.lock.unwrap().datasets,
+        [beta(b"new"), core_pin.clone()]
+    );
+    assert_eq!(kept.summary.from_theirs, ["beta"]);
+
+    let unknown = sides(locks.ours.clone(), locks.theirs.clone(), None);
+    assert_eq!(
+        merged(&manifest, &unknown, &[]).unwrap_err().details[0],
+        "beta: only theirs has it, and fetchloom cannot tell whether theirs added it or ours removed it"
+    );
+    let untouched = sides(
+        lock(vec![core_pin.clone()]),
+        lock(vec![beta(b"old"), core_pin.clone()]),
+        Some(lock(vec![beta(b"old"), core_pin])),
+    );
+    let gone = merged(&manifest, &untouched, &[]).unwrap();
+    assert_eq!(names(&gone.lock.unwrap()), ["core"]);
+    assert_eq!(gone.summary.removed, ["beta"]);
+}
+
+/// git merged their new list's name into our side of data.lock's conflict lines, beside our
+/// list's hash, and took our list's part away. read from those lines, our pin of photos is no pin
+/// either side made: the merge stops and says how to put ours back by hand, with no command to
+/// run as it is. with each side whole from git, our pin is the one we made.
+#[test]
+fn a_pin_mixed_from_both_sides_is_never_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let mut photos = pin("photos", "zenodo:7", b"one");
+    photos.files.push(LockedFile {
+        path: "photos2.csv".to_owned(),
+        ..photos.files[0].clone()
+    });
+    let mut upgraded = photos.clone();
+    upgraded.files[1].size = 2;
+    let listed = |datasets: Vec<Locked>| Lock {
+        datasets,
+        ..Lock::default()
+    };
+    let (ours, theirs) = (listed(vec![photos.clone()]), listed(vec![upgraded]));
+    fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+    let write = |lock: &Lock| {
+        for (part, text) in lock.lists_with(1) {
+            fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+        }
+    };
+    write(&theirs);
+    let (ours_text, theirs_text) = (ours.render_with(1), theirs.render_with(1));
+    let files_in = |text: &str| {
+        text.lines()
+            .find(|line| line.starts_with("files_in"))
+            .unwrap()
+            .to_owned()
+    };
+    let mixed = ours_text.replace(&files_in(&ours_text), &files_in(&theirs_text));
+    let text = toml(&[("photos", "zenodo:7")]);
+    let manifest = sides(text.clone(), text, None);
+    let locks = sides(mixed, theirs_text.clone(), None);
+    let choices = Choices::from([("photos".to_owned(), Side::Ours)]);
+    let error = merge(&manifest, Some(&locks), &choices, root.path()).unwrap_err();
+    assert_eq!(error.kind, Kind::ProjectInvalid);
+    assert_eq!(
+        error.message,
+        "photos on our side of data.lock cannot be read whole"
+    );
+    assert!(
+        error
+            .help
+            .as_deref()
+            .is_some_and(|help| help.ends_with("by hand, then run `fetchloom lock`")),
+        "{error:?}"
+    );
+
+    write(&ours);
+    let whole = Sides {
+        whole: Some([ours_text, theirs_text]),
+        ..locks
+    };
+    let kept = merge(&manifest, Some(&whole), &choices, root.path()).unwrap();
+    assert_eq!(kept.lock.unwrap().datasets, [photos]);
 }
