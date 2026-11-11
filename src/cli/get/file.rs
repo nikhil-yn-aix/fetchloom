@@ -13,7 +13,8 @@ use super::super::Context;
 use super::super::args::Get;
 use super::super::fetch;
 use super::{
-    Done, Got, Written, approve, folder_for, matches_sha256, one_file, selected, tell_fetched, vet,
+    Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, selected,
+    tell_fetched, vet,
 };
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -178,7 +179,8 @@ pub(super) async fn one(
     listing: &Listing,
 ) -> Result<(PathBuf, Done), Error> {
     let remote = only(selected(args, parsed, listing)?, parsed, listing)?;
-    if let Some(expected) = args.sha256 {
+    let expected = args.sha256.map(Expected::flag);
+    if let Some(expected) = &expected {
         one_file(std::slice::from_ref(&remote), expected, parsed)?;
     }
     let shown = path.display().to_string();
@@ -191,7 +193,9 @@ pub(super) async fn one(
         return Ok(kept);
     }
     let fetched = download(context, net, cache, &remote).await?;
-    matches_sha256(&remote.path, &fetched.digest, args.sha256)?;
+    if let Some(expected) = &expected {
+        matches_sha256(&remote.path, &fetched.digest, expected)?;
+    }
     refuse_zipped(cache, &remote, &fetched.digest)?;
     settle(context, cache, &remote, &fetched, args.force, &destination)
 }

@@ -20,7 +20,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json`: its files land straight in `data/`. datasets may share a folder unless two of their files land on one path, which exits 50 with `project.invalid` naming both |
 | download once, no project files | `fetchloom get <ref> --dir <folder> --json` |
 | one file at a path the user chose | `fetchloom get <url> -o <file> --json`; `result.file` is its absolute path. it needs one link to one file, else exit 2 naming `--dir` |
-| several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json` |
+| several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json`; a SHA-256 after a link on its line checks its one file |
 | words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates`. `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
 | restore a cloned project from a mirror of pinned files: a lab disk, a usb drive or a web server, as when a source is gone | `fetchloom sync --locked --mirror <folder or url> --json`; files not on the [mirror](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/mirrors.md) come from their sources, and a folder mirror works with `--offline` |
 | check data/ against the lock | `fetchloom status --json` |

@@ -18,7 +18,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [status](docs/user/commands/status.md): local differences and success-with-differences behavior
 - [path](docs/user/commands/path.md): absolute paths, an implicit sync of that dataset alone, `--locked` and the `result.path` JSON answer
 - [remove](docs/user/commands/remove.md): remove entries and unchanged managed files
-- [get](docs/user/commands/get.md): one-off downloads into a folder or, with `-o`, one checked file at a path that is never replaced without `--force`; batch folders, cancellable link lists and output-folder link rules
+- [get](docs/user/commands/get.md): one-off downloads into a folder or, with `-o`, one checked file at a path that is never replaced without `--force`; batch folders, cancellable link lists with an optional SHA-256 a line and output-folder link rules
 - [cache](docs/user/commands/cache.md): inspection, exclusively locked garbage collection and verification; filesystem failures retain their causes
 - [settings](docs/user/commands/settings.md): each setting's value and origin: variable, settings file, machine or default
 - [auth](docs/user/commands/auth.md): signing in once, with keys shared with each source's own tools

@@ -1203,6 +1203,37 @@ fn an_input_file_lists_links_and_skips_blank_lines_and_comments() -> Result {
 }
 
 #[test]
+fn get_reads_an_optional_sha256_per_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (iris, wine) = two_files()?;
+    sandbox.allow(&iris.url);
+    sandbox.allow(&wine.url);
+    let wrong = "0".repeat(64);
+    fs::write(
+        sandbox.work().join("links.txt"),
+        format!("{} sha256:{IRIS_SHA256}\n{} {wrong}\n", iris.url, wine.url),
+    )?;
+    let output = sandbox.run(&["--json", "get", "-i", "links.txt", "--dir", "out"])?;
+    assert_eq!(output.status.code(), Some(30), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let items = &document["result"]["items"];
+    assert_eq!(items[0]["status"], "ok", "{items}");
+    assert_eq!(items[1]["status"], "error", "{items}");
+    assert_eq!(items[1]["error"]["kind"], "integrity.mismatch");
+    assert_eq!(
+        items[1]["error"]["message"],
+        "wine.csv does not match the SHA-256 on line 2 of links.txt"
+    );
+    let out = sandbox.work().join("out");
+    assert_eq!(fs::read(out.join("iris").join("iris.csv"))?, IRIS);
+    assert!(
+        !out.join("wine").exists(),
+        "a wrong hash keeps its file out"
+    );
+    Ok(())
+}
+
+#[test]
 fn a_dash_reads_the_links_from_stdin() -> Result {
     let sandbox = Sandbox::new()?;
     let (iris, wine) = two_files()?;

@@ -9,7 +9,6 @@ mod folder;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,7 +22,7 @@ use super::fetch::{self, Job};
 use super::sync as engine;
 use super::sync::place::doubtful;
 use super::sync::unpack::{self as unpacking, Unpack};
-use super::{Context, open_cache};
+use super::{Context, links, open_cache};
 use crate::archive::{self, Packed};
 use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
@@ -36,7 +35,6 @@ use crate::project::lock::LockedFile;
 use crate::project::manifest::{self, Manifest};
 use crate::source::search::is_search;
 use crate::source::{Listing, Parsed, Reference, Remote};
-use crate::stop::Stop;
 use crate::units;
 
 /// what `get` did, as `--json` prints it.
@@ -152,8 +150,8 @@ struct Wanted {
     /// the folder `--dir` names for several links, each in a folder of its own inside it.
     parent: Option<PathBuf>,
     extract: bool,
-    /// the hash `--sha256` asks the one file to have.
-    sha256: Option<Sha256>,
+    /// the hash `--sha256` or the link's line asks the one file to have.
+    expected: Option<Expected>,
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
@@ -166,31 +164,83 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
             "get fetches each link from its source",
         ));
     }
-    let links = links(context, &args).await?;
-    if args.sha256.is_some() && links.len() != 1 {
-        return Err(Error::new(
-            Kind::Usage,
-            format!(
-                "--sha256 checks one file, and this get has {}",
-                units::count(links.len() as u64, "link", "links")
-            ),
-        )
-        .help("run one `fetchloom get --sha256` for each file to check"));
+    let mut asked = links(context, &args).await?;
+    if let Some(sha256) = args.sha256 {
+        let [one] = asked.as_mut_slice() else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "--sha256 checks one file, and this get has {}",
+                    units::count(asked.len() as u64, "link", "links")
+                ),
+            )
+            .help("run one `fetchloom get --sha256` for each file to check"));
+        };
+        if let Some(listed) = &one.expected
+            && listed.sha256 != sha256
+        {
+            return Err(Error::new(
+                Kind::Usage,
+                format!("--sha256 and {} give two SHA-256s", listed.named()),
+            )
+            .help("leave out --sha256, or give the hash the file has"));
+        }
+        one.expected.get_or_insert(Expected::flag(sha256));
     }
     let net = Arc::new(context.net());
-    if let [link] = links.as_slice()
+    if let [one] = asked.as_slice()
         && args.input_file.is_none()
     {
-        return one(context, &net, &args, link.clone()).await;
+        return one_link(context, &net, &args, one.clone()).await;
     }
-    many(context, &net, &args, &links).await
+    many(context, &net, &args, &asked).await
 }
 
-/// the links to fetch: those on the command line, then those `--input-file` lists. several links
-/// download together, so each names what it fetches, and only a link alone may be search words.
-async fn links(context: &Context, args: &Get) -> Result<Vec<String>, Error> {
+/// a link to fetch, and the SHA-256 its one file must have when one was given.
+#[derive(Clone)]
+struct Asked {
+    link: String,
+    expected: Option<Expected>,
+}
+
+/// the SHA-256 a file must have, and where it was given.
+#[derive(Clone)]
+struct Expected {
+    sha256: Sha256,
+    /// the line of a list that gave it, as `line 2 of links.txt`, or none for `--sha256`.
+    line: Option<String>,
+}
+
+impl Expected {
+    /// the hash `--sha256` gives.
+    fn flag(sha256: Sha256) -> Expected {
+        Expected { sha256, line: None }
+    }
+
+    /// how messages name the hash: `--sha256`, or the SHA-256 on a line of a list.
+    fn named(&self) -> String {
+        match &self.line {
+            None => "--sha256".to_owned(),
+            Some(line) => format!("the SHA-256 on {line}"),
+        }
+    }
+
+    /// what to do about bytes other than the hash names.
+    fn help(&self) -> String {
+        let given = match &self.line {
+            None => "the hash given to --sha256".to_owned(),
+            Some(line) => format!("the hash on {line}"),
+        };
+        format!("check {given}, or ask the file's owner which bytes are right")
+    }
+}
+
+/// the links to fetch: those on the command line, then those `--input-file` lists, each with the
+/// SHA-256 its line gives. several links download together, so each names what it fetches, and
+/// only a link alone may be search words.
+async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
     context.stop.check()?;
-    let mut links = args.links.clone();
+    let links = &args.links;
     let several = links.len() > 1 || args.input_file.is_some();
     if several && let Some(word) = links.iter().find(|link| is_search(link)) {
         let error = Error::new(
@@ -212,80 +262,37 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<String>, Error> {
             "quote the words of one search, as in `fetchloom get \"{example}\"`, or get one dataset at a time"
         )));
     }
+    let mut asked: Vec<Asked> = links
+        .iter()
+        .map(|link| Asked {
+            link: link.clone(),
+            expected: None,
+        })
+        .collect();
     let Some(path) = &args.input_file else {
-        return Ok(links);
+        return Ok(asked);
     };
-    let (name, text) = read_list(path, &context.stop).await?;
-    let before = links.len();
-    for (number, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
-        context.stop.check()?;
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if is_search(line) {
-            return Err(Error::new(
-                Kind::Usage,
-                format!(
-                    "line {} of {name} is not a link, a DOI or an id",
-                    number + 1
-                ),
-            )
-            .detail(line.to_owned())
-            .help(format!(
-                "find its id with `fetchloom search {line}`, then list that instead"
-            )));
-        }
-        links.push(line.to_owned());
-    }
-    if links.len() == before {
-        return Err(
-            Error::new(Kind::Usage, format!("{name} lists no links")).help(
-                "put one link per line in it. blank lines and lines starting with # are skipped",
-            ),
-        );
-    }
-    Ok(links)
-}
-
-/// the text of the list `--input-file` names, and the name messages give it.
-async fn read_list(path: &Path, stop: &Stop) -> Result<(String, String), Error> {
-    stop.check()?;
-    let path = path.to_path_buf();
-    let reading = tokio::task::spawn_blocking(move || read_list_text(&path));
-    tokio::select! {
-        biased;
-        () = stop.asked() => Err(Stop::stopped()),
-        outcome = reading => outcome.map_err(|err| Error::new(
-            Kind::LocalIo,
-            format!("could not read the link list: {err}"),
-        ))?,
-    }
-}
-
-fn read_list_text(path: &Path) -> Result<(String, String), Error> {
-    let mut text = String::new();
-    if path == Path::new("-") {
-        std::io::stdin()
-            .read_to_string(&mut text)
-            .map_err(|err| Error::io("could not read links from stdin", &err))?;
-        return Ok(("stdin".to_owned(), text));
-    }
-    let name = path.display().to_string();
-    std::fs::File::open(path)
-        .and_then(|mut file| file.read_to_string(&mut text))
-        .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
-    Ok((name, text))
+    let (name, text) = links::read(path, &context.stop).await?;
+    let listed = links::checked(&name, links::parse(&name, &text)?, false)?;
+    asked.extend(listed.into_iter().map(|(line, _)| Asked {
+        expected: line.sha256.map(|sha256| Expected {
+            sha256,
+            line: Some(line.named(&name)),
+        }),
+        link: line.link,
+    }));
+    Ok(asked)
 }
 
 /// a link or search words alone: into the file `-o` names, the folder `--dir` names, or one named
 /// after the download.
-async fn one(
+async fn one_link(
     context: &Context,
     net: &Arc<Net>,
     args: &Get,
-    mut link: String,
+    asked: Asked,
 ) -> Result<Report, Error> {
+    let mut link = asked.link;
     super::search::refuse_local(&link)?;
     if is_search(&link) {
         link = super::search::pick(context, net.as_ref(), &link, "get").await?;
@@ -309,7 +316,13 @@ async fn one(
             items: vec![Item::done(&link, &done)],
         });
     }
-    let mut wanted = prepare(&cache, args, args.dir.as_deref(), None, parsed, listing)?;
+    let mut wanted = prepare(
+        &cache,
+        args,
+        (args.dir.as_deref(), None),
+        (parsed, listing),
+        asked.expected,
+    )?;
     approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
@@ -344,14 +357,22 @@ async fn many(
     context: &Context,
     net: &Arc<Net>,
     args: &Get,
-    links: &[String],
+    asked: &[Asked],
 ) -> Result<Report, Error> {
     let cache = open_cache()?;
+    let links: Vec<String> = asked.iter().map(|asked| asked.link.clone()).collect();
+    let links = links.as_slice();
     let resolved = resolve_all(context, net, args, links).await?;
     let mut wanted = Vec::with_capacity(links.len());
-    for (link, resolved) in links.iter().zip(resolved) {
-        let prepared = resolved.and_then(|(parsed, listing)| {
-            prepare(&cache, args, None, args.dir.as_deref(), parsed, listing)
+    for ((link, asked), resolved) in links.iter().zip(asked).zip(resolved) {
+        let prepared = resolved.and_then(|found| {
+            prepare(
+                &cache,
+                args,
+                (None, args.dir.as_deref()),
+                found,
+                asked.expected.clone(),
+            )
         });
         if let Err(error) = &prepared {
             tell_failed(context, link, error);
@@ -501,13 +522,12 @@ async fn resolve_all(
 fn prepare(
     cache: &Cache,
     args: &Get,
-    chosen: Option<&Path>,
-    parent: Option<&Path>,
-    parsed: Parsed,
-    listing: Listing,
+    (chosen, parent): (Option<&Path>, Option<&Path>),
+    (parsed, listing): (Parsed, Listing),
+    expected: Option<Expected>,
 ) -> Result<Wanted, Error> {
     let files = selected(args, &parsed, &listing)?;
-    if let Some(expected) = args.sha256 {
+    if let Some(expected) = &expected {
         one_file(&files, expected, &parsed)?;
     }
     let extract = !args.no_extract;
@@ -539,38 +559,40 @@ fn prepare(
         chosen: chosen.map(Path::to_path_buf),
         parent: parent.map(Path::to_path_buf),
         extract,
-        sha256: args.sha256,
+        expected,
     })
 }
 
-const SHA256_HELP: &str =
-    "check the hash given to --sha256, or ask the file's owner which bytes are right";
-
-/// refuses `--sha256` for anything but one file, and a file whose source states another hash,
+/// refuses a hash for anything but one file, and a file whose source states another hash,
 /// before it downloads.
-fn one_file(files: &[Remote], expected: Sha256, parsed: &Parsed) -> Result<(), Error> {
+fn one_file(files: &[Remote], expected: &Expected, parsed: &Parsed) -> Result<(), Error> {
     let [file] = files else {
+        let help = match &expected.line {
+            None => "keep one file with --select, or leave out --sha256".to_owned(),
+            Some(line) => format!("list a link to one file on {line}, or leave its SHA-256 off"),
+        };
         return Err(Error::new(
             Kind::Usage,
             format!(
-                "--sha256 checks one file, and {} has {}",
+                "{} checks one file, and {} has {}",
+                expected.named(),
                 parsed.reference.shown(),
                 units::count(files.len() as u64, "file", "files")
             ),
         )
-        .help("keep one file with --select, or leave out --sha256"));
+        .help(help));
     };
     match file.sha256 {
-        Some(stated) if stated != expected => Err(Error::new(
+        Some(stated) if stated != expected.sha256 => Err(Error::new(
             Kind::IntegrityMismatch,
-            format!("{} is not the file --sha256 names", file.path),
+            format!("{} is not the file {} names", file.path, expected.named()),
         )
         .detail(format!(
             "expected sha256 {}, the source states {}",
-            expected.short(),
+            expected.sha256.short(),
             stated.short()
         ))
-        .help(SHA256_HELP)),
+        .help(expected.help())),
         _ => Ok(()),
     }
 }
@@ -616,7 +638,7 @@ async fn finish(
         chosen,
         parent,
         extract,
-        sha256,
+        expected,
         ..
     } = wanted;
     let paths: Vec<String> = files
@@ -647,7 +669,7 @@ async fn finish(
         folder::check_generated_root(&folder)?;
     }
     tell_fetched(context, &paths, &fetched, &files, elapsed);
-    vouch(&folder, &paths, &fetched, sha256, taken)?;
+    vouch(&folder, &paths, &fetched, expected.as_ref(), taken)?;
     let mut locked: Vec<LockedFile> = files
         .iter()
         .zip(&paths)
@@ -701,17 +723,17 @@ async fn finish(
     Ok(Done { folder, files })
 }
 
-/// the checks between a download and its placing: the hash `--sha256` asks for, and a folder no
-/// earlier link of the run took, which then counts as taken.
+/// the checks between a download and its placing: the hash `--sha256` or the link's line asks
+/// for, and a folder no earlier link of the run took, which then counts as taken.
 fn vouch(
     folder: &Path,
     paths: &[String],
     fetched: &[Fetched],
-    sha256: Option<Sha256>,
+    expected: Option<&Expected>,
     taken: &mut Taken,
 ) -> Result<(), Error> {
-    if let ([path], [found]) = (paths, fetched) {
-        matches_sha256(path, &found.digest, sha256)?;
+    if let ([path], [found], Some(expected)) = (paths, fetched, expected) {
+        matches_sha256(path, &found.digest, expected)?;
     }
     // a folder another link filled could hold files of the same name, which its bytes in the
     // cache would let this link replace
@@ -728,21 +750,21 @@ fn vouch(
     Ok(())
 }
 
-/// refuses the bytes of the file at `path` when `--sha256` asked for others.
-fn matches_sha256(path: &str, digest: &Sha256, expected: Option<Sha256>) -> Result<(), Error> {
-    match expected {
-        Some(expected) if expected != *digest => Err(Error::new(
-            Kind::IntegrityMismatch,
-            format!("{path} does not match --sha256"),
-        )
-        .detail(format!(
-            "expected sha256 {}, got {}",
-            expected.short(),
-            digest.short()
-        ))
-        .help(SHA256_HELP)),
-        _ => Ok(()),
+/// refuses the bytes of the file at `path` when the hash `expected` names others.
+fn matches_sha256(path: &str, digest: &Sha256, expected: &Expected) -> Result<(), Error> {
+    if expected.sha256 == *digest {
+        return Ok(());
     }
+    Err(Error::new(
+        Kind::IntegrityMismatch,
+        format!("{path} does not match {}", expected.named()),
+    )
+    .detail(format!(
+        "expected sha256 {}, got {}",
+        expected.sha256.short(),
+        digest.short()
+    ))
+    .help(expected.help()))
 }
 
 /// the folders the links of one run filled. windows and macos see `Data` and `data` as one

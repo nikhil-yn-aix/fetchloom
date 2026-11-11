@@ -853,8 +853,8 @@ pub(crate) struct Get {
     #[arg(short, long, value_name = "folder", help_heading = "options")]
     pub(crate) dir: Option<PathBuf>,
 
-    /// read links from <file>, one per line, or from stdin for -. blank lines and lines
-    /// starting with # are skipped
+    /// read links from <file>, one per line, or from stdin for -. a SHA-256 after a link
+    /// checks its one file. blank lines and lines starting with # are skipped
     #[arg(short, long, value_name = "file", help_heading = "options")]
     pub(crate) input_file: Option<PathBuf>,
 

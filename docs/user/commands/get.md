@@ -23,7 +23,7 @@ fetchloom get [options] <link>...
 | `-o <file>`, `--output <file>` | write the one downloaded file at exactly `<file>`, as it came, never unpacked; see [one file](#one-file) |
 | `--force` | with `-o`, replace a file at `<file>` that holds other bytes |
 | `-d <folder>`, `--dir <folder>` | choose the output folder; with several links, the folder that holds one folder for each |
-| `-i <file>`, `--input-file <file>` | read links from a file, one per line, or from stdin for `-` |
+| `-i <file>`, `--input-file <file>` | read links from a file, one per line, each with an optional SHA-256, or from stdin for `-` |
 | `--sha256 <hex>` | check the one downloaded file against this SHA-256 before it takes its name or goes in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
@@ -131,13 +131,21 @@ an interruption, a refused question about the total size or a cache that cannot 
 
 ## link lists
 
-`-i <file>` reads one link a line, after any links on the command line. blank lines and lines starting with `#` are skipped, and spaces around a link are ignored. `-i -` reads the list from stdin, so another command can supply it:
+`-i <file>` reads one link a line, after any links on the command line. blank lines and lines starting with `#` are skipped, and spaces around a link are ignored. a link may be followed by the SHA-256 of its one file, as 64 hex digits or `sha256:` and 64 hex digits, which is checked as `--sha256` checks it:
+
+```text
+# measurements to compare
+https://example.org/iris.csv sha256:d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
+zenodo:3608990
+```
+
+`-i -` reads the list from stdin, so another command can supply it:
 
 ```sh
 fetchloom get -i - < links.txt
 ```
 
-a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. a line of search words, or a list with no links, is a usage error before anything downloads. ctrl-c while reading the list exits 130 without waiting for its producer to close the pipe.
+a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. the whole list is checked before any request: a line of search words, a path on this machine, a line naming the same data as an earlier one, a line that is no link fetchloom reads, or a list with no links, stops the run before anything downloads, naming the line. a line whose hash names other bytes fails that link alone with `integrity.mismatch`, as any failed link does, and the message names the line, such as `wine.csv does not match the SHA-256 on line 2 of links.txt`. ctrl-c while reading the list exits 130 without waiting for its producer to close the pipe.
 
 ## checking a hash
 

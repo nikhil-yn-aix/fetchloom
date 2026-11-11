@@ -21,8 +21,8 @@ options:
                            named after it. with several links, each gets its own
                            folder inside <folder>
   -i, --input-file <file>  read links from <file>, one per line, or from stdin
-                           for -. blank lines and lines starting with # are
-                           skipped
+                           for -. a SHA-256 after a link checks its one file.
+                           blank lines and lines starting with # are skipped
       --sha256 <hex>       check that the file has this SHA-256 before it takes
                            its name or goes in the folder. needs one link to one
                            file
