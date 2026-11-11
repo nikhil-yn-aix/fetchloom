@@ -158,7 +158,7 @@ exclude = [
 
 `select` and `exclude` in a members table take the [patterns](#patterns) above and match each file by its path inside the archive, its top folder included, before placing strips that folder. `pets-v1/images/dog_010_corrupt.png` above lands at `data/pets/images/dog_010_corrupt.png`, since a dataset that is one archive loses the folder all its files share. a file a table leaves out is not placed, and every other file lands where it would without the table. a table names one archive, so in a dataset of `train.zip` and `test.zip` that both hold `images/x.png`, a table under `"train.zip"` leaves `test.zip`'s copy in place.
 
-a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. each of these is refused with `project.invalid`, exit 50, pointing at its line:
+a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. a [recipe](../recipes.md#what-fetchloom-keys) made from the dataset reads only the files kept, so the tables enter its key, and changing one means building it again. each of these is refused with `project.invalid`, exit 50, pointing at its line:
 
 | mistake | why |
 |---|---|

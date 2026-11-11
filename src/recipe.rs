@@ -12,9 +12,10 @@ use std::path::Path;
 
 use crate::digest::{self, Sha256};
 use crate::error::Error;
+use crate::glob::Glob;
 use crate::project::lock::derived::{Code, Derived, Input};
 use crate::project::lock::{Lock, Locked};
-use crate::project::manifest::{Entry, Manifest, Origin};
+use crate::project::manifest::{Entry, Manifest, Members, Origin};
 
 /// the name a word of `run` uses for the folder the result goes in, so no input may have it.
 pub(crate) const OUT: &str = "out";
@@ -211,10 +212,10 @@ pub(crate) fn closure<'a>(datasets: &'a BTreeMap<String, Entry>, names: &[&str])
 /// archive that unpacks by the tree of what it unpacks to, never its own bytes, since the step
 /// finds its files and not it: a source that packs the same files again keeps the content. the
 /// lines decide which files the step finds and where. links, versions and when it was pinned
-/// stay out, so a source that moves or renames a version keeps the content. member filters, once
-/// data.toml has them, follow the files as lines of their own, so a dataset without one keeps
-/// its content.
-pub(crate) fn content(locked: &Locked) -> Sha256 {
+/// stay out, so a source that moves or renames a version keeps the content. the dataset's
+/// members tables, which choose files inside its archives, follow as lines of their own, sorted,
+/// so a dataset without them keeps its content.
+pub(crate) fn content(locked: &Locked, members: &Members) -> Sha256 {
     let mut files: Vec<_> = locked.files.iter().collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let mut text = String::new();
@@ -223,6 +224,16 @@ pub(crate) fn content(locked: &Locked) -> Sha256 {
             Some(tree) => writeln!(text, "{}\tsha256:{tree}", file.path),
             None => writeln!(text, "{}\t{}\t{}", file.path, file.size, file.sha256),
         };
+    }
+    for (archive, filter) in members {
+        for (kind, patterns) in [("select", &filter.select), ("exclude", &filter.exclude)] {
+            let mut patterns: Vec<&str> = patterns.globs().iter().map(Glob::as_str).collect();
+            patterns.sort_unstable();
+            patterns.dedup();
+            for pattern in patterns {
+                let _ = writeln!(text, "member\t{archive}\t{kind}\t{pattern}");
+            }
+        }
     }
     digest::sha256(text.as_bytes())
 }
@@ -441,7 +452,9 @@ impl Step {
 /// the tree of a recipe's result.
 fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
     match &manifest.datasets.get(name)?.origin {
-        Origin::Source(_) => lock.get(name).map(content),
+        Origin::Source(source) => lock
+            .get(name)
+            .map(|locked| content(locked, &source.members)),
         Origin::Derived(_) => lock.result(name).map(|result| result.tree),
     }
 }
@@ -638,10 +651,11 @@ mod tests {
             pinned("a.csv", b"abc", None),
         ];
         let raw = locked(files.clone());
+        let none = Members::new();
         // the lines `path \t size \t sha256`, or `path \t sha256:<tree>` for an archive that
         // unpacks, hashed by python
         assert_eq!(
-            content(&raw).hex(),
+            content(&raw, &none).hex(),
             "44f9f9781b9da7e9e6ab6aca1196d45e10f048968b6f5e2c994f47b0be1bc8a6"
         );
         let mut moved = raw.clone();
@@ -655,12 +669,12 @@ mod tests {
             file.url = format!("https://mirror.example.org/{}", file.path);
             file.md5 = crate::digest::Md5::from_hex("900150983cd24fb0d6963f7d28e17f72");
         }
-        assert_eq!(content(&moved), content(&raw));
+        assert_eq!(content(&moved, &none), content(&raw, &none));
         // the step reads the archive's files, so the same files packed again keep the content
         let mut rezipped = raw.clone();
         let tree = rezipped.files[0].unpacks_to;
         rezipped.files[0] = pinned("b/x.zip", b"zipped again", tree);
-        assert_eq!(content(&rezipped), content(&raw));
+        assert_eq!(content(&rezipped, &none), content(&raw, &none));
         let mut packed = raw.clone();
         packed.files[0].unpacks_to = None;
         let mut edited = raw.clone();
@@ -668,8 +682,45 @@ mod tests {
         let mut renamed = raw.clone();
         renamed.files[1].path = "A.csv".to_owned();
         for other in [packed, edited, renamed] {
-            assert_ne!(content(&other), content(&raw));
+            assert_ne!(content(&other, &none), content(&raw, &none));
         }
+    }
+
+    /// a dataset's members tables decide which files a step finds, so each pattern follows the
+    /// files as a line of its own, in an order that does not depend on how they are written. a
+    /// dataset without them keeps the content it had.
+    #[test]
+    fn member_filters_change_content() {
+        let raw = locked(vec![
+            pinned("b/x.zip", b"zipped", Some(digest::sha256(b"tree"))),
+            pinned("a.csv", b"abc", None),
+        ]);
+        let members = |table: &str| {
+            Manifest::parse(&format!("[datasets.raw]\nref = \"zenodo:1\"\n{table}"))
+                .unwrap()
+                .datasets["raw"]
+                .source()
+                .unwrap()
+                .members
+                .clone()
+        };
+        let filtered = members(
+            "[datasets.raw.members.\"b/x.zip\"]\nexclude = [\"pets/x.png\", \"pets/a.png\", \"pets/x.png\"]\nselect = \"pets/**\"\n",
+        );
+        // the lines of the files, then `member \t <archive> \t select or exclude \t <pattern>`,
+        // hashed by python
+        assert_eq!(
+            content(&raw, &filtered).hex(),
+            "dd3f97738327867f28f3bb40bcf757c2c31678258620821025953f369470eecd"
+        );
+        let reordered = members(
+            "[datasets.raw.members.\"b/x.zip\"]\nselect = [\"pets/**\"]\nexclude = [\"pets/a.png\", \"pets/x.png\"]\n",
+        );
+        assert_eq!(content(&raw, &reordered), content(&raw, &filtered));
+        assert_eq!(
+            content(&raw, &members("")).hex(),
+            "44f9f9781b9da7e9e6ab6aca1196d45e10f048968b6f5e2c994f47b0be1bc8a6"
+        );
     }
 
     /// a project with the dataset `raw` pinned in data.lock and the recipe `name` made from it
