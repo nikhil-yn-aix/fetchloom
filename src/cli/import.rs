@@ -144,6 +144,8 @@ pub(super) struct Walked {
     root: PathBuf,
     pub(super) files: Vec<Found>,
     pub(super) skipped: Vec<String>,
+    /// what the system writes into folders by itself, such as finder's `.DS_Store`, left out.
+    pub(super) system: Vec<String>,
 }
 
 impl Walked {
@@ -203,6 +205,10 @@ pub(super) fn walk(
                 } else {
                     format!("{folder}/{file_name}")
                 };
+                if name::made_by_system(file_name) {
+                    walked.system.push(relative);
+                    continue;
+                }
                 let kind = listed.file_type().map_err(|err| {
                     Error::io(
                         format_args!("could not read {}", listed.path().display()),
@@ -258,6 +264,7 @@ pub(super) fn walk(
         .help("name a folder or a file, as in `fetchloom add ./flowers`"));
     }
     walked.skipped.sort_unstable();
+    walked.system.sort_unstable();
     kept(&mut walked, source, shown)?;
     walked.files.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     checked_names(&walked.files, shown)?;
@@ -790,6 +797,41 @@ mod tests {
         let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
         assert_eq!(paths(&walked), ["iris.csv"]);
         assert_eq!(walked.skipped, ["more", "queue", "secret.txt"]);
+    }
+
+    /// what the system writes into folders by itself is no data: finder's `.DS_Store`, the `._`
+    /// files a mac leaves on other disks and windows' thumbnails are left out and named, and a
+    /// folder of them is not read.
+    #[test]
+    fn files_the_system_makes_are_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("flowers");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(root.join("__MACOSX")).unwrap();
+        for (path, bytes) in [
+            ("iris.csv", &b"iris\n"[..]),
+            ("sub/petals.csv", b"petals\n"),
+            (".DS_Store", b"finder"),
+            ("sub/.DS_Store", b"finder"),
+            ("._iris.csv", b"appledouble"),
+            ("Thumbs.db", b"thumbs"),
+            ("__MACOSX/._iris.csv", b"appledouble"),
+        ] {
+            std::fs::write(root.join(path), bytes).unwrap();
+        }
+        let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
+        assert_eq!(paths(&walked), ["iris.csv", "sub/petals.csv"]);
+        assert_eq!(
+            walked.system,
+            [
+                ".DS_Store",
+                "._iris.csv",
+                "Thumbs.db",
+                "__MACOSX",
+                "sub/.DS_Store"
+            ]
+        );
+        assert_eq!(walked.skipped, Vec::<String>::new());
     }
 
     /// what an import must leave as it was: a file's bytes, length and modified time, and on

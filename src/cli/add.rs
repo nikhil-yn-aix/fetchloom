@@ -516,6 +516,7 @@ async fn import_held(
     let source = import_entry(manifest, supplied.as_deref(), args)?;
     let walked = import::walk(&start, shown, &source, &context.stop)?;
     tell_skipped(&context.output, shown, &walked.skipped);
+    tell_system(&context.output, shown, &walked.system);
     let pinned = supplied
         .as_ref()
         .and_then(|name| current(old.as_ref(), name, &manifest.datasets[name.as_str()]));
@@ -878,6 +879,24 @@ fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
             "left out {} in {shown}, such as {first}, which fetchloom never follows or imports",
             units::count(skipped.len() as u64, "link or special file", "links and special files")
         )),
+    }
+}
+
+/// says what an import left out as the system's own, such as finder's `.DS_Store`.
+fn tell_system(output: &Output, shown: &str, system: &[String]) {
+    match system {
+        [] => {}
+        [one] => output.step(
+            "Skipped",
+            &format!("{one} in {shown}, which the system makes"),
+        ),
+        [first, rest @ ..] => output.step(
+            "Skipped",
+            &format!(
+                "{first} and {} more the system makes in {shown}",
+                rest.len()
+            ),
+        ),
     }
 }
 

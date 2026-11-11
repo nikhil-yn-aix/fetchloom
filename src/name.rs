@@ -503,6 +503,30 @@ pub(crate) fn is_reserved_on_windows(name: &str) -> bool {
         || numbered("LPT")
 }
 
+/// whether `name`, a file's or folder's own name, is one an operating system writes into folders
+/// by itself: finder's `.DS_Store`, the `._` files a mac leaves beside each file on a disk not
+/// its own, the folders a mac, linux or windows keeps on a removable disk, and windows
+/// explorer's thumbnails and folder settings. none of them is data.
+pub(crate) fn made_by_system(name: &str) -> bool {
+    (name.len() > 2 && name.starts_with("._"))
+        || name.starts_with(".Trash-")
+        || [
+            ".DS_Store",
+            "__MACOSX",
+            ".Spotlight-V100",
+            ".Trashes",
+            ".fseventsd",
+            ".TemporaryItems",
+            "Thumbs.db",
+            "ehthumbs.db",
+            "desktop.ini",
+            "$RECYCLE.BIN",
+            "System Volume Information",
+        ]
+        .iter()
+        .any(|made| name.eq_ignore_ascii_case(made))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -833,6 +857,40 @@ mod tests {
             ("café", "cafe\u{301}"),
         ] {
             assert_eq!(fold(a), fold(b), "{a} and {b}");
+        }
+    }
+
+    #[test]
+    fn names_the_system_writes_by_itself_are_known_and_data_is_not() {
+        for name in [
+            ".DS_Store",
+            ".ds_store",
+            "._iris.csv",
+            "__MACOSX",
+            ".Spotlight-V100",
+            ".Trashes",
+            ".fseventsd",
+            ".TemporaryItems",
+            ".Trash-1000",
+            "Thumbs.db",
+            "thumbs.db",
+            "ehthumbs.db",
+            "desktop.ini",
+            "$RECYCLE.BIN",
+            "System Volume Information",
+        ] {
+            assert!(made_by_system(name), "{name}");
+        }
+        for name in [
+            "._",
+            "_iris.csv",
+            "DS_Store",
+            "iris.csv",
+            ".git",
+            "thumbs.csv",
+            "Trashes",
+        ] {
+            assert!(!made_by_system(name), "{name}");
         }
     }
 }

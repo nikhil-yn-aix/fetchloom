@@ -220,6 +220,65 @@ fn supplying_the_same_folder_again_changes_no_pins() -> Result {
     Ok(())
 }
 
+/// a mac writes `.DS_Store` into a folder a person opens, and `._` files beside each file on a disk
+/// not its own. they are no data: an import leaves them out and says so, and the folder supplied
+/// later, after finder wrote more of them, still matches its pins.
+#[test]
+fn files_the_system_makes_are_left_out_of_imports_and_supplies() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = flowers(&sandbox)?;
+    fs::write(folder.join(".DS_Store"), b"finder")?;
+    fs::write(folder.join("._sepals.csv"), b"appledouble")?;
+    let output = sandbox.run(&["add", "../flowers"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Skipped .DS_Store and 1 more the system makes in ../flowers"),
+        "{stderr}"
+    );
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        !lock.contains("DS_Store") && !lock.contains("._sepals"),
+        "{lock}"
+    );
+    let clone = clone_of(&sandbox)?;
+    let pins = [
+        fs::read(clone.join("data.toml"))?,
+        fs::read(clone.join("data.lock"))?,
+    ];
+    fs::write(folder.join(".DS_Store"), b"finder, after another look")?;
+    fs::write(folder.join("petals").join(".DS_Store"), b"finder")?;
+    let elsewhere = sandbox.folder("another-cache")?;
+    let supplied = sandbox
+        .command_in(
+            &clone,
+            &[
+                "--json",
+                "add",
+                folder.to_str().ok_or("the sandbox path is not text")?,
+                "--as",
+                "flowers",
+            ],
+        )
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(
+        supplied.status.code(),
+        Some(0),
+        "{}",
+        text(&supplied.stdout)?
+    );
+    assert_eq!(
+        pins,
+        [
+            fs::read(clone.join("data.toml"))?,
+            fs::read(clone.join("data.lock"))?,
+        ],
+        "the same data changes no pin"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_import_is_never_resolved_again() -> Result {
     let sandbox = Sandbox::new()?;
