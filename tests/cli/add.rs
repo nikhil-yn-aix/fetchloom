@@ -6,7 +6,9 @@ use std::fs;
 use crate::project::{Background, IRIS, PATH, added};
 #[cfg(unix)]
 use crate::project::{partial_bytes, told_a_stop};
-use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text, wait_until};
+#[cfg(unix)]
+use crate::support::wait_until;
+use crate::support::{Part, Result, Sandbox, Server, file, json, reply, text};
 
 #[test]
 fn an_automatic_name_that_is_taken_gets_a_number() -> Result {
@@ -496,7 +498,7 @@ fn an_add_cut_off_while_it_downloads_leaves_the_project_as_it_was() -> Result {
     let body = vec![b'x'; 1 << 20];
     let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
     let mut running = Background::start(sandbox.command(&["add", &cows.url, "--as", "cows"]))?;
-    wait_until("the download to start", || Ok(!cows.requests().is_empty()))?;
+    cows.wait_for_requests(1)?;
     running.child.kill()?;
     let (_, stderr) = running.finish()?;
     drop(release);
@@ -523,7 +525,7 @@ fn an_add_keeps_an_edit_made_while_it_downloads_and_writes_nothing() -> Result {
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let (cows, release) = held("/files/cows.csv", &body, 1 << 16)?;
     let running = Background::start(sandbox.command(&["-v", "add", &cows.url, "--as", "cows"]))?;
-    wait_until("the download to start", || Ok(!cows.requests().is_empty()))?;
+    cows.wait_for_requests(1)?;
     let edited = format!(
         "{}# a note made meanwhile\n",
         fs::read_to_string(work.join("data.toml"))?
@@ -706,7 +708,7 @@ fn a_first_add_whose_search_ends_without_a_choice_leaves_nothing() -> Result {
             command.env(variable, &stalled.url);
         }
         let running = Background::start(command)?;
-        wait_until("the search to start", || Ok(!stalled.requests().is_empty()))?;
+        stalled.wait_for_requests(1)?;
         running.interrupt()?;
         let (code, stderr) = running.finish()?;
         drop(release);

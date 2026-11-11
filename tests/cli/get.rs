@@ -631,9 +631,7 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     let server = Server::start(PATH, vec![slow, unchanged])?;
     let first =
         crate::support::Running::start(&mut sandbox.command(&["get", &server.url, "-o", "first"]))?;
-    crate::support::wait_until("the first download request", || {
-        Ok(!server.requests().is_empty())
-    })?;
+    server.wait_for_requests(1)?;
     let second = crate::support::Running::start(&mut sandbox.command(&[
         "get",
         &server.url,

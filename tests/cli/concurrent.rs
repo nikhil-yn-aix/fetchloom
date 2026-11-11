@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text, wait_until};
+use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -35,9 +35,7 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
             .command_in(&clone, &["sync"])
             .env("FETCHLOOM_CACHE", &cold),
     )?;
-    wait_until("the sync download request", || {
-        Ok(server.requests().len() >= 2)
-    })?;
+    server.wait_for_requests(2)?;
     let path = Running::start(
         sandbox
             .command_in(&clone, &["path", "iris"])

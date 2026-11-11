@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 mod running;
@@ -309,43 +309,33 @@ pub(crate) fn typed(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    let shown = Arc::new(Mutex::new(Vec::new()));
+    let shown = Arc::new(Watched::<Vec<u8>>::default());
     let mut stdout = child.stdout.take().ok_or("script has no stdout")?;
     let reader = {
         let shown = Arc::clone(&shown);
         std::thread::spawn(move || {
             let mut bytes = [0; 4096];
             while let Ok(read @ 1..) = stdout.read(&mut bytes) {
-                shown
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .extend_from_slice(&bytes[..read]);
+                shown.change(|shown| shown.extend_from_slice(&bytes[..read]));
             }
         })
     };
-    let screen = || {
-        String::from_utf8_lossy(
-            &shown
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-        .replace("\r\n", "\n")
-    };
+    let screen = |bytes: &Vec<u8>| String::from_utf8_lossy(bytes).replace("\r\n", "\n");
     if !after.is_empty()
-        && let Err(err) = wait_until(&format!("{after:?} on the screen"), || {
-            Ok(screen().contains(after))
+        && let Err(err) = shown.wait(&format!("{after:?} on the screen"), |bytes| {
+            screen(bytes).contains(after)
         })
     {
         let _ = child.kill();
         let _ = child.wait();
-        return Err(format!("{err}\n{}", screen()).into());
+        return Err(format!("{err}\n{}", shown.read(screen)).into());
     }
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(keys.as_bytes())?;
     }
     let status = child.wait()?;
     reader.join().map_err(|_| "reading the screen failed")?;
-    Ok(Some((status.code(), screen())))
+    Ok(Some((status.code(), shown.read(screen))))
 }
 
 pub(crate) fn text(bytes: &[u8]) -> Result<String> {
@@ -493,7 +483,7 @@ pub(crate) enum Part {
 /// stopping halfway through a body.
 pub(crate) struct Server {
     pub(crate) url: String,
-    requests: Arc<Mutex<Vec<String>>>,
+    heads: Arc<Watched<Vec<String>>>,
     _running: ServerTask,
 }
 
@@ -501,17 +491,15 @@ impl Server {
     pub(crate) fn start(path: &str, responses: Vec<Vec<Part>>) -> Result<Server> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}{path}", listener.local_addr()?);
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let seen = requests.clone();
+        let heads = Arc::new(Watched::<Vec<String>>::default());
+        let seen = heads.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             for response in responses {
                 let Some((mut stream, _connection)) = stop.accept(&listener) else {
                     return;
                 };
-                let head = read_head(&mut stream);
-                if let Ok(mut seen) = seen.lock() {
-                    seen.push(head.to_ascii_lowercase());
-                }
+                let head = read_head(&mut stream).to_ascii_lowercase();
+                seen.change(|heads| heads.push(head));
                 for part in response {
                     if stop.stopped() {
                         return;
@@ -543,7 +531,7 @@ impl Server {
         })?;
         Ok(Server {
             url,
-            requests,
+            heads,
             _running: running,
         })
     }
@@ -553,8 +541,8 @@ impl Server {
     pub(crate) fn slow_file(path: &str, body: Vec<u8>) -> Result<Server> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}{path}", listener.local_addr()?);
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let seen = requests.clone();
+        let heads = Arc::new(Watched::<Vec<String>>::default());
+        let seen = heads.clone();
         let running = ServerTask::start(listener, move |listener, stop| {
             for slow in [true, false] {
                 let Some((mut stream, _connection)) = stop.accept(&listener) else {
@@ -565,9 +553,7 @@ impl Server {
                     let start = line.strip_prefix("range: bytes=")?.strip_suffix('-')?;
                     start.parse::<usize>().ok()
                 });
-                if let Ok(mut seen) = seen.lock() {
-                    seen.push(asked);
-                }
+                seen.change(|heads| heads.push(asked));
                 let rest = &body[start.unwrap_or_default()..];
                 let length = rest.len().to_string();
                 let mut headers = vec![("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
@@ -593,17 +579,20 @@ impl Server {
         })?;
         Ok(Server {
             url,
-            requests,
+            heads,
             _running: running,
         })
     }
 
     /// the head of every request so far, lowercased.
     pub(crate) fn requests(&self) -> Vec<String> {
-        self.requests
-            .lock()
-            .map(|requests| requests.clone())
-            .unwrap_or_default()
+        self.heads.read(Vec::clone)
+    }
+
+    /// waits until the server has taken `count` requests in all.
+    pub(crate) fn wait_for_requests(&self, count: usize) -> Result {
+        self.heads
+            .wait(&format!("{count} requests"), |heads| heads.len() >= count)
     }
 }
 
@@ -960,7 +949,48 @@ pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
     )
 }
 
-/// waits for an observable test condition, with a deadline that names what never happened.
+/// a value that other threads change, and a signal at each change, so a test can wait for what
+/// it needs without polling.
+#[derive(Default)]
+struct Watched<T> {
+    value: Mutex<T>,
+    changed: Condvar,
+}
+
+impl<T> Watched<T> {
+    fn change(&self, change: impl FnOnce(&mut T)) {
+        change(&mut self.value.lock().unwrap_or_else(PoisonError::into_inner));
+        self.changed.notify_all();
+    }
+
+    fn read<R>(&self, read: impl FnOnce(&T) -> R) -> R {
+        read(&self.value.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// returns once `ready` holds, checked again at each change. the deadline only keeps a test
+    /// whose command never gets there from hanging.
+    fn wait(&self, what: &str, ready: impl Fn(&T) -> bool) -> Result {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut value = self.value.lock().unwrap_or_else(PoisonError::into_inner);
+        while !ready(&value) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(format!("timed out waiting for {what}").into());
+            }
+            value = self
+                .changed
+                .wait_timeout(value, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        Ok(())
+    }
+}
+
+/// checks `ready` until it holds, for state that nothing announces, such as the bytes another
+/// process writes to disk. a server's requests and a child's stderr have waits that need no
+/// polling: [`Server::wait_for_requests`] and [`Running::wait_for`]. the deadline only keeps a
+/// test from hanging, and names what never happened.
 pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) -> Result {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !ready()? {
