@@ -18,8 +18,9 @@ use crate::mirror::{Location, Mirrors};
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
+use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::{Lock, Locked};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{Manifest, Members};
 use crate::project::state::Candidate;
 use crate::recipe;
 use crate::threads::Threads;
@@ -430,9 +431,11 @@ fn unbuilt_here(
         let lacking: Vec<String> = inputs
             .iter()
             .filter(|input| {
+                let Some(source) = manifest.datasets[*input].source() else {
+                    return false;
+                };
                 lock.get(input)
-                    .filter(|_| manifest.datasets[*input].source().is_some())
-                    .is_some_and(|locked| !held(cache, &status.holding, locked))
+                    .is_some_and(|locked| !held(cache, &status.holding, locked, &source.members))
             })
             .cloned()
             .collect();
@@ -485,16 +488,31 @@ fn kept(name: &str, candidate: &Candidate, lock: &Lock, cache: &Cache) -> Kept {
 }
 
 /// whether this machine holds every file a build reads of the fetched dataset `locked`: each
-/// file in the cache or in place in the data folder, as `holding` says, an archive standing for
-/// the files the cache records it unpacked to.
-fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked) -> bool {
-    locked.files.iter().all(|file| {
-        cache.find(&file.sha256, Some(file.size)).is_some()
-            || (file.unpacks_to.is_none() && holding.contains(&file.sha256))
-            || file
-                .unpacks_to
-                .is_some_and(|tree| cache.holds_unpacked(&file.sha256, Some(&tree)))
-    })
+/// file in the cache or in place in the data folder, as `holding` says, and an archive whole in
+/// the cache or standing for the files the cache records it unpacked to that its table in
+/// `members` keeps, as gc keeps them.
+fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked, members: &Members) -> bool {
+    let has = |sha256: &Sha256, size| {
+        cache.find(sha256, Some(size)).is_some() || holding.contains(sha256)
+    };
+    archives::pinned(&locked.files)
+        .iter()
+        .all(|pinned| match pinned {
+            Pinned::File(file) => has(&file.sha256, file.size),
+            Pinned::Archive(archive) => {
+                let filter = members.get(&archive.file.path);
+                archive
+                    .files()
+                    .iter()
+                    .all(|file| cache.find(&file.sha256, Some(file.size)).is_some())
+                    || archive.recorded(cache).is_some_and(|recorded| {
+                        recorded
+                            .iter()
+                            .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
+                            .all(|member| has(&member.sha256, member.size))
+                    })
+            }
+        })
 }
 
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and

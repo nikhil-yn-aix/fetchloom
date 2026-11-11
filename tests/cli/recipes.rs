@@ -351,6 +351,71 @@ fn a_put_back_file_names_what_leaves_it_out() -> Result {
     Ok(())
 }
 
+/// raw data kept out of the data folder, an archive with a file a members table leaves out, and
+/// a recipe that reads it. `cache gc --now` keeps the files the recipe reads and frees the
+/// archive and the file left out. with the result gone from the data folder and the cache too,
+/// as after a sync and a gc while another commit was checked out, status names only the build,
+/// since the cache holds all the build reads, and the build then needs no network.
+#[test]
+fn status_counts_an_archive_whose_kept_files_the_cache_holds() -> Result {
+    use std::io::Write as _;
+    let sandbox = Sandbox::new()?;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (path, bytes) in [
+        ("set/a.csv", &b"a,1\n"[..]),
+        ("set/b.csv", b"b,2\n"),
+        ("set/labels.csv", b"file,label\n"),
+    ] {
+        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
+        archive.write_all(bytes)?;
+    }
+    let zipped = archive.finish()?.into_inner();
+    let server = Server::start("/files/set.zip", vec![file(&zipped, "\"z1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "set"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    unplace(&work, "set")?;
+    let manifest = work.join("data.toml");
+    fs::write(
+        &manifest,
+        format!(
+            "{}\n[datasets.set.members.\"set.zip\"]\nexclude = [\"set/b.csv\"]\n\n[datasets.made]\nfrom = [\"set\"]\nrun = [\"recipe-step\", \"write\", \"made.csv\", \"made\", \"{{set}}\", \"{{out}}\"]\n",
+            fs::read_to_string(&manifest)?
+        ),
+    )?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let collected = sandbox.run(&["cache", "gc", "--now"])?;
+    assert_eq!(
+        collected.status.code(),
+        Some(0),
+        "{}",
+        text(&collected.stderr)?
+    );
+    let cache = sandbox.cache();
+    for (bytes, kept) in [
+        (&zipped[..], false),
+        (b"b,2\n", false),
+        (b"a,1\n", true),
+        (b"file,label\n", true),
+    ] {
+        assert_eq!(object(&cache, bytes).exists(), kept, "{bytes:?}");
+    }
+    // a sync on the other commit retired the result, which gc then freed
+    delete(&work.join("data").join("made").join("made.csv"))?;
+    delete(&object(&cache, b"made"))?;
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        told.contains("    Unbuilt made · its pinned result is not on this machine or a mirror\n"),
+        "{told}"
+    );
+    let offline = build(&sandbox, &["--offline", "build"])?;
+    assert_eq!(offline.status.code(), Some(0), "{}", text(&offline.stderr)?);
+    assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    Ok(())
+}
+
 /// a clone whose cache lacks a pinned result gets it from a folder mirror that holds it, with
 /// no request to the source and no step run, and status calls its files missing until then.
 #[test]
