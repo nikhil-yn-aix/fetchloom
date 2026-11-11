@@ -1442,17 +1442,13 @@ mod tests {
 
     #[test]
     fn a_pasted_secret_shows_only_its_ends_and_length() {
+        assert_eq!(masked("q"), "* \u{b7} 1 character");
         assert_eq!(
             masked("KGAT_0123456789abcdef0123456789abcd"),
             "KGAT...abcd \u{b7} 35 characters"
         );
         assert_eq!(masked("hunter2"), "******* \u{b7} 7 characters");
         assert_eq!(masked(&"p".repeat(20)), "************ \u{b7} 20 characters");
-    }
-
-    #[test]
-    fn a_pasted_secret_of_one_character_is_counted_as_one_character() {
-        assert_eq!(masked("q"), "* \u{b7} 1 character");
     }
 
     #[test]

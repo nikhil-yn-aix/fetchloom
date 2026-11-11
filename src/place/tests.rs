@@ -92,6 +92,10 @@ fn a_hardlink_is_chosen_on_one_volume() {
 
     assert_eq!(method, expected);
     assert_eq!(fs::read_to_string(&destination).unwrap(), CONTENTS);
+    if method == Method::Hardlink {
+        assert!(is_read_only(&destination));
+        assert!(is_read_only(&object));
+    }
 }
 
 #[test]
@@ -169,23 +173,6 @@ fn an_existing_destination_is_an_error_whatever_the_method() {
             "{first:?}"
         );
     }
-}
-
-#[test]
-fn a_hardlink_keeps_the_objects_read_only_flag() {
-    let (folder, object) = cache(true);
-    // FAT32 and exFAT make no hardlinks
-    if !makes_hardlinks(folder.path()) {
-        return;
-    }
-    let destination = folder.path().join("placed.csv");
-    let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
-
-    let method = placer.place(&object, &destination, false).unwrap();
-
-    assert_eq!(method, Method::Hardlink);
-    assert!(is_read_only(&destination));
-    assert!(is_read_only(&object));
 }
 
 #[test]

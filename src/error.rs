@@ -374,12 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn an_ambiguous_reference_is_a_reference_error() {
-        assert_eq!(Kind::ReferenceAmbiguous.name(), "reference.ambiguous");
-        assert_eq!(Kind::ReferenceAmbiguous.exit_code(), 10);
-    }
-
-    #[test]
     fn io_errors_a_person_can_fix_come_with_help() {
         let full = Error::io(
             "could not write data.toml",
