@@ -2,11 +2,69 @@
 //! as mirrors are read.
 
 use std::fs;
+use std::path::Path;
+use std::process::Output;
 
 use serde_json::Value;
 
+use crate::add::sha256_hex as sha256;
 use crate::caps::shown;
-use crate::support::{Result, Sandbox, json};
+use crate::mirrors::{IRIS, MEMBERS, cold, holds_the_project, project};
+use crate::support::{Result, Sandbox, edit, json, text};
+
+fn ok(output: &Output) -> Result {
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+/// the names of the files below `folder` of the mirror at `root`, each checked to hash to its
+/// name, as a reader checks it.
+fn named(root: &Path, folder: &str) -> Result<Vec<String>> {
+    let mut names = Vec::new();
+    for fan in fs::read_dir(root.join(folder))? {
+        let fan = fan?;
+        for file in fs::read_dir(fan.path())? {
+            let file = file?;
+            let name = format!(
+                "{}{}",
+                fan.file_name().to_string_lossy(),
+                file.file_name().to_string_lossy()
+            );
+            assert_eq!(sha256(&fs::read(file.path())?), name, "{name}");
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// the SHA-256 of every file the project in [`project`] places, which a push copies.
+fn pinned() -> Vec<String> {
+    let mut hashes: Vec<String> = std::iter::once(IRIS)
+        .chain(MEMBERS.iter().map(|(_, bytes)| *bytes))
+        .map(sha256)
+        .collect();
+    hashes.sort();
+    hashes
+}
+
+fn bytes() -> usize {
+    IRIS.len() + MEMBERS.iter().map(|(_, bytes)| bytes.len()).sum::<usize>()
+}
+
+/// data.lock of the project in the sandbox's work folder, with `access` as given for each
+/// dataset, as its source would have said.
+fn access(sandbox: &Sandbox, given: &[(&str, &str)]) -> Result {
+    let path = sandbox.work().join("data.lock");
+    let mut lock = fs::read_to_string(&path)?;
+    for (dataset, access) in given {
+        let name = format!("name = \"{dataset}\"\n");
+        assert!(lock.contains(&name), "{lock}");
+        lock = lock.replace(&name, &format!("{name}access = \"{access}\"\n"));
+    }
+    fs::write(path, lock)?;
+    Ok(())
+}
 
 /// the `push_to` setting names the folder push writes to: a relative one is taken from the
 /// settings file's folder, as mirrors are, and `fetchloom settings` shows it with where it came
@@ -32,5 +90,350 @@ fn push_to_is_shown_with_where_it_came_from() -> Result {
     let document = json(&sandbox.run(&["--json", "settings"])?)?;
     assert_eq!(shown(&document, "push_to")["value"], Value::Null);
     assert_eq!(shown(&document, "push_to")["origin"], "default");
+    Ok(())
+}
+
+/// a push starts the mirror, writes each pinned file and the archive's list of files under their
+/// SHA-256, never the archive, and asks no server anything. the next push finds them after one
+/// look each, and replaces a copy someone damaged.
+#[test]
+fn a_push_writes_each_file_once_and_skips_it_next_time() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let asked = source.requests().len();
+    let root = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command(&["--yes", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    assert_eq!(
+        fs::read_to_string(root.join("fetchloom-mirror"))?,
+        "fetchloom mirror 1\n"
+    );
+    assert_eq!(named(&root, "objects")?, pinned());
+    assert_eq!(named(&root, "trees")?.len(), 1);
+    assert_eq!(fs::read_dir(root.join("tmp"))?.count(), 0);
+    assert_eq!(source.requests().len(), asked, "no server is asked");
+    let hex = sha256(IRIS);
+    edit(
+        &root.join("objects").join(&hex[..2]).join(&hex[2..]),
+        b"damaged",
+    )?;
+    let again = sandbox
+        .command(&["--json", "--yes", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&again)?;
+    let document = json(&again)?;
+    let result = &document["result"];
+    assert_eq!(result["target"], root.display().to_string());
+    assert_eq!(result["started"], false);
+    assert_eq!(result["datasets"], serde_json::json!(["dataset", "iris"]));
+    assert_eq!(result["objects"], 6);
+    assert_eq!(result["bytes"], bytes());
+    assert_eq!(result["copied"], 1);
+    assert_eq!(result["copied_bytes"], IRIS.len());
+    assert_eq!(result["replaced"], 1);
+    assert_eq!(result["present"], 5);
+    assert_eq!(result["present_bytes"], bytes() - IRIS.len());
+    assert_eq!(result["trees"], 0);
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(named(&root, "objects")?, pinned());
+    Ok(())
+}
+
+/// a member a members table leaves out is not pushed: no clone places it, and gc may already
+/// have freed its bytes, which would make the push refuse for want of them.
+#[test]
+fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    ok(&sandbox.run(&["drop", "data/dataset/data/train.csv"])?)?;
+    ok(&sandbox.run(&["cache", "gc", "--now"])?)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command(&["--yes", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&output)?;
+    let dropped = sha256(b"x,y\n1,2\n3,4\n");
+    let mut kept = pinned();
+    kept.retain(|hash| *hash != dropped);
+    assert_eq!(named(&root, "objects")?, kept);
+    Ok(())
+}
+
+/// a dry run says what a push would write and what it would ask about, and writes nothing.
+#[test]
+fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let root = sandbox.work().join("mirror");
+    let output = sandbox
+        .command(&["--json", "push", "--dry-run", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&output)?;
+    let result = &json(&output)?["result"];
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["started"], true);
+    assert_eq!(result["copied"], 6);
+    assert_eq!(result["copied_bytes"], bytes());
+    assert_eq!(result["present"], 0);
+    assert_eq!(result["trees"], 1);
+    let mut copy: Vec<String> = result["changes"]["copy"]
+        .as_array()
+        .ok_or("no changes.copy")?
+        .iter()
+        .map(|file| file["sha256"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    copy.sort();
+    assert_eq!(copy, pinned());
+    assert_eq!(
+        result["asks"],
+        serde_json::json!([
+            {"dataset": "dataset", "access": "unknown"},
+            {"dataset": "iris", "access": "unknown"}
+        ])
+    );
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// a folder that holds files but no marker may be anything, such as the folder a network disk
+/// mounts on, so push writes nothing there.
+#[test]
+fn a_folder_that_is_not_a_mirror_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let thesis = sandbox.folder("thesis")?;
+    fs::write(thesis.join("draft.tex"), "chapter one")?;
+    let output = sandbox
+        .command(&["--json", "--yes", "push", "--to"])
+        .arg(&thesis)
+        .output()?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    let names: Vec<_> = fs::read_dir(&thesis)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<_>>()?;
+    assert_eq!(names, ["draft.tex"]);
+    Ok(())
+}
+
+/// push copies what the cache holds and never downloads: a clone that never synced is told
+/// what is missing and what to run, and nothing is written.
+#[test]
+fn push_never_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let asked = source.requests().len();
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let root = sandbox.work().join("mirror");
+    let output = sandbox
+        .command_in(&folder, &["--json", "--yes", "push", "--to"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "offline.missing");
+    let details = error["details"].to_string();
+    assert!(details.contains("iris/iris.csv"), "{details}");
+    assert!(details.contains("dataset/dataset.zip"), "{details}");
+    assert_eq!(error["fix"], "fetchloom sync");
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(source.requests().len(), asked);
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// data whose source wanted an account or accepted terms, or did not say, is pushed only once a
+/// person says yes: anyone who can read the mirror gets it without either. a script gets
+/// `unconfirmed` with no command to run, since only a person may agree.
+#[test]
+fn gated_data_asks_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    access(&sandbox, &[("iris", "terms"), ("dataset", "public")])?;
+    let root = sandbox.work().join("mirror");
+    let output = sandbox
+        .command(&["--json", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    // what the push would have written, and what it asks about
+    assert_eq!(document["result"]["copied"], 6);
+    assert_eq!(
+        document["result"]["asks"],
+        serde_json::json!([{"dataset": "iris", "access": "terms"}])
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("iris"),
+        "{error}"
+    );
+    assert_eq!(error["fix"], Value::Null);
+    assert!(!root.exists());
+    // public data alone asks nothing
+    let public = sandbox
+        .command(&["--json", "push", "dataset", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&public)?;
+    let result = &json(&public)?["result"];
+    assert_eq!(result["datasets"], serde_json::json!(["dataset"]));
+    assert_eq!(result["objects"], 5);
+    let yes = sandbox
+        .command(&["--json", "--yes", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&yes)?;
+    assert_eq!(json(&yes)?["result"]["copied"], 1);
+    Ok(())
+}
+
+/// at a terminal, the question names the data and who can read the mirror; no keeps everything
+/// as it was.
+#[cfg(target_os = "linux")]
+#[test]
+fn no_at_the_question_pushes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    access(&sandbox, &[("iris", "terms"), ("dataset", "public")])?;
+    let root = sandbox.work().join("mirror");
+    let mut command = sandbox.command(&["push", "--to"]);
+    command.arg(&root);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "", "push it anyway?", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(1), "{screen}");
+    assert!(screen.contains("iris needs accepted terms"), "{screen}");
+    assert!(screen.contains("Cancelled"), "{screen}");
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// two pushes of one project into one new mirror at once leave every file once, each holding
+/// the bytes its name says.
+#[test]
+fn two_pushes_at_once_leave_one_good_copy() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let root = sandbox.work().join("mirror");
+    let push = || {
+        sandbox
+            .command(&["--yes", "push", "--to"])
+            .arg(&root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+    };
+    let (first, second) = (push()?, push()?);
+    for child in [first, second] {
+        ok(&child.wait_with_output()?)?;
+    }
+    assert_eq!(named(&root, "objects")?, pinned());
+    assert_eq!(named(&root, "trees")?.len(), 1);
+    assert_eq!(fs::read_dir(root.join("tmp"))?.count(), 0);
+    Ok(())
+}
+
+/// push writes into a folder it is given, never to a web address: a server or a bucket gets a
+/// folder mirror through a copying tool.
+#[test]
+fn a_push_needs_a_folder_and_never_a_web_address() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let output = sandbox.run(&["--json", "--yes", "push"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "usage");
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(help.contains("--to") && help.contains("push_to"), "{help}");
+    let output = sandbox.run(&[
+        "--json",
+        "--yes",
+        "push",
+        "--to",
+        "https://data.lab.example/fetchloom",
+    ])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "usage");
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("rclone")),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// push sends what data.lock pins, so a dataset data.toml has that data.lock does not pin yet
+/// stops it before anything is written.
+#[test]
+fn a_dataset_not_pinned_yet_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{text_now}\n[datasets.extra]\nref = \"https://example.org/extra.csv\"\n"),
+    )?;
+    let root = sandbox.work().join("mirror");
+    let output = sandbox
+        .command(&["--json", "--yes", "push", "--to"])
+        .arg(&root)
+        .output()?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+    assert_eq!(json(&output)?["errors"][0]["kind"], "lock.outdated");
+    assert!(!root.exists());
+    Ok(())
+}
+
+/// the lab's journey: alice pushes the files her cache holds into the folder `push_to` names; a
+/// cold clone whose settings name that folder as its only mirror then syncs with no request to
+/// anything else.
+#[test]
+fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let lab = sandbox.folder("lab")?;
+    let alice = lab.join("alice.toml");
+    fs::write(&alice, "push_to = \"fetchloom\"\n")?;
+    let pushed = sandbox
+        .command(&["--yes", "push"])
+        .env("FETCHLOOM_SETTINGS", &alice)
+        .output()?;
+    ok(&pushed)?;
+    let asked = source.requests().len();
+    let (folder, cache) = cold(&sandbox, "bob")?;
+    let bob = lab.join("bob.toml");
+    fs::write(&bob, "mirrors = [\"fetchloom\"]\nmirrors_only = true\n")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_SETTINGS", &bob)
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    let document = json(&output)?;
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(document["work"]["mirror_objects"], 6);
+    assert_eq!(source.requests().len(), asked, "the source is never asked");
     Ok(())
 }

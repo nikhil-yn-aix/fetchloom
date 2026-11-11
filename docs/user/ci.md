@@ -58,7 +58,7 @@ a private, gated or competition dataset needs its source's key in the job's envi
 
 ## a mirror for runners
 
-runners inside a lab or company network can take pinned files from a [mirror](mirrors.md) there instead of the internet: set `FETCHLOOM_MIRRORS` in the job's environment to the mirror's folder or address. a runner that must not reach the internet at all also sets `FETCHLOOM_MIRRORS_ONLY=1`, so a file the mirror lacks fails the job, named, rather than being fetched from its source.
+runners inside a lab or company network can take pinned files from a [mirror](mirrors.md) there instead of the internet: set `FETCHLOOM_MIRRORS` in the job's environment to the mirror's folder or address. a runner that must not reach the internet at all also sets `FETCHLOOM_MIRRORS_ONLY=1`, so a file the mirror lacks fails the job, named, rather than being fetched from its source. a machine that synced the project fills a folder mirror with [`fetchloom push`](commands/push.md); in a job, `--yes` answers its question about data whose source wanted an account or accepted terms, so decide first who may read the mirror.
 
 ## exact inputs
 

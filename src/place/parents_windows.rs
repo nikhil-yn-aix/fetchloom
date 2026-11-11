@@ -120,7 +120,7 @@ impl Location {
     pub(super) fn create_file(&self, readonly: bool) -> io::Result<File> {
         const FILE_ATTRIBUTE_READONLY: u32 = 1;
         let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.read(true).write(true).create_new(true);
         if readonly {
             options.attributes(FILE_ATTRIBUTE_READONLY);
         }

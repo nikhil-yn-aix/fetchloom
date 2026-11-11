@@ -9,10 +9,10 @@ use crate::add::sha256_hex as sha256;
 use crate::caps::shown;
 use crate::support::{Result, Routes, Sandbox, delete, edit, file, json, reply, text};
 
-const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
+pub(crate) const IRIS: &[u8] = b"sepal_length,sepal_width,species\n5.1,3.5,setosa\n";
 
 /// every file tests/fixtures/archives/python.zip holds, by its path under the zip's top folder.
-const MEMBERS: [(&str, &[u8]); 5] = [
+pub(crate) const MEMBERS: [(&str, &[u8]); 5] = [
     ("README.md", b"# sample dataset\n"),
     ("data/caf\u{e9}.csv", b"a,b\n"),
     ("data/empty.txt", b""),
@@ -30,7 +30,7 @@ fn ok(output: &Output) -> Result {
 
 /// a source serving one csv file and one zip, and a project in the sandbox's work folder that
 /// pins both, synced once there so the sandbox's cache holds them.
-fn project(sandbox: &Sandbox) -> Result<Routes> {
+pub(crate) fn project(sandbox: &Sandbox) -> Result<Routes> {
     let zip = fs::read(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
     )?;
@@ -97,7 +97,7 @@ fn web_mirror_of(sandbox: &Sandbox) -> Result<Routes> {
 }
 
 /// a fresh clone of the project in the sandbox's work folder, with a cache of its own.
-fn cold(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
+pub(crate) fn cold(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
     let folder = sandbox.folder(name)?;
     for file in ["data.toml", "data.lock"] {
         fs::copy(sandbox.work().join(file), folder.join(file))?;
@@ -106,7 +106,7 @@ fn cold(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
 }
 
 /// the clone at `folder` holds the csv file and every file of the zip.
-fn holds_the_project(folder: &Path) -> Result {
+pub(crate) fn holds_the_project(folder: &Path) -> Result {
     assert_eq!(fs::read(folder.join("data/iris/iris.csv"))?, IRIS);
     for (path, bytes) in MEMBERS {
         assert_eq!(

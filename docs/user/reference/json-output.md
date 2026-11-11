@@ -15,7 +15,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `build`, `status`, `list`, `export`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
+| `command` | `add`, `remove`, `sync`, `lock`, `build`, `status`, `list`, `export`, `push`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
@@ -45,6 +45,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, null for a dataset a recipe makes, `from`, the datasets a recipe makes it from or null for a fetched one, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, nullable `access` (`public`, `login`, `terms` or `unknown`, as the source said), and nullable `locked_files`, an array of `path`, `size`, `sha256` and `url` records, `url` null for a link holding a login, a secret or a control character; counts and `locked_files` describe locked source files, not archive members, or the files of a recipe's pinned result, whose `url` is null. `list <name>` returns only that dataset |
 | `export` | `file`: the absolute path `-o` wrote, or null; `placed`: a record for each file in the data folder, archive members included, with `dataset`, project-relative `path`, `size`, `sha256` and `unpacked_from`, the archive's path in its dataset or null; `sources`: a record for each downloaded file with `dataset`, `path` in the dataset, `size`, `sha256` and `url`, null when the link is not written; `unlocked`: dataset names data.lock does not pin as data.toml asks; `not_unpacked`: project-relative paths of archives whose files this machine does not know; `no_link`: `<dataset>/<path>` of files whose link holds a login, a secret or a control character. without `-o` it lists what is known and exits 0; with `-o` it fails as the text forms do. [export](../commands/export.md#what-it-leaves-out) |
+| `push` | `target`: the mirror's absolute folder; `started`: whether the push started a mirror there; `selected`: the names given, or null; `datasets`: every dataset pushed; `objects` and `bytes`: the files those datasets need on the mirror, each once, and their bytes; `copied` and `copied_bytes`: the files written; `present` and `present_bytes`: the files found there after one look each; `replaced`: how many of `copied` took the place of a damaged copy; `trees`: the lists of archives' files written; `asks`: a `{dataset, access}` record for each dataset that asks first. `offline.missing` and `unconfirmed` keep it. with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); [push](../commands/push.md#json) |
 | `path` | `path`: the absolute path of the dataset, file or subfolder |
 | `status` | `project`: absolute path; the arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `linked`: of `needed`, the bytes of files that also have a name outside the cache, such as a project's hardlink, so deleting them would free nothing; `unneeded`: payload bytes no registered lock needs; `freeable`: of `unneeded`, what `cache gc` frees now: files at least a day old with no other name; `copies`: bytes of files in registered projects that are separate copies of cached files, placed as copies or clones, or placed as hardlinks that lost their link; `unlinked_copies`: of `copies`, those placed as hardlinks; `cloned`: of `copies`, the clones, which share blocks with the cache's copy and take no room of their own until either changes, so `copies - cloned` is what takes room twice; `inputs_only`: null, kept for the raw input only builds read; `projects`: root-path array; `unfinished_downloads`: downloads kept under `partial/` to continue later; `unfinished_bytes`: the disk space they take. byte counts are estimates in payload bytes, [cache](../commands/cache.md#inspect) |
@@ -91,7 +92,7 @@ successful sync still exits 0 if its cache registration cannot be written. human
 
 ## dry runs
 
-`add`, `remove`, `drop`, `sync`, `lock` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
+`add`, `remove`, `drop`, `sync`, `lock`, `push` and `cache gc` with `--dry-run` return their usual result, counting what would happen, plus `dry_run: true` and a `changes` object listing what would change. without `--dry-run` neither field is present.
 
 for `add`, `remove`, `drop` and `sync`, `lock_changed` says whether `data.lock` would change and `placement` counts what placing would do. `changes` has these arrays of project-relative paths:
 
@@ -112,6 +113,8 @@ a file already standing where a file goes whose hash only its download can learn
 ```
 
 for `lock`, `lock_changed` and `datasets` say whether `data.lock` would change and which pins, as far as is known without downloading; `placement` is null. `changes.download` lists the files locking would download first, to learn a hash or, with `--upgrade`, to check a file no checksum pins, which the dry run counts as unchanged until then. `changes.unpack` lists the archives it would unpack to learn what they hold. `place`, `replace` and `remove` are empty.
+
+for `push`, the counts say what it would write, and `changes` has `copy`, a `{path, sha256, size}` record for each file it would copy into the mirror, `path` being the first `<dataset>/<file>` that needs it, and `trees`, the same for each list of an archive's files, `path` naming the archive. it writes nothing, starts no mirror and asks nothing.
 
 for `cache gc`, `removed_objects`, `removed_bytes`, `kept_objects`, `kept_bytes`, `removed_leftovers` and `removed_leftover_bytes` count what gc would remove and keep, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 

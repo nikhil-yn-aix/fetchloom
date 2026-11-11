@@ -263,13 +263,15 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 &["sync"],
                 &["lock"],
                 &["build"],
+                &["push"],
                 &["cache", "gc"],
             ][..],
-            "`add`, `remove`, `sync`, `lock`, `build` and `cache gc` also take ",
+            "`add`, `remove`, `sync`, `lock`, `build`, `push` and `cache gc` also take ",
         ),
         (&[&["add"][..], &["get"]], "`add` and `get` also take "),
         (&[&["add"][..]], "`add` takes "),
         (&[&["get"][..]], "`get` takes "),
+        (&[&["push"][..]], "`push` takes "),
     ] {
         let (_, rest) = options.split_once(intro).ok_or(intro)?;
         // a sentence lists one command's options, or two joined by ", and `get` takes"

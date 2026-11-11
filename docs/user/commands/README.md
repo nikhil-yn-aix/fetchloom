@@ -10,6 +10,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`build`](build.md) | run the recipes in data.toml, pin what they made and place it; `--dry-run` shows the commands first | make a dataset from others with a [recipe](../recipes.md) of yours |
 | [`list`](list.md) | show dataset references, locked sizes and folders | inspect the project manifest and lock |
 | [`export`](export.md) | write the SHA-256 of placed files, or the links of downloaded ones | check files with `sha256sum`, or download them with another tool |
+| [`push`](push.md) | copy the pinned files from the cache into a folder mirror | share a project's data through a lab disk or a usb drive |
 | [`search`](search.md) | find datasets on public catalogs | choose a reference from plain words |
 | [`status`](status.md) | list missing, edited and extra files | check local inputs without downloads |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |
@@ -29,7 +30,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `sync`, `lock`, `build` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror.
 
 | option | effect |
 |---|---|
@@ -42,7 +43,7 @@ every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <
 | `--color <when>` | choose `auto` (default), `always` or `never` |
 | `-C <dir>` | change the working directory before running; help, version and completions ignore it |
 | `--mirror <url>` | ask the [mirror](../mirrors.md) at this web address or folder for pinned files before their sources; repeat it for more. these come before the mirrors the settings name |
-| `-n`, `--dry-run` | with `add`, `remove`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `build`, show what each step would run, and run nothing. explicit `FETCHLOOM_TRACE` output is still written |
+| `-n`, `--dry-run` | with `add`, `remove`, `sync`, `lock` and `cache gc`, plan project and cache changes without applying them; sources may still be asked what a link holds. with `build`, show what each step would run, and run nothing. with `push`, say what would be copied to the mirror, and copy nothing. explicit `FETCHLOOM_TRACE` output is still written |
 | `-h`, `--help` | print help, including after a command |
 | `-V`, `--version` | print the version; root-level option |
 

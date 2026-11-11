@@ -1,0 +1,7 @@
+---
+source: tests/cli/push.rs
+expression: stderr
+---
+    Started a mirror in [sandbox]/lab/mirror
+     Pushed 6 files · 91 B to [sandbox]/lab/mirror
+         Ok every file dataset and iris need is on the mirror

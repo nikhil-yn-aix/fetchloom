@@ -150,7 +150,7 @@ impl Location {
         native::openat(
             &self.parent.file,
             &self.name,
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::from_bits_truncate(mode),
         )
         .map(File::from)

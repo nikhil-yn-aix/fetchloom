@@ -615,7 +615,8 @@ impl Placer {
         self.location(path, false)?.create_folder()
     }
 
-    /// creates a new file through its parent, with a writable handle even when its mode is read-only.
+    /// creates a new file through its parent, with a handle that writes it even when its mode is
+    /// read-only, and reads it, so what was written can be read back through the same file.
     pub(crate) fn create_file(&self, path: &Path, readonly: bool) -> io::Result<File> {
         check_stop(&self.stop)?;
         self.location(path, false)?.create_file(readonly)

@@ -77,7 +77,7 @@ chmod 2770 /scratch/lab/fetchloom-cache
 
 then each member runs `umask 002`, so the files and folders they add stay writable for the group, and sets `FETCHLOOM_CACHE=/scratch/lab/fetchloom-cache`. fetchloom keeps a folder's permissions once it exists. linux usually refuses a hardlink to a file someone else owns, so fetchloom places files another member downloaded as reflinks or copies. [concepts](concepts.md#cache) has the rules for sharing a cache.
 
-a lab that would rather not share a cache can share a [mirror](mirrors.md): a folder of pinned files each person's own cache copies from and checks before use. each member sets `mirrors = ["/scratch/lab/fetchloom-mirror"]` in their settings file, and nobody needs to write to anyone else's cache.
+a lab that would rather not share a cache can share a [mirror](mirrors.md): a folder of pinned files each person's own cache copies from and checks before use. each member sets `mirrors = ["/scratch/lab/fetchloom-mirror"]` and `push_to = "/scratch/lab/fetchloom-mirror"` in their settings file; whoever synced a project fills the mirror with [`fetchloom push`](commands/push.md), and nobody needs to write to anyone else's cache.
 
 ## no internet on compute nodes
 

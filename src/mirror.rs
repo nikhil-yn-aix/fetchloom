@@ -26,6 +26,10 @@ pub(crate) const MARKER: &str = "fetchloom-mirror";
 pub(crate) const MARKER_LINE: &str = "fetchloom mirror 1";
 /// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
 pub(crate) const LARGEST_TREE: u64 = 64 * 1024 * 1024;
+/// the folder of a mirror that holds pinned files.
+pub(crate) const OBJECTS: &str = "objects";
+/// the folder of a mirror that holds trees.
+pub(crate) const TREES: &str = "trees";
 
 /// where a mirror is.
 #[derive(Clone, Debug, PartialEq, Eq)]

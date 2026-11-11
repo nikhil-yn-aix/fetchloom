@@ -17,6 +17,7 @@
     - [build](user/commands/build.md)
     - [list](user/commands/list.md)
     - [export](user/commands/export.md)
+    - [push](user/commands/push.md)
     - [search](user/commands/search.md)
     - [status](user/commands/status.md)
     - [path](user/commands/path.md)

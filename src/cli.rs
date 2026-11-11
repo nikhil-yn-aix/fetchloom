@@ -17,6 +17,7 @@ mod list;
 mod logs;
 mod path;
 mod project;
+mod push;
 mod remove;
 mod search;
 mod settings;
@@ -688,6 +689,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Export(args) => {
             let outcome = blocking(context, move |context| export::run(context, &args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Push(args) => {
+            let outcome = blocking(context, move |context| push::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

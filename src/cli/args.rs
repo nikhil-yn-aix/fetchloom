@@ -79,6 +79,13 @@ on disk: nothing. it reads data.toml and data.lock";
 
 on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive";
 
+    pub(super) const PUSH: &str = "examples:
+  fetchloom push --to /mnt/lab/fetchloom
+  fetchloom push iris --dry-run
+  fetchloom push --to /media/usb/fetchloom --json
+
+on disk: copies the files data.lock lists from the cache into the mirror folder, which it starts when the folder is new or empty. it never changes the project or the cache. --dry-run writes nothing";
+
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
   fetchloom path iris/Iris.csv
@@ -500,6 +507,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom export [options] [name]...", help_template = TEMPLATE, after_help = examples::EXPORT)]
     Export(Export),
 
+    /// copy the files data.lock lists into a folder mirror
+    #[command(override_usage = "fetchloom push [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(PUSH_DRY_RUN)), after_help = examples::PUSH)]
+    Push(Push),
+
     /// print where a dataset or a file in it is, syncing it if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
@@ -545,6 +556,7 @@ impl Command {
             Command::Status(_) => "status",
             Command::List(_) => "list",
             Command::Export(_) => "export",
+            Command::Push(_) => "push",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
@@ -685,6 +697,10 @@ const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it"
 /// `--dry-run` help for `build`, which says what would run.
 const BUILD_DRY_RUN: &str =
     "say what each step would run, what it reads and where its result goes; run nothing";
+
+/// `--dry-run` help for `push`, which writes only the mirror.
+const PUSH_DRY_RUN: &str =
+    "say what would be copied to the mirror and what is there already; copy nothing";
 
 /// `--dry-run`, for the commands that change files.
 #[derive(Clone, Copy, Debug, clap::Args)]
@@ -855,6 +871,23 @@ pub(crate) struct Export {
     /// replace the file -o names when it exists
     #[arg(long, requires = "output", help_heading = "options")]
     pub(crate) force: bool,
+}
+
+/// copy the files data.lock lists into a folder mirror
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Push {
+    /// the datasets to push, by their names in data.toml; every dataset sync places when none
+    /// is named
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
+
+    /// the mirror folder to copy the files into; the `push_to` setting names it otherwise. a new
+    /// or empty folder becomes a mirror
+    #[arg(long, value_name = "folder", help_heading = "options")]
+    pub(crate) to: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// what `export` writes.

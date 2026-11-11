@@ -161,7 +161,7 @@ sync drops an archive's own bytes once its files are in the cache, unless anothe
 
 an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.
 
-`access` is a hint for sharing the files, never a licence check. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
+`access` is a hint for sharing the files, never a licence check: [`push`](../commands/push.md#data-you-may-not-share) asks before copying a dataset whose `access` is not `public` into a mirror. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
 
 DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment. a competition file kaggle sent as a zip of itself is recorded at its path plus `.zip`, with `unpacks_to`.
 

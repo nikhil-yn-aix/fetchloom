@@ -7,7 +7,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | running workflows: steps at once, on a scheduler, or in a sandbox | `fetchloom build` runs [recipes](recipes.md) one step at a time, as you, on the machine it runs on, with no sandbox; on windows ending a step ends its own process, not what it started. for steps in parallel or jobs on a scheduler, call fetchloom from make, snakemake, nextflow or your script |
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
-| cloud copying, and writing mirrors | use a transfer application such as rclone; fetchloom reads [mirrors](mirrors.md) but does not fill them |
+| cloud copying, and web mirrors | [`fetchloom push`](commands/push.md) fills a folder [mirror](mirrors.md); copy that folder to a server or a bucket with a transfer application such as rclone |
 | requester-pays buckets, private google cloud storage buckets and AWS keys from roles or IAM identity center | use the provider's own tools, or export the keys; fetchloom reads [private S3 buckets](sources/buckets.md#private-s3-buckets) with keys from the environment or `~/.aws` |
 | search beyond hugging face, kaggle and zenodo | choose a reference from the source's own catalog |
 | plugins | source adapters live in the fetchloom crate |

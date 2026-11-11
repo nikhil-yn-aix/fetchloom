@@ -16,6 +16,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [build](commands/build.md) | run the recipes in data.toml, pin what they made and place it |
 | [list](commands/list.md) | see dataset references, locked sizes and folders |
 | [export](commands/export.md) | write checksums or links of the project's files for other tools |
+| [push](commands/push.md) | copy a project's pinned files into a folder mirror others sync from |
 | [search](commands/search.md) | find a dataset by words and choose a canonical reference |
 | [status](commands/status.md) | find missing, edited and extra files |
 | [path](commands/path.md) | locate a dataset, file or subfolder |

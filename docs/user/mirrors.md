@@ -126,22 +126,30 @@ mirror-only mode is fetchloom's promise not to ask anything else; a person can t
 
 ## filling a folder mirror
 
-a mirror is filled by copying files under their SHA-256, as a cache holds them. on linux or macos, from a cache that synced the project:
+[`fetchloom push`](commands/push.md) fills a folder mirror from this machine's cache with the files a project's `data.lock` pins and the lists of what its archives unpack to, each checked before it takes its name. a lab names its mirror once in each member's settings file, both to read from and to push to:
 
-```sh
-mirror=/mnt/lab/fetchloom
-cache=~/.cache/fetchloom
-mkdir -p "$mirror/trees"
-printf 'fetchloom mirror 1\n' > "$mirror/fetchloom-mirror"
-cp -R "$cache/objects" "$mirror/"
-for record in "$cache"/unpacked/*; do
-  hash=$(sha256sum "$record" | cut -c1-64)
-  mkdir -p "$mirror/trees/${hash:0:2}"
-  cp "$record" "$mirror/trees/${hash:0:2}/${hash:2}"
-done
+```toml
+mirrors = ["/mnt/lab/fetchloom"]
+push_to = "/mnt/lab/fetchloom"
 ```
 
-a cache holds the files of every project that used it, so copy only what you may share. [cache folder](reference/cache-folder.md) says where your cache is. fetchloom only reads mirrors; it never writes one, and a damaged copy stays until someone replaces it.
+whoever synced the project pushes it, and their teammates' syncs then take the files from the nas:
+
+```sh
+fetchloom push
+```
+
+at a terminal, from a real run with the mirror's path shortened:
+
+```text
+the sources of iris and pets did not say who may read them. anyone who can read /mnt/lab/fetchloom can take their files from there. push them anyway? [y/N] y
+    Started a mirror in /mnt/lab/fetchloom
+     Pushed 6 files · 106 B to /mnt/lab/fetchloom
+         Ok every file iris and pets need is on the mirror
+  next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file
+```
+
+push copies the project's files alone, never the rest of a cache other projects share, and it asks first about data whose source wanted an account or accepted terms, or did not say who may read it. it writes folders only: a web mirror or a bucket gets a folder mirror through a copying tool such as rclone. a push replaces a copy of another size it finds; a copy of the right size with other bytes, which `sync` warns about, goes once someone deletes it and pushes again.
 
 ## privacy
 
@@ -149,4 +157,4 @@ a mirror is asked only for files the cache lacks, by their SHA-256 alone: no pro
 
 ## a mirror is not an archive
 
-a mirror keeps bytes, not their licences, versions, retention or access rules. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. to preserve data, deposit it where it gets a DOI.
+a mirror keeps bytes, not their licences, versions, retention or access rules: anyone who can read it can take what was pushed there. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. to preserve data, deposit it where it gets a DOI.
