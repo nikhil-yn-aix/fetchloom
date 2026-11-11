@@ -26,6 +26,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 |---|---|
 | `--check` | run every step again from the inputs `data.lock` pins and compare what each makes with `data.lock`, file by file; `data.lock` and the data folder stay as they are. [check](#check) has the details |
 | `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
+| `--prepare` | put in the cache everything the build, or with `--check` the check, would read, from a mirror first, and run nothing, as on a login node before a job builds without the network. [prepare](#prepare) has the details |
 | `--locked` | fail with `lock.outdated`, exit 1, instead of changing `data.lock`, for CI: before anything is fetched or run when `data.lock` does not pin every dataset the steps need as `data.toml` asks, and when building would change a pin anyway |
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
@@ -127,6 +128,18 @@ error: data.lock is out of date: clean changed since it was built
 
 `--check` cannot be combined with `--accept` or `--dry-run`. with `--locked` it is the check CI runs, [CI](../ci.md#recipes) shows.
 
+## prepare
+
+`fetchloom build --prepare` fetches what a build of the named recipes would read and runs nothing, so a build on a machine without the network, such as a cluster's compute node, finds it all in the cache. for each step the build would run, it puts in the cache the files of the datasets the step reads, asking a [mirror](../mirrors.md) before their source as a build does, and the pinned result of each recipe the step reads. a step `data.lock` pins as building it now would make needs only its own result: it is `Up to date` when the cache holds it, and `Fetched` when a mirror gave the files the cache lacked. with `--check`, every step counts as one that runs. a fetched dataset whose entry changed in `data.toml` is pinned anew and written to `data.lock`, as `fetchloom lock` would, so the later build needs no network for it either; with `--locked`, it is `lock.outdated` instead. this output is from a project whose `clean` reads `iris`, with a cache that did not hold it yet:
+
+```text
+ Downloaded 1 file · 72 B in 30 ms
+   Prepared clean · what it reads is on this machine
+         Ok a build of these steps reads only what this machine holds now; nothing ran
+```
+
+`fetchloom --offline build` then runs the step with no request. [HPC](../hpc.md#recipes-in-jobs) shows the two halves on a cluster. `--prepare` cannot be combined with `--accept` or `--dry-run`.
+
 ## a rebuild that differs
 
 a step that runs again for a key `data.lock` pins, and makes other files than the ones it pins, stops the build with `build.differs`, exit 60. `data.lock`, `data.lock.d` and the data folder stay as they were, and the error says which files differ. this output is from a project where `emb` writes random bytes with `python3 embed.py`, built again after its file left the cache:
@@ -189,9 +202,9 @@ when every step is up to date, the last line says so:
 | field | value |
 |---|---|
 | `name` | the recipe |
-| `action` | `ran`, `reused`, `fetched`, `up_to_date`, with `--accept` `accepted`, and with `--check` `ran` or `skipped` |
-| `key` | the key of its result, `sha256:` and 64 hex digits |
-| `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits; for a step that differs, the tree `data.lock` keeps |
+| `action` | `ran`, `reused`, `fetched`, `up_to_date`, with `--accept` `accepted`, with `--check` `ran` or `skipped`, and with `--prepare` `prepared`, `fetched` or `up_to_date` |
+| `key` | the key of its result, `sha256:` and 64 hex digits; with `--prepare`, null while a recipe it reads would run first |
+| `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits; for a step that differs, the tree `data.lock` keeps; with `--prepare`, null while `data.lock` pins no result for its key |
 | `files`, `bytes` | how many files its result holds, and their size |
 | `check` | for a step checked, or one that ran again for a key `data.lock` pins and made other files, `matching`, the count of files that match, and `changed`, `missing` and `extra`, every path of each; else null |
 | `candidate` | the tree of the files a step that differs made, kept for `--accept`; else null |

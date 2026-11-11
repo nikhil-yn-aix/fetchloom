@@ -1439,6 +1439,42 @@ fn locked_build_never_writes_data_lock() -> Result {
     Ok(())
 }
 
+/// `--prepare` puts in the cache everything a build of the recipes reads and runs nothing, as on
+/// a login node, so a build without the network afterwards, as in a job, makes no request.
+#[test]
+fn prepare_fetches_inputs_so_an_offline_build_makes_no_requests() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &sandbox.work(), args)?
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .output()?)
+    };
+    let pinned = pins(&sandbox.work())?;
+    let prepared = there(&["--json", "build", "--prepare"])?;
+    assert_eq!(
+        prepared.status.code(),
+        Some(0),
+        "{}",
+        text(&prepared.stdout)?
+    );
+    let document = json(&prepared)?;
+    assert_eq!(document["result"]["steps"][0]["action"], "prepared");
+    assert_eq!(runs(&sandbox.work())?, 0, "preparing runs nothing");
+    assert_eq!(server.requests().len(), 2, "iris came into the new cache");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert!(!sandbox.work().join("data").join("clean").exists());
+    let built = there(&["--json", "--offline", "build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stdout)?);
+    let document = json(&built)?;
+    assert_eq!(document["result"]["steps"][0]["action"], "ran");
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(server.requests().len(), 2);
+    Ok(())
+}
+
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
 /// `--accept` refuses it and changes nothing.
 #[test]

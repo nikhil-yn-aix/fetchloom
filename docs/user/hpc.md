@@ -85,12 +85,14 @@ a node without internet can still use the data the cache holds. prepare online, 
 
 ## recipes in jobs
 
-`fetchloom build` runs each [recipe](recipes.md)'s step on the machine it runs on, one step at a time, so run it inside a job when a step needs the cluster. a step reads its inputs from the cache, so a job on a node without internet builds offline once the login node has put them there:
+`fetchloom build` runs each [recipe](recipes.md)'s step on the machine it runs on, one step at a time, so run it inside a job when a step needs the cluster. a step reads its inputs from the cache, so a job on a node without internet builds offline once the login node has put them there. `fetchloom build --prepare` fetches everything the build would read, from a [mirror](mirrors.md) first, and runs nothing:
 
 ```sh
-fetchloom sync                  # on the login node
+fetchloom build --prepare       # on the login node
 fetchloom --offline build       # in the job
 ```
+
+with the cache on a shared disk both see, the job's build makes no request. a name, as in `fetchloom build --prepare clean`, prepares that recipe and the ones it is made from.
 
 a job that ends before its build does leaves `data.lock` and the data folder as they were, and the next build clears what the step left in the cache's `tmp` folder. two of your jobs that build one recipe from the same inputs into one cache run its step once: the second waits for the first and takes its result. in [one cache for a whole lab](#one-cache-for-a-whole-lab), another person's build waits too, then runs the step itself, since a build reuses only results its own user recorded. a step that submits jobs of its own must wait for them to finish, since fetchloom takes in `{out}` as the step leaves it.
 

@@ -832,6 +832,10 @@ pub(crate) struct Lock {
 
 /// run the recipes and record their results in data.lock
 #[derive(Clone, Debug, clap::Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a yes or no on the command line"
+)]
 pub(crate) struct Build {
     /// the recipes to build, by their names in data.toml, with the recipes they are made from;
     /// all of them when none is named
@@ -853,6 +857,11 @@ pub(crate) struct Build {
     /// for CI
     #[arg(long, conflicts_with = "accept", help_heading = "options")]
     pub(crate) locked: bool,
+
+    /// fetch everything the build, or with --check the check, would read, from a mirror
+    /// first, and run nothing, as on a login node before a job builds without the network
+    #[arg(long, conflicts_with_all = ["dry_run", "accept"], help_heading = "options")]
+    pub(crate) prepare: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

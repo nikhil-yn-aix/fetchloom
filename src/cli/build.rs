@@ -73,10 +73,12 @@ pub(super) struct Built {
 struct Done {
     name: String,
     action: Did,
-    /// the key of its result, `sha256:` and its hash.
-    key: String,
-    /// the tree of the files its result holds, `sha256:` and its hash.
-    tree: String,
+    /// the key of its result, `sha256:` and its hash, which `--prepare` leaves out when a recipe
+    /// it reads would run first.
+    key: Option<String>,
+    /// the tree of the files its result holds, `sha256:` and its hash, which `--prepare` leaves
+    /// out when data.lock pins no result of it for its key.
+    tree: Option<String>,
     files: u64,
     bytes: u64,
     /// how the files it made when it ran again differ from the ones data.lock pins for its key,
@@ -111,6 +113,8 @@ enum Did {
     /// `--check` could not run it, since data.lock's result of a recipe it reads is not in the
     /// cache or on a mirror, as after that recipe's check made other files.
     Skipped,
+    /// `--prepare` put in the cache everything a build of it reads, and ran nothing.
+    Prepared,
 }
 
 /// what `build --dry-run` found.
@@ -185,6 +189,10 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
             .map(|built| Report::Built(Box::new(built)));
     }
     let mut building = Building::start(context, &project, &args.names, current).await?;
+    if args.prepare {
+        building.prepare(args.check).await?;
+        return Ok(Report::Built(Box::new(building.report)));
+    }
     if args.check {
         building.check().await?;
         return Ok(Report::Built(Box::new(building.report)));
@@ -636,6 +644,102 @@ impl<'a> Building<'a> {
         }
         done.check = Some(compared);
         Ok(done)
+    }
+
+    /// puts in the cache everything a build of the recipes, or with `check` a check of them,
+    /// reads, mirrors first, and runs nothing: the datasets each step that would run reads, and
+    /// the pinned results a build would take as they are. the sources the build pins anew are
+    /// written to data.lock, so a later build needs no network for them either.
+    async fn prepare(&mut self, check: bool) -> Result<(), Error> {
+        let output = &self.context.output;
+        let mut running: BTreeSet<String> = BTreeSet::new();
+        for name in self.recipes.clone() {
+            let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, &name)?
+                .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
+            let after = step.inputs.iter().any(|read| running.contains(&read.name));
+            let key = step.key();
+            let pinned = self
+                .lock
+                .result(&name)
+                .filter(|pinned| Some(pinned.key) == key)
+                .map(|pinned| (pinned.key, pinned.tree, pinned.files.clone()));
+            if !check
+                && !after
+                && let Some((key, tree, files)) = &pinned
+            {
+                if whole(&self.work.cache, files) {
+                    output.step("Up to date", &name);
+                    self.report
+                        .steps
+                        .push(done(Did::UpToDate, &name, *key, *tree, files));
+                    continue;
+                }
+                if self.fetched(&name, files).await? {
+                    output.step(
+                        "Fetched",
+                        &format!("{name} · {} as data.lock pins it", sized(files)),
+                    );
+                    self.report
+                        .steps
+                        .push(done(Did::Fetched, &name, *key, *tree, files));
+                    continue;
+                }
+            }
+            for read in step.inputs.iter().filter(|read| read.made) {
+                if !running.contains(&read.name)
+                    && let Some(result) = self.lock.result(&read.name)
+                {
+                    let files = result.files.clone();
+                    self.fetched(&read.name, &files).await?;
+                }
+            }
+            let sources: BTreeSet<&str> = step
+                .inputs
+                .iter()
+                .filter(|read| !read.made)
+                .map(|read| read.name.as_str())
+                .collect();
+            self.work
+                .ready(&self.manifest, &self.lock, &sources)
+                .await?;
+            output.step(
+                "Prepared",
+                &format!("{name} · what it reads is on this machine"),
+            );
+            let (tree, files) = match &pinned {
+                Some((_, tree, files)) => (Some(*tree), files.as_slice()),
+                None => (None, &[][..]),
+            };
+            self.report.steps.push(Done {
+                name: name.clone(),
+                action: Did::Prepared,
+                key: key.map(|key| format!("sha256:{key}")),
+                tree: tree.map(|tree| format!("sha256:{tree}")),
+                files: files.len() as u64,
+                bytes: files.iter().map(|file| file.size).sum(),
+                check: None,
+                candidate: None,
+                log: None,
+                seconds: None,
+            });
+            running.insert(name);
+        }
+        let written = self.work.write_lock(&self.before, &self.lock)?;
+        self.report.lock_changed = written.is_some();
+        self.report.datasets = repinned(&self.before, &self.lock);
+        if self.recipes.is_empty() {
+            output.done(
+                "Ok",
+                "data.toml has no recipes, so there is nothing to prepare",
+            );
+        } else {
+            output.done(
+                "Ok",
+                "a build of these steps reads only what this machine holds now; nothing ran",
+            );
+            output.next("run `fetchloom --offline build` where the steps should run");
+        }
+        Ok(())
     }
 
     /// `error`, with what the build did so far beside it for `--json`.
@@ -1105,8 +1209,8 @@ fn done(action: Did, name: &str, key: Sha256, tree: Sha256, files: &[Member]) ->
     Done {
         name: name.to_owned(),
         action,
-        key: format!("sha256:{key}"),
-        tree: format!("sha256:{tree}"),
+        key: Some(format!("sha256:{key}")),
+        tree: Some(format!("sha256:{tree}")),
         files: files.len() as u64,
         bytes: files.iter().map(|file| file.size).sum(),
         check: None,
