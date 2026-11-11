@@ -185,4 +185,4 @@ paths in this record retain their archive folders; placement may strip a shared 
 
 ## encoding and validation
 
-locks are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys fail, and the parser lists the allowed fields. duplicate dataset names are refused with `project.invalid` and lock-recovery help. restore the intended lock rather than relying on one duplicate to win.
+locks are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys fail, and the parser lists the allowed fields. duplicate dataset names are refused with `project.invalid` and lock-recovery help. restore the intended lock rather than relying on one duplicate to win. a dataset name data.toml would refuse, such as `../outside`, is refused the same way, since a name also names its list's parts in `data.lock.d`.

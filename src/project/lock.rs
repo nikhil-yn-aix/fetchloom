@@ -486,10 +486,21 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
 /// is in the writer's form, otherwise through the general TOML reader.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    match canonical::read(text, false).or_else(|| canonical::read(text, true)) {
-        Some(parsed) => Ok(parsed),
-        None => parse_toml(text),
+    let parsed = match canonical::read(text, false).or_else(|| canonical::read(text, true)) {
+        Some(parsed) => parsed,
+        None => parse_toml(text)?,
+    };
+    // a name becomes a path in data.lock.d, and a cloned lock is untrusted
+    if let Some(entry) = parsed
+        .iter()
+        .find(|entry| !crate::name::is_dataset_name(entry.name()))
+    {
+        return Err(broken(format!(
+            "data.lock names a dataset \"{}\", which is not a valid dataset name",
+            entry.name()
+        )));
     }
+    Ok(parsed)
 }
 
 /// the datasets any valid TOML of the lock's format gives, sorted by name, each source's files
@@ -810,6 +821,29 @@ mod tests {
             assert_eq!(error.kind, Kind::ProjectInvalid);
             assert!(error.message.contains("twice"), "{}", error.message);
             assert_eq!(error.help.as_deref(), Some(BROKEN));
+        }
+    }
+
+    /// a cloned data.lock is untrusted, and a name becomes a path in data.lock.d, so the lock
+    /// takes only names data.toml takes.
+    #[test]
+    fn a_name_data_toml_refuses_is_refused_by_both_readers() {
+        for name in ["../outside", "a/b", "a\\b"] {
+            let mut lock = sample();
+            lock.datasets[0].name = name.to_owned();
+            let canonical = lock.render();
+            let edited = format!("# edited lock\n{canonical}");
+            for text in [canonical, edited] {
+                let error = Lock::parse(&text).unwrap_err();
+                assert_eq!(error.kind, Kind::ProjectInvalid, "{name}");
+                assert_eq!(
+                    error.message,
+                    format!(
+                        "data.lock names a dataset \"{name}\", which is not a valid dataset name"
+                    ),
+                );
+                assert_eq!(error.help.as_deref(), Some(BROKEN));
+            }
         }
     }
 
