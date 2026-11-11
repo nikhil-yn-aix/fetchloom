@@ -79,6 +79,23 @@ class DocumentationLinks(unittest.TestCase):
                     if fragment and target.suffix == ".md" and not link.startswith(BLOB):
                         self.assertIn(fragment, anchors(target), "the link names no heading")
 
+    def test_every_user_page_is_listed(self):
+        """the site's sidebar, the user guide's index and llms.txt each name every user page; a page
+        SUMMARY.md leaves out is not published."""
+        user = ROOT / "docs" / "user"
+        pages = {page.resolve() for page in user.rglob("*.md")}
+        for index in (ROOT / "docs" / "SUMMARY.md", user / "README.md", ROOT / "llms.txt"):
+            listed = {
+                (index.parent / unquote(urlsplit(link).path)).resolve()
+                for _, link in links(index)
+                if not urlsplit(link).scheme
+            }
+            missing = sorted(
+                page.relative_to(user).as_posix() for page in pages - listed - {index.resolve()}
+            )
+            with self.subTest(index=index.relative_to(ROOT).as_posix()):
+                self.assertEqual(missing, [], "these user pages are not listed")
+
 
 if __name__ == "__main__":
     unittest.main()
