@@ -12,7 +12,7 @@ use super::args;
 use super::project::{Run, Waited, find, hold_until, ignore_data, known, locked, sync_all};
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
-use super::sync::{Loop, Scope};
+use super::sync::{self, Loop, Scope};
 use super::{Context, open_cache};
 use crate::cache::Cache;
 use crate::digest;
@@ -43,6 +43,12 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     let lock = project.lock()?;
     unbuilt(&manifest, lock.as_ref(), name)?;
     let mut cache = None;
+    let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
+    let tell_stale = |manifest: &Manifest, lock: Option<&Lock>| {
+        if let Some(lock) = lock {
+            sync::tell_stale(&context.output, &project.root, manifest, lock, &scope);
+        }
+    };
     let path = if let Some(path) = ready_path(
         context,
         &project,
@@ -52,12 +58,16 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         name,
         file,
     )? {
+        tell_stale(&manifest, lock.as_ref());
         path
     } else {
         drop(lock);
         drop(manifest);
         match hold_path(context, &project, &mut cache, name, file, before).await? {
-            Waited::Ready(path) => path,
+            Waited::Ready(path) => {
+                tell_stale_again(context, &project, name, &scope)?;
+                path
+            }
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
                 answerable(&manifest, name)?;
@@ -72,9 +82,9 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                     name,
                     file,
                 )? {
+                    tell_stale(&manifest, read.as_ref().map(|(lock, _)| lock));
                     path
                 } else {
-                    let scope = Scope::Only(BTreeSet::from([name.to_owned()]));
                     if args.locked {
                         locked(
                             &project,
@@ -88,8 +98,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                         Some(cache) => cache,
                         None => open_cache()?,
                     };
-                    let work =
-                        Loop::new(context, &project, Arc::new(context.net()), cache).within(scope);
+                    let work = Loop::new(context, &project, Arc::new(context.net()), cache)
+                        .within(scope.clone());
                     let seen = Seen {
                         manifest: digest::sha256(text.as_bytes()),
                         lock: read
@@ -142,6 +152,26 @@ fn answerable(manifest: &Manifest, name: &str) -> Result<(), Error> {
     Err(error.help(format!(
         "set place = true on datasets.{name} in data.toml, then run `fetchloom sync {name}`"
     )))
+}
+
+/// warns about the recipe `name` as [`sync::tell_stale`] does, once another run made it ready,
+/// from data.toml and data.lock as that run left them.
+fn tell_stale_again(
+    context: &Context,
+    project: &Project,
+    name: &str,
+    scope: &Scope,
+) -> Result<(), Error> {
+    let (_, manifest) = project.manifest()?;
+    if manifest
+        .datasets
+        .get(name)
+        .is_some_and(|entry| entry.recipe().is_some())
+    {
+        let lock = project.lock()?.unwrap_or_default();
+        sync::tell_stale(&context.output, &project.root, &manifest, &lock, scope);
+    }
+    Ok(())
 }
 
 /// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no

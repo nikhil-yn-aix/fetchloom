@@ -5,12 +5,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::build::{build, building_in, with};
+use serde_json::json;
+
+use crate::build::{build, building_in, runs, with};
+use crate::export::sha256;
 use crate::project::{IRIS, PATH};
-use crate::support::{Result, Sandbox, Server, file, text};
+use crate::support::{Result, Sandbox, Server, delete, file, json, text};
 
 /// a recipe that makes `clean` from iris: the file clean.csv, holding `done`.
 const WRITE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\n";
+
+/// [`WRITE`], with clean.py as its code.
+const WRITE_CODE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
 
 /// sets `place = false` on the dataset `name` in the data.toml of the project at `folder`.
 fn unplace(folder: &Path, name: &str) -> Result {
@@ -36,6 +42,221 @@ fn cloned(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
         fs::copy(entry.path(), parts.join(entry.file_name()))?;
     }
     Ok((folder, sandbox.folder(&format!("{name}-cache"))?))
+}
+
+/// how many of the warnings in the `--json` document `output` printed are `warning`.
+fn warned(output: &std::process::Output, warning: &str) -> Result<usize> {
+    Ok(json(output)?["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|told| *told == warning)
+        .count())
+}
+
+/// the cached object holding `bytes`, in the cache at `cache`.
+fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
+    let hex = sha256(bytes);
+    cache.join("objects").join(&hex[..2]).join(&hex[2..])
+}
+
+/// a recipe data.lock pins nothing of has nothing a sync could place, so a sync of every
+/// dataset says so, while a sync that names it fails as `path` does.
+#[test]
+fn sync_warns_of_a_recipe_not_built_yet() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["warnings"],
+        json!(["clean is not built yet; run `fetchloom build clean` to make it"])
+    );
+    let named = sandbox.run(&["--json", "sync", "clean"])?;
+    assert_eq!(named.status.code(), Some(60), "{}", text(&named.stdout)?);
+    let error = &json(&named)?["errors"][0];
+    assert_eq!(error["kind"], "build.needed");
+    assert_eq!(
+        error["message"],
+        "data.lock is out of date: clean is not built yet"
+    );
+    assert_eq!(error["fix"], serde_json::Value::Null);
+    Ok(())
+}
+
+/// a recipe whose code changed since its build keeps the result data.lock pins: sync and path
+/// place that result and say what changed and which build makes it again, once each.
+#[test]
+fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE_CODE)?;
+    let code = sandbox.work().join("clean.py");
+    fs::write(&code, "print('before')\n")?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    fs::write(&code, "print('after')\n")?;
+    let warned_text = "clean changed since it was built: clean.py changed; data.lock still pins the result built before; `fetchloom build clean` builds it again";
+    let placed = sandbox.work().join("data").join("clean").join("clean.csv");
+    for args in [
+        &["--json", "sync"][..],
+        &["--json", "sync", "clean"],
+        &["--json", "path", "clean"],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stdout)?
+        );
+        assert_eq!(json(&output)?["warnings"], json!([warned_text]), "{args:?}");
+    }
+    delete(&placed)?;
+    let output = sandbox.run(&["--json", "path", "clean"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        warned(&output, warned_text)?,
+        1,
+        "{}",
+        text(&output.stdout)?
+    );
+    assert_eq!(fs::read(&placed)?, b"done");
+    let told = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(
+        told.contains("warning: clean changed since it was built: clean.py changed\n"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 1, "only the build ran the step");
+    Ok(())
+}
+
+/// a sync or path of a recipe alone relocks and fetches nothing of what it is made from: it
+/// reads the inputs' pins and entries to tell that one changed in data.toml, and places the
+/// result from the cache.
+#[test]
+fn a_named_sync_reads_its_inputs_and_fetches_none_of_them() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    delete(&object(&sandbox.cache(), IRIS))?;
+    let manifest = sandbox.work().join("data.toml");
+    let changed = fs::read_to_string(&manifest)?.replacen(
+        "[datasets.iris]\n",
+        "[datasets.iris]\nselect = \"*.csv\"\n",
+        1,
+    );
+    fs::write(&manifest, changed)?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let placed = sandbox.work().join("data").join("clean").join("clean.csv");
+    delete(&placed)?;
+    let warned_text = "clean changed since it was built: iris changed in data.toml; data.lock still pins the result built before; `fetchloom build clean` builds it again";
+    for args in [
+        &["--json", "sync", "clean"][..],
+        &["--json", "path", "clean"],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stdout)?
+        );
+        assert_eq!(warned(&output, warned_text)?, 1, "{args:?}");
+    }
+    assert_eq!(fs::read(&placed)?, b"done");
+    assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// a clone whose cache lacks a pinned result that no mirror holds has nothing sync can place for
+/// it, so status names the build that makes it rather than the result's files, and names the
+/// input the build would fetch first.
+#[test]
+fn status_lists_a_result_no_cache_or_mirror_holds_as_unbuilt() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let (folder, cache) = cloned(&sandbox, "clone")?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(sandbox
+            .command_in(&folder, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?)
+    };
+    let document = json(&there(&["--json", "status"])?)?;
+    assert_eq!(document["result"]["unbuilt"], json!(["clean"]));
+    assert_eq!(document["result"]["missing"], json!(["data/iris/iris.csv"]));
+    let told = text(&there(&["status"])?.stderr)?;
+    assert!(
+        told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is iris, which it is made from\n"),
+        "{told}"
+    );
+    assert!(
+        told.contains("hint: `fetchloom build clean` makes it on this machine\n"),
+        "{told}"
+    );
+    assert!(!told.contains("Missing data/clean"), "{told}");
+    let synced = there(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let told = text(&there(&["status"])?.stderr)?;
+    assert!(
+        told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror\n"),
+        "{told}"
+    );
+    assert!(!told.contains("`fetchloom sync`"), "{told}");
+    Ok(())
+}
+
+/// a clone whose cache lacks a pinned result gets it from a folder mirror that holds it, with
+/// no request to the source and no step run, and status calls its files missing until then.
+#[test]
+fn a_result_only_a_folder_mirror_holds_is_synced_from_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let mirror = sandbox.folder("mirror")?;
+    fs::write(mirror.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    for bytes in [IRIS, b"done".as_slice()] {
+        let hex = sha256(bytes);
+        let fan = mirror.join("objects").join(&hex[..2]);
+        fs::create_dir_all(&fan)?;
+        fs::write(fan.join(&hex[2..]), bytes)?;
+    }
+    let (folder, cache) = cloned(&sandbox, "clone")?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(sandbox
+            .command_in(&folder, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?)
+    };
+    let document = json(&there(&["--json", "status"])?)?;
+    assert_eq!(document["result"]["unbuilt"], json!([]));
+    assert_eq!(
+        document["result"]["missing"],
+        json!(["data/iris/iris.csv", "data/clean/clean.csv"])
+    );
+    let output = there(&["--json", "sync", "--locked"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["work"]["mirror_objects"], 2);
+    assert_eq!(document["result"]["placement"]["unbuilt"], json!([]));
+    assert_eq!(
+        fs::read(folder.join("data").join("clean").join("clean.csv"))?,
+        b"done"
+    );
+    assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    assert_eq!(runs(&folder)?, 0, "sync never runs a step");
+    Ok(())
 }
 
 /// a build of a recipe made from a dataset with `place = false` places only the result and

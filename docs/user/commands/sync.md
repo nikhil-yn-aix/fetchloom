@@ -142,6 +142,18 @@ warning: clean's pinned result is not on this machine or a mirror, so it is left
 
 `sync clean`, which names the recipe, and `sync --locked` stop instead with `build.needed`, exit 60, before anything is placed.
 
+a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` with the build as help and exits 0, while `sync clean` stops with `build.needed`, exit 60.
+
+a recipe that changed since its build, as when its code, `run`, `env` or a dataset it reads moved, keeps the result data.lock pins until `fetchloom build` makes another. sync places that result as it stands and says what changed, every time it runs, a settled sync too. stderr after clean.py changed:
+
+```text
+warning: clean changed since it was built: clean.py changed
+  help: data.lock still pins the result built before; `fetchloom build clean` builds it again
+         Ok all pinned files are in place by size and time, nothing to do
+```
+
+`sync clean` works on clean alone: it relocks, fetches and places nothing of the datasets clean is made from. it reads their pins in `data.lock` and their entries in `data.toml`, so it still tells that one changed, as `iris changed in data.toml`, and places clean's result from the cache or a mirror. `fetchloom build clean` pins the input again and builds clean.
+
 a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has nothing in the data folder: sync downloads nothing for it, and the first sync after `place = false` was set removes what sync placed of it before, unchanged files only, with one line for the dataset:
 
 ```text

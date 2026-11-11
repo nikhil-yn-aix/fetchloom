@@ -70,7 +70,7 @@ a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, 
 
 `fetchloom push --inputs <recipe>` copies a recipe's pinned result and every dataset it is made from into a folder [mirror](mirrors.md), so a reviewer whose sources are gone can rebuild it from there.
 
-no command but `build` runs a step. `sync` places a pinned result from the cache like any dataset, also after its recipe changed, and never builds it. a pinned result neither the cache nor a [mirror](mirrors.md) holds, as in a fresh clone, is left out of a sync of every dataset with a warning naming `fetchloom build` with the recipe, while `sync <recipe>` and `sync --locked` fail with `build.needed`, exit 60, as [sync](commands/sync.md#recipe-results) shows. `lock` keeps a recipe's pin while `data.toml` has the recipe, and `sync` and `lock` drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` answers a built recipe's folder, and fails with `build.needed` for one never built. `fetchloom export` lists a result's files with their SHA-256, and `cache gc` keeps the files of every result a project's `data.lock` pins.
+no command but `build` runs a step. `sync` places a pinned result from the cache like any dataset, also after its recipe changed, and never builds it; `sync` and `path` then warn what changed, naming the build that makes it again. a recipe not built yet gets the same warning from a sync of every dataset. a pinned result neither the cache nor a [mirror](mirrors.md) holds, as in a fresh clone, is left out of a sync of every dataset with a warning naming `fetchloom build` with the recipe, `status` lists it under `unbuilt` with that build as its hint, and `sync <recipe>` and `sync --locked` fail with `build.needed`, exit 60, as [sync](commands/sync.md#recipe-results) shows. `sync <recipe>` and `path <recipe>` work on that recipe alone: they read the pins of what it is made from to tell that one changed, and fetch nothing of them. `lock` keeps a recipe's pin while `data.toml` has the recipe, and `sync` and `lock` drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` answers a built recipe's folder, and fails with `build.needed` for one never built. `fetchloom export` lists a result's files with their SHA-256, and `cache gc` keeps the files of every result a project's `data.lock` pins.
 
 ## build
 
@@ -131,4 +131,13 @@ the build places the result and retires what the add placed of raw, unchanged fi
          Ok everything matches data.lock by size and time
 ```
 
-a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out with a warning naming the build, and their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. the examples are stderr from one run against a server on this machine.
+a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out, and `status` names the build, and raw, which it reads and the cache lacks too:
+
+```text
+ Not placed raw · place = false in data.toml
+    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is raw, which it is made from
+      Found 1 difference from data.lock
+  hint: `fetchloom build clean` makes it on this machine
+```
+
+their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. the examples are stderr from one run against a server on this machine.

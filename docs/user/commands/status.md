@@ -24,7 +24,7 @@ fetchloom status [options]
 
 1. read the manifest, lock and saved placement state.
 2. compare file sizes and modification times, hashing where those records need checking.
-3. report changed manifest entries, missing or different files, extra paths and unavailable archive trees.
+3. report changed manifest entries, missing or different files, extra paths, unavailable archive trees and recipe results nothing here holds.
 
 a project still as the last complete sync left it, with `data.toml` and `data.lock` unchanged byte for byte and every placed file looking as placed, is settled, as `sync` finds it: status lists only files fetchloom did not place as extra. that holds even when the cache no longer records what an archive held, as after moving the project and running `fetchloom cache gc --now` before any sync there.
 
@@ -37,6 +37,15 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
       Extra data/iris/notes.txt
       Found 2 differences from data.lock
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
+```
+
+stderr in a fresh clone whose cache holds neither the recipe `clean`'s result nor `raw`, which has `place = false` and which clean is made from:
+
+```text
+ Not placed raw · place = false in data.toml
+    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is raw, which it is made from
+      Found 1 difference from data.lock
+  hint: `fetchloom build clean` makes it on this machine
 ```
 
 an `exclude` in a dataset that names a file inside an archive leaves the file where it is, since a dataset's patterns choose among the files its source lists. status then adds a hint naming the [`fetchloom drop`](drop.md) that leaves the file out, as in `hint: exclude "data/train.csv" in datasets.dataset names a file inside dataset.zip, which exclude does not reach; run \`fetchloom drop data/dataset/data/train.csv\``. status shows it when it plans, as it does after data.toml or the data folder changed, and sync warns the same way.
@@ -55,6 +64,7 @@ an `exclude` in a dataset that names a file inside an archive leaves the file wh
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
 | `extra` | a scanned path is outside known targets, such as a file sync placed of a dataset that now has `place = false`, which the next sync removes |
 | `not_unpacked` | an archive's member record is unavailable here |
+| `unbuilt` | a recipe's pinned result has files missing from the data folder, or placed for an older pin, whose bytes neither the cache nor a folder [mirror](../mirrors.md) holds, so a sync leaves it out and only [`fetchloom build`](build.md) makes it here. its files are in no other list; the line names the datasets it is made from that the cache lacks too, which the build fetches first, and a hint names the build. status asks no web mirror, so with one set it lists the files as missing, since sync asks it |
 | `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line names it |
 
 files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.

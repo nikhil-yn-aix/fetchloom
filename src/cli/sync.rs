@@ -264,6 +264,18 @@ impl<'a> Loop<'a> {
         Ok(())
     }
 
+    /// warns about each recipe in the run's scope whose result `lock` does not pin as building it
+    /// now would make, as [`tell_stale`] says.
+    pub(super) fn tell_stale(&self, manifest: &Manifest, lock: &Lock) {
+        tell_stale(
+            &self.context.output,
+            &self.project.root,
+            manifest,
+            lock,
+            &self.scope,
+        );
+    }
+
     /// puts in the cache every file the fetched datasets `names` of `lock` hold, whatever the data
     /// folder holds, as a build's private copy of them needs: from the mirrors first, else from
     /// their sources, an archive unpacked again when a file it holds is missing. nothing in the
@@ -1117,6 +1129,64 @@ impl<'a> Loop<'a> {
         );
         error = shown_five(error, missing);
         error.help(self.net.offline().missing_help("them"))
+    }
+}
+
+/// warns about each recipe in `scope` whose result `lock` does not pin as building it now
+/// would make: one not built yet, and one whose code, command, variables or inputs moved since
+/// it was built, whose pinned result a run places as it is. a run of named datasets relocks none
+/// of the others, so an input data.toml changed since data.lock pinned it is told as changed
+/// too. this reads the code in the project at `root`, data.toml and data.lock, and fetches
+/// nothing.
+pub(super) fn tell_stale(
+    output: &Output,
+    root: &std::path::Path,
+    manifest: &Manifest,
+    lock: &Lock,
+    scope: &Scope,
+) {
+    for (name, entry) in &manifest.datasets {
+        let Some(recipe) = entry.recipe().filter(|_| scope.includes(name)) else {
+            continue;
+        };
+        let changes = match crate::recipe::drift(root, manifest, lock, name) {
+            Ok(changes) => changes,
+            Err(error) => {
+                match &error.help {
+                    Some(help) => output.warn_with(&error.message, help),
+                    None => output.warn(&error.message),
+                }
+                continue;
+            }
+        };
+        if changes.first() == Some(&crate::recipe::Change::Unbuilt) {
+            output.warn_with(
+                &format!("{name} is not built yet"),
+                &format!("run `fetchloom build {name}` to make it"),
+            );
+            continue;
+        }
+        let mut said: Vec<String> = changes.iter().map(ToString::to_string).collect();
+        for input in &recipe.from {
+            let moved = manifest
+                .datasets
+                .get(input)
+                .filter(|input| input.source().is_some())
+                .zip(lock.get(input))
+                .is_some_and(|(entry, locked)| locked.drift(entry).is_some());
+            if moved {
+                said.push(format!("{input} changed in data.toml"));
+            }
+        }
+        if said.is_empty() {
+            continue;
+        }
+        output.warn_with(
+            &format!("{name} changed since it was built: {}", said.join("; ")),
+            &format!(
+                "data.lock still pins the result built before; `fetchloom build {name}` builds it again"
+            ),
+        );
     }
 }
 

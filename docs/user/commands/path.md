@@ -38,7 +38,7 @@ stderr excerpt for a path absent from a dataset:
 error: dataset has no file or folder called not-a-file.csv
 ```
 
-a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no folder in the data folder, so `path` refuses it:
+a [recipe](../recipes.md) that changed since its build keeps the result data.lock pins, so `path` answers its folder and warns what changed, as sync does, naming the `fetchloom build` that makes it again. it reads the pins and data.toml entries of the datasets the recipe is made from to tell, and fetches nothing of them. a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no folder in the data folder, so `path` refuses it:
 
 ```text
 error: raw has place = false, so it has no folder in data/

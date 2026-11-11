@@ -796,6 +796,7 @@ pub(super) async fn sync_all(
         verify,
         read,
     } = run;
+    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -806,6 +807,7 @@ pub(super) async fn sync_all(
         Read::Settled(seen) => {
             if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
             {
+                work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
                 // files hashing found unchanged settle with a state written now; a project folder
                 // that takes no write fails no run that changed nothing
                 if survey.needs_writing
@@ -847,6 +849,7 @@ pub(super) async fn sync_all(
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;
+    work.tell_stale(manifest, &lock);
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
     let pins = engine::repinned(&before, &lock);
@@ -886,6 +889,7 @@ pub(super) async fn preview_all(
     given: Vec<Given>,
     seen: Option<&Seen>,
 ) -> Result<Outcome<Preview>, Error> {
+    refuse_unbuilt(manifest, old.as_ref(), &work.scope)?;
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
@@ -895,6 +899,7 @@ pub(super) async fn preview_all(
     if let Some(seen) = seen
         && let Some(placement) = place::untouched(work.project, manifest, &survey, seen, false)?
     {
+        work.tell_stale(manifest, old.as_ref().unwrap_or(&Lock::default()));
         return Ok(Outcome {
             lock_changed: false,
             pins: Vec::new(),
@@ -915,6 +920,7 @@ pub(super) async fn preview_all(
         .await?;
     let changed = !before.holds(&lock);
     let output = &work.context.output;
+    work.tell_stale(manifest, &lock);
     if changed {
         engine::tell_lock(
             output,
@@ -944,6 +950,26 @@ pub(super) async fn preview_all(
         pins: engine::repinned(&before, &lock),
         placed: preview,
     })
+}
+
+/// refuses a run of named datasets that names a recipe `lock` pins no result of, before
+/// anything else: only `fetchloom build` makes one, so the run has nothing to place for it.
+fn refuse_unbuilt(manifest: &Manifest, lock: Option<&Lock>, scope: &Scope) -> Result<(), Error> {
+    let Scope::Only(names) = scope else {
+        return Ok(());
+    };
+    let unbuilt: Vec<(String, Vec<Change>)> = names
+        .iter()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(|entry| entry.recipe().is_some())
+                && lock.is_none_or(|lock| lock.result(name).is_none())
+        })
+        .map(|name| (name.clone(), vec![Change::Unbuilt]))
+        .collect();
+    needs_building(&unbuilt).map_or(Ok(()), Err)
 }
 
 /// the last line of every dry run, with what it found when there is nothing to do.

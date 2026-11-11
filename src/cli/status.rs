@@ -10,12 +10,14 @@ use serde::Serialize;
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
 use super::sync::{Scope, place};
-use crate::digest;
+use crate::cache::Cache;
+use crate::digest::{self, Sha256};
 use crate::error::Error;
+use crate::mirror::{Location, Mirrors};
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
-use crate::project::lock::Lock;
+use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::Manifest;
 use crate::recipe;
 use crate::threads::Threads;
@@ -44,6 +46,10 @@ pub(super) struct Status {
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// recipes whose pinned result the data folder lacks files of that neither the cache nor a
+    /// folder mirror holds, so only `fetchloom build` makes it here. their files are in no other
+    /// list.
+    unbuilt: Vec<String>,
     /// datasets data.toml keeps out of the data folder with `place = false`.
     unplaced: Vec<String>,
     /// entries in the way of files data.lock places, by path: a link or special file at a
@@ -79,6 +85,10 @@ pub(super) struct Status {
     /// exclude patterns that name files inside an archive, which they leave where they are.
     #[serde(skip)]
     unreached: Vec<plan::Unreached>,
+    /// the fetched datasets each of `unbuilt` is made from that the cache lacks files of, which
+    /// building it reads first.
+    #[serde(skip)]
+    lacking: BTreeMap<String, Vec<String>>,
     /// whether the data folder still holds files fetchloom placed of an `unplaced` dataset,
     /// which `sync` removes.
     #[serde(skip)]
@@ -90,6 +100,7 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
     let status = check(
         &super::project::find(&context.output)?,
         context.threads,
+        &context.mirrors.mirrors,
         verify,
     )?;
     let output = &context.output;
@@ -111,6 +122,16 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
         if !status.building.is_empty() {
             output.hint("`fetchloom build --dry-run` shows the commands that would build them");
         }
+        match status.unbuilt.as_slice() {
+            [] => {}
+            [name] => output.hint(&format!(
+                "`fetchloom build {name}` makes it on this machine"
+            )),
+            names => output.hint(&format!(
+                "`fetchloom build {}` makes them on this machine",
+                names.join(" ")
+            )),
+        }
     }
     for found in &status.unreached {
         let (said, help) = place::unreached_said(found);
@@ -121,7 +142,7 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let status = check(project, context.threads, false)?;
+    let status = check(project, context.threads, &context.mirrors.mirrors, false)?;
     let output = &context.output;
     if sum_up(output, &status) {
         output.hint("`fetchloom status` lists what differs");
@@ -175,8 +196,15 @@ fn unbuilt(
 /// compares the data folder with data.lock, reading only what the disk says about each file,
 /// or, with `verify`, hashing every placed file too. a project still as a complete sync left it
 /// is settled as sync finds it, without a plan, so status agrees with sync even once the cache
-/// no longer records what an archive holds, as after a move and `cache gc --now`.
-fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Error> {
+/// no longer records what an archive holds, as after a move and `cache gc --now`. a recipe's
+/// result is looked for in the cache and the folder `mirrors`, never on a web mirror, since
+/// status makes no request.
+fn check(
+    project: &Project,
+    threads: Threads,
+    mirrors: &Mirrors,
+    verify: bool,
+) -> Result<Status, Error> {
     let (text, manifest) = project.manifest()?;
     let read = project.lock_and_text()?;
     let seen = place::Seen {
@@ -225,6 +253,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned);
+    unbuilt_here(&mut status, &manifest, &lock, &planned, &cache, mirrors);
     status.retiring = status.extra.iter().any(|path| {
         survey
             .state
@@ -236,6 +265,112 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     Ok(status)
+}
+
+/// moves to `unbuilt` each recipe whose result sync would leave out: one with a missing or
+/// outdated file whose bytes neither the cache, a folder mirror nor a download of the same sync
+/// gives. a web mirror may hold them, and only a sync asks it, so with one set nothing moves.
+fn unbuilt_here(
+    status: &mut Status,
+    manifest: &Manifest,
+    lock: &Lock,
+    planned: &plan::Plan<'_>,
+    cache: &Cache,
+    mirrors: &Mirrors,
+) {
+    if mirrors.web().next().is_some() {
+        return;
+    }
+    let folders: Vec<&std::path::Path> = mirrors
+        .list
+        .iter()
+        .filter_map(|location| match location {
+            Location::Folder(root) => Some(root.as_path()),
+            Location::Web(_) => None,
+        })
+        .filter(|root| crate::mirror::folder::probe(root).is_ok())
+        .collect();
+    let placing: HashSet<&str> = status
+        .missing
+        .iter()
+        .chain(&status.outdated)
+        .map(String::as_str)
+        .collect();
+    let needed = || {
+        planned
+            .targets
+            .iter()
+            .filter(|target| placing.contains(target.path.as_str()))
+    };
+    let fetched: HashSet<Sha256> = needed()
+        .filter(|target| target.holder != plan::Holder::Result)
+        .map(|target| target.sha256)
+        .collect();
+    let mut unbuilt: Vec<String> = needed()
+        .filter(|target| {
+            target.holder == plan::Holder::Result
+                && !fetched.contains(&target.sha256)
+                && cache.find(&target.sha256, Some(target.size)).is_none()
+                && !folders
+                    .iter()
+                    .any(|root| mirrored(root, &target.sha256, target.size))
+        })
+        .map(|target| target.dataset.to_owned())
+        .collect();
+    unbuilt.sort();
+    unbuilt.dedup();
+    let left_out: HashSet<&str> = planned
+        .targets
+        .iter()
+        .filter(|target| unbuilt.iter().any(|name| name == target.dataset))
+        .map(|target| target.path.as_str())
+        .collect();
+    status
+        .missing
+        .retain(|path| !left_out.contains(path.as_str()));
+    status
+        .outdated
+        .retain(|path| !left_out.contains(path.as_str()));
+    for name in &unbuilt {
+        let inputs = manifest
+            .datasets
+            .get(name)
+            .and_then(crate::project::manifest::Entry::recipe)
+            .map(|recipe| recipe.from.as_slice())
+            .unwrap_or_default();
+        let lacking: Vec<String> = inputs
+            .iter()
+            .filter(|input| {
+                lock.get(input)
+                    .filter(|_| manifest.datasets[*input].source().is_some())
+                    .is_some_and(|locked| !held(cache, locked))
+            })
+            .cloned()
+            .collect();
+        if !lacking.is_empty() {
+            status.lacking.insert(name.clone(), lacking);
+        }
+    }
+    status.unbuilt = unbuilt;
+}
+
+/// whether the folder mirror at `root` holds the object `sha256` of `size` bytes where a sync
+/// looks for it.
+fn mirrored(root: &std::path::Path, sha256: &Sha256, size: u64) -> bool {
+    let [kind, fan, rest] = crate::mirror::below("objects", sha256);
+    std::fs::metadata(root.join(kind).join(fan).join(rest))
+        .is_ok_and(|found| found.is_file() && found.len() == size)
+}
+
+/// whether the cache holds every file a build reads of the fetched dataset `locked`: each file,
+/// an archive standing for the files it unpacked to.
+fn held(cache: &Cache, locked: &Locked) -> bool {
+    locked.files.iter().all(|file| {
+        cache.find(&file.sha256, Some(file.size)).is_some()
+            || file
+                .unpacks_to
+                .is_some_and(|tree| cache.holds_unpacked(&file.sha256, Some(&tree)))
+    })
 }
 
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and
@@ -425,6 +560,18 @@ fn list(output: &Output, status: &Status) {
             &format!("{archive} · not unpacked on this machine yet"),
         );
     }
+    for name in &status.unbuilt {
+        let said = format!("{name} · its pinned result is not on this machine or a mirror");
+        let said = match status.lacking.get(name).map(Vec::as_slice) {
+            None | Some([]) => said,
+            Some([one]) => format!("{said}, nor is {one}, which it is made from"),
+            Some([first @ .., last]) => format!(
+                "{said}, nor are {} and {last}, which it is made from",
+                first.join(", ")
+            ),
+        };
+        output.mark("Unbuilt", &said);
+    }
     for blocker in status.blocked.iter().take(SHOWN) {
         output.mark(
             "Blocked",
@@ -454,6 +601,7 @@ fn sum_up(output: &Output, status: &Status) -> bool {
     let differences = status.removed.len()
         + status.unlocked.len()
         + status.not_unpacked.len()
+        + status.unbuilt.len()
         + status.blocked.len()
         + status.damaged.len()
         + status
@@ -548,6 +696,49 @@ mod tests {
         );
         assert_eq!(value["removed"], serde_json::json!(["old"]));
         assert_eq!(value["edited"], serde_json::json!([]));
+    }
+
+    /// a result whose missing file nothing here holds is unbuilt, its file in no other list,
+    /// unless a web mirror is set, which only sync asks, so the file stays missing.
+    #[test]
+    fn a_web_mirror_keeps_a_result_missing_rather_than_unbuilt() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.raw]\nref = \"https://example.org/raw.csv\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n",
+        )
+        .unwrap();
+        let planned = plan::Plan {
+            targets: vec![plan::Target {
+                dataset: "clean",
+                path: "data/clean/clean.csv".to_owned(),
+                sha256: digest::sha256(b"done"),
+                size: 4,
+                copy: false,
+                holder: plan::Holder::Result,
+            }],
+            unknown: Vec::new(),
+        };
+        let web = url::Url::parse("https://lab.example/fetchloom/").unwrap();
+        for (mirrors, unbuilt) in [
+            (Mirrors::default(), true),
+            (Mirrors::new(vec![Location::Web(web)], &[], false), false),
+        ] {
+            let mut status = Status {
+                missing: vec!["data/clean/clean.csv".to_owned()],
+                ..Status::default()
+            };
+            unbuilt_here(
+                &mut status,
+                &manifest,
+                &Lock::default(),
+                &planned,
+                &cache,
+                &mirrors,
+            );
+            assert_eq!(status.unbuilt.len(), usize::from(unbuilt), "{mirrors:?}");
+            assert_eq!(status.missing.is_empty(), unbuilt, "{mirrors:?}");
+        }
     }
 
     #[test]
