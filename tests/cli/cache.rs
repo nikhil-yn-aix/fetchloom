@@ -530,6 +530,7 @@ fn verify_handles_ctrl_c_during_a_large_hash() -> Result {
     let mut child = sandbox
         .command(&["cache", "verify"])
         .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_TEST_TICKER", "on")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;

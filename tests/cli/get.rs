@@ -1259,12 +1259,11 @@ fn two_runs_of_one_link_download_it_once() -> Result {
         "first",
     ]))?;
     server.wait_for_requests(1)?;
-    let second = crate::support::Running::start(&mut sandbox.command(&[
-        "get",
-        &server.url,
-        "--dir",
-        "second",
-    ]))?;
+    let second = crate::support::Running::start(
+        sandbox
+            .command(&["get", &server.url, "--dir", "second"])
+            .env("FETCHLOOM_TEST_TICKER", "on"),
+    )?;
     // redirected stderr says the second run waits for the first, and never that it downloads
     let waiting = second.wait_for("Waiting iris.csv · another fetchloom is downloading it");
     drop(release);

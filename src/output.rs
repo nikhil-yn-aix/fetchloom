@@ -477,6 +477,12 @@ impl Output {
         if self.bars.is_some() || !self.tells(Level::Normal) {
             return Ticker::quiet();
         }
+        // tests turn off these lines, since how fast a machine runs decides when they come.
+        // release builds never read it
+        #[cfg(debug_assertions)]
+        if std::env::var_os("FETCHLOOM_TEST_TICKER").is_some_and(|value| value == "off") {
+            return Ticker::quiet();
+        }
         let known = sizes
             .into_iter()
             .fold((0, 0), |(total, unknown), size| match size {
