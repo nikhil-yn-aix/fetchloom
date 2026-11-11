@@ -39,7 +39,8 @@ fn added(sandbox: &Sandbox, routes: &Routes, files: &[&str]) -> Result {
     Ok(())
 }
 
-fn sha256(bytes: &[u8]) -> String {
+/// the SHA-256 of `bytes` in hex, as data.lock and export write it.
+pub(crate) fn sha256(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     use std::fmt::Write as _;
     let mut text = String::with_capacity(64);
@@ -255,7 +256,12 @@ fn a_link_with_a_secret_is_never_written() -> Result {
         document["result"]["no_link"],
         serde_json::json!(["iris/iris.csv"])
     );
-    for output in [&refused, &listed] {
+    let listing = sandbox.run(&["--json", "list"])?;
+    assert_eq!(
+        json(&listing)?["result"]["datasets"][0]["locked_files"][0].get("url"),
+        Some(&serde_json::Value::Null)
+    );
+    for output in [&refused, &listed, &listing] {
         for stream in [&output.stdout, &output.stderr] {
             assert!(
                 !text(stream)?.contains("export-canary"),

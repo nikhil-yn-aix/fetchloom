@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use super::Context;
+use crate::digest::Sha256;
 use crate::error::Error;
 use crate::plan;
 use crate::project::lock::Lock;
@@ -43,6 +44,10 @@ struct Listed {
 struct ListedFile {
     path: String,
     size: u64,
+    sha256: Sha256,
+    /// the link the file downloads from, or none when it holds a login, a secret or a character
+    /// no line may hold, as `export` leaves it out.
+    url: Option<String>,
 }
 
 pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error> {
@@ -138,6 +143,8 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
                         .map(|file| ListedFile {
                             path: file.path.clone(),
                             size: file.size,
+                            sha256: file.sha256,
+                            url: super::export::link(&file.url).ok(),
                         })
                         .collect()
                 }),
@@ -229,16 +236,13 @@ mod tests {
 
     #[test]
     fn one_dataset_lists_a_path_and_a_size_per_line() {
-        let files = [
-            ListedFile {
-                path: "iris.csv".to_owned(),
-                size: 4551,
-            },
-            ListedFile {
-                path: "docs/readme.txt".to_owned(),
-                size: 12,
-            },
-        ];
+        let file = |path: &str, size| ListedFile {
+            path: path.to_owned(),
+            size,
+            sha256: crate::digest::sha256(path.as_bytes()),
+            url: None,
+        };
+        let files = [file("iris.csv", 4551), file("docs/readme.txt", 12)];
         assert_eq!(
             file_lines(&files),
             "iris.csv         4.4 KiB\ndocs/readme.txt  12 B"

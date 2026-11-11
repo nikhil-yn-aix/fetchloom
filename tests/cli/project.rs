@@ -3,6 +3,7 @@
 
 use std::fs;
 
+use crate::export::sha256;
 #[cfg(unix)]
 use crate::support::wait_until;
 use crate::support::{Result, Sandbox, Server, delete, edit, file, json, reply, text};
@@ -47,6 +48,8 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     assert_eq!(dataset["folder"], "data/iris");
     assert_eq!(dataset["locked_files"][0]["path"], "iris.csv");
     assert_eq!(dataset["locked_files"][0]["size"], IRIS.len());
+    assert_eq!(dataset["locked_files"][0]["sha256"], sha256(IRIS));
+    assert_eq!(dataset["locked_files"][0]["url"], server.url.as_str());
     assert!(dataset.get("title").is_some(), "{dataset}");
     assert_eq!(
         dataset["access"], "unknown",
