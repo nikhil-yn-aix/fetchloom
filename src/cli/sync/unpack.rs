@@ -288,9 +288,24 @@ impl Loop<'_> {
         if archives.is_empty() {
             return Ok(Vec::new());
         }
+        let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
+        // before any link is read, so one that cannot be followed stops no mirror
+        super::fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+            archives
+                .iter()
+                .filter(|(_, file)| lacks(file))
+                .map(|(dataset, file)| crate::mirror::Wanted {
+                    digest: file.sha256,
+                    size: file.size,
+                    label: format!("{dataset}/{}", file.path),
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| self.as_left(error))?;
         let jobs = archives
             .iter()
-            .filter(|(_, file)| self.cache.find(&file.sha256, Some(file.size)).is_none())
+            .filter(|(_, file)| lacks(file))
             .map(|(dataset, file)| job(lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;

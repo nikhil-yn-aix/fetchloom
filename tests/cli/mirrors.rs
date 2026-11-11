@@ -436,3 +436,35 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     );
     Ok(())
 }
+
+/// an archive a mirror holds is copied before its link in data.lock is read, so a link no
+/// machine can follow, as an imported dataset's, does not stop a mirror from giving it.
+#[test]
+fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    fs::remove_dir_all(root.join("trees"))?;
+    let zip = fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
+    )?;
+    let hex = sha256(&zip);
+    fs::create_dir_all(root.join("objects").join(&hex[..2]))?;
+    fs::write(root.join("objects").join(&hex[..2]).join(&hex[2..]), &zip)?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let lock = fs::read_to_string(folder.join("data.lock"))?;
+    let link = format!("{}/files/dataset.zip", source.url);
+    assert!(lock.contains(&link), "{lock}");
+    fs::write(folder.join("data.lock"), lock.replace(&link, "not a link"))?;
+    let asked = source.requests().len();
+    let output = sandbox
+        .command_in(&folder, &["sync", "--locked", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    holds_the_project(&folder)?;
+    assert_eq!(source.requests().len(), asked);
+    Ok(())
+}
