@@ -161,6 +161,9 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     if let Some(path) = &args.output {
         file::usage(path, args.links.len(), args.input_file.is_some())?;
     }
+    for path in args.output.iter().chain(&args.dir) {
+        warn_tilde(context, path);
+    }
     if context.mirrors.mirrors.only {
         return Err(super::fetch::mirrors::refused(
             context,
@@ -285,6 +288,26 @@ async fn links(context: &Context, args: &Get) -> Result<Vec<Asked>, Error> {
         link: line.link,
     }));
     Ok(asked)
+}
+
+/// warns of a path that starts with a folder named `~`, as a quoted `~` reaches fetchloom: it
+/// reads as the home folder, and get makes a folder of that name here.
+fn warn_tilde(context: &Context, path: &Path) {
+    let mut parts = path.components();
+    if parts.next() != Some(std::path::Component::Normal(std::ffi::OsStr::new("~"))) {
+        return;
+    }
+    let shown = path.display();
+    let home = std::env::home_dir().map_or_else(
+        || "the whole path of your home folder".to_owned(),
+        |home| home.join(parts.as_path()).display().to_string(),
+    );
+    context.output.warn_with(
+        &format!(
+            "{shown} starts with a folder named ~ here, not your home folder, since a shell turns ~ into it only outside quotes"
+        ),
+        &format!("write {home}, or ./{shown} to keep a folder named ~"),
+    );
 }
 
 /// a link or search words alone: into the file `-o` names, the folder `--dir` names, or one named

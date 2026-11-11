@@ -148,7 +148,8 @@ def get(
 
     ``link`` is a link, a DOI or an id such as ``zenodo:3608990``. with ``path``, the one
     file the link resolves to is written at exactly that path, writable, and that path is
-    returned, so ``pd.read_csv(fetchloom.get(url, "data.csv"))`` works. a file already
+    returned, so ``pd.read_csv(fetchloom.get(url, "data.csv"))`` works. a leading ``~`` in
+    ``path`` or ``folder`` is your home folder, as pandas reads it. a file already
     there that holds the same bytes stays as it is; one holding other bytes raises
     :class:`Error` with kind ``local.not_empty`` unless ``force=True`` replaces it. without
     ``path``, the download goes into a new folder named after it, or into ``folder``, and
@@ -164,9 +165,9 @@ def get(
         )
     arguments = ["get"]
     if path is not None:
-        arguments.append(f"--output={os.fspath(path)}")
+        arguments.append(f"--output={_local(path)}")
     if folder is not None:
-        arguments.append(f"--dir={os.fspath(folder)}")
+        arguments.append(f"--dir={_local(folder)}")
     if sha256 is not None:
         arguments.append(f"--sha256={sha256}")
     if force:
@@ -174,6 +175,11 @@ def get(
     _options(arguments, yes, offline, False)
     result = _run([*arguments, "--", link], ".")
     return Path(result["file"] if path is not None else result["folder"])
+
+
+def _local(path: str | os.PathLike[str]) -> str:
+    # pandas expands ~ in the paths it is given, and no shell does it for a python call
+    return os.path.expanduser(os.fspath(path))
 
 
 def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> list[str]:
@@ -185,7 +191,7 @@ def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> li
 
 def _run(arguments: list[str], project: str | os.PathLike[str]) -> Any:
     finished = subprocess.run(
-        [_program(), "--json", "-C", os.fspath(project), *arguments],
+        [_program(), "--json", "-C", _local(project), *arguments],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         encoding="utf-8",

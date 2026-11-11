@@ -459,6 +459,31 @@ fn bytes_a_server_compressed_on_their_way_are_kept_with_a_warning() -> Result {
     Ok(())
 }
 
+/// a quoted `~` reaches fetchloom as a folder named ~, which no shell turned into the home
+/// folder: get writes where it was asked and warns once, while `./~` says that folder is meant.
+#[test]
+fn a_path_starting_with_a_folder_named_tilde_gets_a_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["get", &server.url, "-o", "~/data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("~").join("data.csv"))?, IRIS);
+    let home = sandbox.folder("home")?.join("data.csv");
+    assert!(
+        stderr.replace('\\', "/").contains(&format!(
+            "warning: ~/data.csv starts with a folder named ~ here, not your home folder, since a shell turns ~ into it only outside quotes\n  help: write {}, or ./~/data.csv to keep a folder named ~",
+            home.display().to_string().replace('\\', "/")
+        )),
+        "{stderr}"
+    );
+    let meant = sandbox.run(&["get", &server.url, "-o", "./~/other.csv"])?;
+    let stderr = text(&meant.stderr)?;
+    assert_eq!(meant.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    Ok(())
+}
+
 /// offline, the bytes a link served last time stand for what it serves, so a notebook run again
 /// without a network keeps its file.
 #[test]

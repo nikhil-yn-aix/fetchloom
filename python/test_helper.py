@@ -145,6 +145,22 @@ class GetOptions(unittest.TestCase):
                 self.assertEqual(actual, Path("/work/flowers"))
                 self.assertEqual(argv, ["fetchloom", "--json", "-C", ".", "get", *flags, "--", "zenodo:3608990"])
 
+    def test_a_home_folder_in_a_path_is_expanded_as_pandas_does(self):
+        home = str(Path.home())
+        result = {"file": "/f", "folder": "/d", "files": [], "items": []}
+        _, argv = self.run_get(result, "https://example.org/~iris.csv", "~/data/iris.csv")
+        self.assertEqual(argv[5], f"--output={home}/data/iris.csv")
+        self.assertEqual(argv[-1], "https://example.org/~iris.csv")
+        _, argv = self.run_get(result, "zenodo:3608990", folder=Path("~", "flowers"))
+        self.assertEqual(argv[5], f"--dir={Path(home, 'flowers')}")
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": {"path": "p"}, "warnings": []}), ""
+        )
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
+                fetchloom.path("~iris", "~/project")
+        self.assertEqual(run.call_args.args[0][3:], [f"{home}/project", "path", "~iris"])
+
     def test_get_takes_a_path_or_a_folder_not_both(self):
         with patch.object(fetchloom.subprocess, "run") as run:
             with self.assertRaises(fetchloom.Error) as raised:
