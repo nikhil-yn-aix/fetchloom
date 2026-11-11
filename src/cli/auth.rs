@@ -82,6 +82,11 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
             &format!("limit it to yourself with `chmod 600 {}`", path.display()),
         );
     }
+    if context.mirrors.mirrors.only {
+        output.hint(
+            "mirrors_only lets fetchloom ask its mirrors alone, so no key is checked with its site",
+        );
+    }
     for account in auth::listed(&auth::env) {
         let found = account.find(&auth::env);
         let (user, valid) = match &found {
@@ -90,7 +95,9 @@ async fn status(context: &Arc<Context>) -> Result<Report, Error> {
                 warn_unsendable(output, &account, found);
                 (None, None)
             }
-            Some(found) if !context.offline.enabled() => check(context, &account, found).await,
+            Some(found) if !context.offline.enabled() && !context.mirrors.mirrors.only => {
+                check(context, &account, found).await
+            }
             _ => (None, None),
         };
         let name = title(&account);
@@ -177,7 +184,7 @@ async fn sign_in(
         secret: secret.clone(),
         login: user_name.clone(),
     };
-    let (user, valid) = if context.offline.enabled() {
+    let (user, valid) = if context.offline.enabled() || context.mirrors.mirrors.only {
         (None, None)
     } else {
         check(context, account, &found).await
@@ -190,6 +197,8 @@ async fn sign_in(
             .as_ref()
             .map_or_else(String::new, |user| format!(" for {user}"));
         output.step("Checked", &format!("the key works{who}"));
+    } else if context.mirrors.mirrors.only {
+        output.hint("mirrors_only lets fetchloom ask its mirrors alone, so the key was not checked with its site");
     }
     let saved_to = save(
         context,

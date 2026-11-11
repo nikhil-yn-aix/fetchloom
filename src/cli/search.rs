@@ -169,6 +169,12 @@ async fn find(
         )
         .help("search again online. offline, `fetchloom sync --offline` places what a project already pinned"));
     }
+    if context.mirrors.mirrors.only {
+        return Err(super::fetch::mirrors::refused(
+            context,
+            &format!("searching for \"{words}\" asks sites such as hugging face"),
+        ));
+    }
     let asked: Vec<&str> = Catalog::ALL
         .into_iter()
         .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))

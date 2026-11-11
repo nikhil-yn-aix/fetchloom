@@ -32,7 +32,7 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, retaining unchanged entries. a dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title, file count and size, so an entry whose id has a typo and pins an unrelated record stands out.
-3. reuse unchanged local files and cached objects, copy what the cache lacks from the [mirrors](../mirrors.md) you named, and download the rest when online. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
+3. reuse unchanged local files and cached objects, copy what the cache lacks from the [mirrors](../mirrors.md) you named, and download the rest when online. in [mirror-only mode](../mirrors.md#mirror-only-mode) a file no mirror holds fails the run before any download. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed, as `add` does, so a repository started after the first `add` stops listing `data/`.

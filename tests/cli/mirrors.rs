@@ -350,3 +350,89 @@ fn a_dead_web_mirror_is_asked_once_then_skipped() -> Result {
     assert_eq!(source.requests().len(), asked + 2);
     Ok(())
 }
+
+/// in mirror-only mode nothing asks a source: a file no mirror holds fails before any request,
+/// naming what each mirror said, and resolving, searching, checking keys and one-off downloads
+/// are refused, each naming the setting.
+#[test]
+fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = project(&sandbox)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let hex = sha256(IRIS);
+    fs::remove_file(root.join("objects").join(&hex[..2]).join(&hex[2..]))?;
+    let asked = source.requests().len();
+    let catalogs = Routes::start(Vec::new())?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let run = |arguments: &[&str]| {
+        sandbox
+            .command_in(&folder, arguments)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", &root)
+            .env("FETCHLOOM_MIRRORS_ONLY", "1")
+            .env("FETCHLOOM_TEST_HF_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_KAGGLE_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_ZENODO_API", &catalogs.url)
+            .env("HF_TOKEN", "hf_unchecked")
+            .output()
+    };
+    let output = run(&["--json", "sync", "--locked"])?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        "1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone"
+    );
+    assert_eq!(
+        error["details"][0],
+        format!("iris/iris.csv: not there on {}", root.display())
+    );
+    let new = format!("{}/files/new.csv", source.url);
+    for (arguments, said) in [
+        (
+            &["--json", "add", new.as_str()][..],
+            "fetchloom will not ask 127.0.0.1, since mirrors_only lets it ask its mirrors alone",
+        ),
+        (
+            &["--json", "get", new.as_str(), "--dir", "one-off"],
+            "get fetches each link from its source, and mirrors_only lets fetchloom ask its mirrors alone",
+        ),
+        (
+            &["--json", "search", "iris"],
+            "searching for \"iris\" asks sites such as hugging face, and mirrors_only lets fetchloom ask its mirrors alone",
+        ),
+    ] {
+        let output = run(arguments)?;
+        assert_eq!(output.status.code(), Some(20), "{arguments:?}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "network.refused", "{arguments:?}");
+        assert_eq!(error["message"], said, "{arguments:?}");
+    }
+    // without the zip's tree on the mirror, a fresh cache wants the zip itself, which no
+    // mirror holds
+    fs::remove_dir_all(root.join("trees"))?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("fresh-cache")?)
+        .env("FETCHLOOM_MIRRORS", &root)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["details"][0],
+        format!("dataset/dataset.zip: not there on {}", root.display())
+    );
+    let output = run(&["--json", "auth"])?;
+    ok(&output)?;
+    assert_eq!(json(&output)?["work"]["requests"], 0, "no key was checked");
+    assert_eq!(source.requests().len(), asked, "no source was asked");
+    assert_eq!(
+        catalogs.requests(),
+        Vec::<String>::new(),
+        "no site was asked"
+    );
+    Ok(())
+}

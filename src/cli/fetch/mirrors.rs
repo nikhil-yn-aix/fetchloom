@@ -69,6 +69,29 @@ impl Mirrored {
         self.answers().lacked.insert((index, digest), said);
     }
 
+    /// what each mirror said of the file pinned to `digest`, in order, or that none can be asked
+    /// for a file whose SHA-256 is not known yet.
+    fn said(&self, digest: Option<&Sha256>) -> String {
+        let Some(digest) = digest else {
+            return "its SHA-256 is not known yet, so only its source can give it".to_owned();
+        };
+        let answers = self.answers();
+        self.mirrors
+            .list
+            .iter()
+            .enumerate()
+            .map(|(index, location)| {
+                let said = answers
+                    .lacked
+                    .get(&(index, *digest))
+                    .or_else(|| answers.down.get(&index))
+                    .map_or("not asked", String::as_str);
+                format!("{said} on {location}")
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
     /// skips mirror `index` for the rest of the run, warning once.
     fn skip(&self, context: &Context, index: usize, skip: Skip) {
         let mut answers = self.answers();
@@ -235,6 +258,57 @@ pub(in crate::cli) fn read(given: &[String], settings: &Settings) -> Result<Mirr
         )));
     }
     Ok(mirrors)
+}
+
+/// the error for what only a source gives, `what`, while `mirrors_only` lets fetchloom ask its
+/// mirrors alone.
+pub(in crate::cli) fn refused(context: &Context, what: &str) -> Error {
+    let off = if context.settings.mirrors_only.origin == Origin::File {
+        "set mirrors_only = false in the settings file"
+    } else {
+        "unset FETCHLOOM_MIRRORS_ONLY"
+    };
+    Error::new(
+        Kind::NetworkRefused,
+        format!("{what}, and mirrors_only lets fetchloom ask its mirrors alone"),
+    )
+    .help(format!(
+        "ask whoever keeps the mirrors to add what is missing, or {off} to ask sources too"
+    ))
+}
+
+/// refuses, in mirror-only mode, to download `files` from their sources: each by its name and
+/// its SHA-256, when known, and named with what each mirror said of it.
+///
+/// # Errors
+///
+/// `network.refused` naming the files, in mirror-only mode, when there are any.
+pub(in crate::cli) fn sources_allowed(
+    context: &Context,
+    files: &[(String, Option<Sha256>)],
+) -> Result<(), Error> {
+    if !context.mirrors.mirrors.only || files.is_empty() {
+        return Ok(());
+    }
+    let count = files.len();
+    let mut error = refused(
+        context,
+        &format!(
+            "{} data.lock names {} on no mirror",
+            units::count(count as u64, "file", "files"),
+            if count == 1 { "is" } else { "are" }
+        ),
+    );
+    for (label, digest) in files.iter().take(super::NAMED) {
+        error = error.detail(format!(
+            "{label}: {}",
+            context.mirrors.said(digest.as_ref())
+        ));
+    }
+    if count > super::NAMED {
+        error = error.detail(format!("and {} more", count - super::NAMED));
+    }
+    Err(error)
 }
 
 /// the pinned files among `jobs` that the cache lacks, as a mirror is asked for them.

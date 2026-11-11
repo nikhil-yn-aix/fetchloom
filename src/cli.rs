@@ -175,6 +175,11 @@ impl Context {
             .with_retries(self.settings.retries.value)
             .with_host_jobs(self.settings.host_jobs.value)
             .with_timeout(self.settings.timeout.value);
+        let net = if self.mirrors.mirrors.only {
+            net.with_mirrors_only(self.mirrors.mirrors.web().cloned().collect())
+        } else {
+            net
+        };
         // a person named these mirrors, as they type a link, so a lab server on their network
         // may be one
         net.trust(

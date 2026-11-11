@@ -7,7 +7,7 @@ use url::Url;
 use super::{MARKER, MARKER_LINE, Wanted, below};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::net::{Api, Expect, Fetch, Net};
+use crate::net::{Expect, Fetch, Net};
 
 /// what a web mirror's marker showed.
 pub(crate) enum Look {
@@ -35,7 +35,7 @@ pub(crate) enum Tree {
 ///
 /// `interrupted` when a stop is asked.
 pub(crate) async fn probe(net: &Net, base: &Url) -> Result<Look, Error> {
-    let answer = match net.get(&joined(base, &[MARKER])).await {
+    let answer = match net.mirror_get(&joined(base, &[MARKER])).await {
         Ok(answer) => answer,
         Err(error) if error.kind == Kind::Interrupted => return Err(error),
         Err(error) => return Ok(Look::Failed(error)),
@@ -55,6 +55,7 @@ pub(crate) fn object(base: &Url, wanted: &Wanted) -> Fetch {
             md5: None,
             size: Some(wanted.size),
         },
+        mirror: true,
         ..Fetch::new(joined(base, &below("objects", &wanted.digest)))
     }
 }
@@ -65,7 +66,7 @@ pub(crate) fn object(base: &Url, wanted: &Wanted) -> Fetch {
 ///
 /// `interrupted` when a stop is asked.
 pub(crate) async fn read_tree(net: &Net, base: &Url, tree: &Sha256) -> Result<Tree, Error> {
-    let answer = match net.get(&joined(base, &below("trees", tree))).await {
+    let answer = match net.mirror_get(&joined(base, &below("trees", tree))).await {
         Ok(answer) => answer,
         Err(error) if error.kind == Kind::Interrupted => return Err(error),
         // past 64 MiB

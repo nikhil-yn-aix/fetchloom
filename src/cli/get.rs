@@ -160,6 +160,12 @@ pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
     if let Some(path) = &args.output {
         file::usage(path, args.links.len(), args.input_file.is_some())?;
     }
+    if context.mirrors.mirrors.only {
+        return Err(super::fetch::mirrors::refused(
+            context,
+            "get fetches each link from its source",
+        ));
+    }
     let links = links(context, &args).await?;
     if args.sha256.is_some() && links.len() != 1 {
         return Err(Error::new(

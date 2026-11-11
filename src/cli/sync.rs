@@ -548,6 +548,12 @@ impl<'a> Loop<'a> {
                     self.net.offline().retry()
                 )));
             }
+            if self.context.mirrors.mirrors.only {
+                return Err(fetch::mirrors::refused(
+                    self.context,
+                    &format!("{name} needs a new entry in data.lock, which only its source gives"),
+                ));
+            }
             let entry = &manifest.datasets[&name];
             let parsed = Reference::parse(&text).map_err(|err| cite_place(err, entry, "ref"))?;
             // the line itself may hold a secret, so only its place is shown
@@ -603,6 +609,12 @@ impl<'a> Loop<'a> {
         .await
         .map_err(|error| self.as_left(error))?;
         self.refuse_offline(&jobs)?;
+        let lacking: Vec<(String, Option<Sha256>)> = jobs
+            .iter()
+            .filter(|job| !in_cache(&self.cache, &job.fetch))
+            .map(|job| (job.label.clone(), job.fetch.expect.sha256))
+            .collect();
+        fetch::mirrors::sources_allowed(self.context, &lacking)?;
         crate::space::cache_holds(
             self.cache.root(),
             jobs.iter()
@@ -741,6 +753,12 @@ impl<'a> Loop<'a> {
                 return Err(self.offline_missing(&missing));
             }
         }
+        let lacking: Vec<(String, Option<Sha256>)> = files
+            .iter()
+            .filter(|(_, file)| !available(file))
+            .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
+            .collect();
+        fetch::mirrors::sources_allowed(self.context, &lacking)?;
         crate::space::cache_holds(
             self.cache.root(),
             files

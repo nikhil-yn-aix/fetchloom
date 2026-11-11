@@ -153,6 +153,8 @@ the output folder explicitly chosen with `--dir` for a single link may itself li
 
 ## exit codes
 
+in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before any request, with `network.refused`, exit 20, since it fetches each link from its source.
+
 0 returns an output folder for every link, or with `-o` the file. missing approval exits 1; invalid usage exits 2; an occupied destination, including a file `-o` will not replace without `--force`, exits 50 with `local.not_empty`; a `--sha256` mismatch exits 30 with `integrity.mismatch`. source, download, access and integrity errors use the [shared exit codes](../reference/exit-codes.md). with several links, the first failed link decides the code, and `--json` keeps every link's result in [`result.items`](../reference/json-output.md#command-results).
 
 ## common mistakes

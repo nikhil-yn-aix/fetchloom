@@ -56,6 +56,10 @@ a kubernetes job or another container keeps its cache on a volume instead; [note
 
 a private, gated or competition dataset needs its source's key in the job's environment, from the CI system's secrets: `HF_TOKEN` for hugging face, `KAGGLE_API_TOKEN` for kaggle, and the others in [environment](reference/environment.md#credentials). never write a key into the cache folder or the repository; fetchloom keeps keys out of its cache, logs and output.
 
+## a mirror for runners
+
+runners inside a lab or company network can take pinned files from a [mirror](mirrors.md) there instead of the internet: set `FETCHLOOM_MIRRORS` in the job's environment to the mirror's folder or address. a runner that must not reach the internet at all also sets `FETCHLOOM_MIRRORS_ONLY=1`, so a file the mirror lacks fails the job, named, rather than being fetched from its source.
+
 ## exact inputs
 
 `--locked` trusts a cached file whose size and time still match, so a cached file that changed but kept both is placed as it is. a job that needs exactly the pinned bytes adds `--verify`:

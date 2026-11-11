@@ -188,6 +188,9 @@ pub(crate) struct Net {
     /// matched its pin: they likely refuse every old version, so their objects are asked for as
     /// they are now first.
     refuse_versions: Mutex<std::collections::HashSet<crate::source::Bucket>>,
+    /// in mirror-only mode, the web mirrors' addresses, each ending in `/`: a request goes only
+    /// below one of them, and only as a mirror's request.
+    mirrors_only: Option<Vec<Url>>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -349,6 +352,7 @@ impl Net {
             credentials,
             signing: crate::source::Signing::default(),
             refuse_versions: Mutex::default(),
+            mirrors_only: None,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
@@ -401,6 +405,36 @@ impl Net {
         self
     }
 
+    /// sends requests to the web mirrors at `bases` alone, each ending in `/`, and only for what
+    /// a mirror gives, as the `mirrors_only` setting asks.
+    pub(crate) fn with_mirrors_only(mut self, bases: Vec<Url>) -> Net {
+        self.mirrors_only = Some(bases);
+        self
+    }
+
+    /// refuses `url` in mirror-only mode unless it is a `mirror`'s request below a mirror's
+    /// address: the same scheme, host and port, and a path inside the mirror's.
+    fn may_ask(&self, url: &Url, mirror: bool) -> Result<(), Failure> {
+        let Some(bases) = &self.mirrors_only else {
+            return Ok(());
+        };
+        let below =
+            |base: &Url| url.origin() == base.origin() && url.path().starts_with(base.path());
+        if mirror && bases.iter().any(below) {
+            return Ok(());
+        }
+        Err(Failure::Final(
+            Error::new(
+                Kind::NetworkRefused,
+                format!(
+                    "fetchloom will not ask {}, since mirrors_only lets it ask its mirrors alone",
+                    host(url)
+                ),
+            )
+            .help("ask whoever keeps the mirrors to add what is missing, or turn off mirrors_only in the settings file or FETCHLOOM_MIRRORS_ONLY"),
+        ))
+    }
+
     /// the hosts a credential goes to, for tests.
     #[cfg(test)]
     pub(crate) fn credential_hosts(&self) -> Vec<&str> {
@@ -414,47 +448,55 @@ impl Net {
         self.offline
     }
 
+    /// [`Net::send_on`] for what a source gives, on the shared client.
+    #[cfg(test)]
+    async fn send(
+        &self,
+        url: &Url,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        self.send_on(Lane::Shared, url, false, shape).await
+    }
+
+    /// [`Net::send_on`] for a file body, which a `mirror` may be asked for in mirror-only mode.
+    async fn send_body(
+        &self,
+        url: &Url,
+        mirror: bool,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        let response = self.send_on(Lane::Apart, url, mirror, shape).await?;
+        tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
+        Ok(response)
+    }
+
+    /// [`Net::send_on`] on a connection of the request's own, for the added streams of a split
+    /// download.
+    async fn send_apart(
+        &self,
+        url: &Url,
+        mirror: bool,
+        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, Failure> {
+        self.send_on(Lane::Apart, url, mirror, shape).await
+    }
+
     /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
     /// hop is checked the way its connection will be made before it is sent, and waits while its
     /// host's rate limit is used up. a credential goes only to its own host, and never once a
     /// redirect has left the first one, except a saved login, which answers its own host on any
     /// hop as curl's does. a request for an S3 bucket that `s3_buckets` lists goes again once,
     /// signed, when S3 refuses it without a key, and signed from the start once it did; a
-    /// redirect never carries the signature on.
-    async fn send(
-        &self,
-        url: &Url,
-        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, Failure> {
-        self.send_on(Lane::Shared, url, shape).await
-    }
-
-    async fn send_body(
-        &self,
-        url: &Url,
-        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, Failure> {
-        let response = self.send_on(Lane::Apart, url, shape).await?;
-        tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
-        Ok(response)
-    }
-
-    /// [`Net::send`] on a connection of the request's own, for the added streams of a split
-    /// download.
-    async fn send_apart(
-        &self,
-        url: &Url,
-        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, Failure> {
-        self.send_on(Lane::Apart, url, shape).await
-    }
-
+    /// redirect never carries the signature on. in mirror-only mode every hop must be a
+    /// `mirror`'s request below a mirror's address, checked before any name is looked up.
     async fn send_on(
         &self,
         lane: Lane,
         url: &Url,
+        mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
+        self.may_ask(url, mirror)?;
         let refused = |url: &Url, reason| Failure::Final(failure::refused(url, &reason));
         // the bucket is judged on the link as written, before a test server stands in for it
         let bucket = self.signing.locate(url);
@@ -474,6 +516,7 @@ impl Net {
         let mut name = None;
         let mut first_origin = true;
         loop {
+            self.may_ask(&hop, mirror)?;
             wire.proxies
                 .check(&hop, &self.typed)
                 .await
@@ -769,7 +812,7 @@ mod tests {
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         net.typed(&url);
         assert!(block_on(net.send(&url, |request| request)).is_ok());
-        assert!(block_on(net.send_body(&url, |request| request)).is_ok());
+        assert!(block_on(net.send_body(&url, false, |request| request)).is_ok());
         let heads = asked.lock().unwrap();
         assert!(
             heads[1]
@@ -866,5 +909,67 @@ mod tests {
             assert_eq!(value, "published");
             assert!(permits.is_none());
         });
+    }
+
+    fn mirror_only(bases: &[&str]) -> Net {
+        let options = Options {
+            offline: Offline::No,
+            jobs: 1,
+            credentials: Vec::new(),
+            split: Splitting::Never,
+        };
+        Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}))
+            .with_mirrors_only(bases.iter().map(|base| Url::parse(base).unwrap()).collect())
+    }
+
+    /// in mirror-only mode a request goes to a mirror's address alone, and only as a mirror's:
+    /// any other is refused before a name is looked up, so a host that does not exist is refused
+    /// rather than unknown.
+    #[test]
+    fn mirror_only_refuses_other_hosts_before_any_lookup() {
+        use crate::source::recorded::block_on;
+
+        let net = mirror_only(&["https://mirror.invalid/fetchloom/"]);
+        for (link, mirror) in [
+            ("https://source.invalid/data.csv", false),
+            ("https://mirror.invalid/fetchloom/objects/ab/cd", false),
+            ("https://mirror.invalid/admin", true),
+            ("https://mirror.invalid:8443/fetchloom/objects/ab/cd", true),
+            ("http://mirror.invalid/fetchloom/objects/ab/cd", true),
+        ] {
+            let url = Url::parse(link).unwrap();
+            let sent = block_on(net.send_on(Lane::Shared, &url, mirror, |request| request));
+            let Err(Failure::Final(error)) = sent else {
+                panic!("{link} was not refused");
+            };
+            assert_eq!(
+                error.kind,
+                Kind::NetworkRefused,
+                "{link}: {}",
+                error.message
+            );
+            assert!(error.message.contains("mirrors_only"), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn mirror_only_refuses_a_redirect_off_the_mirror() {
+        use crate::net::scripted::{reply, serve};
+        use crate::source::recorded::block_on;
+
+        let (url, asked) = serve(vec![
+            reply("302 Found", &[("Location", "/elsewhere/file")], b""),
+            reply("200 OK", &[], b"never"),
+        ]);
+        let base = url.join("m/").unwrap();
+        let net = mirror_only(&[base.as_str()]);
+        net.typed(&url);
+        let marker = base.join("fetchloom-mirror").unwrap();
+        let sent = block_on(net.send_on(Lane::Shared, &marker, true, |request| request));
+        let Err(Failure::Final(error)) = sent else {
+            panic!("the redirect off the mirror was followed");
+        };
+        assert_eq!(error.kind, Kind::NetworkRefused);
+        assert_eq!(asked.lock().unwrap().len(), 1);
     }
 }

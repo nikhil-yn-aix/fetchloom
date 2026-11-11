@@ -49,6 +49,8 @@ pub(super) struct Job<'a> {
     /// the file's hash pins it, so a part another server labels differently is kept and the
     /// check at the end decides, instead of the download starting over.
     pub(super) pinned: bool,
+    /// the parts are a mirror's, which mirror-only mode lets a request ask for.
+    pub(super) mirror: bool,
     pub(super) total: u64,
     pub(super) on: Listener<'a>,
     /// the stream's measured rate before handover, in bytes a second.
@@ -536,7 +538,7 @@ impl Net {
         };
         Work::add(&self.work.requests, 1);
         let response = self
-            .send_apart(job.from, shape)
+            .send_apart(job.from, job.mirror, shape)
             .await
             .map_err(Ended::Failed)?;
         let status = response.status();

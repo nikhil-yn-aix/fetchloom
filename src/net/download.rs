@@ -81,6 +81,8 @@ pub(crate) struct Fetch {
     /// the bytes are an archive the caller unpacks, so the files it unpacked to stand for it in
     /// the cache once its own object is gone.
     pub(crate) unpack: bool,
+    /// the bytes are a mirror's copy, which mirror-only mode lets the request ask for.
+    pub(crate) mirror: bool,
 }
 
 impl Fetch {
@@ -124,6 +126,7 @@ impl Fetch {
             expect: Expect::default(),
             revalidate: false,
             unpack: false,
+            mirror: false,
         }
     }
 }
@@ -351,6 +354,7 @@ impl Net {
             expect: fetch.expect,
             revalidate: false,
             unpack: fetch.unpack,
+            mirror: fetch.mirror,
         };
         let bucket = crate::source::Bucket::holding(&fetch.from);
         if bucket
@@ -607,7 +611,7 @@ impl Net {
             .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
         Work::add(&self.work.requests, 1);
         let shape = conditions(earlier.as_ref(), known);
-        let response = self.send_body(from, shape).await?;
+        let response = self.send_body(from, fetch.mirror, shape).await?;
         let status = response.status();
         tracing::debug!(url = %super::Shown(from), status = status.as_u16(), from_byte = earlier.as_ref().map(|(received, _)| *received), "response");
         let head = response.headers().clone();
@@ -687,6 +691,7 @@ impl Net {
             key: &fetch.from,
             validators: &validators,
             pinned: fetch.expect.pins(),
+            mirror: fetch.mirror,
             total,
             on,
             measured,

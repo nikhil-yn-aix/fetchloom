@@ -78,6 +78,8 @@ a mirror you name may be on this machine or your network, such as `http://10.0.0
 | holds a copy of another size or with other bytes, or a link or a special file in its place | warns, naming the mirror and the file, and asks the next mirror, then the source |
 | is not there, holds no `fetchloom-mirror` file, cannot be reached, refuses with 401 or 403, or fails with 5xx after the retries | warns once and skips the mirror for the rest of the run |
 
+in [mirror-only mode](#mirror-only-mode) the source is never asked, so a file no mirror gives fails the run, named.
+
 a warning for a damaged copy, on stderr:
 
 ```text
@@ -94,6 +96,33 @@ after five such warnings for one mirror, the rest are counted on one line.
 ```sh
 fetchloom --offline sync --mirror /media/usb/fetchloom
 ```
+
+## mirror-only mode
+
+an air-gapped company keeps a mirror inside its network and holds every machine to it. outside, someone syncs the project and copies the mirror to a usb drive; inside, the admin's settings file names the mirror and turns on mirror-only mode:
+
+```toml
+mirrors = ["https://data.corp.internal/fetchloom"]
+mirrors_only = true
+```
+
+then no request goes anywhere but to the mirrors: not to a source, not to a search site, not to check a key. each request is checked before its name is looked up, and every redirect too, so one that leads off a mirror's address is refused. a request to a mirror's host for anything but what the mirror holds is refused as well. `sync --locked` asks the mirror alone, and a file no mirror holds fails at once, before any download, naming each file and what each mirror said, with kind `network.refused`, exit 20:
+
+```text
+error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone
+  iris/iris.csv: not there on https://data.corp.internal/fetchloom
+  help: ask whoever keeps the mirrors to add what is missing, or set mirrors_only = false in the settings file to ask sources too
+```
+
+| command | in mirror-only mode |
+|---|---|
+| `sync`, `path`, `lock` | work from the cache and the mirrors; a dataset data.lock does not pin yet is refused, since only its source can list it |
+| `add` of a link, `get`, `search` | refused before any request, naming `mirrors_only` |
+| `auth` | lists keys without checking them with their sites |
+
+`mirrors_only` needs a mirror: set alone it stops every command with kind `usage`. offline mode is stricter: no network at all, so it reads folder mirrors and no web mirror.
+
+mirror-only mode is fetchloom's promise not to ask anything else; a person can turn it off, so a network that must not reach the internet still needs rules in its firewall or proxy. set `FETCHLOOM_SETTINGS` for every account to a settings file people cannot edit, so the same mirrors apply to all.
 
 ## filling a folder mirror
 

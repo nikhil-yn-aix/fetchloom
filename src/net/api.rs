@@ -53,6 +53,18 @@ impl Response {
 
 impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
+        self.get_for(url, false).await
+    }
+}
+
+impl Net {
+    /// [`Api::get`] for what a mirror gives, its marker or a tree, which mirror-only mode lets a
+    /// request ask a mirror for.
+    pub(crate) async fn mirror_get(&self, url: &Url) -> Result<Response, Error> {
+        self.get_for(url, true).await
+    }
+
+    async fn get_for(&self, url: &Url, mirror: bool) -> Result<Response, Error> {
         if self.offline.enabled() {
             return Err(Error::new(
                 Kind::OfflineMissing,
@@ -75,7 +87,7 @@ impl Api for Net {
         let _permits = self.permit(url).await?;
         let mut retry = Retry::new(self, url);
         loop {
-            match self.answer(url).await {
+            match self.answer(url, mirror).await {
                 Ok(response) => return Ok(response),
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason }) => retry.limited(reason, false).await?,
@@ -86,13 +98,11 @@ impl Api for Net {
             }
         }
     }
-}
 
-impl Net {
-    async fn answer(&self, url: &Url) -> Result<Response, Failure> {
+    async fn answer(&self, url: &Url, mirror: bool) -> Result<Response, Failure> {
         Work::add(&self.work.requests, 1);
         let mut response = self
-            .send(url, |request| {
+            .send_on(super::Lane::Shared, url, mirror, |request| {
                 request.header(
                     header::ACCEPT,
                     "application/json, text/html;q=0.9, */*;q=0.8",
