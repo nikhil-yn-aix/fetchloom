@@ -7,11 +7,11 @@ use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
 use crate::cli::args;
 use crate::error::{Error, Kind};
-use crate::project::Project;
 use crate::project::lock::merge::markers::{self, Sides};
 use crate::project::lock::merge::{self, Choices, Merged, Side, Summary};
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
+use crate::project::{Project, git};
 
 /// data.toml and data.lock as a merge left them, and the sides of each that holds git's conflict
 /// lines.
@@ -68,7 +68,8 @@ pub(super) fn merge(
         context.stop.check()?;
         context.stop.finish();
         let changed = rendered.as_deref().filter(|_| lock_changed);
-        write(project, &merged, &conflicted.manifest, changed)?;
+        let written = write(project, &merged, &conflicted.manifest, changed)?;
+        context.wrote_lists(&project.root, written);
     }
     tell(
         context,
@@ -134,8 +135,7 @@ fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
 /// show when it reads, else git's index's, which is exact, else the one read around the lines
 /// zdiff3 moved out of the conflicts. a file without conflict lines is the same on both sides.
 fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
-    let git =
-        std::env::var_os("PATH").and_then(|path| merge::git::find(Some(&path), &project.root));
+    let program = std::env::var_os("PATH").and_then(|path| git::find(Some(&path), &project.root));
     let based = |sides: Option<&Sides>, file: &str, text: &str| match sides {
         Some(sides) => {
             let mut sides = sides.clone();
@@ -145,9 +145,9 @@ fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
                 .is_some_and(|base| merge::reads(file, base))
             {
                 let trimmed = sides.trimmed.take().filter(|base| merge::reads(file, base));
-                sides.base = git
+                sides.base = program
                     .as_deref()
-                    .and_then(|git| merge::git::base(git, &project.root, file))
+                    .and_then(|program| git::base(program, &project.root, file))
                     .or(trimmed);
             }
             sides
@@ -181,23 +181,25 @@ fn in_project(error: Error, project: &Project) -> Error {
 }
 
 /// writes the merged data.toml when it changed, then, when data.lock changed into `rendered`, the
-/// lists it names and data.lock itself, and sweeps the lists no side needs any more.
+/// lists it names and data.lock itself, and sweeps the lists no side needs any more. returns the
+/// parts of lists it wrote anew.
 fn write(
     project: &Project,
     merged: &Merged,
     manifest: &str,
     rendered: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<Vec<String>, Error> {
     if merged.manifest != manifest {
         project.write(manifest::FILE, merged.manifest.as_bytes())?;
     }
+    let mut written = Vec::new();
     if let (Some(lock), Some(text)) = (&merged.lock, rendered) {
         // the lists first, so data.lock never names a part that is not there yet
-        project.write_lists(lock)?;
+        written = project.write_lists(lock)?;
         project.write(lock::FILE, text.as_bytes())?;
         project.sweep_lists(lock);
     }
-    Ok(())
+    Ok(written)
 }
 
 /// what the merge did, or with `dry_run` would do, to `files`, and what comes next.

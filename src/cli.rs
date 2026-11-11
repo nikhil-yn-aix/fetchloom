@@ -72,6 +72,9 @@ struct Context {
     /// the project whose `fetchloom build` runs this one inside a step, from
     /// `FETCHLOOM_BUILDING`, which may not wait for that project's lock the build holds.
     building: Option<std::path::PathBuf>,
+    /// the parts of file lists this run wrote anew into a project's data.lock.d, with the
+    /// project's folder, so the run can end by naming those git does not have.
+    lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
 }
 
 impl Context {
@@ -92,7 +95,16 @@ impl Context {
             cautioned: std::sync::atomic::AtomicBool::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
             building: None,
+            lists: std::sync::Mutex::default(),
         }
+    }
+
+    /// notes the parts of file lists `written` anew below the project at `root`.
+    fn wrote_lists(&self, root: &std::path::Path, written: Vec<String>) {
+        self.lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(written.into_iter().map(|part| (root.to_path_buf(), part)));
     }
 
     /// the network, with credentials from where each source keeps them, and retries reported as
@@ -955,6 +967,9 @@ fn finish<T: Serialize>(
         Some(line) => error.naming(&line),
         None => error,
     });
+    if outcome.is_ok() {
+        project::remind_lists(context);
+    }
     let printed = context
         .output
         .document(command, outcome.as_ref(), counts, elapsed);

@@ -6,7 +6,7 @@
 mod conflicts;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
-use crate::project::{Held, Hold, Project};
+use crate::project::{Held, Hold, Project, git};
 use crate::recipe::{self, Change};
 use crate::source::{Listing, local};
 use crate::units;
@@ -97,6 +97,69 @@ pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Er
 
 /// the project files a person commits: data.lock.d as well when a big dataset keeps its file
 /// list there, since a clone without it cannot read data.lock.
+/// ends a run that wrote lists anew into data.lock.d that git does not have, which `git commit
+/// -a` would leave out and a clone then misses: a `next:` line for a person at a terminal, else a
+/// warning, which scripts and `--json` read too. it says nothing when git has them, and with no
+/// git or outside a repository.
+pub(super) fn remind_lists(context: &Context) {
+    let written = std::mem::take(
+        &mut *context
+            .lists
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let Some((root, _)) = written.first() else {
+        return;
+    };
+    let missing = untracked(root, written.iter().map(|(_, part)| part.as_str()));
+    let named = match missing.as_slice() {
+        [] => return,
+        [one] => one.clone(),
+        [first, ..] => format!(
+            "{} lists data.lock names now, such as {first}",
+            missing.len()
+        ),
+    };
+    let output = &context.output;
+    let since = if missing.len() == 1 {
+        ", which data.lock names now"
+    } else {
+        ""
+    };
+    if output.shows_next() {
+        output.next(&format!(
+            "run `git add data.lock.d` before you commit: git does not have {named}{since}"
+        ));
+    } else {
+        output.warn_with(
+            &format!("git does not have {named}{since}"),
+            "run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out",
+        );
+    }
+}
+
+/// the parts of `parts`, lists below the project at `root`, that are there and that git does not
+/// have, sorted. none when git cannot tell, as with no git or outside a repository.
+pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut parts: Vec<&str> = parts.filter(|part| root.join(part).is_file()).collect();
+    if parts.is_empty() {
+        return Vec::new();
+    }
+    let Some(tracked) = std::env::var_os("PATH")
+        .and_then(|path| git::find(Some(&path), root))
+        .and_then(|program| git::tracked(&program, root, lock::lists::FOLDER))
+    else {
+        return Vec::new();
+    };
+    parts.sort_unstable();
+    parts.dedup();
+    parts
+        .into_iter()
+        .filter(|part| !tracked.contains(*part))
+        .map(str::to_owned)
+        .collect()
+}
+
 pub(super) fn committed(project: &Project) -> &'static str {
     if project.root.join(lock::lists::FOLDER).is_dir() {
         "data.toml, data.lock and data.lock.d"

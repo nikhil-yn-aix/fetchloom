@@ -515,6 +515,19 @@ impl Lock {
     }
 }
 
+/// the parts of the file lists the text of data.lock names, by path below the project, read
+/// without the lists themselves. none for a text that does not read.
+pub(crate) fn parts(text: &str) -> Vec<String> {
+    parse(text)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|parsed| match parsed {
+            Parsed::Source(_, Some(listed)) | Parsed::Derived(_, listed) => listed.parts,
+            Parsed::Source(_, None) => Vec::new(),
+        })
+        .collect()
+}
+
 /// `files` sorted by path, as the lock keeps them.
 fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
     let mut sorted = files.to_vec();

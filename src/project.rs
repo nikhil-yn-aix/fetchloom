@@ -1,6 +1,7 @@
 //! the project: the folder holding `data.toml`, its `data.lock`, the data folder, and the small
 //! `.fetchloom` folder of facts about what was placed.
 
+pub(crate) mod git;
 pub(crate) mod lock;
 pub(crate) mod manifest;
 pub(crate) mod state;
@@ -317,17 +318,19 @@ impl Project {
             .map_err(|err| self.refused(format_args!("could not write {name}"), &err))
     }
 
-    /// writes the parts of the file lists `lock` keeps beside data.lock that are not there yet.
-    /// a part's name changes with its list, so one already there holds the same list.
-    pub(crate) fn write_lists(&self, lock: &Lock) -> Result<(), Error> {
+    /// writes the parts of the file lists `lock` keeps beside data.lock that are not there yet,
+    /// and returns their paths below the project. a part's name changes with its list, so one
+    /// already there holds the same list.
+    pub(crate) fn write_lists(&self, lock: &Lock) -> Result<Vec<String>, Error> {
         let parts = lock.lists();
         if parts.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let folder = self.root.join(lock::lists::FOLDER);
         fs::create_dir_all(&folder).map_err(|err| {
             self.refused(format_args!("could not make {}", lock::lists::FOLDER), &err)
         })?;
+        let mut written = Vec::new();
         for (part, text) in parts {
             let path = self
                 .root
@@ -338,8 +341,9 @@ impl Project {
             let bytes = lock::lists::compress(&text)
                 .map_err(|err| Error::io(format_args!("could not compress {part}"), &err))?;
             self.write(&part, &bytes)?;
+            written.push(part);
         }
-        Ok(())
+        Ok(written)
     }
 
     /// removes the parts of file lists `lock` no longer names, and their folder once it is

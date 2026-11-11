@@ -54,7 +54,7 @@ the lists in `data.lock.d` are named by their contents, so a merge brings each b
 
 ## big datasets
 
-a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock.
+a dataset of more than 50,000 files keeps them beside `data.lock`, in compressed parts in the folder `data.lock.d`, so `data.lock` stays small enough to read and review and git takes every part under its size limits. the rule is part of the format, not a setting, so every machine writes the same lock. commit `data.lock.d` with `data.lock`; a clone without it cannot read the lock, and says so: `data.lock names data.lock.d/photos.0123456789ab.1.tsv.zst, which is not there`, with help to get the commit that adds data.lock.d. a list is named by its content, so a new one is a new file, which `git commit -a` leaves out: in a git repository, `status` warns of each list data.lock names that git does not have, and a command that writes a list git does not have ends with `git add data.lock.d`, as a `next:` line at a terminal and a warning otherwise. fetchloom asks git with `git ls-files`, which only reads git's index, and says nothing without git or outside a repository.
 
 ```toml
 version = 1

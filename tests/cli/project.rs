@@ -538,6 +538,118 @@ fn a_clone_without_data_lock_says_nothing_pins_its_files() -> Result {
     Ok(())
 }
 
+/// the parts of the lists in the work folder's data.lock.d, by path from the work folder.
+fn parts(sandbox: &Sandbox) -> Result<Vec<String>> {
+    let mut parts: Vec<String> = fs::read_dir(sandbox.work().join("data.lock.d"))?
+        .map(|entry| {
+            Ok(format!(
+                "data.lock.d/{}",
+                entry?.file_name().to_string_lossy()
+            ))
+        })
+        .collect::<Result<_>>()?;
+    parts.sort();
+    Ok(parts)
+}
+
+/// a commit of changed files alone, as `git commit -a` makes, leaves a new list in data.lock.d
+/// out, and a clone of it cannot read data.lock: status names each list git does not have, with
+/// the git command that adds it, and says nothing once git has it.
+#[test]
+fn status_names_lists_git_does_not_have() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let listed = |args: &[&str]| {
+        sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_INLINE", "0")
+            .output()
+    };
+    let added = listed(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    crate::merge::ok(&sandbox, &["add", "data.toml", "data.lock", ".gitignore"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "iris"])?;
+    let [part] = parts(&sandbox)?.try_into().map_err(|_| "one list")?;
+
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        status["warnings"],
+        serde_json::json!([format!(
+            "data.lock names {part}, which git does not have; run `git add data.lock.d`, then commit it with data.lock, since a clone without it cannot read data.lock"
+        )])
+    );
+    crate::merge::ok(&sandbox, &["add", "data.lock.d"])?;
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["warnings"], serde_json::json!([]));
+    Ok(())
+}
+
+/// a command that writes a list git does not have ends by saying so, as a warning for a script
+/// and as a `next:` line for a person at a terminal. outside a git repository, or once git has
+/// the list, it says nothing.
+#[test]
+fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, (0..3).map(|_| file(IRIS, "\"v1\"")).collect())?;
+    sandbox.allow(&server.url);
+    let listed = |args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_TEST_INLINE", "0");
+        command
+    };
+    let ran = |args: &[&str]| -> Result<serde_json::Value> {
+        let output = listed(args).output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        json(&output)
+    };
+    let outside = ran(&["--json", "add", &server.url, "--as", "first"])?;
+    assert_eq!(outside["warnings"], serde_json::json!([]), "no repository");
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    crate::merge::ok(&sandbox, &["add", "."])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "first"])?;
+    let before = parts(&sandbox)?;
+
+    let second = ran(&["--json", "add", &server.url, "--as", "second"])?;
+    let part = parts(&sandbox)?
+        .into_iter()
+        .find(|part| !before.contains(part))
+        .ok_or("no new list")?;
+    assert_eq!(
+        second["warnings"],
+        serde_json::json!([format!(
+            "git does not have {part}, which data.lock names now; run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out"
+        )])
+    );
+    let again = ran(&["--json", "sync"])?;
+    assert_eq!(
+        again["warnings"],
+        serde_json::json!([]),
+        "nothing new written"
+    );
+    #[cfg(target_os = "linux")]
+    {
+        crate::merge::ok(&sandbox, &["add", "."])?;
+        crate::merge::ok(&sandbox, &["commit", "-qm", "second"])?;
+        let Some(told) =
+            sandbox.on_a_terminal_running(&listed(&["add", &server.url, "--as", "third"]))?
+        else {
+            return Ok(());
+        };
+        let next = told.lines().last().unwrap_or_default();
+        assert!(
+            next.starts_with("  next: run `git add data.lock.d` before you commit: git does not have data.lock.d/third."),
+            "{told}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     let sandbox = Sandbox::new()?;

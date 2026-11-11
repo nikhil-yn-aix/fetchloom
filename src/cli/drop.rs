@@ -139,7 +139,7 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     context.stop.finish();
     project.write(manifest::FILE, updated.as_bytes())?;
     if lock_changed {
-        project.write_lists(&new_lock)?;
+        context.wrote_lists(&project.root, project.write_lists(&new_lock)?);
         project.write(lock::FILE, new_lock.render().as_bytes())?;
         project.sweep_lists(&new_lock);
     }

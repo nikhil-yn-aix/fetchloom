@@ -1,10 +1,13 @@
-//! the merge base of a file git could not merge, read from git's index, so `fetchloom lock` can
-//! tell which side changed a dataset when the conflict lines do not show the base. git is the one
-//! program fetchloom runs here, and only as a reader: found by an absolute path outside the
-//! project, with no shell, no input, and bounded output and time, and with `--no-lazy-fetch`, so
-//! a partial clone never reaches the network. any failure, an older git among them, means no
-//! base.
+//! git, run as a reader of a project's repository: the merge base of a file git could not merge,
+//! read from git's index, so `fetchloom lock` can tell which side changed a dataset when the
+//! conflict lines do not show the base, and which of the files in `data.lock.d` git has, so a
+//! list a commit would leave out is named. apart from the steps `fetchloom build` runs, git is the
+//! one program fetchloom runs: found by an absolute path outside the project, with no shell, no
+//! input, and bounded output and time. reading objects takes `--no-lazy-fetch`, so a partial
+//! clone never reaches the network; listing the index reads no object. any failure, an older git
+//! or a folder outside a repository among them, means no answer.
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -51,15 +54,23 @@ fn runnable(program: &Path) -> bool {
 
 /// `file`, a file in `root`, as it was at the merge base of the merge git left unfinished there:
 /// the index's stage 1, or nothing at all when both sides added the file. none when git cannot
-/// tell.
+/// tell, as git older than 2.45, which refuses `--no-lazy-fetch`, cannot.
 pub(crate) fn base(git: &Path, root: &Path, file: &str) -> Option<String> {
-    if let Some(bytes) = run(git, root, &["cat-file", "blob", &format!(":1:./{file}")]) {
+    let blob = format!(":1:./{file}");
+    if let Some(bytes) = run(git, root, &["--no-lazy-fetch", "cat-file", "blob", &blob]) {
         return String::from_utf8(bytes).ok();
     }
     let staged = run(
         git,
         root,
-        &["ls-files", "--unmerged", "-z", "--", &format!("./{file}")],
+        &[
+            "--no-lazy-fetch",
+            "ls-files",
+            "--unmerged",
+            "-z",
+            "--",
+            &format!("./{file}"),
+        ],
     )?;
     let mut found: Vec<&[u8]> = staged
         .split(|byte| *byte == 0)
@@ -72,10 +83,28 @@ pub(crate) fn base(git: &Path, root: &Path, file: &str) -> Option<String> {
     (found == [b"2", b"3"]).then(String::new)
 }
 
+/// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their
+/// paths from `root` with `/` between folders. it reads only git's index. none when git cannot
+/// tell, as outside a repository.
+pub(crate) fn tracked(git: &Path, root: &Path, folder: &str) -> Option<HashSet<String>> {
+    let listed = run(
+        git,
+        root,
+        &["ls-files", "-z", "--cached", "--", &format!("./{folder}")],
+    )?;
+    Some(
+        listed
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .filter_map(|path| std::str::from_utf8(path).ok().map(str::to_owned))
+            .collect(),
+    )
+}
+
 /// what git prints for `arguments` in `root`, when it succeeds within the bounds.
 fn run(git: &Path, root: &Path, arguments: &[&str]) -> Option<Vec<u8>> {
     let mut child = Command::new(git)
-        .args(["--no-lazy-fetch", "-c", "core.fsmonitor=false", "-C"])
+        .args(["-c", "core.fsmonitor=false", "-C"])
         .arg(root)
         .args(arguments)
         // started outside the project, so windows never loads a library the project holds

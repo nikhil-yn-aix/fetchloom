@@ -5,7 +5,6 @@
 //! needs a choice, since an addition on one side looks like a removal on the other. nothing is
 //! resolved or downloaded: data.lock keeps a pin only when it answers the merged data.toml.
 
-pub(crate) mod git;
 pub(crate) mod markers;
 #[cfg(test)]
 mod tests;

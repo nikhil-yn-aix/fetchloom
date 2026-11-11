@@ -72,7 +72,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     context.stop.check()?;
     context.stop.finish();
     project.write(manifest::FILE, updated.as_bytes())?;
-    project.write_lists(&lock)?;
+    context.wrote_lists(&project.root, project.write_lists(&lock)?);
     project.write(lock::FILE, lock.render().as_bytes())?;
     project.sweep_lists(&lock);
     let placement = placing.remove_only(&context.output).map_err(|error| {

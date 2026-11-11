@@ -295,7 +295,7 @@ impl Output {
 
     /// whether [`Output::next`] prints: only to a person at a terminal, never with `-q` or
     /// `--json`, or when stdout goes to a pipe or a file.
-    fn shows_next(&self) -> bool {
+    pub(crate) fn shows_next(&self) -> bool {
         self.hints && self.for_person()
     }
 

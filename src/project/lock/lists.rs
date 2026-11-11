@@ -364,7 +364,18 @@ fn broken(message: String) -> Error {
 
 fn unreadable(part: &str, err: &std::io::Error) -> Error {
     if err.kind() == std::io::ErrorKind::NotFound {
-        return broken(format!("data.lock names {part}, which is not there"));
+        // the usual cause is a commit of data.lock without the new list, which a fresh pin of
+        // every dataset would not mend: it drops every recipe's pin
+        return Error::new(
+            Kind::ProjectInvalid,
+            format!("data.lock names {part}, which is not there"),
+        )
+        .detail(format!(
+            "{FOLDER} was probably not committed with data.lock: `git commit -a` leaves new files out"
+        ))
+        .help(format!(
+            "ask whoever shares the project for the commit that adds {FOLDER}, made with `git add {FOLDER}`, then pull it. a part deleted here comes back with `git checkout -- {FOLDER}`"
+        ));
     }
     broken(format!("could not read {part}: {err}"))
 }
@@ -518,7 +529,8 @@ mod tests {
                 .message
                 .contains("does not write")
         );
-        // a part that is gone
+        // a part that is gone, as in a clone of a commit that left data.lock.d out: the help
+        // gets the list, and never leads with deleting data.lock, which drops recipes' pins
         fs::remove_file(root.path().join(&listed.parts[0])).unwrap();
         let gone = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
         assert!(
@@ -526,7 +538,18 @@ mod tests {
             "{}",
             gone.message
         );
-        assert_eq!(gone.help.as_deref(), Some(BROKEN));
+        assert_eq!(
+            gone.details,
+            [
+                "data.lock.d was probably not committed with data.lock: `git commit -a` leaves new files out"
+            ]
+        );
+        let help = gone.help.as_deref().unwrap_or_default();
+        assert!(
+            help.starts_with("ask whoever shares the project for the commit that adds data.lock.d"),
+            "{help}"
+        );
+        assert!(!help.contains("delete data.lock"), "{help}");
     }
 
     #[test]

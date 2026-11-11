@@ -25,6 +25,7 @@ fetchloom status [options]
 1. read the manifest, lock and saved placement state.
 2. compare file sizes and modification times, hashing where those records need checking.
 3. report changed manifest entries, missing or different files, extra paths, unavailable archive trees and recipe results nothing here holds.
+4. in a git repository, warn of each list in [`data.lock.d`](../reference/data-lock.md#big-datasets) that data.lock names and git does not have, with `git add data.lock.d` as help, since a commit without it leaves clones unable to read data.lock. it asks git with `git ls-files`, which reads only git's index, and says nothing without git or outside a repository.
 
 a project still as the last complete sync left it, with `data.toml` and `data.lock` unchanged byte for byte and every placed file looking as placed, is settled, as `sync` finds it: status lists only files fetchloom did not place as extra. that holds even when the cache no longer records what an archive held, as after moving the project and running `fetchloom cache gc --now` before any sync there.
 
@@ -102,3 +103,4 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 | a file shows as damaged that you did not touch | an edit through another project's link changed the cache's copy you share | run `fetchloom sync`; use `copy = true` on datasets you edit |
 | fewer paths appear in the terminal | human categories are limited to 20 paths | use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |
+| `warning: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which git does not have` | a build or a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |

@@ -10,7 +10,7 @@ use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
 
 /// git in `folder`, as a person with a name runs it, without the machine's git settings. none
 /// when git is not installed.
-fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Option<Output>> {
+pub(crate) fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Option<Output>> {
     let home = sandbox.folder("home")?;
     // git refuses a repository on a disk that records no owner, as FAT does, unless the person
     // trusts it; fetchloom's git, run with this home too, then reads the base as theirs does
@@ -49,7 +49,7 @@ fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Option<Output>
 }
 
 /// git in the work folder, which must succeed. none when git is not installed.
-fn ok(sandbox: &Sandbox, args: &[&str]) -> Result<Option<()>> {
+pub(crate) fn ok(sandbox: &Sandbox, args: &[&str]) -> Result<Option<()>> {
     let Some(output) = git(sandbox, &sandbox.work(), args)? else {
         return Ok(None);
     };

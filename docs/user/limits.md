@@ -23,7 +23,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | what | bound | how to go further |
 |---|---|---|
 | files one dataset lists | `FETCHLOOM_MOST_FILES`: the memory budget at about 2 KiB a file, at least 100,000; 2,097,152 with a 4 GiB budget | raise `FETCHLOOM_MOST_FILES` or `FETCHLOOM_MEMORY`, or list a folder with select patterns |
-| files in `data.lock` | 50,000 a dataset; more go to compressed parts in [`data.lock.d`](reference/data-lock.md#big-datasets) | commit `data.lock.d` with `data.lock` |
+| files in `data.lock` | 50,000 a dataset; more go to compressed parts in [`data.lock.d`](reference/data-lock.md#big-datasets) | commit `data.lock.d` with `data.lock`; `git add data.lock.d` takes a new list, which `status` names until git has it |
 | bytes a run downloads | none; past `FETCHLOOM_ASK_ABOVE` it asks first, and it checks the free space of the cache's disk before starting | `--yes`, or a bigger cache disk with `FETCHLOOM_CACHE` |
 | downloads at once | `FETCHLOOM_JOBS`, 8, and `FETCHLOOM_HOST_JOBS`, 4 to one site | raise both for a fast link or your own mirror |
 | one file on a FAT32 disk | 4 GiB less one byte. a larger file is refused before it is downloaded to a cache there, copied into a data or `get` folder there, or unpacked there from an archive; exFAT has no such limit | a disk formatted as exFAT, NTFS, APFS or ext4 |

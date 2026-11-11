@@ -137,13 +137,10 @@ struct Differing {
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
 pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
-    let status = check(
-        &super::project::find(&context.output)?,
-        context.threads,
-        &context.mirrors.mirrors,
-        verify,
-    )?;
+    let project = super::project::find(&context.output)?;
+    let status = check(&project, context.threads, &context.mirrors.mirrors, verify)?;
     let output = &context.output;
+    warn_untracked(output, &project);
     list(output, &status);
     if sum_up(output, &status) {
         // a sync would pin what the sources serve now, which a clone may not want
@@ -195,10 +192,42 @@ pub(super) fn run(context: &Context, verify: bool) -> Result<Status, Error> {
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
     let status = check(project, context.threads, &context.mirrors.mirrors, false)?;
     let output = &context.output;
+    warn_untracked(output, project);
     if sum_up(output, &status) {
         output.hint("`fetchloom status` lists what differs");
     }
     Ok(status)
+}
+
+/// warns of the lists data.lock names in data.lock.d that git does not have, which a commit then
+/// leaves out, so a clone of it cannot read data.lock. `-v` names each. nothing is said with no
+/// git, outside a repository, or for a data.lock that names no list.
+fn warn_untracked(output: &Output, project: &Project) {
+    let Ok(text) = std::fs::read_to_string(project.root.join(crate::project::lock::FILE)) else {
+        return;
+    };
+    let parts = crate::project::lock::parts(&text);
+    let missing = super::project::untracked(&project.root, parts.iter().map(String::as_str));
+    let said = match missing.as_slice() {
+        [] => return,
+        [one] => format!("data.lock names {one}, which git does not have"),
+        [first, ..] => format!(
+            "data.lock names {} lists git does not have, such as {first}",
+            missing.len()
+        ),
+    };
+    let them = if missing.len() == 1 { "it" } else { "them" };
+    output.warn_with(
+        &said,
+        &format!(
+            "run `git add data.lock.d`, then commit {them} with data.lock, since a clone without {them} cannot read data.lock"
+        ),
+    );
+    if missing.len() > 1 {
+        for part in &missing {
+            output.detail(part);
+        }
+    }
 }
 
 /// the datasets data.lock no longer pins as data.toml asks: those data.toml fetches that the lock

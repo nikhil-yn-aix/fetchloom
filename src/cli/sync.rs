@@ -787,7 +787,8 @@ impl<'a> Loop<'a> {
     ) -> Result<String, Error> {
         let _span = tracing::debug_span!("write_lock").entered();
         // the lists first, so data.lock never names a part that is not there yet
-        self.project.write_lists(lock)?;
+        let written = self.project.write_lists(lock)?;
+        self.context.wrote_lists(&self.project.root, written);
         self.project.write(lock::FILE, text.as_bytes())?;
         self.wrote_lock.store(true, Ordering::Relaxed);
         tell_lock(
