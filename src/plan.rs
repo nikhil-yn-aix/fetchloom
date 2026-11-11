@@ -40,13 +40,21 @@ pub(crate) struct Plan<'a> {
 /// the folder a dataset lands in, relative to the project: the data folder itself for
 /// `path = "."`.
 pub(crate) fn folder(manifest: &Manifest, name: &str) -> String {
+    match subfolder(manifest, name) {
+        None => manifest.data_dir.clone(),
+        Some(inner) => format!("{}/{inner}", manifest.data_dir),
+    }
+}
+
+/// the folder a dataset lands in below the data folder, or none for `path = "."`.
+pub(crate) fn subfolder<'a>(manifest: &'a Manifest, name: &'a str) -> Option<&'a str> {
     match manifest
         .datasets
         .get(name)
         .and_then(|entry| entry.path.as_deref())
     {
-        Some(manifest::DATA_FOLDER_ITSELF) => manifest.data_dir.clone(),
-        inner => format!("{}/{}", manifest.data_dir, inner.unwrap_or(name)),
+        Some(manifest::DATA_FOLDER_ITSELF) => None,
+        inner => Some(inner.unwrap_or(name)),
     }
 }
 

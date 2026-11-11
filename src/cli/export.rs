@@ -65,6 +65,9 @@ struct Source {
     sha256: Sha256,
     /// none when the link is not written.
     url: Option<String>,
+    /// below the data folder, in the folder `path` gives its dataset, where aria2c puts it.
+    #[serde(skip)]
+    out: String,
 }
 
 pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Error> {
@@ -178,10 +181,15 @@ fn inventory(
         .map(|(dataset, file)| format!("{}/{}", plan::folder(manifest, dataset), file.path))
         .collect();
     for dataset in &lock.datasets {
+        let folder = plan::subfolder(manifest, &dataset.name);
         for file in &dataset.files {
             let shown = format!("{}/{}", dataset.name, file.path);
-            if let Some(reason) = name::escapes(&shown) {
-                return Err(unwritable(&shown, reason));
+            let out = folder.map_or_else(
+                || file.path.clone(),
+                |folder| format!("{folder}/{}", file.path),
+            );
+            if let Some(reason) = name::escapes(&out) {
+                return Err(unwritable(&out, reason));
             }
             let url = match link(&file.url) {
                 Ok(url) => Some(url),
@@ -197,6 +205,7 @@ fn inventory(
                 size: file.size,
                 sha256: file.sha256,
                 url,
+                out,
             });
         }
     }
@@ -296,8 +305,8 @@ fn render(report: &Report, format: Format) -> (String, u64) {
                 } else {
                     let _ = writeln!(
                         text,
-                        "{url}\n  out={}/{}\n  checksum=sha-256={}",
-                        source.dataset, source.path, source.sha256
+                        "{url}\n  out={}\n  checksum=sha-256={}",
+                        source.out, source.sha256
                     );
                 }
                 count += 1;

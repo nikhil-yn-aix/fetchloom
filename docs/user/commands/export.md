@@ -21,7 +21,7 @@ fetchloom export [options] [name]...
 |---|---|
 | `--format sha256` | the default: one `<sha256>  <path>` line for each file in the data folder, archive members included, as `sha256sum -c` reads them |
 | `--format links` | one `<link> <sha256>` line for each file downloaded: a plain file, or an archive as one packed file |
-| `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=<dataset>/<path>` and `checksum=sha-256=` |
+| `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=` its place below the data folder and `checksum=sha-256=` |
 | `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty` |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
 
@@ -66,6 +66,8 @@ $ aria2c -i sources.aria2 -d downloads
 ```
 
 aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
+
+`out=` puts each file in the folder its dataset is placed in, the one `path` in data.toml names, or the data folder itself for `path = "."`. so `aria2c -i sources.aria2 -d data`, run in the project's folder with `data` the folder `data_dir` names, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
 `-o` writes the whole file under a hidden name beside it, flushes it, then gives it its name without replacing anything; a filesystem that cannot do that refuses. the file is UTF-8 with LF line ends on every system; windows powershell 5.1's `>` would write UTF-16 instead.
 

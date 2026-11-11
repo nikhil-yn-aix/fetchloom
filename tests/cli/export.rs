@@ -111,6 +111,38 @@ fn links_and_aria2_name_each_downloaded_file_and_never_an_archive_member() -> Re
     Ok(())
 }
 
+/// `aria2c -d data` puts each file in the folder `path` gives its dataset, as sync does, so the
+/// data folder can be fetched again without fetchloom.
+#[test]
+fn aria2_puts_each_file_in_the_folder_its_dataset_is_placed_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (routes, zip) = server()?;
+    sandbox.allow(&routes.url);
+    let url = &routes.url;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{url}/iris.csv\"\npath = \"raw\"\n\n[datasets.pack]\nref = \"{url}/pack.zip\"\npath = \".\"\n"
+        ),
+    )?;
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("data/raw/iris.csv"))?, IRIS);
+
+    let aria2 = sandbox.run(&["export", "--format", "aria2"])?;
+
+    assert_eq!(aria2.status.code(), Some(0), "{}", text(&aria2.stderr)?);
+    assert_eq!(
+        text(&aria2.stdout)?,
+        format!(
+            "{url}/iris.csv\n  out=raw/iris.csv\n  checksum=sha-256={}\n{url}/pack.zip\n  out=pack.zip\n  checksum=sha-256={}\n",
+            sha256(IRIS),
+            sha256(&zip)
+        )
+    );
+    Ok(())
+}
+
 #[test]
 fn json_lists_placed_files_and_downloaded_ones_with_their_hashes() -> Result {
     let sandbox = Sandbox::new()?;
