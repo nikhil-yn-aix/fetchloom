@@ -14,28 +14,16 @@ use url::Url;
 /// is kept before its response is sent, so every request a finished client made is there.
 pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
     let seen = asked.clone();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let _entered = runtime.enter();
-        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        // no deadline for the next connection: a busy disk has held a test's client back for
+        // 15 s. a test that connects fewer times than scripted leaves the server waiting
         for response in responses {
-            // a test that connects fewer times than scripted leaves the server to end on its own
-            let Ok(Ok((stream, _))) = runtime.block_on(tokio::time::timeout(
-                Duration::from_secs(10),
-                listener.accept(),
-            )) else {
+            let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
-            let mut stream = stream.into_std().unwrap();
-            // windows hands out accepted sockets non-blocking like their listener
-            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -57,28 +45,16 @@ pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
 }
 
 /// serves every connection with what `answer` makes of its request target, the path and query,
-/// until none comes for 10 s, and keeps the head of every request it took, as [`serve`] does.
+/// for as long as the tests run, and keeps the head of every request it took, as [`serve`] does.
 pub(super) fn route(
     answer: impl Fn(&str) -> Vec<u8> + Send + 'static,
 ) -> (Url, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
     let asked = Arc::new(Mutex::new(Vec::new()));
     let seen = asked.clone();
     std::thread::spawn(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let _entered = runtime.enter();
-        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-        while let Ok(Ok((stream, _))) = runtime.block_on(tokio::time::timeout(
-            Duration::from_secs(10),
-            listener.accept(),
-        )) {
-            let mut stream = stream.into_std().unwrap();
-            stream.set_nonblocking(false).unwrap();
+        while let Ok((mut stream, _)) = listener.accept() {
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
