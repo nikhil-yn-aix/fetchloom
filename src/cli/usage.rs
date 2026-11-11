@@ -167,9 +167,8 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         return Error::new(Kind::Usage, message).help(help);
     }
     let named = |kind| context_value(err, kind);
-    let message = message(err);
-    // a missing or wrong value is easiest to fix next to the usage line
-    let usage = match err.get(ContextKind::Usage) {
+    // a missing or wrong value is easiest to fix next to the usage lines, one for each form
+    let usage: Option<Vec<String>> = match err.get(ContextKind::Usage) {
         Some(ContextValue::StyledStr(text))
             if matches!(
                 err.kind(),
@@ -181,10 +180,22 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
             Some(
                 text.strip_prefix("Usage:")
                     .map_or(text, str::trim)
-                    .to_owned(),
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
             )
         }
         _ => None,
+    };
+    let message = match (&usage, parent) {
+        (Some(forms), Some(parent))
+            if err.kind() == ErrorKind::MissingRequiredArgument && forms.len() > 1 =>
+        {
+            needs(parent, forms)
+        }
+        _ => message(err),
     };
     let placement = (err.kind() == ErrorKind::UnknownArgument)
         .then(|| named(ContextKind::InvalidArg).and_then(|arg| misplaced_option(&arg, parent)))
@@ -229,8 +240,8 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
             Some((last, rest)) => format!("use one of {} or {last}", rest.join(", ")),
             None => String::new(),
         }
-    } else if let Some(usage) = &usage {
-        let command: Vec<&str> = usage
+    } else if let Some(first) = usage.as_ref().and_then(|forms| forms.first()) {
+        let command: Vec<&str> = first
             .split_whitespace()
             .take_while(|word| !word.starts_with(['[', '<']))
             .collect();
@@ -240,12 +251,33 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     } else {
         "`fetchloom --help` lists commands and options".to_owned()
     };
-    let error = Error::new(Kind::Usage, message);
-    match usage {
-        Some(usage) => error.detail(format!("usage: {usage}")),
-        None => error,
+    let mut error = Error::new(Kind::Usage, message);
+    for (at, form) in usage.iter().flatten().enumerate() {
+        error = error.detail(if at == 0 {
+            format!("usage: {form}")
+        } else {
+            format!("       {form}")
+        });
     }
-    .help(help)
+    error.help(help)
+}
+
+/// what a command with several forms needs, from the part of each usage line after its options,
+/// as in `add needs <link>, <path> or -i <file>`.
+fn needs(command: &str, forms: &[String]) -> String {
+    let wanted: Vec<&str> = forms
+        .iter()
+        .map(|form| {
+            form.split_once("[options] ")
+                .map_or(form.as_str(), |(_, wanted)| wanted)
+        })
+        .collect();
+    match wanted.split_last() {
+        Some((last, rest)) if !rest.is_empty() => {
+            format!("{command} needs {} or {last}", rest.join(", "))
+        }
+        _ => format!("{command} needs {}", wanted.join("")),
+    }
 }
 
 /// the command the person likely meant, with a command or option that does not exist changed

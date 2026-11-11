@@ -445,6 +445,34 @@ fn a_missing_link_shows_the_usage() -> Result {
     Ok(())
 }
 
+/// add takes a link, a path or a list, so its usage has three lines, each of its own, with no
+/// written `\n` between them, and the sentence above them names what is missing in plain words.
+#[test]
+fn add_without_a_link_shows_each_usage_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let output = sandbox.run(&["add"])?;
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stderr)?,
+        "error: add needs <link>, <path> or -i <file>\n  \
+         usage: fetchloom add [options] <link>\n         \
+         fetchloom add [options] <path>\n         \
+         fetchloom add [options] -i <file>\n  \
+         help: `fetchloom add --help` says what it takes\n"
+    );
+    let output = sandbox.run(&["--json", "add"])?;
+    let document: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        document["errors"][0]["details"],
+        serde_json::json!([
+            "usage: fetchloom add [options] <link>",
+            "       fetchloom add [options] <path>",
+            "       fetchloom add [options] -i <file>"
+        ])
+    );
+    Ok(())
+}
+
 #[test]
 fn usage_errors_name_options_as_typed() -> Result {
     let sandbox = Sandbox::new()?;
