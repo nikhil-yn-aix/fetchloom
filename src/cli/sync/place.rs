@@ -17,7 +17,7 @@ use serde::Serialize;
 use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::tell_preview;
-use super::disk::{Blocker, Entry, Survey};
+use super::disk::{Blocker, Entry, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
 use crate::error::Error;
@@ -67,6 +67,9 @@ pub(crate) struct Placement {
     /// files `--force` moved aside to replace them, kept until what replaces them is in place.
     #[serde(skip)]
     set_aside: Vec<SetAside>,
+    /// folders no dataset uses now that still hold files fetchloom did not place, so they stay.
+    #[serde(skip)]
+    pub(crate) retired: Vec<Retired>,
 }
 
 /// a file `--force` moved aside to replace it, which goes once what replaces it is in place and
@@ -483,7 +486,10 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| target.path.as_str())
             .collect();
-        for (path, fate) in unwanted(&self.survey, &wanted, &self.unknown) {
+        let unwanted = unwanted(&self.survey, &wanted, &self.unknown);
+        let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
+        preview.placement.retired = self.survey.retired(&wanted, &going);
+        for (path, fate) in unwanted {
             match fate {
                 Unwanted::Remove(_) => {
                     preview.placement.removed += 1;
@@ -1266,6 +1272,8 @@ fn remove_unwanted(
 ) -> Result<bool, Error> {
     let unwanted = unwanted(survey, wanted, unknown);
     let changed = !unwanted.is_empty();
+    let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
+    placement.retired = survey.retired(wanted, &going);
     for (path, fate) in unwanted {
         placer.stop().check()?;
         let Some(before) = survey.state.files.remove(&path) else {

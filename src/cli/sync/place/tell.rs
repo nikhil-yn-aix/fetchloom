@@ -81,6 +81,7 @@ pub(super) fn tell(
         }
     }
     warn_kept(output, placement);
+    warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(
@@ -223,6 +224,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     }
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     warn_kept(output, placement);
+    warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(
@@ -276,6 +278,35 @@ fn tell_adoptions(output: &Output, manifest: &Manifest, dataset: &str, files: &[
     );
     for path in files {
         output.detail(path);
+    }
+}
+
+/// a warning for each folder no dataset uses now that still holds files fetchloom did not place,
+/// such as work of yours or a changed copy sync kept, which stay with the folder. `-v` names each
+/// file.
+fn warn_retired(output: &Output, placement: &Placement) {
+    for retired in &placement.retired {
+        let folder = &retired.folder;
+        let (said, help) = match retired.unplaced.as_slice() {
+            [] => continue,
+            [only] => (
+                format!(
+                    "{folder} still holds {only}, a file fetchloom did not place, so the folder stays"
+                ),
+                "`fetchloom status` lists it as extra; delete it when you no longer need it",
+            ),
+            [first, ..] => (
+                format!(
+                    "{folder} still holds {} files fetchloom did not place, such as {first}, so the folder stays",
+                    retired.unplaced.len()
+                ),
+                "`fetchloom status` lists them as extra; delete them when you no longer need them",
+            ),
+        };
+        output.warn_with(&said, help);
+        for path in &retired.unplaced {
+            output.detail(path);
+        }
     }
 }
 

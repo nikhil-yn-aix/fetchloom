@@ -4,9 +4,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH, added, clone};
-#[cfg(windows)]
-use crate::support::json;
-use crate::support::{Result, Sandbox, Server, file, text};
+use crate::support::{Result, Sandbox, Server, file, json, text};
 
 #[test]
 fn remove_drops_the_dataset_and_only_its_files() -> Result {
@@ -34,6 +32,37 @@ fn remove_drops_the_dataset_and_only_its_files() -> Result {
     assert_eq!(fs::read(work.join("data").join("b").join("b.csv"))?, b"b\n");
     let unknown = sandbox.run(&["remove", "a"])?;
     assert_eq!(unknown.status.code(), Some(2));
+    Ok(())
+}
+
+/// a dataset's folder can hold more than fetchloom placed: work of yours, and the changed copies
+/// sync kept beside files it put back. remove leaves them and the folder, and says so, as its dry
+/// run does first.
+#[test]
+fn remove_names_the_files_it_leaves_in_the_dataset_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let folder = sandbox.work().join("data").join("iris");
+    fs::create_dir(folder.join("resized"))?;
+    let left = ["notes.txt", "iris.csv.changed", "resized/small.csv"];
+    for name in left {
+        fs::write(folder.join(name), name)?;
+    }
+    let said = "data/iris still holds 3 files fetchloom did not place, such as data/iris/iris.csv.changed, so the folder stays";
+    for args in [
+        &["--json", "remove", "iris", "--dry-run"][..],
+        &["--json", "remove", "iris"],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+        let warnings = json(&output)?["warnings"].to_string();
+        assert!(warnings.contains(said), "{warnings}");
+    }
+    assert!(!folder.join("iris.csv").exists());
+    for name in left {
+        assert_eq!(fs::read_to_string(folder.join(name))?, name);
+    }
     Ok(())
 }
 

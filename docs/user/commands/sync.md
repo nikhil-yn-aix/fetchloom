@@ -58,6 +58,17 @@ a file someone put at a pinned path before fetchloom placed it, such as one down
 
 a file in a dataset with `copy = true`, a file with another name, and a file whose bytes the cache does not hold stay as they are, and the line says so: `so it stays as it is`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there. a dry run lists adoptions under `Would adopt`, and a file whose hash only its download can tell under `Would check`.
 
+## folders left behind
+
+sync deletes only files it placed that are unchanged, and only inside the data folder. when a dataset goes from `data.toml`, or its `path` changes, its old folder goes with the last such file. a folder that still holds anything else, such as work of yours or a `.changed` copy, stays, and sync names it (stderr):
+
+```text
+warning: data/pets still holds data/pets/own.txt, a file fetchloom did not place, so the folder stays
+  help: `fetchloom status` lists it as extra; delete it when you no longer need it
+```
+
+a dry run warns the same way, and `-v` names each file.
+
 ## local changes
 
 without `--force`, edited files and conflicting untracked files stay in place. JSON lists them in `result.placement.kept`. unrelated extras are not included there; use [status](status.md) to find them.

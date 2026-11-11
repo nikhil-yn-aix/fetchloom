@@ -1,7 +1,7 @@
 //! what the data folder holds, read once per command by listing its folders, and the objects
 //! behind hardlinks someone edited.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
@@ -55,6 +55,17 @@ pub(crate) struct Survey {
     pub(crate) entries: HashMap<String, Entry>,
     /// the data folder's path in the project, below which entries can stand in a file's way.
     data_dir: String,
+}
+
+/// a folder that held files fetchloom placed which no dataset needs now, and that holds none a
+/// dataset needs, with what else is in it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Retired {
+    /// its path in the project.
+    pub(crate) folder: String,
+    /// the files, links and special files in it that fetchloom did not place, by path in the
+    /// project, in order.
+    pub(crate) unplaced: Vec<String>,
 }
 
 /// what stands at a path in the data folder.
@@ -115,6 +126,71 @@ impl Survey {
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
         survey
+    }
+
+    /// the folders that held files fetchloom placed, `going`, which no file of `wanted` needs now,
+    /// each the highest below the data folder that holds none of `wanted`, with what else they
+    /// hold, as the survey listed it before anything was removed. a folder holding nothing else
+    /// goes with its last file, so it is not among them.
+    pub(crate) fn retired(&self, wanted: &HashSet<&str>, going: &HashSet<&str>) -> Vec<Retired> {
+        let mut sorted: Vec<&str> = wanted.iter().copied().collect();
+        sorted.sort_unstable();
+        let holds_wanted = |folder: &str| {
+            let below = format!("{folder}/");
+            let at = sorted.partition_point(|path| *path < below.as_str());
+            sorted.get(at).is_some_and(|path| path.starts_with(&below))
+        };
+        let start = self.data_dir.len() + 1;
+        let mut folders = HashSet::new();
+        for path in going {
+            let Some(below) = path
+                .strip_prefix(self.data_dir.as_str())
+                .and_then(|rest| rest.strip_prefix('/'))
+            else {
+                continue;
+            };
+            if let Some(folder) = below
+                .match_indices('/')
+                .map(|(end, _)| &path[..start + end])
+                .find(|folder| !holds_wanted(folder))
+            {
+                folders.insert(folder.to_owned());
+            }
+        }
+        if folders.is_empty() {
+            return Vec::new();
+        }
+        let mut retired: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+        let unplaced = self
+            .disk
+            .keys()
+            .filter(|path| !self.state.files.contains_key(*path))
+            .filter(|path| !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path)))
+            .chain(
+                self.entries
+                    .iter()
+                    .filter(|(_, entry)| **entry != Entry::Folder)
+                    .map(|(path, _)| path),
+            );
+        for path in unplaced {
+            let folder = path
+                .match_indices('/')
+                .map(|(end, _)| &path[..end])
+                .find(|folder| folders.contains(*folder));
+            if let Some(folder) = folder {
+                retired.entry(folder).or_default().push(path.clone());
+            }
+        }
+        retired
+            .into_iter()
+            .map(|(folder, mut unplaced)| {
+                unplaced.sort();
+                Retired {
+                    folder: folder.to_owned(),
+                    unplaced,
+                }
+            })
+            .collect()
     }
 
     /// on windows, a folder's listing keeps a hardlinked file's size, time and read-only flag as
@@ -1606,6 +1682,73 @@ mod tests {
         assert_eq!(
             scan(dir.path(), "missing", Threads::default()).found.len(),
             0
+        );
+    }
+
+    /// what a removal leaves in a folder no dataset uses now: work of yours, a link, never a
+    /// file placement stages, and never a folder beside it whose name only starts the same.
+    #[cfg(unix)]
+    #[test]
+    fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let placed = [
+            "data/pets/pets.csv",
+            "data/pets-extra/keep.csv",
+            "data/a/b/old.csv",
+            "data/a/c/new.csv",
+            "data/old/deep/only.csv",
+            "data/gone/only.csv",
+        ];
+        let own = [
+            "data/pets/notes.txt",
+            "data/pets/sub/x.txt",
+            "data/pets-extra/mine.txt",
+            "data/a/b/own.txt",
+            "data/a/b/.fetchloom-0123456789abcdef.copy",
+            "data/old/mine.txt",
+        ];
+        for path in placed.iter().chain(&own) {
+            let file = project.root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, path).unwrap();
+        }
+        std::os::unix::fs::symlink(dir.path(), project.root.join("data/pets/link")).unwrap();
+        let mut survey = Survey::read(&project, "data", Threads::default());
+        for path in placed {
+            let record = record(&project.root, path, path.as_bytes(), Method::Copy);
+            survey.state.files.insert(path.to_owned(), record);
+        }
+        let wanted = HashSet::from(["data/pets-extra/keep.csv", "data/a/c/new.csv"]);
+        let going = HashSet::from([
+            "data/pets/pets.csv",
+            "data/a/b/old.csv",
+            "data/old/deep/only.csv",
+            "data/gone/only.csv",
+        ]);
+
+        assert_eq!(
+            survey.retired(&wanted, &going),
+            [
+                Retired {
+                    folder: "data/a/b".to_owned(),
+                    unplaced: vec!["data/a/b/own.txt".to_owned()],
+                },
+                Retired {
+                    folder: "data/old".to_owned(),
+                    unplaced: vec!["data/old/mine.txt".to_owned()],
+                },
+                Retired {
+                    folder: "data/pets".to_owned(),
+                    unplaced: vec![
+                        "data/pets/link".to_owned(),
+                        "data/pets/notes.txt".to_owned(),
+                        "data/pets/sub/x.txt".to_owned(),
+                    ],
+                },
+            ]
         );
     }
 }

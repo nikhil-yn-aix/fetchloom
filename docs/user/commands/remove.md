@@ -24,9 +24,16 @@ fetchloom remove [options] <name>
 1. open the cache and plan removal before changing project metadata.
 2. remove the dataset from `data.toml` and `data.lock`.
 3. delete unchanged managed files belonging to it.
-4. leave edited and unrelated extra files in place, warning about edits.
+4. leave edited files and files fetchloom did not place where they are, and warn about each edited file and each folder those keep.
 
 nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged, and then warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`; `--dry-run` warns the same way first. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.
+
+a dataset folder that still holds files fetchloom did not place, such as your own outputs or the `.changed` copies sync kept, stays with them, and remove names it (stderr), with `-v` naming each file:
+
+```text
+warning: data/pets still holds 2 files fetchloom did not place, such as data/pets/notes.txt, so the folder stays
+  help: `fetchloom status` lists them as extra; delete them when you no longer need them
+```
 
 removing a table also removes its attached comments and strips leading blank lines. other manifest entries remain. commit the manifest and lock after removal.
 
@@ -42,7 +49,7 @@ if deleting files fails after metadata was written, fix the reported error and r
          Ok dry run, nothing was changed
 ```
 
-edited files that a real removal would keep are named in warnings, as they are without `--dry-run`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
+edited files that a real removal would keep, and the folders that keep files fetchloom did not place, are named in warnings, as they are without `--dry-run`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## exit codes
 
@@ -52,7 +59,7 @@ edited files that a real removal would keep are named in warnings, as they are w
 
 | symptom | cause | fix |
 |---|---|---|
-| some dataset files remain | they were edited or were unrelated extras | inspect and move or delete them yourself |
+| some dataset files remain | they were edited, or fetchloom did not place them; the warnings name them | inspect and move or delete them yourself |
 | cached bytes remain | other projects may use them, and gc has an age rule | run `cache gc` when cleanup is needed |
 | metadata changed but a file could not be deleted | permissions or an open handle blocked deletion | fix that error, then sync |
 | an identical file that was already there was removed, with a warning | matching adopted files are managed | keep independent work outside managed inputs |
