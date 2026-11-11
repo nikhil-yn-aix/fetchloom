@@ -576,7 +576,8 @@ impl Reader<'_> {
                     "remove the NUL character from the value".to_owned(),
                 ));
             }
-            variables.insert(variable.to_owned(), value.to_owned());
+            // git for windows checks data.toml out with CRLF, which a multi-line string keeps
+            variables.insert(variable.to_owned(), value.replace("\r\n", "\n"));
         }
         Ok(variables)
     }
@@ -2139,6 +2140,20 @@ mod tests {
             assert_eq!(error.details.len(), 1, "{env}");
             assert!(error.details[0].starts_with("data.toml:7"), "{env}");
             assert!(!error.details[0].contains("hf_abc"), "{env}");
+        }
+    }
+
+    /// git for windows checks data.toml out with CRLF line endings, which a multi-line string
+    /// keeps, so a variable reads with LF on every system and keys alike.
+    #[test]
+    fn a_multi_line_variable_reads_alike_in_a_crlf_checkout() {
+        let text =
+            format!("{RAW}{CLEAN}env = {{ HEADER = \"\"\"id\nname\"\"\", TAB = \"a\\tb\" }}\n");
+        for written in [text.clone(), text.replace('\n', "\r\n")] {
+            let manifest = parse(&written);
+            let env = &manifest.datasets["clean"].recipe().unwrap().env;
+            assert_eq!(env["HEADER"], "id\nname", "{written:?}");
+            assert_eq!(env["TAB"], "a\tb");
         }
     }
 
