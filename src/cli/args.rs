@@ -82,6 +82,7 @@ on disk: nothing, or the one file -o names, which it never replaces without --fo
     pub(super) const PUSH: &str = "examples:
   fetchloom push --to /mnt/lab/fetchloom
   fetchloom push iris --dry-run
+  fetchloom push --inputs clean
   fetchloom push --to /media/usb/fetchloom --json
 
 on disk: copies the files data.lock lists from the cache into the mirror folder, which it starts when the folder is new or empty. it never changes the project or the cache. --dry-run writes nothing";
@@ -885,6 +886,11 @@ pub(crate) struct Push {
     /// or empty folder becomes a mirror
     #[arg(long, value_name = "folder", help_heading = "options")]
     pub(crate) to: Option<PathBuf>,
+
+    /// also push the datasets the named recipes are made from, and what those are made from,
+    /// so a rebuild on another machine finds them on the mirror
+    #[arg(long, help_heading = "options")]
+    pub(crate) inputs: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

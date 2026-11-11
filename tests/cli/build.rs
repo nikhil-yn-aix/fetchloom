@@ -18,7 +18,7 @@ use crate::support::{Result, Running, Sandbox, Server, file, json, text, wait_un
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
 
 /// a project with iris added from `server` and the recipe [`CLEAN`] beside it, with its code.
-fn with_recipe(sandbox: &Sandbox, server: &Server) -> Result {
+pub(crate) fn with_recipe(sandbox: &Sandbox, server: &Server) -> Result {
     added(sandbox, server)?;
     let manifest = sandbox.work().join("data.toml");
     let text = fs::read_to_string(&manifest)?;
@@ -31,13 +31,13 @@ fn with_recipe(sandbox: &Sandbox, server: &Server) -> Result {
 }
 
 /// the bytes of clean.py that [`pin_clean`] pins by default.
-const CODE: &[u8] = b"import sys\nprint(sys.argv)\n";
+pub(crate) const CODE: &[u8] = b"import sys\nprint(sys.argv)\n";
 
 /// pins `clean` in data.lock as built from iris with clean.py holding `code` and the variables
 /// `env`, one file in its result. the key is made here as the recipe key scheme defines it, apart
 /// from fetchloom's own code: the JSON of the scheme, each input's content, the run, each code
 /// file's hash and the variables.
-fn pin_clean(sandbox: &Sandbox, code: &[u8], env: &[(&str, &str)]) -> Result {
+pub(crate) fn pin_clean(sandbox: &Sandbox, code: &[u8], env: &[(&str, &str)]) -> Result {
     let content = sha256(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256(IRIS)).as_bytes());
     let pairs: Vec<String> = env
         .iter()

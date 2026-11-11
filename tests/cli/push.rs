@@ -8,9 +8,10 @@ use std::process::Output;
 use serde_json::Value;
 
 use crate::add::sha256_hex as sha256;
+use crate::build::{CODE, pin_clean, with_recipe};
 use crate::caps::shown;
 use crate::mirrors::{IRIS, MEMBERS, cold, holds_the_project, project};
-use crate::support::{Result, Sandbox, edit, json, text};
+use crate::support::{Result, Sandbox, Server, edit, file, json, text};
 
 fn ok(output: &Output) -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
@@ -435,5 +436,78 @@ fn a_cold_clone_syncs_from_what_a_push_left_with_no_other_request() -> Result {
     assert_eq!(document["work"]["requests"], 0);
     assert_eq!(document["work"]["mirror_objects"], 6);
     assert_eq!(source.requests().len(), asked, "the source is never asked");
+    Ok(())
+}
+
+/// `--inputs` adds what a recipe is made from, so a rebuild elsewhere finds it on the mirror. a
+/// result's files are pushed as data.lock pins them, and one the cache lacks names the build
+/// that makes it, which only a person may run.
+#[test]
+fn inputs_push_what_a_recipe_is_made_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        crate::project::PATH,
+        vec![file(crate::project::IRIS, "\"v1\"")],
+    )?;
+    with_recipe(&sandbox, &server)?;
+    pin_clean(&sandbox, CODE, &[])?;
+    let root = sandbox.work().join("mirror");
+    let output = sandbox
+        .command(&["--json", "--yes", "push", "--inputs", "clean", "--to"])
+        .arg(&root)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    assert_eq!(document["result"]["selected"], serde_json::json!(["clean"]));
+    assert_eq!(
+        document["result"]["datasets"],
+        serde_json::json!(["clean", "iris"])
+    );
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "offline.missing");
+    assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
+    assert_eq!(error["help"], "`fetchloom build clean` makes clean's files");
+    assert_eq!(error["fix"], Value::Null);
+    assert!(!root.exists());
+    // the result as a build would leave it in the cache
+    let hex = sha256(b"done");
+    let fan = sandbox.cache().join("objects").join(&hex[..2]);
+    fs::create_dir_all(&fan)?;
+    fs::write(fan.join(&hex[2..]), b"done")?;
+    let pushed = sandbox
+        .command(&["--json", "--yes", "push", "--inputs", "clean", "--to"])
+        .arg(&root)
+        .output()?;
+    ok(&pushed)?;
+    assert_eq!(json(&pushed)?["result"]["copied"], 2);
+    let mut expected = vec![sha256(crate::project::IRIS), hex];
+    expected.sort();
+    assert_eq!(named(&root, "objects")?, expected);
+    // a clone that never synced is told to sync what the recipe is made from, not the recipe
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock", "clean.py"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let parts = clone.join("data.lock.d");
+    fs::create_dir(&parts)?;
+    for part in fs::read_dir(sandbox.work().join("data.lock.d"))? {
+        let part = part?;
+        fs::copy(part.path(), parts.join(part.file_name()))?;
+    }
+    let output = sandbox
+        .command_in(
+            &clone,
+            &["--json", "--yes", "push", "--inputs", "clean", "--to"],
+        )
+        .arg(sandbox.folder("other")?.join("mirror"))
+        .env("FETCHLOOM_CACHE", sandbox.folder("clone-cache")?)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["help"],
+        "run `fetchloom sync iris` first, then push again; `fetchloom build clean` makes clean's files"
+    );
+    assert_eq!(error["fix"], "fetchloom sync iris");
     Ok(())
 }

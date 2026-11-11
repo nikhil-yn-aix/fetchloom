@@ -5,6 +5,7 @@
 ```sh
 fetchloom push --to /mnt/lab/fetchloom
 fetchloom push iris --dry-run
+fetchloom push --inputs clean
 fetchloom push --to /media/usb/fetchloom --json
 ```
 
@@ -14,11 +15,12 @@ fetchloom push --to /media/usb/fetchloom --json
 fetchloom push [options] [name]...
 ```
 
-`name` is a dataset in `data.toml`; with none, every dataset `sync` places is pushed. an unknown name is a usage error, exit 2, that suggests the closest name.
+`name` is a dataset in `data.toml`; with none, every dataset `sync` places is pushed. an unknown name is a usage error, exit 2, that suggests the closest name. `--inputs` adds what the named [recipes](../recipes.md) are made from.
 
 | option | effect |
 |---|---|
 | `--to <folder>` | the mirror's folder. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
+| `--inputs` | also push the datasets the named recipes are made from, and what those are made from in turn, so a rebuild on another machine finds them on the mirror. with no name, of every recipe |
 | `-n`, `--dry-run` | say what would be copied and what is there already; copy nothing |
 
 [global options](README.md#global-options) also apply. `--yes` answers the [question](#data-you-may-not-share) about data whose source wanted an account or accepted terms.
@@ -91,7 +93,9 @@ error: this machine's cache lacks files the push needs, and push never downloads
   help: run `fetchloom sync` first, then push again
 ```
 
-push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds either: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60. a result data.lock pins is pushed by its files, which the cache holds once a build made them.
+push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds either: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60. a result data.lock pins is pushed by the files data.lock lists for it, which the cache holds once a build made them. a file of one that the cache lacks is named with the build that makes it, such as `fetchloom build clean`, and the JSON `fix` is null, since a build runs the project's code.
+
+`fetchloom push --inputs clean` sends `clean`'s result with every dataset it is made from, so a reviewer whose sources are gone can rebuild it from the mirror and check it against data.lock.
 
 ## data you may not share
 

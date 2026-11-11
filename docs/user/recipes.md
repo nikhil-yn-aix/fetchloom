@@ -58,7 +58,7 @@ the key holds nothing of the machine: no path, user, system, time or fetchloom v
   hint: `fetchloom build --dry-run` shows the commands that would build them
 ```
 
-`fetchloom lock --check` and `fetchloom sync --locked` fail with `build.needed`, exit 60, naming what moved:
+`fetchloom lock --check`, `fetchloom sync --locked` and a [`fetchloom push`](commands/push.md) of the recipe fail with `build.needed`, exit 60, naming what moved:
 
 ```text
 error: data.lock is out of date: clean changed since it was built
@@ -67,6 +67,8 @@ error: data.lock is out of date: clean changed since it was built
 ```
 
 a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, since `fetchloom lock` must pin it before a build can read it. the JSON `fix` of `build.needed` is always null: building runs the project's code, so a script or an agent asks a person first.
+
+`fetchloom push --inputs <recipe>` copies a recipe's pinned result and every dataset it is made from into a folder [mirror](mirrors.md), so a reviewer whose sources are gone can rebuild it from there.
 
 no command but `build` runs a step. `sync` places a pinned result from the cache like any dataset, also after its recipe changed, and never builds it. a pinned result neither the cache nor a [mirror](mirrors.md) holds, as in a fresh clone, is left out of a sync of every dataset with a warning naming `fetchloom build` with the recipe, while `sync <recipe>` and `sync --locked` fail with `build.needed`, exit 60, as [sync](commands/sync.md#recipe-results) shows. `lock` keeps a recipe's pin while `data.toml` has the recipe, and `sync` and `lock` drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` answers a built recipe's folder, and fails with `build.needed` for one never built. `fetchloom export` lists a result's files with their SHA-256, and `cache gc` keeps the files of every result a project's `data.lock` pins.
 
