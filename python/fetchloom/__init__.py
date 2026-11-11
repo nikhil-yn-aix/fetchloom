@@ -99,8 +99,8 @@ def path(
     ``locked=True`` never changes data.lock: when that sync would, it raises :class:`Error`
     with kind ``lock.outdated``.
     """
-    arguments = _options(["path", name], yes, offline, locked)
-    return Path(_run(arguments, project, {"project", "yes", "offline", "locked"})["path"])
+    arguments = _options(["path"], yes, offline, locked)
+    return Path(_run([*arguments, "--", name], project, {"project", "yes", "offline", "locked"})["path"])
 
 
 def sync(

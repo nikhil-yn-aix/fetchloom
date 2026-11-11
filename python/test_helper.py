@@ -29,16 +29,17 @@ class HelperOptions(unittest.TestCase):
                         with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
                             if command == "path":
                                 actual = fetchloom.path("iris/data.csv", Path("project"), **flags)
-                                arguments = ["path", "iris/data.csv"]
                             else:
                                 actual = fetchloom.sync(Path("project"), **flags)
-                                arguments = ["sync"]
+                    arguments = [command]
                     if yes:
                         arguments.append("--yes")
                     if offline:
                         arguments.append("--offline")
                     if locked:
                         arguments.append("--locked")
+                    if command == "path":
+                        arguments += ["--", "iris/data.csv"]
                     self.assertEqual(actual, Path("resolved"))
                     self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "project", *arguments])
                     self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
@@ -50,6 +51,23 @@ class HelperOptions(unittest.TestCase):
             fetchloom.sync(".", True)
         with self.assertRaises(TypeError):
             fetchloom.sync(".", ["iris"])
+
+    def test_a_name_like_an_option_stays_a_name(self):
+        def program(argv, **_):
+            # as fetchloom does, it reads -h before any -- as a request for help, which has no path
+            options = argv[: argv.index("--")] if "--" in argv else argv
+            if "-h" in options:
+                document = {"status": "ok", "command": "help", "result": {"commands": [], "options": []}, "warnings": []}
+                return subprocess.CompletedProcess(argv, 0, json.dumps(document), "")
+            error = {"kind": "usage", "message": f"data.toml has no dataset called {argv[-1]}", "details": [], "help": None}
+            return subprocess.CompletedProcess(argv, 2, json.dumps({"status": "error", "errors": [error], "warnings": []}), "")
+
+        with patch.object(fetchloom, "_program", return_value="fetchloom"):
+            with patch.object(fetchloom.subprocess, "run", side_effect=program) as run:
+                with self.assertRaises(fetchloom.Error) as raised:
+                    fetchloom.path("-h", "p", yes=True)
+        self.assertEqual(raised.exception.message, "data.toml has no dataset called -h")
+        self.assertEqual(run.call_args.args[0], ["fetchloom", "--json", "-C", "p", "path", "--yes", "--", "-h"])
 
     def test_sync_verify_hashes_every_placed_file_as_the_cli_does(self):
         response = subprocess.CompletedProcess(
@@ -209,7 +227,7 @@ class GetOptions(unittest.TestCase):
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
             with patch.object(fetchloom.subprocess, "run", return_value=response) as run:
                 fetchloom.path("~iris", "~/project")
-        self.assertEqual(run.call_args.args[0][3:], [f"{home}/project", "path", "~iris"])
+        self.assertEqual(run.call_args.args[0][3:], [f"{home}/project", "path", "--", "~iris"])
 
     def test_get_takes_a_path_or_a_folder_not_both(self):
         with patch.object(fetchloom.subprocess, "run") as run:
