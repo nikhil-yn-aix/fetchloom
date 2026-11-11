@@ -435,7 +435,8 @@ impl Target {
         &self.root
     }
 
-    /// writes the marker, unless another push wrote it first. says whether this one did.
+    /// writes the marker, unless another push wrote it first, and puts it on the disk, its name
+    /// too, before any file is pushed. says whether this one wrote it.
     fn start(&mut self) -> io::Result<bool> {
         self.placer
             .check_folders(&self.root.join(TMP).join(MARKER), true)?;
@@ -447,6 +448,7 @@ impl Target {
         match self.placer.move_back(&temp.path, &self.root.join(MARKER)) {
             Ok(()) => {
                 temp.named = true;
+                self.keep_marker()?;
                 Ok(true)
             }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists && probe(&self.root).is_ok() => {
@@ -454,6 +456,17 @@ impl Target {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// flushes the mirror's top folder, which just gained the marker's name: a power cut could
+    /// otherwise keep pushed files and lose the marker, and every later push would refuse the
+    /// folder as holding files but no mirror.
+    fn keep_marker(&self) -> io::Result<()> {
+        #[cfg(all(test, target_os = "linux"))]
+        if let Some(folder) = tests::unflushable(tests::Flush::Marker, &self.root) {
+            return flush(&folder);
+        }
+        crate::project::sync_directory(&self.root)
     }
 
     /// makes `tmp/` and the folders `items` go in, each checked once through the mirror's top: a
@@ -918,7 +931,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::mirror::OBJECTS;
+    use crate::mirror::{OBJECTS, TREES};
 
     thread_local! {
         /// whether a pushed file's first byte is changed between writing it and reading it back,
@@ -926,9 +939,9 @@ pub(crate) mod tests {
         static LOSING_A_WRITE: Cell<bool> = const { Cell::new(false) };
         /// what happens between a push writing its files and naming them.
         static BETWEEN: Cell<Between> = const { Cell::new(Between::Nothing) };
-        /// whether a push's batch flush fails, as one that a disk's failed write-back fails does.
+        /// which of a push's flushes fails, as a disk whose write-back failed makes it fail.
         #[cfg(target_os = "linux")]
-        static FAILING_FLUSH: Cell<bool> = const { Cell::new(false) };
+        static FAILING: Cell<Option<Flush>> = const { Cell::new(None) };
     }
 
     /// what a test makes happen between a push writing its files and naming them.
@@ -959,19 +972,35 @@ pub(crate) mod tests {
         }
     }
 
-    /// a batch whose flush fails, when a test asks: syncfs refuses an `O_PATH` handle, which is a
-    /// real flush error without a failing disk.
+    /// a flush a push makes, which a test can make fail.
     #[cfg(target_os = "linux")]
-    pub(super) fn failing_batch(root: &Path) -> Option<Batch> {
-        FAILING_FLUSH.get().then(|| {
-            let folder = rustix::fs::open(
-                root.join(TMP),
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Flush {
+        /// the new mirror's top folder, once the marker has its name.
+        Marker,
+        /// the one flush of a batch of files.
+        Batch,
+    }
+
+    /// a handle on `path` that every flush fails on, when a test makes `flush` fail: fsync and
+    /// syncfs refuse an `O_PATH` handle, which is a real flush error without a failing disk.
+    #[cfg(target_os = "linux")]
+    pub(super) fn unflushable(flush: Flush, path: &Path) -> Option<File> {
+        (FAILING.get() == Some(flush)).then(|| {
+            let handle = rustix::fs::open(
+                path,
                 rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
                 rustix::fs::Mode::empty(),
             )
             .unwrap();
-            crate::cache::Batch::with_file_for_test(File::from(folder))
+            File::from(handle)
         })
+    }
+
+    /// a batch whose flush fails, when a test asks.
+    #[cfg(target_os = "linux")]
+    pub(super) fn failing_batch(root: &Path) -> Option<Batch> {
+        unflushable(Flush::Batch, &root.join(TMP)).map(crate::cache::Batch::with_file_for_test)
     }
 
     /// changes the file a push wrote before it is read back, when a test asks.
@@ -1247,9 +1276,9 @@ pub(crate) mod tests {
     fn a_failed_batch_flush_names_nothing() {
         let folder = tempfile::tempdir().unwrap();
         let contents = many();
-        FAILING_FLUSH.set(true);
+        FAILING.set(Some(Flush::Batch));
         let (target, put) = put_all(folder.path(), &contents);
-        FAILING_FLUSH.set(false);
+        FAILING.set(None);
         assert!(matches!(put, Err(Failed::Flush(_))), "{put:?}");
         for bytes in &contents {
             assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(bytes)).exists());
@@ -1293,6 +1322,28 @@ pub(crate) mod tests {
             "{put:?}"
         );
         assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(&contents[0])).exists());
+    }
+
+    /// a new mirror's marker is on the disk, its name in the top folder too, before any file is
+    /// pushed: a marker whose name cannot be flushed stops the push before it writes a file.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_marker_that_cannot_be_flushed_stops_the_push_before_any_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        FAILING.set(Some(Flush::Marker));
+        let opened = Target::open(&root, Arc::default());
+        FAILING.set(None);
+        let Err(Refused::Failed(err)) = opened else {
+            panic!("the push went on with a marker that is not on the disk");
+        };
+        assert_eq!(
+            err.raw_os_error(),
+            Some(rustix::io::Errno::BADF.raw_os_error())
+        );
+        assert!(!root.join(OBJECTS).exists());
+        assert!(!root.join(TREES).exists());
+        assert_eq!(unfinished(&root), Vec::<PathBuf>::new());
     }
 
     /// a link someone planted in the mirror is refused, so no write follows it out of the mirror.
