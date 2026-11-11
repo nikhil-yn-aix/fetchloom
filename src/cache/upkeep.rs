@@ -34,6 +34,18 @@ pub(crate) struct Object {
     pub(crate) names: Option<u64>,
 }
 
+impl Object {
+    /// whether a name outside the cache keeps the object's bytes too, as a project's hardlink
+    /// does, so removing it frees nothing. a windows listing does not count names, so there the
+    /// object is opened to count them.
+    pub(crate) fn has_other_names(&self) -> bool {
+        self.names.map_or_else(
+            || crate::place::has_other_names(&self.path),
+            |names| names > 1,
+        )
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Scan {
     pub(crate) objects: Vec<Object>,

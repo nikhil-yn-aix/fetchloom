@@ -10,7 +10,7 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-use super::upkeep::{GRACE, Needed, Object, Scan, Use};
+use super::upkeep::{GRACE, Needed, Scan, Use};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::place::Method;
@@ -76,7 +76,7 @@ impl Usage {
         for object in &scan.objects {
             usage.objects += 1;
             usage.bytes += object.size;
-            let linked = has_other_names(object);
+            let linked = object.has_other_names();
             if needed.objects.contains(&object.digest) {
                 usage.needed += object.size;
                 if linked {
@@ -189,20 +189,13 @@ fn file_has_other_names(path: &Path, metadata: &fs::Metadata) -> bool {
     }
 }
 
-/// whether `object` has a name outside the cache too, so removing it frees nothing.
-fn has_other_names(object: &Object) -> bool {
-    object.names.map_or_else(
-        || crate::place::has_other_names(&object.path),
-        |names| names > 1,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use super::super::Cache;
     use super::super::tests::store;
+    use super::super::upkeep::Object;
     use super::*;
     use crate::digest;
     use crate::place::Method;
