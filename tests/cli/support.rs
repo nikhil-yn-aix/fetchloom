@@ -314,21 +314,24 @@ pub(crate) fn typed(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
-    let shown = Arc::new(Watched::<Vec<u8>>::default());
+    // what the screen showed, and whether the terminal closed, as it does once the command ends
+    let shown = Arc::new(Watched::<(Vec<u8>, bool)>::default());
     let mut stdout = child.stdout.take().ok_or("script has no stdout")?;
     let reader = {
         let shown = Arc::clone(&shown);
         std::thread::spawn(move || {
             let mut bytes = [0; 4096];
             while let Ok(read @ 1..) = stdout.read(&mut bytes) {
-                shown.change(|shown| shown.extend_from_slice(&bytes[..read]));
+                shown.change(|(shown, _)| shown.extend_from_slice(&bytes[..read]));
             }
+            shown.change(|(_, closed)| *closed = true);
         })
     };
-    let screen = |bytes: &Vec<u8>| String::from_utf8_lossy(bytes).replace("\r\n", "\n");
+    let screen =
+        |(bytes, _): &(Vec<u8>, bool)| String::from_utf8_lossy(bytes).replace("\r\n", "\n");
     if !after.is_empty()
-        && let Err(err) = shown.wait(&format!("{after:?} on the screen"), |bytes| {
-            screen(bytes).contains(after)
+        && let Err(err) = shown.wait(&format!("{after:?} on the screen"), |state| {
+            screen(state).contains(after)
         })
     {
         let _ = child.kill();
@@ -337,6 +340,12 @@ pub(crate) fn typed(
     }
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(keys.as_bytes())?;
+    }
+    // a key the command misread would leave it waiting for another, and the test with it
+    if let Err(err) = shown.wait("the command to end after the keys", |(_, closed)| *closed) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("{err}\n{}", shown.read(screen)).into());
     }
     let status = child.wait()?;
     reader.join().map_err(|_| "reading the screen failed")?;
