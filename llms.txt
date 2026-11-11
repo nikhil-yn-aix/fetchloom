@@ -55,7 +55,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [notebooks and containers](docs/user/notebooks.md): where the cache lasts on hosted notebooks, dev containers and codespaces, read-only roots, a kubernetes job and small disks
 - [AI agents](docs/user/ai-agents.md): the agent skill, JSON contract and why there is no MCP server
 - [agent skill](skills/fetchloom/SKILL.md): which command fits which task, safe flags and reading failures
-- [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders and long paths
+- [windows](docs/user/windows.md): Defender, dev drives, aliases, synced folders, long paths, and how a recipe's step finds its program and ends with all it started
 - [macos](docs/user/macos.md): cache location, apfs clones, icloud drive and cloud storage folders, unicode names
 - [troubleshooting](docs/user/troubleshooting.md): recorded errors, causes and fixes
 - [limits](docs/user/limits.md): excluded workflows and reproducibility boundaries

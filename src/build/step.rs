@@ -6,7 +6,11 @@
 //! when asked to stop, when the step ends, so nothing it started still writes while its result
 //! is taken in, and when a second ctrl-c quits. on unix that is a process group, which the
 //! terminal's ctrl-c does not reach. on windows it is a job object, which also ends when
-//! fetchloom does, however it ends, and the console's ctrl-c reaches the step there too.
+//! fetchloom does, however it ends, and the console's ctrl-c reaches the step there too. there
+//! the `program` module finds the step's program as a shell would.
+
+#[cfg(any(windows, test))]
+mod program;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
@@ -196,6 +200,8 @@ fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::C
         .words
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "a step with no program"))?;
+    #[cfg(windows)]
+    let program = program::find(program, command.folder, command.env);
     let mut process = std::process::Command::new(program);
     process
         .args(arguments)

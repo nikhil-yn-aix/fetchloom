@@ -79,6 +79,10 @@ if a replacement or deletion fails, close editors, notebooks or other programs h
 
 the console's ctrl-c reaches the step as well as fetchloom, so a step may print its own message, such as python's `KeyboardInterrupt`, before the build says it stopped.
 
+a step's program is found as cmd.exe finds it: in the folders of `PATH`, in order, trying in each the extensions of `PATHEXT` that windows can start, `.com`, `.exe`, `.bat` and `.cmd`. so `uv` and `python` start, and a `.cmd` shim such as `npm.cmd` in an earlier folder runs before an `.exe` in a later one. a name that already ends with one of these, such as `npm.cmd`, is looked for as written, and a name with a folder in it, such as `tools/prep`, from the project folder. unlike cmd.exe, fetchloom never looks in the project folder first; write `./tool.bat` to run a program there. other types `PATHEXT` may list, such as `.js`, are passed over: name their program first, as in `run = ["node", "tool.js"]`.
+
+a `.bat` or `.cmd` program runs through cmd.exe, which reads its arguments again. fetchloom leaves the quoting to rust, which quotes each argument so the program gets it as written, `%` and `&` included, and refuses one it cannot pass safely, such as an argument with a line break; that step does not start.
+
 ## company proxies
 
 fetchloom uses the proxy that `HTTPS_PROXY` names, or the system's proxy settings when that is unset. a proxy that asks for your windows sign-in needs a local relay that signs in for you, as [company proxies](troubleshooting.md#company-proxies) shows.

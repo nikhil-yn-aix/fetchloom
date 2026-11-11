@@ -2197,6 +2197,26 @@ fn a_missing_program_cannot_start() -> Result {
     Ok(())
 }
 
+/// on windows a step's program is found through PATHEXT as a shell finds it, so a `.cmd` shim on
+/// PATH, as npm and many installers leave, runs, and gets its arguments as written.
+#[cfg(windows)]
+#[test]
+fn a_batch_shim_on_path_runs_with_its_arguments() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let shim = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-shim\", \"write\", \"said.txt\", \"50% & \\\"more\\\"\", \"{iris}\", \"{out}\"]\n";
+    with(&sandbox, &server, shim)?;
+    fs::write(
+        sandbox.folder("bin")?.join("recipe-shim.cmd"),
+        "@\"%~dp0recipe-step.exe\" %*\r\n",
+    )?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let said = sandbox.work().join("data").join("clean").join("said.txt");
+    assert_eq!(fs::read_to_string(said)?, "50% & \"more\"");
+    Ok(())
+}
+
 /// cache gc keeps the files of a result data.lock pins, which only a build could make again.
 #[test]
 fn gc_keeps_a_pinned_result() -> Result {

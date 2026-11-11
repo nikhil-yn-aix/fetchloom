@@ -78,7 +78,7 @@ when it makes other files, the build fails instead, as [a rebuild that differs](
 
 ## the step
 
-a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. fetchloom makes a folder for it in the cache, which `<build>` stands for in the output:
+a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. the program is found as your shell finds it: in the folders of `PATH`, in order, and a name with a folder in it, such as `tools/prep`, from the project folder. on windows each folder is tried with the extensions of `PATHEXT` that windows can start, `.com`, `.exe`, `.bat` and `.cmd`, so `uv`, `python` and a `.cmd` shim such as `npm` all start; [windows](../windows.md#recipe-steps) has the details. fetchloom makes a folder for the step in the cache, which `<build>` stands for in the output:
 
 - `<build>/in/<name>` holds a copy of each dataset it reads, made from the files `data.lock` pins in the cache, never from the data folder, where you may have changed a file. the copies are reflinks where the disk clones files and plain copies elsewhere, never hardlinks, and read-only, so a step that writes one anyway changes only its own copy.
 - `<build>/out` is empty, and what the step writes there becomes the dataset.
