@@ -73,7 +73,7 @@ on disk: nothing. it reads data.toml, data.lock and data/";
   fetchloom list iris
   fetchloom list --json
 
-on disk: nothing. it reads data.toml and data.lock";
+on disk: nothing. it reads data.toml, data.lock and what the cache recorded of each archive";
 
     pub(super) const EXPORT: &str = "examples:
   fetchloom export > data.sha256
