@@ -708,7 +708,6 @@ impl Net {
         let earlier = partial
             .resumable()
             .filter(|(_, validators)| fetch.expect.proves() || if_range(validators).is_some());
-        Work::add(&self.work.requests, 1);
         let shape = conditions(earlier.as_ref(), known);
         let response = self.send_body(from, fetch.mirror, shape).await?;
         let status = response.status();

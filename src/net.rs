@@ -549,6 +549,11 @@ impl Net {
                 }
                 None => shape(self.request(client, &hop, first_origin)),
             };
+            // counted as it goes: one refused before is no request, and a redirect's hop is part
+            // of the request it follows
+            if redirects == 0 {
+                Work::add(&self.work.requests, 1);
+            }
             let mut response = self.sent(wire, &hop, carrier.as_ref(), request).await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, Instant::now());
@@ -569,7 +574,6 @@ impl Net {
                     .map_err(Failure::Final)?
                 {
                     tracing::debug!(url = %Shown(&hop), "S3 refused the request without a key, so it goes again signed");
-                    Work::add(&self.work.requests, 1);
                     continue;
                 }
             }

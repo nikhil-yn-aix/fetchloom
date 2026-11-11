@@ -100,7 +100,6 @@ impl Net {
     }
 
     async fn answer(&self, url: &Url, mirror: bool) -> Result<Response, Failure> {
-        Work::add(&self.work.requests, 1);
         let mut response = self
             .send_on(super::Lane::Shared, url, mirror, |request| {
                 request.header(

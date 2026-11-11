@@ -495,6 +495,10 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
             "fetchloom will not ask 127.0.0.1, since mirrors_only lets it ask its mirrors alone",
         ),
         (
+            &["--json", "add", "zenodo:3608990"],
+            "fetchloom will not ask 127.0.0.1, since mirrors_only lets it ask its mirrors alone",
+        ),
+        (
             &["--json", "get", new.as_str(), "--dir", "one-off"],
             "get fetches each link from its source, and mirrors_only lets fetchloom ask its mirrors alone",
         ),
@@ -505,9 +509,12 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
     ] {
         let output = run(arguments)?;
         assert_eq!(output.status.code(), Some(20), "{arguments:?}");
-        let error = &json(&output)?["errors"][0];
+        let document = json(&output)?;
+        let error = &document["errors"][0];
         assert_eq!(error["kind"], "network.refused", "{arguments:?}");
         assert_eq!(error["message"], said, "{arguments:?}");
+        // refused before it was sent, so no request was made
+        assert_eq!(document["work"]["requests"], 0, "{arguments:?}");
     }
     // without the zip's tree on the mirror, a fresh cache wants the zip itself, which no
     // mirror holds

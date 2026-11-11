@@ -146,7 +146,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 
 | field | counts |
 |---|---|
-| `requests` | explicit metadata or file request attempts, including retries; redirect hops are not counted separately |
+| `requests` | explicit metadata or file request attempts, including retries, counted as each is sent; redirect hops are not counted separately, and a request refused before it is sent, as in [mirror-only mode](../mirrors.md#mirror-only-mode), is not counted |
 | `bytes_down` | body bytes read, including metadata and unsuccessful attempts; excludes headers and the saved resume prefix |
 | `retries` | scheduled retry waits |
 | `resumes` | accepted nonzero range starts |

@@ -536,7 +536,6 @@ impl Net {
                 None => request,
             }
         };
-        Work::add(&self.work.requests, 1);
         let response = self
             .send_apart(job.from, job.mirror, shape)
             .await
