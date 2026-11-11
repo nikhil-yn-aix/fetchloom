@@ -456,6 +456,39 @@ impl Draft {
     }
 }
 
+/// the pin of `locked`, an import, once data.toml switched its `extract` to `entry`'s: the same
+/// files, with what each archive unpacks to left to learn again.
+pub(super) fn switched_import(entry: &Entry, locked: &Locked) -> Locked {
+    let mut switched = locked.clone();
+    switched.extract = entry.extract;
+    for file in &mut switched.files {
+        file.unpacks_to = None;
+    }
+    switched
+}
+
+/// fills in what each archive of `locked`, an import pinned whole, unpacks to, for a dry run: as
+/// this machine recorded it, or a stand-in. returns the archives, as `<dataset>/<path>`, that a
+/// run would unpack to learn it.
+pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> {
+    let mut unknown = Vec::new();
+    if !locked.extract {
+        return unknown;
+    }
+    for file in &mut locked.files {
+        if file.unpacks_to.is_some() || archive::by_name(&file.path) != Some(Packed::Archive) {
+            continue;
+        }
+        let label = format!("{}/{}", locked.name, file.path);
+        file.unpacks_to = Some(cache.unpacked_tree(&file.sha256).unwrap_or_else(|| {
+            let tree = stand_in(&format!("{label} unpacked"));
+            unknown.push(label);
+            tree
+        }));
+    }
+    unknown
+}
+
 /// the link data.lock pins for `file` of `dataset`.
 pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
     Url::parse(&file.url).map_err(|err| {

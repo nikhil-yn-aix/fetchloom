@@ -28,7 +28,7 @@ use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Synced;
 use crate::project::{Held, Hold, Project};
-use crate::source::Listing;
+use crate::source::{Listing, local};
 use crate::units;
 
 /// what a project command did, or with `--dry-run` would do, as `--json` prints it.
@@ -434,10 +434,16 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     }
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,
-        Some(names) if names.is_empty() => Upgrade::All,
+        Some(names) if names.is_empty() => {
+            tell_imports_kept(&context.output, &manifest);
+            Upgrade::All
+        }
         Some(names) => {
             for name in &names {
                 known(&manifest, name, "lock --upgrade")?;
+                if local::is_imported(&manifest.datasets[name].reference) {
+                    return Err(local::no_newer(name));
+                }
             }
             Upgrade::Only(names.into_iter().collect::<BTreeSet<_>>())
         }
@@ -479,6 +485,26 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         placement: None,
         ..Report::default()
     })
+}
+
+/// says which datasets an upgrade of all leaves as they are: imports, which no source has a newer
+/// version of.
+fn tell_imports_kept(output: &Output, manifest: &Manifest) {
+    let imported: Vec<&str> = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| local::is_imported(&entry.reference))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let names = match imported.as_slice() {
+        [] => return,
+        [first @ .., last] if !first.is_empty() => format!("{} and {last}", first.join(", ")),
+        _ => imported.join(""),
+    };
+    output.step(
+        "Skipped",
+        &format!("{names}, imported from files, which no source has a newer version of"),
+    );
 }
 
 /// `lock --dry-run`: what locking would change, found without downloading, unpacking or

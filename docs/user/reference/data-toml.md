@@ -23,12 +23,18 @@ path = "measurements"
 | key | meaning | default |
 |---|---|---|
 | `project.data_dir` | folder relative to the project root | `"data"` |
-| `ref` | a reference from [sources](../sources/README.md) | required, nonempty string |
+| `ref` | a reference from [sources](../sources/README.md), or `"local"` for [imported files](#imported-files) | required, nonempty string |
 | `select` | keep files matching any of these patterns | all files; for a `ref` that links one file or folder inside a dataset, that file or everything below that folder |
 | `exclude` | drop files matching any of these patterns | none |
 | `extract` | unpack recognized archive names | `true` |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
+
+## imported files
+
+`fetchloom add ./flowers` writes `ref = "local"` for files it imports from a folder or a file on this machine. the entry names no path: a path would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, and the cache holds the bytes. `select`, `exclude` and `extract` apply to the imported files as they do to a source's listing.
+
+no source can list an import again, so a changed `select` or `exclude`, or `ref = "local"` written by hand for a dataset data.lock does not pin, is refused with `reference.unresolved`, exit 10, before any request. to pin other files, run `fetchloom remove <name>`, then `fetchloom add <folder> --as <name>`. a changed `extract` keeps the pinned files. [add](../commands/add.md#files-on-this-machine) says how a clone without the files gets them.
 
 ## dataset names
 

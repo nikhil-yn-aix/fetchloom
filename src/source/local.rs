@@ -1,11 +1,79 @@
 //! text that names something on this machine rather than data published elsewhere: a path such
 //! as `./x.csv`, `~/data` or `C:\data`, a `file:` link, or a bare word that names a file or
 //! folder in the current folder. fetchloom never searches for these or sends them anywhere.
+//! `fetchloom add <path>` imports such files: data.lock pins their bytes under the ref
+//! [`IMPORTED`], and no source can list them again.
 
 use std::path::Path;
 
 use crate::error::{Error, Kind};
 use crate::net;
+
+/// the ref of a dataset imported from files on a machine, in data.toml and data.lock alike. it
+/// names no path, which would mean nothing on another machine and say where the files were.
+pub(crate) const IMPORTED: &str = "local";
+
+/// whether `reference`, as data.toml or data.lock writes it, is that of an import.
+pub(crate) fn is_imported(reference: &str) -> bool {
+    reference == IMPORTED
+}
+
+/// the refusal to resolve an import: no source lists its files.
+pub(crate) fn unlisted() -> Error {
+    Error::new(
+        Kind::ReferenceUnresolved,
+        "\"local\" names files imported from a folder, which no source can list again",
+    )
+    .help("run `fetchloom add <folder> --as <name>` where the files are")
+}
+
+/// the refusal of a changed data.toml entry of `name`, an import: only importing the files
+/// again can pin other ones.
+pub(crate) fn changed(name: &str) -> Error {
+    Error::new(
+        Kind::ReferenceUnresolved,
+        format!("{name} was imported from files, so a change to its entry in data.toml cannot pin other files"),
+    )
+    .help(format!(
+        "put datasets.{name} back as it was, or run `fetchloom remove {name}`, then `fetchloom add <folder> --as {name}` where the files are"
+    ))
+}
+
+/// the refusal of `name`, an import that data.lock holds no pin of: nothing tells which files
+/// it was.
+pub(crate) fn unpinned(name: &str) -> Error {
+    Error::new(
+        Kind::ReferenceUnresolved,
+        format!("{name} was imported from files, and data.lock holds no pin of them"),
+    )
+    .help(format!(
+        "restore data.lock from git, or run `fetchloom add <folder> --as {name}` where the files are"
+    ))
+}
+
+/// the refusal to upgrade `name`, an import.
+pub(crate) fn no_newer(name: &str) -> Error {
+    Error::new(
+        Kind::ReferenceUnresolved,
+        format!("{name} was imported from files, and no source has a newer version of them"),
+    )
+    .help(format!(
+        "to pin other files, run `fetchloom remove {name}`, then `fetchloom add <folder> --as {name}` where they are"
+    ))
+}
+
+/// the error for files of `name`, an import, that this machine's cache lacks, as a clone of the
+/// project's repository does: no link fetches them. `folder` is where the dataset's files go in
+/// the project.
+pub(crate) fn imported_elsewhere(name: &str, folder: &str) -> Error {
+    Error::new(
+        Kind::ReferenceUnresolved,
+        format!("{name} was imported from files, and this machine's cache does not hold them"),
+    )
+    .help(format!(
+        "copy them to {folder} and run `fetchloom sync`, or run `fetchloom add <folder> --as {name}` where they are"
+    ))
+}
 
 /// whether `text` is written as a path on this machine: from the root, `.`, `..` or `~`, on a
 /// drive such as `C:`, or as a `file:` link. this reads the text alone, never the disk, so a

@@ -32,7 +32,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `offline.missing` | prepare the missing data online |
 | `integrity.mismatch` | investigate changed bytes; upgrade pins only if intended |
 | `auth.required` | obtain access and set supported credentials |
-| `local.io` | check free space, permissions and files held open |
+| `local.io` | check free space, permissions and files held open; after `add <folder> --as <name>`, check that the folder holds the files data.lock pins |
 | `local.not_empty` | preserve existing files and choose another `get --dir` folder or `get -o` name; `get -o --force` replaces a file you no longer need |
 | `project.invalid` | correct or restore the manifest, lock or project folders |
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |

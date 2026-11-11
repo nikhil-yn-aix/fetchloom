@@ -394,13 +394,13 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
     std::fs::write(sandbox.work().join("flowers.csv"), b"a,b\n")?;
     std::fs::create_dir(sandbox.work().join("iris"))?;
     let absolute = sandbox.work().join("flowers.csv").display().to_string();
+    // add imports what a path names, and finds nothing at these
     for (args, code, kind) in [
-        (["add", absolute.as_str()], 10, "reference.invalid"),
-        (["add", "./flowers.csv"], 10, "reference.invalid"),
-        (["add", "~/flowers.csv"], 10, "reference.invalid"),
-        (["add", "C:\\data\\flowers.csv"], 10, "reference.invalid"),
-        (["add", "file:///etc/hostname"], 10, "reference.invalid"),
+        (["add", "~/flowers.csv"], 50, "local.io"),
+        (["add", "C:\\data\\flowers.csv"], 50, "local.io"),
+        (["get", absolute.as_str()], 10, "reference.invalid"),
         (["get", "./flowers.csv"], 10, "reference.invalid"),
+        (["get", "file:///etc/hostname"], 10, "reference.invalid"),
         (["search", "./flowers.csv"], 2, "usage"),
         (["add", "iris"], 2, "usage"),
         (["get", "flowers.csv"], 2, "usage"),
@@ -415,7 +415,7 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
     }
     let path = json(
         &catalogs
-            .command(&sandbox, &["--json", "add", "./flowers.csv"])
+            .command(&sandbox, &["--json", "get", "./flowers.csv"])
             .output()?,
     )?;
     assert_eq!(

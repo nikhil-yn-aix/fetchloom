@@ -7,6 +7,7 @@ fetchloom add iris    # at a terminal, pick one from a list
 fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 fetchloom add https://zenodo.org/records/3608990 --as flowers
 fetchloom add hf:datasets/scikit-learn/iris --select "*.csv" --dry-run
+fetchloom add ./flowers    # files on this machine, pinned by their bytes
 fetchloom add -i links.txt    # a dataset for each link in a list
 ```
 
@@ -14,6 +15,7 @@ fetchloom add -i links.txt    # a dataset for each link in a list
 
 ```sh
 fetchloom add [options] <link>
+fetchloom add [options] <path>
 fetchloom add [options] -i <file>
 ```
 
@@ -55,6 +57,42 @@ adding an existing reference with identical filters and extraction settings sync
 
 if a new addition fails to sync, fetchloom attempts to restore both `data.toml` and `data.lock`, including their absence before the command. it puts back only a file the add changed: an add that failed before changing either file reports no rollback. before changing an existing manifest or lock, fetchloom saves its exact bytes in a recovery file under `.fetchloom/`. if restoration fails, the error names that file without printing its contents, which may contain credentials. recovery files are removed after success or complete rollback and retained after incomplete rollback. on unix they are created readable only by the owner; on windows they inherit the metadata folder's permissions. cached downloads stay, so running the add again reuses them, while the files it placed for the new dataset are removed with it.
 
+## files on this machine
+
+a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, `C:\data\flowers` or a `file:` link, imports the files there: a folder's every plain file, or one file. data.toml gets `ref = "local"`, never the path, which would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, with an empty `url`, since no source holds them. a plain word that names a folder here, such as `iris` beside an `iris` folder, is not imported: it exits 2 and says to write `./iris`.
+
+the files are copied into the cache and hashed as they are copied, several at once as placing works, which [`FETCHLOOM_THREADS`](../reference/environment.md) can cap. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. the files themselves are only read: never changed, moved or linked, since a link to the cache's copy would make your file read-only. an import bigger than the free space on the cache's disk asks first, as a big download does, and `--yes` goes on, as on a disk that clones the files. the cache is yours alone unless you made it [one cache for a whole lab](../hpc.md#one-cache-for-a-whole-lab), where everyone who reads it can read what you import. stderr from a project whose data.toml already existed:
+
+```text
+   Imported flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
+      Added flowers, its files are in data/flowers
+  hint: scripts can find it with `fetchloom path flowers`
+```
+
+below the folder, `.git`, `.hg`, `.svn` and `.fetchloom` are left out unseen. links and special files, such as named pipes, are left out with a warning and never followed. names are checked as an archive's members are, before anything is copied: a name with a control character or a `\`, one longer than 4096 bytes, one this machine cannot store, or two names that are one on disks that ignore case or unicode composition, stop the import with `source.invalid`, exit 10. `--select` and `--exclude` match the paths below the folder, and a select pattern that keeps nothing is a usage error. a folder holding more files than `most_files`, 100,000 unless raised, is refused before it is all read; past 50,000 files data.lock keeps the list in [data.lock.d](../reference/data-lock.md#big-datasets). archives in the folder unpack as a downloaded dataset's do.
+
+a folder that holds the project, sits in its data folder, where fetchloom places what data.lock pins, or holds or sits in the cache, is refused with `usage`, exit 2. the same files imported again under their own name change nothing and say `<name> is already in data.toml`; other files under a name data.toml has take the next number, as a link does.
+
+no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, though once a cached archive is unpacked its own bytes leave the cache, as a downloaded archive's do, so a switch to `extract = false` then needs them supplied again.
+
+### a clone without the files
+
+a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10:
+
+```text
+error: flowers was imported from files, and this machine's cache does not hold them
+  help: copy them to data/flowers and run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
+```
+
+files copied to `data/flowers` by hand are adopted when they hold the pinned bytes. `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset: the paths and sizes are compared with data.lock first, then the bytes as they are copied, and other files stop it with `local.io`, exit 50, naming the first difference, with data.toml and data.lock as they were. matching files change neither file:
+
+```text
+   Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
+         Ok flowers is in data.toml and data.lock as it was, its files are in data/flowers
+```
+
+a supply takes the patterns and `extract` data.toml gives, so `--select`, `--exclude` and `--no-extract` are refused with it. when data.lock holds no pin of the import, as after a lost data.lock, supplying pins the files again.
+
 ## a list of links
 
 `-i <file>` adds a dataset for each link in a list, as `get -i` reads one: one link a line, blank lines and lines starting with `#` skipped, and after a link, optionally, the SHA-256 of its one file, as 64 hex digits or `sha256:` and 64 hex digits:
@@ -90,6 +128,8 @@ Would place data/iris · 1 file
          Ok dry run, nothing was changed
 ```
 
+`add <path> --dry-run` reads no file's bytes: it names the files it would import, their count and size, and the dataset it would add, and lists their places in `changes.place`. it cannot tell yet whether the same files are in data.toml already.
+
 the plan covers the whole project, as the sync after a real addition would. a file whose hash only a download can tell counts as one to place; when a file already stands where it goes, it is listed under `Would check` instead, with no warning, since only the download tells whether it holds the pinned bytes. an archive not yet unpacked here is listed with `Would open`, without its members. a link whose file name only the server gives is named from the link, since learning the name takes a download; pass `--as` to fix the name. adding an existing reference reports `<name> is already in data.toml`. JSON adds `dry_run` and `changes` to the usual result, as [JSON output](../reference/json-output.md#dry-runs) describes.
 
 ## generated names
@@ -98,7 +138,7 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 
 ## exit codes
 
-0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means a question went unanswered or was answered no: approval of a large download, or of a project in the home folder or at a disk's root. 2 means invalid usage. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
+0 means the command succeeded, including when sync kept local conflicts. inspect `result.placement.kept` in JSON. 1 means a question went unanswered or was answered no: approval of a large download, or of a project in the home folder or at a disk's root. 2 means invalid usage. 10 includes an import's files this machine's cache lacks, and 50 a supplied folder holding other files than data.lock pins. source, network, integrity, access and local failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -110,3 +150,6 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |
 | a large download stops in CI | it needs approval | check the size, then pass `--yes` if approved |
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
+| `"iris" is a folder here, so fetchloom did not search for it` | a plain word names a file or folder in the current folder | write it as a path, `fetchloom add ./iris`, to import it, or run `fetchloom search iris` |
+| `... was imported from files, and this machine's cache does not hold them` | a clone has the pins of an import but not its files | copy them to the dataset's folder and sync, or run `fetchloom add <folder> --as <name>` where they are |
+| `... does not hold the files data.lock pins for ...` | the folder supplied is not the one imported | supply the folder the files came from, or remove the dataset and import the new files |

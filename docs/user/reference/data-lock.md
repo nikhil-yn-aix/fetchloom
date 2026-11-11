@@ -26,7 +26,7 @@ files = [
 | `dataset[].ref` | the manifest reference |
 | `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
 | `dataset[].extract` | `false` when `data.toml` keeps the dataset's archives packed; omitted when they unpack |
-| `dataset[].resolved` | the source reference used to list the files |
+| `dataset[].resolved` | the source reference used to list the files, or `local` for an import |
 | `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
 | `dataset[].access` | who may read the data, as the source said: `public`, `login` for an account, or `terms` for accepted terms; omitted when the source said nothing, which means unknown |
 | `dataset[].locked` | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ` |
@@ -35,7 +35,7 @@ files = [
 | `files[].size` | byte count, unsigned 64-bit integer |
 | `files[].sha256` | 64 hex digits, without a prefix |
 | `files[].md5` | optional source checksum, 32 hex digits |
-| `files[].url` | download URL recorded before redirects |
+| `files[].url` | download URL recorded before redirects; empty for an imported file, which no source holds |
 | `files[].unpacks_to` | optional `sha256:` plus the 64-digit archive tree hash |
 
 hashes are written in lowercase. datasets sort by name and files by path. the writer uses the field order above, inline file tables, LF newlines and a final newline. identical lock contents render identically; a fresh resolution can have a different timestamp.
@@ -152,6 +152,9 @@ an unchanged spec and `extract` keep the existing lock entry unless an upgrade i
 | kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
 | S3 bucket | `s3://<bucket>/<prefix>`, or `s3:https://<host>/<bucket>/<prefix>` at another service | the object's HTTPS URL on the endpoint that listed it, with `?versionId=<id>` when the bucket keeps versions |
 | cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
+| [imported files](data-toml.md#imported-files) | `local` | empty |
+
+an import records no path of the machine it came from, and no link: its bytes are in the caches of the machines that imported or were given them. a machine whose cache lacks them stops before any download with `reference.unresolved`, exit 10. files copied to the dataset's folder are adopted when they hold the pinned bytes, and `fetchloom add <folder> --as <name>` checks a folder against the pins before it copies anything in. an import leaves out `access`, which is then unknown.
 
 `access` is a hint for sharing the files, never a licence check. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
 

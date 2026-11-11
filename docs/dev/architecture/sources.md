@@ -11,6 +11,7 @@ adapters own source-specific identifiers, versions, listing pages and access err
 | file | what it holds | types and functions |
 |---|---|---|
 | [source.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source.rs) | reference routing, listing checks and transfer customization | `Reference`, `Parsed`, `Listing`, `Access`, `Remote`, `Unavailable`, `parse`, `resolve`, `fetch_plan`, `may_wrap`, `refused` |
+| [local.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/local.rs) | paths on this machine, which are never searched, and the ref of files imported from them | `is_path`, `here`, `refused`, `IMPORTED`, `is_imported`, `unlisted`, `changed`, `unpinned`, `no_newer`, `imported_elsewhere` |
 | [search.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/search.rs), [search/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/search/tests.rs) | public catalog queries and interleaved candidates | `Candidate`, `Search`, `search`, `is_search` |
 | [recorded.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/recorded.rs) | in-memory answers for adapter tests | `Recorded`, `on`, `fixture`, `next`, `asked`, `block_on` |
 | [doi.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/doi.rs) | handle resolution and destination routing | `Doi`, `locate` |
@@ -33,6 +34,8 @@ adapters own source-specific identifiers, versions, listing pages and access err
 ### parse before resolving
 
 `Reference::parse` recognizes identifiers and known pasted-link shapes. dataverse link parsing returns explicit errors for invalid version queries, so routing cannot discard the version or fall back to downloading the page. figshare distinguishes type/title/id links from the title/id links still supplied by figshare, then reads the id and version by position rather than guessing from their values. `Parsed.file` keeps an individual file selection embedded in a link. an unrecognized page on a known source host fails instead of being mistaken for a plain downloadable file. figshare uses the same institutional-host classification for article parsing and page refusal; its API and download endpoints remain plain URLs.
+
+a path on this machine is refused before routing, with no request, so a person's file names never reach a search site. `add` imports such a path itself, through [cli/import.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/import.rs): no adapter lists the files, and the dataset's ref is `local`, which parses to `Reference::Local` and never resolves. relocking keeps an import's pin as data.lock has it, through an upgrade too, refuses a changed entry before any source is asked, and takes a new import's whole pin as `Given::Locked`, learning only what its archives unpack to. a download job for an import's file, which has an empty link, is the error of files imported elsewhere, decided in `source_link` in [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), where a mirror can be tried first.
 
 github and gitlab file-page URLs are normalized to raw URLs before ordinary URL resolution. [URL references](../../user/sources/urls-and-dois.md) owns accepted forms and HTML warnings.
 
@@ -89,6 +92,7 @@ in debug builds, `FETCHLOOM_TEST_BUCKETS` sends every request for an `amazonaws.
 - a reported MD5 is checked against the bytes a URL served before its mapping to SHA-256 can be reused, and only for that URL. the remembered SHA-256 must agree with any SHA-256 the source states, including when its listing omits the size.
 - mutable services cannot guarantee historical listings. the lock's hashes establish byte identity even when a source changes.
 - default tests use recorded responses or local servers. [ignored live tests](../engineering/ci.md#live-source-checks) check current services separately.
+- an import records no path and no link. its files are walked without following a link, opened below the folder one name at a time on unix, and copied into the cache, never hardlinked, since a link would seal the person's file read-only.
 
 ## tests
 
@@ -99,6 +103,7 @@ in debug builds, `FETCHLOOM_TEST_BUCKETS` sends every request for an `amazonaws.
 | [zenodo.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/zenodo.rs) | `cargo test --locked --lib source::zenodo::` |
 | [DOI tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/doi/tests.rs), [dataverse tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/dataverse/tests.rs) | `cargo test --locked --lib source::doi::`; `cargo test --locked --lib source::dataverse::` |
 | [drive folder tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/drive/folder_tests.rs), [OSF walk tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/osf/walk_tests.rs) | `cargo test --locked --lib source::drive::`; `cargo test --locked --lib source::osf::` |
+| [local.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/local.rs), [cli/import.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/import.rs), [CLI import tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/import.rs) | `cargo test --locked --lib source::local::`; `cargo test --locked --lib cli::import::`; `cargo test --locked --test cli import::` |
 | [get.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/get.rs), [add.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/add.rs), [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/project.rs), [secrets.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/secrets.rs) | `cargo test --locked --test cli get::`; `cargo test --locked --test cli add::`; `cargo test --locked --test cli project::`; `cargo test --locked --test cli secrets::` |
 | [bucket tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/bucket/tests.rs), [signing tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/source/bucket/signing.rs), [AWS key tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/auth/aws.rs), [CLI bucket tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/buckets.rs) | `cargo test --locked --lib source::bucket::`; `cargo test --locked --lib auth::aws::`; `cargo test --locked --test cli buckets::` |
 

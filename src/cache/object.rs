@@ -42,7 +42,7 @@ pub(crate) enum Copied {
 }
 
 /// what stopped a copy into the cache: reading the file given, or writing the cache's copy.
-enum Fault {
+pub(super) enum Fault {
     Source(io::Error),
     Cache(io::Error),
 }
@@ -297,7 +297,12 @@ fn create_sealed(path: &Path) -> io::Result<File> {
 impl NewObject {
     /// writes what `input` holds into the object, at most `most` bytes, looking for a stop
     /// between blocks.
-    fn copy_from(&mut self, input: &mut impl Read, most: u64, stop: &Stop) -> Result<(), Fault> {
+    pub(super) fn copy_from(
+        &mut self,
+        input: &mut impl Read,
+        most: u64,
+        stop: &Stop,
+    ) -> Result<(), Fault> {
         each_block(input, most, stop, |block| self.write_all(block))
     }
 
@@ -305,7 +310,7 @@ impl NewObject {
     /// most `most` bytes of it. says whether the disk made the clone; one that makes none leaves
     /// the object empty.
     #[cfg(target_os = "linux")]
-    fn clone_from(&mut self, source: &File, most: u64, stop: &Stop) -> io::Result<bool> {
+    pub(super) fn clone_from(&mut self, source: &File, most: u64, stop: &Stop) -> io::Result<bool> {
         if let Err(err) = rustix::fs::ioctl_ficlone(&self.file, source) {
             tracing::debug!(%err, "no reflink, so the bytes are copied");
             return Ok(false);

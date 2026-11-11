@@ -46,6 +46,8 @@ already pinned ordinary files need not be cached. a source that supplies SHA-256
 
 `--upgrade` revalidates unchecksummed URLs and files whose source now states an MD5 that `data.lock` lacks. a specifically versioned reference still names that version. edit `ref` if you want another explicit version.
 
+an [import](add.md#files-on-this-machine) has no source with a newer version: `--upgrade <name>` naming one exits 10 with `reference.unresolved`, and `--upgrade` alone keeps it as data.lock pins it and says so with a `Skipped` line.
+
 filter changes resolve the existing `resolved` reference. an `extract` change alone keeps the pinned files and lists nothing again; it needs the network only for archives the cache lacks. changing `ref`, deleting the lock or requesting an upgrade resolves the manifest reference instead. [spec hashes](../reference/data-lock.md#the-spec-hash) defines these rules.
 
 after an upgrade, run `fetchloom sync` to place the new inputs and commit `data.lock`. unchanged resolved references and file lists retain their previous `locked` timestamp.

@@ -10,13 +10,14 @@ use tokio::task::JoinSet;
 use tracing::Instrument as _;
 
 use super::args::Add;
+use super::import::{self, Walked};
 use super::links::{self, Line};
 use super::project::{
     Outcome, Report, committed, dry_run_done, hold, ignore_data, preview_all, preview_ignore,
     register,
 };
 use super::sync::disk::{self, Survey};
-use super::sync::place::Placement;
+use super::sync::place::{Changes, Placement};
 use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
 use crate::digest::{self, Sha256};
@@ -29,7 +30,7 @@ use crate::project::lock::{self, Lock};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::Synced;
 use crate::project::{Held, Project};
-use crate::source::{Listing, Parsed, Reference, Remote};
+use crate::source::{Listing, Parsed, Reference, Remote, local};
 use crate::units;
 
 struct AddProject {
@@ -190,10 +191,12 @@ impl Drop for BeforeAdd<'_> {
     }
 }
 
-/// what an add adds: what one link or search words name, or a dataset for each link of a list.
+/// what an add adds: what one link or search words name, a dataset for each link of a list, or
+/// the files at a path on this machine, as typed.
 enum Request {
     Link(String),
     List(List),
+    Path(String),
 }
 
 /// a list of links `add -i` read, each line checked.
@@ -245,6 +248,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         (Ok(()), Request::List(list)) => {
             add_list_held(context, &mut adding, &args, list, &here, starting).await
         }
+        (Ok(()), Request::Path(typed)) => {
+            import_held(context, &mut adding, &args, &typed, &here, starting).await
+        }
         (Err(error), _) => Err(error),
     };
     added.map_err(|error| {
@@ -270,6 +276,9 @@ async fn request(context: &Context, args: &mut Add) -> Result<Request, Error> {
                 .help("run `fetchloom add <link>`, or `fetchloom add -i links.txt`"),
         );
     };
+    if local::is_path(&link) {
+        return Ok(Request::Path(link));
+    }
     super::search::refuse_local(&link)?;
     Ok(Request::Link(link))
 }
@@ -459,6 +468,400 @@ async fn add_held(
         placement: Some(outcome.placed),
         ..Report::default()
     })
+}
+
+/// `add <path>`: the files of a folder, or one file, on this machine, pinned by their bytes. with
+/// `--as` naming a dataset data.toml has as an import, the files supply it instead: they must be
+/// the ones data.lock pins, and then only the data folder changes. the files are only read.
+async fn import_held(
+    context: &Context,
+    adding: &mut AddProject,
+    args: &Add,
+    typed: &str,
+    here: &Path,
+    starting: bool,
+) -> Result<Report, Error> {
+    let dry_run = args.dry.dry_run;
+    let shown = typed.trim();
+    let old = adding.old.take();
+    let adding = &*adding;
+    let project = &adding.project;
+    let manifest = &adding.manifest;
+    let start = import::located(shown, here, std::env::home_dir().as_deref())?;
+    if !dry_run {
+        project.check_writable()?;
+    }
+    let cache = if dry_run {
+        peek_cache()?
+    } else {
+        open_cache()?
+    };
+    import::refuse_overlap(
+        &start,
+        shown,
+        &project.root,
+        &project.root.join(&manifest.data_dir),
+        cache.root(),
+    )?;
+    let supplied = args
+        .name
+        .as_deref()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(|entry| local::is_imported(&entry.reference))
+        })
+        .map(str::to_owned);
+    let entry = import_entry(manifest, supplied.as_deref(), args)?;
+    let walked = import::walk(&start, shown, &entry, &context.stop)?;
+    tell_skipped(&context.output, shown, &walked.skipped);
+    let pinned = supplied
+        .as_ref()
+        .and_then(|name| current(old.as_ref(), name, &entry));
+    if let (Some(name), Some(pinned)) = (&supplied, pinned)
+        && let Some(difference) = import::first_difference(&walked.files, &pinned.files)
+    {
+        return Err(other_files(shown, name, difference));
+    }
+    let own = match (&supplied, args.name.as_deref()) {
+        (Some(name), _) => name.clone(),
+        (None, Some(asked)) => asked.to_owned(),
+        (None, None) => unreserved(
+            import::dataset_name(&start, start.is_file()).unwrap_or_else(|| "dataset".to_owned()),
+        ),
+    };
+    let net = Arc::new(context.net());
+    if dry_run {
+        let supplying = supplied.is_some();
+        let name = if supplying || args.name.is_some() {
+            own
+        } else {
+            free_name(&context.output, own, manifest)?
+        };
+        let work = Loop::new(context, project, net, cache).telling(&name);
+        let found = (&walked, shown, supplying);
+        return Ok(preview_import(&work, manifest, found, &name, here));
+    }
+    import::room(context, &cache, &walked, shown)?;
+    let copied = import::into_cache(context, &cache, &walked)?;
+    let how = if copied.cloned { "cloned" } else { "copied" };
+    let told = format!(
+        "{} · {}, {how} into the cache; {shown} is unchanged",
+        units::count(walked.files.len() as u64, "file", "files"),
+        units::size(walked.bytes())
+    );
+    if let Some(name) = supplied {
+        let work = Loop::new(context, project, net, cache).telling(&name);
+        let imported = Imported {
+            name: &name,
+            entry: &entry,
+            files: copied.files,
+        };
+        return supply(&work, adding, old, imported, (shown, &told), here).await;
+    }
+    // the same files imported again under their own name change nothing, as the same link does
+    if args.name.is_none() && same_import(manifest, old.as_ref(), &own, &entry, &copied.files) {
+        let work = Loop::new(context, project, net, cache).telling(&own);
+        context.output.step("Imported", &format!("{own} · {told}"));
+        return already_imported(&work, adding, old, &own, here).await;
+    }
+    let name = if args.name.is_some() {
+        own
+    } else {
+        free_name(&context.output, own, manifest)?
+    };
+    context.output.step("Imported", &format!("{name} · {told}"));
+    let work = Loop::new(context, project, net, cache).telling(&name);
+    let imported = Imported {
+        name: &name,
+        entry: &entry,
+        files: copied.files,
+    };
+    import_new(&work, adding, old, imported, here, starting).await
+}
+
+/// files of a folder copied into the cache, pinned for the dataset `name` as data.toml's `entry`
+/// would have them.
+struct Imported<'a> {
+    name: &'a str,
+    entry: &'a manifest::Entry,
+    files: Vec<lock::LockedFile>,
+}
+
+/// the entry an import is checked against: data.toml's for `supplied`, an import `--as` names,
+/// whose patterns and extract setting stay as data.toml has them, or else one made from `args`,
+/// once `--as` gives a usable name.
+fn import_entry(
+    manifest: &Manifest,
+    supplied: Option<&str>,
+    args: &Add,
+) -> Result<manifest::Entry, Error> {
+    if let Some(name) = supplied {
+        return supplied_entry(manifest, name, args);
+    }
+    if let Some(asked) = args.name.as_deref() {
+        usable(asked, manifest)?;
+    }
+    let text = manifest::with_dataset(
+        "",
+        "new",
+        local::IMPORTED,
+        &args.filter.select,
+        &args.filter.exclude,
+        !args.no_extract,
+    )?;
+    Ok(Manifest::parse(&text)?.datasets["new"].clone())
+}
+
+/// data.lock's pin of `name`, when `old` has one that still answers data.toml's `entry`.
+fn current<'a>(
+    old: Option<&'a Lock>,
+    name: &str,
+    entry: &manifest::Entry,
+) -> Option<&'a lock::Locked> {
+    old.and_then(|lock| lock.get(name))
+        .filter(|locked| locked.drift(entry).is_none())
+}
+
+/// whether data.toml has `name` as an import with the settings of `entry`, pinned in `old` to
+/// exactly the files `copied` holds.
+fn same_import(
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    name: &str,
+    entry: &manifest::Entry,
+    copied: &[lock::LockedFile],
+) -> bool {
+    let Some(existing) = manifest.datasets.get(name) else {
+        return false;
+    };
+    let pin = |file: &lock::LockedFile| (file.path.clone(), file.size, file.sha256);
+    local::is_imported(&existing.reference)
+        && existing.select == entry.select
+        && existing.exclude == entry.exclude
+        && existing.extract == entry.extract
+        && current(old, name, existing)
+            .is_some_and(|locked| locked.files.iter().map(pin).eq(copied.iter().map(pin)))
+}
+
+/// an import whose files data.toml and data.lock pin already: it syncs, and says so.
+async fn already_imported(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    old: Option<Lock>,
+    name: &str,
+    here: &Path,
+) -> Result<Report, Error> {
+    let manifest = &adding.manifest;
+    let names = [name.to_owned()];
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, Vec::new()), &[]).await?;
+    ignore_data(work, manifest)?;
+    let folder = from_here(work.project, here, &plan::folder(manifest, name));
+    work.context.output.done(
+        "Ok",
+        &format!("{name} is already in data.toml, its files are in {folder}"),
+    );
+    Ok(Report {
+        project: work.project.root.clone(),
+        datasets: Vec::new(),
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
+        ..Report::default()
+    })
+}
+
+/// adds `imported` to data.toml and pins it in data.lock, then places it, as any add does.
+async fn import_new(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    old: Option<Lock>,
+    imported: Imported<'_>,
+    here: &Path,
+    starting: bool,
+) -> Result<Report, Error> {
+    let Imported { name, entry, files } = imported;
+    let text = adding.text.as_deref().unwrap_or_default();
+    let patterns = |globs: &[crate::glob::Glob]| -> Vec<String> {
+        globs.iter().map(|glob| glob.as_str().to_owned()).collect()
+    };
+    let updated = manifest::with_dataset(
+        text,
+        name,
+        local::IMPORTED,
+        &patterns(&entry.select),
+        &patterns(&entry.exclude),
+        entry.extract,
+    )?;
+    let manifest = Manifest::parse(&updated)?;
+    let pinned = import::pinned(name, &manifest.datasets[name], files);
+    let names = [name.to_owned()];
+    let outcome = sync_add(
+        work,
+        adding,
+        &manifest,
+        Some(&updated),
+        old,
+        (&names, vec![Given::Locked(pinned)]),
+        &[],
+    )
+    .await?;
+    render_add(work, &manifest, name, here, starting)?;
+    Ok(Report {
+        project: work.project.root.clone(),
+        datasets: names.to_vec(),
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
+        ..Report::default()
+    })
+}
+
+/// the entry of `name`, an import in data.toml that `add <path> --as <name>` supplies. its
+/// patterns and extract setting stay as data.toml has them.
+fn supplied_entry(manifest: &Manifest, name: &str, args: &Add) -> Result<manifest::Entry, Error> {
+    if !args.filter.select.is_empty() || !args.filter.exclude.is_empty() || args.no_extract {
+        return Err(Error::new(
+            Kind::Usage,
+            format!("{name} is in data.toml already, so its patterns and extract setting come from there"),
+        )
+        .help(format!(
+            "leave out --select, --exclude and --no-extract, or change datasets.{name} in data.toml"
+        )));
+    }
+    Ok(manifest.datasets[name].clone())
+}
+
+/// the error of a supply whose folder, `shown`, holds other files than data.lock pins for `name`,
+/// as `difference` says first.
+fn other_files(shown: &str, name: &str, difference: String) -> Error {
+    Error::new(
+        Kind::LocalIo,
+        format!("{shown} does not hold the files data.lock pins for {name}"),
+    )
+    .detail(difference)
+    .help(format!(
+        "supply the files {name} was imported from, or run `fetchloom remove {name}` and add these as a new import"
+    ))
+}
+
+/// supplies an import from its files copied into the cache: when data.lock pins them, nothing
+/// but the data folder changes; when it holds no pin of them, they are pinned as data.toml's
+/// entry asks. other bytes than data.lock pins change nothing. `shown` names the folder, and
+/// `told` what was copied.
+async fn supply(
+    work: &Loop<'_>,
+    adding: &AddProject,
+    old: Option<Lock>,
+    imported: Imported<'_>,
+    (shown, told): (&str, &str),
+    here: &Path,
+) -> Result<Report, Error> {
+    let Imported { name, entry, files } = imported;
+    let manifest = &adding.manifest;
+    let given = match current(old.as_ref(), name, entry) {
+        Some(pinned) => {
+            if let Some(difference) = import::first_other_bytes(&files, &pinned.files) {
+                return Err(other_files(shown, name, difference));
+            }
+            Vec::new()
+        }
+        None => vec![Given::Locked(import::pinned(name, entry, files))],
+    };
+    let pins = !given.is_empty();
+    let output = &work.context.output;
+    output.step("Supplied", &format!("{name} · {told}"));
+    let names = [name.to_owned()];
+    let outcome = sync_add(work, adding, manifest, None, old, (&names, given), &[]).await?;
+    ignore_data(work, manifest)?;
+    let folder = from_here(work.project, here, &plan::folder(manifest, name));
+    if pins {
+        output.done(
+            "Pinned",
+            &format!("{name} in data.lock, its files are in {folder}"),
+        );
+    } else {
+        output.done(
+            "Ok",
+            &format!("{name} is in data.toml and data.lock as it was, its files are in {folder}"),
+        );
+    }
+    Ok(Report {
+        project: work.project.root.clone(),
+        datasets: if pins { names.to_vec() } else { Vec::new() },
+        lock_changed: outcome.lock_changed,
+        placement: Some(outcome.placed),
+        ..Report::default()
+    })
+}
+
+/// `add <path> --dry-run`: what importing the files `walked` found in `shown` as `name` would
+/// change, or supplying them when `supplying`, found without reading a byte of them, told from
+/// `here`.
+fn preview_import(
+    work: &Loop<'_>,
+    manifest: &Manifest,
+    (walked, shown, supplying): (&Walked, &str, bool),
+    name: &str,
+    here: &Path,
+) -> Report {
+    let output = &work.context.output;
+    let folder = plan::folder(manifest, name);
+    let files = units::count(walked.files.len() as u64, "file", "files");
+    let size = units::size(walked.bytes());
+    if supplying {
+        output.step(
+            "Would supply",
+            &format!("{name} · {files} · {size} into the cache; {shown} stays unchanged"),
+        );
+    } else {
+        output.step(
+            "Would import",
+            &format!("{name} · {files} · {size} into the cache; {shown} stays unchanged"),
+        );
+        output.step(
+            "Would add",
+            &format!(
+                "{name} to data.toml, its files in {}",
+                from_here(work.project, here, &folder)
+            ),
+        );
+    }
+    dry_run_done(output, None);
+    Report {
+        project: work.project.root.clone(),
+        selected: None,
+        datasets: if supplying {
+            Vec::new()
+        } else {
+            vec![name.to_owned()]
+        },
+        lock_changed: !supplying,
+        placement: None,
+        dry_run: true,
+        changes: Some(Changes {
+            place: walked
+                .files
+                .iter()
+                .map(|file| format!("{folder}/{}", file.path))
+                .collect(),
+            ..Changes::default()
+        }),
+        merge: None,
+    }
+}
+
+/// warns about the links and special files below `shown` that an import left out.
+fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
+    match skipped {
+        [] => {}
+        [one] => output.warn(&format!(
+            "left out {one} in {shown}, a link or a special file, which fetchloom never follows or imports"
+        )),
+        [first, ..] => output.warn(&format!(
+            "left out {} in {shown}, such as {first}, which fetchloom never follows or imports",
+            units::count(skipped.len() as u64, "link or special file", "links and special files")
+        )),
+    }
 }
 
 /// `add -i`: a dataset for each link of a list, resolved, downloaded and placed together, with
@@ -1413,6 +1816,12 @@ fn choose_name(
         .or_else(|| listing.naming_title().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
+    free_name(output, name, manifest)
+}
+
+/// `name`, a name fetchloom chose, made usable: with `-data` added where windows keeps it for a
+/// device, and the next number when data.toml has it already.
+fn free_name(output: &Output, name: String, manifest: &Manifest) -> Result<String, Error> {
     // data.toml travels to windows machines, where a folder named con or aux cannot exist
     let name = unreserved(name);
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number

@@ -98,6 +98,9 @@ pub(crate) enum Reference {
     Drive(drive::Item),
     Dropbox(dropbox::Link),
     Bucket(bucket::Prefix),
+    /// files imported from a machine with `fetchloom add <path>`, which no source lists: data.lock
+    /// pins their bytes, never where they were.
+    Local,
 }
 
 /// a reference, and the one file or folder inside it when a pasted link pointed at one.
@@ -235,6 +238,9 @@ impl Reference {
         if local::is_path(text) {
             return Err(local::refused(text));
         }
+        if text == local::IMPORTED {
+            return whole(Reference::Local);
+        }
         if let Some(doi) = doi::Doi::bare(text) {
             return whole(Reference::Doi(doi));
         }
@@ -371,6 +377,7 @@ impl Reference {
             Reference::Drive(item) => item.resolve(api).await,
             Reference::Dropbox(link) => Ok(link.listing()),
             Reference::Bucket(prefix) => prefix.resolve(api).await,
+            Reference::Local => Err(local::unlisted()),
         }
     }
 }
@@ -390,6 +397,7 @@ impl fmt::Display for Reference {
             Reference::Drive(item) => write!(f, "{item}"),
             Reference::Dropbox(link) => write!(f, "{link}"),
             Reference::Bucket(prefix) => write!(f, "{prefix}"),
+            Reference::Local => f.write_str(local::IMPORTED),
         }
     }
 }
@@ -795,6 +803,25 @@ mod tests {
 
     fn parse(text: &str) -> Parsed {
         Reference::parse(text).unwrap()
+    }
+
+    #[test]
+    fn local_never_resolves() {
+        let parsed = parse("local");
+        assert_eq!(parsed.reference, Reference::Local);
+        assert_eq!(parsed.reference.to_string(), "local");
+        let api = recorded::Recorded::default();
+        let error = recorded::block_on(parsed.reference.resolve(&api)).unwrap_err();
+        assert_eq!(error.kind, Kind::ReferenceUnresolved);
+        assert_eq!(
+            error.help.as_deref(),
+            Some("run `fetchloom add <folder> --as <name>` where the files are")
+        );
+        assert!(api.asked().is_empty(), "nothing is asked of anyone");
+        assert!(
+            Reference::parse("Local").is_err(),
+            "only data.lock's own word"
+        );
     }
 
     #[test]

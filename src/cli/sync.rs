@@ -29,7 +29,7 @@ use crate::project::Project;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest};
 use crate::project::state::Synced;
-use crate::source::{self, Listing, Reference};
+use crate::source::{self, Listing, Reference, local};
 use crate::units;
 
 /// the most of a title the `Resolved` line shows.
@@ -83,6 +83,9 @@ impl serde::Serialize for Scope {
 pub(super) enum Given {
     /// what a source listed for the dataset named first.
     Listing(String, Listing),
+    /// the whole pin of files imported from this machine, whose archives relocking unpacks to
+    /// learn what they hold.
+    Locked(Locked),
 }
 
 /// a project and what working on it needs.
@@ -178,7 +181,7 @@ impl<'a> Loop<'a> {
             let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
                 .await
                 .map_err(|error| self.as_left(error))?;
-            self.unpack_locked(lock, &unknown).await?;
+            self.unpack_locked(manifest, lock, &unknown).await?;
             let survey = placing.into_survey();
             placing = Placing::new(
                 self.project,
@@ -199,8 +202,8 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
-        self.download_prepared(lock, &files).await?;
-        self.unpack_locked(lock, &archives).await?;
+        self.download_prepared(manifest, lock, &files).await?;
+        self.unpack_locked(manifest, lock, &archives).await?;
         Ok(placing)
     }
 
@@ -235,6 +238,7 @@ impl<'a> Loop<'a> {
         let Drafted {
             kept,
             mut drafts,
+            mut pinned,
             mut others,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
@@ -262,11 +266,16 @@ impl<'a> Loop<'a> {
             }
         }
         self.unpack_drafts(&mut drafts).await?;
+        self.unpack_pinned(manifest, &mut pinned).await?;
         let now = lock::timestamp(SystemTime::now());
-        let drafted = drafts
+        let mut drafted = drafts
             .into_iter()
             .map(|draft| draft.finish(&now))
             .collect::<Result<Vec<_>, _>>()?;
+        drafted.extend(pinned.into_iter().map(|mut locked| {
+            locked.timestamp.clone_from(&now);
+            locked
+        }));
         let (lock, kept) = settled(&mut others, kept, drafted);
         Ok((
             lock,
@@ -292,6 +301,7 @@ impl<'a> Loop<'a> {
         let Drafted {
             kept,
             mut drafts,
+            pinned,
             mut others,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
@@ -310,10 +320,15 @@ impl<'a> Loop<'a> {
         }
         let now = lock::timestamp(SystemTime::now());
         let mut guessed = HashSet::new();
-        let mut drafted = Vec::with_capacity(drafts.len());
+        let mut drafted = Vec::with_capacity(drafts.len() + pinned.len());
         for draft in drafts {
             let (locked, stood_in) = draft.stand_in(&now)?;
             guessed.extend(stood_in);
+            drafted.push(locked);
+        }
+        for mut locked in pinned {
+            unpack.extend(draft::stand_in_trees(&mut locked, &self.cache));
+            locked.timestamp.clone_from(&now);
             drafted.push(locked);
         }
         let (lock, kept) = settled(&mut others, kept, drafted);
@@ -344,21 +359,44 @@ impl<'a> Loop<'a> {
         let mut kept: Vec<Locked> = Vec::new();
         let mut others = Vec::new();
         let mut drafts = Vec::new();
+        let mut listed = Vec::new();
+        let mut whole = Vec::new();
+        for given in given {
+            match given {
+                Given::Listing(name, listing) => listed.push((name, listing)),
+                Given::Locked(locked) => whole.push(locked),
+            }
+        }
         for locked in old.datasets {
             // another dataset's entry stays as it is, even one data.toml changed or dropped
             if !self.scope.includes(&locked.name) {
                 kept.push(locked);
                 continue;
             }
+            if whole.iter().any(|given| given.name == locked.name) {
+                others.push(locked);
+                continue;
+            }
             match manifest.datasets.get(&locked.name) {
-                Some(entry) if !upgrade.includes(&locked.name) => match locked.drift(entry) {
-                    None => kept.push(locked),
-                    Some(Drift::Extract) => {
-                        drafts.push((locked.name.clone(), Draft::switched(entry, &locked)?));
-                        others.push(locked);
+                // an import has no newer version anywhere, so even an upgrade keeps it
+                Some(entry)
+                    if !upgrade.includes(&locked.name) || local::is_imported(&entry.reference) =>
+                {
+                    match locked.drift(entry) {
+                        None => kept.push(locked),
+                        // an import's files stand as data.lock pins them, so a switch only
+                        // learns what its archives unpack to
+                        Some(Drift::Extract) if local::is_imported(&entry.reference) => {
+                            whole.push(draft::switched_import(entry, &locked));
+                            others.push(locked);
+                        }
+                        Some(Drift::Extract) => {
+                            drafts.push((locked.name.clone(), Draft::switched(entry, &locked)?));
+                            others.push(locked);
+                        }
+                        Some(Drift::Spec) => others.push(locked),
                     }
-                    Some(Drift::Spec) => others.push(locked),
-                },
+                }
                 _ => others.push(locked),
             }
         }
@@ -371,8 +409,10 @@ impl<'a> Loop<'a> {
             let is_kept = kept
                 .binary_search_by(|locked| locked.name.as_str().cmp(name))
                 .is_ok();
+            let is_whole = whole.iter().any(|given| given.name == *name);
             if self.scope.includes(name)
                 && !is_kept
+                && !is_whole
                 && !drafts.iter().any(|(drafted, _)| drafted == name)
             {
                 asks.push((
@@ -381,10 +421,18 @@ impl<'a> Loop<'a> {
                 ));
             }
         }
-        let listed = given
-            .into_iter()
-            .map(|Given::Listing(name, listing)| (name, listing))
-            .collect();
+        // an import names no source to list it again, so the run stops before it asks anyone
+        if let Some((name, _)) = asks
+            .iter()
+            .find(|(name, _)| local::is_imported(&manifest.datasets[name].reference))
+        {
+            let error = if others.get(name).is_some() {
+                local::changed(name)
+            } else {
+                local::unpinned(name)
+            };
+            return Err(cite_place(error, &manifest.datasets[name], "ref"));
+        }
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
             let draft = Draft::new(
@@ -401,6 +449,7 @@ impl<'a> Loop<'a> {
         Ok(Drafted {
             kept,
             drafts: drafts.into_iter().map(|(_, draft)| draft).collect(),
+            pinned: whole,
             others,
         })
     }
@@ -472,7 +521,7 @@ impl<'a> Loop<'a> {
             if file.unpacks_to.is_some() {
                 unpack.push(format!("{dataset}/{}", file.path));
             }
-            jobs.push(job(lock, &dataset, file)?);
+            jobs.push(job(manifest, lock, &dataset, file)?);
         }
         let mut seen = BTreeSet::new();
         jobs.retain(|job| seen.insert(job.label.clone()));
@@ -731,6 +780,7 @@ impl<'a> Loop<'a> {
 
     async fn download_prepared(
         &self,
+        manifest: &Manifest,
         lock: &Lock,
         files: &[(String, &LockedFile)],
     ) -> Result<Vec<Fetched>, Error> {
@@ -740,7 +790,7 @@ impl<'a> Loop<'a> {
         let mut descriptions = Vec::with_capacity(files.len());
         let mut urls = Vec::with_capacity(files.len());
         for (dataset, file) in files {
-            let (description, url) = fetch::Description::take(job(lock, dataset, file)?);
+            let (description, url) = fetch::Description::take(job(manifest, lock, dataset, file)?);
             descriptions.push(description);
             urls.push(url);
         }
@@ -912,6 +962,9 @@ struct Drafted {
     /// entries whose data.toml entry did not change, moved from data.lock.
     kept: Vec<Locked>,
     drafts: Vec<Draft>,
+    /// whole pins of imports, given or with `extract` switched, whose archives may still need
+    /// unpacking.
+    pinned: Vec<Locked>,
     /// the entries of data.lock not kept: those to replace or drop, and the results of recipes,
     /// which [`settled`] moves into the new lock.
     others: Lock,
@@ -1192,9 +1245,21 @@ fn pinned(entry: &Entry, previous: Option<&Locked>, upgrading: bool) -> String {
 
 /// the download of one locked file. when its recorded link is dead, the source is asked again
 /// at the version the lock pins.
-fn job(lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
-    let url = draft::link(dataset, file)?;
+fn job(manifest: &Manifest, lock: &Lock, dataset: &str, file: &LockedFile) -> Result<Job, Error> {
+    let url = source_link(manifest, dataset, file)?;
     Ok(make_job(lock, dataset, file, &url))
+}
+
+/// where to download `file` of `dataset` from: the link data.lock pins. an import pins none,
+/// since only the folder it was imported from held its bytes.
+fn source_link(manifest: &Manifest, dataset: &str, file: &LockedFile) -> Result<Url, Error> {
+    if file.url.is_empty() {
+        return Err(local::imported_elsewhere(
+            dataset,
+            &plan::folder(manifest, dataset),
+        ));
+    }
+    draft::link(dataset, file)
 }
 
 fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url) -> Job {
@@ -1487,7 +1552,8 @@ mod tests {
             ..Lock::default()
         };
         let file = &lock.datasets[0].files[0];
-        let download = job(&lock, "set", file).unwrap();
+        let manifest = Manifest::parse("").unwrap();
+        let download = job(&manifest, &lock, "set", file).unwrap();
         assert_eq!(download.label, "set/data.csv");
         assert_eq!(download.dataset.as_deref(), Some("set"));
         assert_eq!(download.fetch.expect.sha256, Some(file.sha256));
@@ -1501,7 +1567,7 @@ mod tests {
         assert!(again.alone);
         let mut broken = file.clone();
         broken.url = "not a URL".to_owned();
-        let error = job(&lock, "set", &broken).err().unwrap();
+        let error = job(&manifest, &lock, "set", &broken).err().unwrap();
         assert_eq!(error.kind, Kind::ProjectInvalid);
         assert!(error.message.contains("set/data.csv"));
         assert!(error.help.unwrap().contains("lock --upgrade set"));
@@ -1589,7 +1655,13 @@ mod tests {
         };
         let jobs = (0..7)
             .map(|index| {
-                let mut download = job(&lock, "set", &lock.datasets[0].files[0]).unwrap();
+                let mut download = job(
+                    &Manifest::parse("").unwrap(),
+                    &lock,
+                    "set",
+                    &lock.datasets[0].files[0],
+                )
+                .unwrap();
                 download.label = format!("set/{index}.csv");
                 download
             })
@@ -1611,9 +1683,16 @@ mod tests {
         assert!(error.help.unwrap().contains("without --offline"));
         assert_eq!(context.work.counts().requests, 0);
         store(&runner.cache, b"data");
-        let fetched =
-            block_on(runner.download(vec![job(&lock, "set", &lock.datasets[0].files[0]).unwrap()]))
-                .unwrap();
+        let fetched = block_on(runner.download(vec![
+                job(
+                    &Manifest::parse("").unwrap(),
+                    &lock,
+                    "set",
+                    &lock.datasets[0].files[0],
+                )
+                .unwrap(),
+            ]))
+        .unwrap();
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].origin, Origin::Cache);
         assert_eq!(fetched[0].digest, digest::sha256(b"data"));

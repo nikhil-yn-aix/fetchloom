@@ -59,6 +59,13 @@ pub(crate) struct Cache {
     held: Option<Arc<File>>,
 }
 
+/// a file's bytes on their way into the cache from a folder on this machine, and how they came.
+pub(crate) struct Imported {
+    pub(crate) sealed: Sealed,
+    /// whether the object is a clone sharing the file's blocks, which takes no room of its own.
+    pub(crate) cloned: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct Stored {
     pub(crate) digest: Sha256,
@@ -299,6 +306,52 @@ impl Cache {
             return None;
         }
         Some(path)
+    }
+
+    /// a new object in `staging` holding the bytes of `source`, a plain file a person opened
+    /// without following a link, as many as it had when this began: a clone where the disk shares
+    /// blocks between files, else a copy, hashed as it is read. the file is only read, never
+    /// linked, moved or changed, since a link would make the person's file the cache's read-only
+    /// object. the object is sealed, flushed to disk when `flush`, and waits for
+    /// [`Sealed::publish`].
+    ///
+    /// # Errors
+    ///
+    /// `source` is no plain file or cannot be read, the cache cannot be written, or `stop` is
+    /// asked, which gives `Interrupted`.
+    pub(crate) fn import_file(
+        &self,
+        mut source: File,
+        staging: &Arc<Staging>,
+        flush: bool,
+        stop: &crate::stop::Stop,
+    ) -> io::Result<Imported> {
+        let metadata = source.metadata()?;
+        if !is_plain(&metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a link or a special file, which fetchloom never imports",
+            ));
+        }
+        let size = metadata.len();
+        let written = |err| self.explained(&self.root.join("tmp"), err);
+        let mut object = staging.new_object().map_err(written)?;
+        // a clone is hashed whole: its file holds every byte it shares, however many there are
+        #[cfg(target_os = "linux")]
+        let cloned = object.clone_from(&source, u64::MAX, stop)?;
+        #[cfg(not(target_os = "linux"))]
+        let cloned = false;
+        if !cloned {
+            match object.copy_from(&mut source, size, stop) {
+                Ok(()) => {}
+                Err(object::Fault::Source(err)) => return Err(err),
+                Err(object::Fault::Cache(err)) => return Err(written(err)),
+            }
+        }
+        Ok(Imported {
+            sealed: object.seal(flush).map_err(written)?,
+            cloned,
+        })
     }
 
     /// removes an object the cache no longer needs to hold, such as an archive whose files are
@@ -715,6 +768,39 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         (dir, cache)
+    }
+
+    #[test]
+    fn an_imported_file_is_cloned_or_copied_and_never_linked() {
+        let (dir, cache) = cache();
+        let original = dir.path().join("flowers.csv");
+        fs::write(&original, b"length\n1.4\n").unwrap();
+        // the import clones on linux wherever this probe can
+        let clones = reflink_copy::reflink(&original, dir.path().join("probe")).is_ok();
+        let staging = cache.staging().unwrap();
+        let stop = crate::stop::Stop::default();
+        let source = File::open(&original).unwrap();
+        let imported = cache.import_file(source, &staging, true, &stop).unwrap();
+        assert_eq!(imported.cloned, clones && cfg!(target_os = "linux"));
+        let stored = imported.sealed.publish(&cache).unwrap();
+        assert_eq!(stored.digest, digest::sha256(b"length\n1.4\n"));
+        assert_eq!(stored.size, 11);
+        let object = cache.object_path(&stored.digest);
+        assert_eq!(fs::read(&object).unwrap(), b"length\n1.4\n");
+        assert!(
+            !same_file::is_same_file(&object, &original).unwrap(),
+            "the person's file is never the cache's object"
+        );
+        assert!(!fs::metadata(&original).unwrap().permissions().readonly());
+        #[cfg(unix)]
+        {
+            let folder = File::open(dir.path()).unwrap();
+            let refused = cache.import_file(folder, &staging, true, &stop);
+            assert_eq!(
+                refused.err().map(|err| err.kind()),
+                Some(io::ErrorKind::InvalidInput)
+            );
+        }
     }
 
     /// a cache that acts as if it sat on FAT32 or exFAT: it cannot hardlink, and it refuses to

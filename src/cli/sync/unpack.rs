@@ -14,12 +14,15 @@ use super::super::Context;
 use super::super::cache::needed_by_all;
 use super::draft::Draft;
 use super::{Loop, job};
-use crate::archive::{self, Unpacked};
+use crate::archive::{self, Packed, Unpacked};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
-use crate::project::lock::{Lock, LockedFile};
+use crate::plan;
+use crate::project::lock::{Lock, Locked, LockedFile};
+use crate::project::manifest::Manifest;
+use crate::source::local;
 use crate::units;
 
 /// an archive the cache holds, to unpack on this machine.
@@ -202,6 +205,55 @@ impl Loop<'_> {
         Ok(())
     }
 
+    /// learns what every archive of `pinned`, imports pinned whole, unpacks to, from its bytes in
+    /// the cache, and says which archives stay packed. no link fetches an import's bytes, so an
+    /// archive the cache lacks is files imported elsewhere.
+    pub(super) async fn unpack_pinned(
+        &self,
+        manifest: &Manifest,
+        pinned: &mut [Locked],
+    ) -> Result<(), Error> {
+        let mut slots = Vec::new();
+        let mut unpacks = Vec::new();
+        for (index, locked) in pinned.iter_mut().enumerate() {
+            if !locked.extract {
+                continue;
+            }
+            for (at, file) in locked.files.iter_mut().enumerate() {
+                let label = format!("{}/{}", locked.name, file.path);
+                match archive::by_name(&file.path) {
+                    Some(Packed::Unsupported(format)) => self.context.output.warn(&format!(
+                        "{label} stays packed, since fetchloom does not unpack {format}"
+                    )),
+                    Some(Packed::Archive) if file.unpacks_to.is_none() => {
+                        if let Some(tree) = self.cache.unpacked_tree(&file.sha256) {
+                            file.unpacks_to = Some(tree);
+                        } else if self.cache.find(&file.sha256, Some(file.size)).is_none() {
+                            return Err(local::imported_elsewhere(
+                                &locked.name,
+                                &plan::folder(manifest, &locked.name),
+                            ));
+                        } else {
+                            slots.push((index, at));
+                            unpacks.push(Unpack {
+                                archive: file.sha256,
+                                size: file.size,
+                                label,
+                                tree: None,
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let trees = self.unpack(unpacks).await?;
+        for ((index, at), tree) in slots.into_iter().zip(trees) {
+            pinned[index].files[at].unpacks_to = tree;
+        }
+        Ok(())
+    }
+
     /// unpacks archives the cache holds, remembers them for [`Loop::drop_unpacked`], and says each
     /// one's tree hash, or none for a file whose bytes are no archive after all.
     async fn unpack(&self, archives: Vec<Unpack>) -> Result<Vec<Option<Sha256>>, Error> {
@@ -230,6 +282,7 @@ impl Loop<'_> {
     /// a download replaces them. only an intact archive that unpacks to other files is an error.
     pub(super) async fn unpack_locked(
         &self,
+        manifest: &Manifest,
         lock: &Lock,
         archives: &[(String, &LockedFile)],
     ) -> Result<(), Error> {
@@ -241,7 +294,7 @@ impl Loop<'_> {
                 )
             })
         };
-        let checked = match self.unpack_checked(lock, archives).await {
+        let checked = match self.unpack_checked(manifest, lock, archives).await {
             Err(error) if error.kind == Kind::SourceInvalid => {
                 // a checksum can fail before a tree exists to compare with the lock.
                 let mut changed = false;
@@ -257,7 +310,7 @@ impl Loop<'_> {
                 if !changed {
                     return Err(error);
                 }
-                self.unpack_checked(lock, archives).await?
+                self.unpack_checked(manifest, lock, archives).await?
             }
             result => result?,
         };
@@ -272,7 +325,7 @@ impl Loop<'_> {
             ));
             damaged.push((dataset, file));
         }
-        match self.unpack_checked(lock, &damaged).await?.first() {
+        match self.unpack_checked(manifest, lock, &damaged).await?.first() {
             Some((dataset, file)) => Err(other_files(dataset, file)),
             None => Ok(()),
         }
@@ -282,6 +335,7 @@ impl Loop<'_> {
     /// unpacked to other files than the lock says.
     async fn unpack_checked<'f>(
         &self,
+        manifest: &Manifest,
         lock: &Lock,
         archives: &[(String, &'f LockedFile)],
     ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
@@ -306,7 +360,7 @@ impl Loop<'_> {
         let jobs = archives
             .iter()
             .filter(|(_, file)| lacks(file))
-            .map(|(dataset, file)| job(lock, dataset, file))
+            .map(|(dataset, file)| job(manifest, lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
         let unpacks = archives
@@ -542,9 +596,11 @@ mod tests {
         });
         let context = context();
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
-        let error = block_on(
-            runner.unpack_locked(&lock, &[("set".to_owned(), &lock.datasets[0].files[0])]),
-        )
+        let error = block_on(runner.unpack_locked(
+            &Manifest::parse("").unwrap(),
+            &lock,
+            &[("set".to_owned(), &lock.datasets[0].files[0])],
+        ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::IntegrityMismatch);
         assert!(error.message.contains("set/set.tar"));
@@ -628,9 +684,11 @@ mod tests {
         });
         let context = context();
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
-        let error = block_on(
-            runner.unpack_locked(&lock, &[("set".to_owned(), &lock.datasets[0].files[0])]),
-        )
+        let error = block_on(runner.unpack_locked(
+            &Manifest::parse("").unwrap(),
+            &lock,
+            &[("set".to_owned(), &lock.datasets[0].files[0])],
+        ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);
         assert!(error.message.contains("damaged"), "{}", error.message);

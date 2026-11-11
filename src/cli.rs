@@ -9,6 +9,7 @@ mod export;
 mod fetch;
 mod get;
 mod help;
+mod import;
 mod links;
 mod list;
 mod logs;
