@@ -325,6 +325,21 @@ class Errors(unittest.TestCase):
             ),
             (
                 "get",
+                "name the file inside it, as in `--output=results/iris.csv`",
+                "name the file inside it, as in `path='results/iris.csv'`",
+            ),
+            (
+                "get",
+                "unpack it into a folder with `--dir=flowers`",
+                "unpack it into a folder with `folder='flowers'`",
+            ),
+            (
+                "get",
+                "check the connection and run `fetchloom get --output=u.csv -- https://example.org/u.csv` again",
+                "check the connection and run `fetchloom get --output=u.csv -- https://example.org/u.csv` again",
+            ),
+            (
+                "get",
                 "run it again without --offline to download it once. "
                 "after that, `fetchloom get <link> --offline` reuses it",
                 "run it again without offline=True to download it once. "
@@ -334,6 +349,16 @@ class Errors(unittest.TestCase):
                 "sync",
                 "add --yes to download it without being asked, or --locked-ish words stay",
                 "pass yes=True to download it without being asked, or --locked-ish words stay",
+            ),
+            (
+                "sync",
+                "give -C a folder that exists and that you may open",
+                "give the project argument a folder that exists and that you may open",
+            ),
+            (
+                "path",
+                "give -C a folder that exists and that you may open",
+                "give the project argument a folder that exists and that you may open",
             ),
             ("path", "add --force to replace it", "add --force to replace it"),
         ]:
@@ -354,6 +379,34 @@ class Errors(unittest.TestCase):
                             else:
                                 fetchloom.path("iris")
                 self.assertEqual(raised.exception.help, shown)
+
+    def test_quoted_input_stays_as_typed(self):
+        # fetchloom quotes what it was given, which a keyword's name would misquote
+        for call, message, shown in [
+            (
+                lambda: fetchloom.get("--dir=zzz"),
+                'found no dataset matching "--dir=zzz"',
+                'found no dataset matching "--dir=zzz"',
+            ),
+            (
+                lambda: fetchloom.get("--yes", offline=True),
+                'searching for "--yes" needs the internet',
+                'searching for "--yes" needs the internet',
+            ),
+            (lambda: fetchloom.sync(""), "-C needs a value", "the project argument needs a value"),
+        ]:
+            answer = {
+                "status": "error",
+                "errors": [{"kind": "usage", "message": message, "details": [], "help": None}],
+                "warnings": [],
+            }
+            response = subprocess.CompletedProcess([], 2, json.dumps(answer), "")
+            with self.subTest(message=message):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            call()
+                self.assertEqual(raised.exception.message, shown)
 
     def test_messages_details_and_warnings_name_the_keywords_too(self):
         answer = {

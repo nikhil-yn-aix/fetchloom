@@ -28,7 +28,9 @@ _SWITCHES = {
     "--locked": "locked",
     "--verify": "verify",
 }
-_VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256"}
+_VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256", "-C": "project"}
+# an example or command in backticks, or input fetchloom quotes, as in `found no dataset matching "x"`
+_QUOTED = re.compile(r'`[^`]*`|"[^"]*"')
 
 
 def __dir__() -> list[str]:
@@ -98,7 +100,7 @@ def path(
     with kind ``lock.outdated``.
     """
     arguments = _options(["path", name], yes, offline, locked)
-    return Path(_run(arguments, project, {"yes", "offline", "locked"})["path"])
+    return Path(_run(arguments, project, {"project", "yes", "offline", "locked"})["path"])
 
 
 def sync(
@@ -136,7 +138,7 @@ def sync(
     named = [names] if isinstance(names, str) else list(names)
     if named:
         arguments += ["--", *named]
-    result = _run(arguments, project, {"yes", "offline", "locked", "verify"})
+    result = _run(arguments, project, {"project", "yes", "offline", "locked", "verify"})
     placement = result.get("placement") or {}
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
@@ -260,8 +262,9 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
 def _spoken(text: str, keywords: set[str]) -> str:
     """``text`` with each flag a helper sets for one of ``keywords`` named as a python caller
     sets it: ``add --force`` reads ``pass force=True``, ``-o`` reads ``the path argument``, and
-    an example in backticks, as `` `-o results/iris.csv` ``, reads `` `path='results/iris.csv'` ``.
-    a command in backticks stays as a person types it at a terminal.
+    an example in backticks, as `` `-o results/iris.csv` `` or `` `--output=results/iris.csv` ``,
+    reads `` `path='results/iris.csv'` ``. a command in backticks stays as a person types it at
+    a terminal, and input fetchloom quotes, as ``"--dir=zzz"``, stays as it was given.
     """
     switches = {flag: name for flag, name in _SWITCHES.items() if name in keywords}
     values = {flag: name for flag, name in _VALUES.items() if name in keywords}
@@ -276,14 +279,15 @@ def _spoken(text: str, keywords: set[str]) -> str:
             return f"{'pass ' if added else ''}{switches[flag]}=True"
         return f"{added or ''}the {values[flag]} argument"
 
-    # backticks alternate prose and code, so every second part is code
-    parts = text.split("`")
-    for index, part in enumerate(parts):
-        if index % 2:
-            parts[index] = _example(part, switches, values)
-        else:
-            parts[index] = found.sub(named, part)
-    return "`".join(parts)
+    spoken = []
+    prose = 0
+    for quoted in _QUOTED.finditer(text):
+        spoken.append(found.sub(named, text[prose:quoted.start()]))
+        part = quoted.group()
+        spoken.append(f"`{_example(part[1:-1], switches, values)}`" if part.startswith("`") else part)
+        prose = quoted.end()
+    spoken.append(found.sub(named, text[prose:]))
+    return "".join(spoken)
 
 
 def _example(code: str, switches: dict[str, str], values: dict[str, str]) -> str:
@@ -292,8 +296,11 @@ def _example(code: str, switches: dict[str, str], values: dict[str, str]) -> str
     spoken = []
     while words:
         word = words.pop(0)
+        flag, equals, value = word.partition("=")
         if word in switches:
             spoken.append(f"{switches[word]}=True")
+        elif equals and flag in values:
+            spoken.append(f"{values[flag]}={value!r}")
         elif word in values and words:
             spoken.append(f"{values[word]}={words.pop(0)!r}")
         else:
