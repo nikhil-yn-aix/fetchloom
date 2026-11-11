@@ -78,6 +78,8 @@ fn run(git: &Path, root: &Path, arguments: &[&str]) -> Option<Vec<u8>> {
         .args(["--no-lazy-fetch", "-c", "core.fsmonitor=false", "-C"])
         .arg(root)
         .args(arguments)
+        // started outside the project, so windows never loads a library the project holds
+        .current_dir(git.parent()?)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
