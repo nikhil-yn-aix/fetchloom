@@ -39,6 +39,8 @@ from a real run, a project with a csv file and a zip that unpacks to five files,
 
 each file is written under a temporary name in the mirror's `tmp/` folder, read-only, and hashed as it is written. once all are written, they go to the disk as the cache's new files do: up to 64 flushed one by one, more with one flush of the whole disk where the system can. only then is each read back from the disk, hashed again and given its name, with a rename that never replaces a file already there. a file that reads back other bytes than were written never gets a name, and push stops with `integrity.mismatch`, exit 30. so does a copy in the cache that no longer holds its pinned bytes. on linux push drops the file from memory before reading it back, and on macos asks to read past memory; a network disk, or windows, may still answer from memory, and every reader checks each file against its pin again.
 
+push knows the file it wrote by its number on the disk, so another file put in its place shows at the read-back. a network disk may forget a file's number and give it a new one, as smb mounted with `noserverino` and sshfs without `use_ino` do. on linux and macos push still takes such a file when the account that wrote it owns it and its size is right: it flushes the file again and reads it back like any other. another account's file, one of another size, and on windows any file with a new number get no name, and push stops with `integrity.mismatch`, exit 30.
+
 a push stopped with ctrl-c keeps the files that already have their names and gives no name to a file it has not read back. a push that is killed leaves its unfinished files under their temporary names, never under their own, and a later push removes temporary files in `tmp/` that are more than a day old. a new mirror's `fetchloom-mirror` file is on the disk, its name too, before the first file is pushed, so a power cut never leaves pushed files in a folder that does not say it is a mirror.
 
 a file already there is found with one look at its name and size, and left as it is. pushing the same project again:
@@ -139,7 +141,7 @@ the work counters stay 0, since push asks no server anything. [JSON output](../r
 
 ## exit codes
 
-0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that the cache lacks files; 30 that a file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, or the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that the cache lacks files; 30 that a pushed file failed its read-back, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, or the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -148,4 +150,5 @@ the work counters stay 0, since push asks no server anything. [JSON output](../r
 | `holds files, but no fetchloom-mirror file says it is a mirror` | `--to` names a folder that is not a mirror, or a network disk that is not mounted | name an empty folder or a mirror's top folder, and mount the disk |
 | `this machine's cache lacks files the push needs` | this machine never synced those datasets, or `cache gc` freed them | run `fetchloom sync`, then push again |
 | `... so pushing them needs a yes` | a source wanted an account or accepted terms, or did not say who may read the data | check that everyone who can read the mirror may have it, then answer yes or add `--yes` |
+| `..., read back from ..., holds other bytes than were written, so it was not given its name` | the disk lost or changed a write, or another file took the place of the one written in `tmp/`: another account's, one of another size, or on windows any file with a new number | check the disk that holds the mirror and who else can write to it, then push again |
 | `push needs a folder to copy the files into` | neither `--to` nor `push_to` names one | add `--to <folder>`, or set `push_to` in the settings file |

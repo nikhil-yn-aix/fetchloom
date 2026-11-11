@@ -271,8 +271,18 @@ struct Written<'a> {
     temp: Temporary<'a>,
     item: Item,
     there: There,
-    /// the file as written: its device and its number there, so the file read back is that one.
-    identity: (u64, u64),
+    /// the file as written, so the file read back is that one.
+    identity: Identity,
+}
+
+/// which file a pushed file is: its device and its number there, and on unix the account that
+/// owns it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Identity {
+    device: u64,
+    number: u64,
+    #[cfg(unix)]
+    owner: u32,
 }
 
 /// what is at `root`, a folder named as a mirror to push to, read without changing anything. a
@@ -582,7 +592,7 @@ impl Target {
         });
         let pending = waiting(wrote)?;
         #[cfg(test)]
-        if tests::killed_before_naming(&self.root) {
+        if tests::killed_before_naming(&self.root, &pending) {
             // a killed push runs no destructors, so what it wrote stays where it was
             std::mem::forget(pending);
             return Err(flushing(io::ErrorKind::Interrupted.into()));
@@ -641,7 +651,11 @@ impl Target {
     fn name(&self, mut written: Written<'_>) -> Result<Put, Fault> {
         let item = written.item;
         let mut file = read_unfollowed(&written.temp.path).map_err(Fault::Mirror)?;
-        if identity(&file).map_err(Fault::Mirror)? != written.identity {
+        let found = identity(&file).map_err(Fault::Mirror)?;
+        if found != written.identity {
+            #[cfg(unix)]
+            renumbered(&file, found, &written)?;
+            #[cfg(not(unix))]
             return Err(Fault::ReadBack);
         }
         let most = item.size.saturating_add(1);
@@ -814,19 +828,48 @@ fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
     match *batch {}
 }
 
-/// which file `file` is: its device and its number there, so a file opened again by its name can
-/// be told to be the one written.
-fn identity(file: &File) -> io::Result<(u64, u64)> {
+/// lets `file`, opened again by the temporary name of `written`, be read back and named though
+/// its number is not the written file's: a network disk that forgot a file's number gives it a
+/// new one, as smb mounted with `noserverino` and sshfs without `use_ino` do. the account that
+/// owns the file written must own it, so no other account can change the bytes once named, and
+/// its size must be the item's; then it is flushed on its own handle, since only bytes on the
+/// disk may take a name. `read_unfollowed` opens only plain files.
+///
+/// # Errors
+///
+/// [`Fault::ReadBack`] for a file another account owns or of another size, or the flush's error.
+#[cfg(unix)]
+fn renumbered(file: &File, found: Identity, written: &Written<'_>) -> Result<(), Fault> {
+    let size = file.metadata().map_err(Fault::Mirror)?.len();
+    if found.owner != written.identity.owner || size != written.item.size {
+        return Err(Fault::ReadBack);
+    }
+    #[cfg(all(test, target_os = "linux"))]
+    if let Some(handle) = tests::unflushable(tests::Flush::Renumbered, &written.temp.path) {
+        return flush(&handle).map_err(Fault::Mirror);
+    }
+    flush(file).map_err(Fault::Mirror)
+}
+
+/// which file `file` is, so a file opened again by its name can be told to be the one written.
+fn identity(file: &File) -> io::Result<Identity> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
         let found = file.metadata()?;
-        Ok((found.dev(), found.ino()))
+        Ok(Identity {
+            device: found.dev(),
+            number: found.ino(),
+            owner: found.uid(),
+        })
     }
     #[cfg(windows)]
     {
         let found = winapi_util::file::information(file)?;
-        Ok((found.volume_serial_number(), found.file_index()))
+        Ok(Identity {
+            device: found.volume_serial_number(),
+            number: found.file_index(),
+        })
     }
 }
 
@@ -950,26 +993,53 @@ pub(crate) mod tests {
         Nothing,
         /// the push is killed.
         Kill,
-        /// someone puts a file of the same bytes under each file's temporary name.
-        Swap,
+        /// each file comes back under its temporary name as a new file of the same bytes, as a
+        /// disk that forgot the file's number and gave it a new one shows it.
+        Renumber,
+        /// as `Renumber`, with the first byte changed.
+        Alter,
+        /// as `Renumber`, one byte longer.
+        Grow,
+        /// as `Renumber`, by another account: the push takes the file it wrote for that account's,
+        /// since a test cannot make a file another account owns.
+        #[cfg(unix)]
+        Foreign,
     }
 
-    /// whether the push is killed once it has written its files and before it names them, as a
-    /// test asks, which may also swap each file written for another holding its bytes.
-    pub(super) fn killed_before_naming(root: &Path) -> bool {
-        match BETWEEN.get() {
-            Between::Nothing => false,
-            Between::Kill => true,
-            Between::Swap => {
-                for entry in fs::read_dir(root.join(TMP)).unwrap() {
-                    let path = entry.unwrap().path();
-                    let bytes = fs::read(&path).unwrap();
-                    fs::rename(&path, path.with_extension("swapped")).unwrap();
-                    fs::write(&path, bytes).unwrap();
+    /// whether the push is killed once it has written its files, `pending`, and before it names
+    /// them in `root`, as a test asks, which may instead put another file in each one's place.
+    pub(super) fn killed_before_naming(
+        root: &Path,
+        pending: &[Mutex<Option<Written<'_>>>],
+    ) -> bool {
+        let between = BETWEEN.get();
+        match between {
+            Between::Nothing => return false,
+            Between::Kill => return true,
+            _ => {}
+        }
+        for entry in fs::read_dir(root.join(TMP)).unwrap() {
+            let path = entry.unwrap().path();
+            let mut bytes = fs::read(&path).unwrap();
+            match between {
+                Between::Alter => bytes[0] ^= 1,
+                Between::Grow => bytes.push(b'\n'),
+                _ => {}
+            }
+            fs::rename(&path, path.with_extension("swapped")).unwrap();
+            fs::write(&path, bytes).unwrap();
+        }
+        #[cfg(unix)]
+        if between == Between::Foreign {
+            for slot in pending {
+                if let Some(written) = slot.lock().unwrap().as_mut() {
+                    written.identity.owner = written.identity.owner.wrapping_add(1);
                 }
-                false
             }
         }
+        #[cfg(not(unix))]
+        let _ = pending;
+        false
     }
 
     /// a flush a push makes, which a test can make fail.
@@ -980,6 +1050,8 @@ pub(crate) mod tests {
         Marker,
         /// the one flush of a batch of files.
         Batch,
+        /// a file that came back with a new number, flushed again before it is read back.
+        Renumbered,
     }
 
     /// a handle on `path` that every flush fails on, when a test makes `flush` fail: fsync and
@@ -1308,20 +1380,95 @@ pub(crate) mod tests {
         }));
     }
 
-    /// the file read back must be the one written: another put under its temporary name, even
-    /// one holding the same bytes, never takes the name.
-    #[test]
-    fn a_file_swapped_before_its_read_back_never_takes_a_name() {
+    /// what pushing one file gives when `between` happens between writing it and reading it
+    /// back, and whether it took its name.
+    fn one_put(between: Between) -> (Result<Vec<Put>, Failed>, bool) {
         let folder = tempfile::tempdir().unwrap();
         let contents = vec![b"pinned bytes".to_vec()];
-        BETWEEN.set(Between::Swap);
+        BETWEEN.set(between);
         let (target, put) = put_all(folder.path(), &contents);
         BETWEEN.set(Between::Nothing);
+        let name = place(&target.root, OBJECTS, &crate::digest::sha256(&contents[0]));
+        let named = fs::read(name).is_ok_and(|bytes| bytes == contents[0]);
+        (put, named)
+    }
+
+    /// a file that comes back under its temporary name with a new number, as a disk that forgot
+    /// its number shows it, still takes its name: it is the same account's, of the same size, and
+    /// is flushed again on its own handle and read back. windows never renumbers a file, so there
+    /// any new file in its place is refused.
+    #[test]
+    fn a_file_renumbered_before_its_read_back_still_takes_its_name() {
+        let (put, named) = one_put(Between::Renumber);
+        #[cfg(unix)]
+        {
+            assert_eq!(put.unwrap(), vec![Put::Copied]);
+            assert!(named);
+        }
+        #[cfg(not(unix))]
+        {
+            assert!(
+                matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+                "{put:?}"
+            );
+            assert!(!named);
+        }
+    }
+
+    /// a file swapped for other bytes of the same size before its read-back never takes a name.
+    #[test]
+    fn a_file_swapped_before_its_read_back_never_takes_a_name() {
+        let (put, named) = one_put(Between::Alter);
         assert!(
             matches!(put, Err(Failed::File(0, Fault::ReadBack))),
             "{put:?}"
         );
-        assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(&contents[0])).exists());
+        assert!(!named);
+    }
+
+    /// another account's file in a pushed file's place never takes its name, even with the same
+    /// bytes, since that account could change them once it had.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_another_account_put_in_its_place_never_takes_a_name() {
+        let (put, named) = one_put(Between::Foreign);
+        assert!(
+            matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            "{put:?}"
+        );
+        assert!(!named);
+    }
+
+    /// a file of another size in a pushed file's place never takes its name, and is refused
+    /// before it is flushed: on linux, where the test makes that flush fail, it is never tried.
+    #[test]
+    fn a_file_of_another_size_in_its_place_is_refused_unflushed() {
+        #[cfg(target_os = "linux")]
+        FAILING.set(Some(Flush::Renumbered));
+        let (put, named) = one_put(Between::Grow);
+        #[cfg(target_os = "linux")]
+        FAILING.set(None);
+        assert!(
+            matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            "{put:?}"
+        );
+        assert!(!named);
+    }
+
+    /// a renumbered file takes its name only once flushed again: a flush that fails stops the
+    /// push with the disk's error, and the file never takes its name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_renumbered_file_that_cannot_be_flushed_never_takes_a_name() {
+        FAILING.set(Some(Flush::Renumbered));
+        let (put, named) = one_put(Between::Renumber);
+        FAILING.set(None);
+        let badf = Some(rustix::io::Errno::BADF.raw_os_error());
+        assert!(
+            matches!(&put, Err(Failed::File(0, Fault::Mirror(err))) if err.raw_os_error() == badf),
+            "{put:?}"
+        );
+        assert!(!named);
     }
 
     /// a new mirror's marker is on the disk, its name in the top folder too, before any file is
