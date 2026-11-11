@@ -51,6 +51,12 @@ pub(crate) struct Output {
     locked: AtomicBool,
     /// set at the first ctrl-c, so every bar says the run is stopping.
     stopping: Arc<AtomicBool>,
+    /// whether report rows on stdout take color, which stdout decides apart from stderr.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "no command prints report rows yet")
+    )]
+    report_color: bool,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -161,6 +167,7 @@ impl Output {
             hints: true,
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
+            report_color: Style::stdout_colored(),
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -793,6 +800,36 @@ impl Output {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "no command prints report rows yet")
+)]
+impl Output {
+    /// one row of a report on stdout, as `mark` draws it on stderr: a verb in its column, such
+    /// as `Missing`, then its subject, so a pipe or a file gets the rows while the story stays on
+    /// stderr. quiet and `--json` print none.
+    pub(crate) fn report(&self, verb: &str, text: &str) {
+        let Some(line) = self.report_text(verb, text) else {
+            return;
+        };
+        let write = || self.answer(&line);
+        match &self.bars {
+            Some(bars) => bars.suspend(write),
+            None => write(),
+        }
+    }
+
+    fn report_text(&self, verb: &str, text: &str) -> Option<String> {
+        self.tells(Level::Normal).then(|| {
+            shown(
+                &verb_line(verb, text, verb_color(verb), self.report_color),
+                self.style.unicode,
+            )
+            .into_owned()
+        })
     }
 }
 
@@ -1701,6 +1738,42 @@ mod tests {
             super::fix("run `fetchloom lock` and commit data.lock", false),
             Some("fetchloom lock")
         );
+    }
+
+    /// a report row is a verb line for stdout, colored as stdout decides apart from stderr, and
+    /// quiet or `--json` print none.
+    #[test]
+    fn report_rows_follow_stdout_alone() {
+        let style = |color| Style {
+            color,
+            unicode: true,
+            interactive: false,
+            watched: false,
+            links: false,
+        };
+        let mut colored_story = Output::new(style(true), Level::Normal, false, false);
+        colored_story.report_color = false;
+        assert_eq!(
+            colored_story
+                .report_text("Missing", "data/iris/iris.csv")
+                .as_deref(),
+            Some("    Missing data/iris/iris.csv")
+        );
+        let mut plain_story = Output::new(style(false), Level::Normal, false, false);
+        plain_story.report_color = true;
+        let row = plain_story
+            .report_text("Missing", "data/iris/iris.csv")
+            .unwrap_or_default();
+        assert!(row.contains("\u{1b}["), "{row:?}");
+        assert_eq!(
+            console::strip_ansi_codes(&row),
+            "    Missing data/iris/iris.csv"
+        );
+        for (level, json) in [(Level::Quiet, false), (Level::Normal, true)] {
+            let silent = Output::new(style(false), level, json, false);
+            assert_eq!(silent.report_text("Missing", "data/iris/iris.csv"), None);
+            silent.report("Missing", "data/iris/iris.csv");
+        }
     }
 
     /// the `-v` counters say what each counts: a placement from bytes the cache held before is

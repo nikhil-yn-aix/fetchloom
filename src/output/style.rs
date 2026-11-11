@@ -199,6 +199,9 @@ fn parse_color(text: &str) -> Option<Color> {
 
 static PALETTE: OnceLock<Palette> = OnceLock::new();
 
+/// whether stdout takes color, as the run's color choice decided it for that stream.
+static STDOUT_COLOR: OnceLock<bool> = OnceLock::new();
+
 /// the color of `tone` in the palette this run uses.
 pub(crate) fn color(tone: Tone) -> Color {
     PALETTE.get().copied().unwrap_or_default().color(tone)
@@ -249,6 +252,7 @@ pub(crate) struct Style {
 
 impl Style {
     pub(crate) fn detect(choice: ColorChoice) -> Style {
+        let _ = STDOUT_COLOR.set(Style::stdout_color(choice));
         let terminal = std::io::stderr().is_terminal();
         let var = |name: &str| std::env::var_os(name);
         Style {
@@ -264,6 +268,12 @@ impl Style {
         wants_color(choice, std::io::stdout().is_terminal(), &|name| {
             std::env::var_os(name)
         })
+    }
+
+    /// whether stdout takes color, as [`Style::detect`] decided for the run, or not before it
+    /// ran, as in tests.
+    pub(crate) fn stdout_colored() -> bool {
+        STDOUT_COLOR.get().copied().unwrap_or(false)
     }
 
     /// what ends text that was cut short.
