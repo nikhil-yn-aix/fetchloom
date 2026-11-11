@@ -1056,6 +1056,84 @@ pub(crate) mod tests {
         );
     }
 
+    /// two datasets in the data folder itself: `a` pinned with a README, and `b`, whose listing
+    /// has `remote` as its one file and needs a download to learn its hash. the error a sync
+    /// meets first, when every download fails, and whether data.lock stayed as it was.
+    fn sync_beside_a_readme(remote: crate::source::Remote) -> (Error, bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let context = offline_context();
+        let cache = crate::cache::Cache::open(dir.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.a]\nref = \"https://example.org/a\"\npath = \".\"\n\n[datasets.b]\nref = \"https://example.org/b\"\npath = \".\"\n",
+        )
+        .unwrap();
+        let a = pinned(
+            "a",
+            lock::spec(&manifest.datasets["a"]),
+            vec![pinned_file("README", "https://example.org/a", b"a")],
+        );
+        let old = Lock {
+            datasets: vec![a],
+            ..Lock::default()
+        };
+        std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
+        let work = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let given = (
+            "b".to_owned(),
+            listed("https://example.org/b", vec![remote]),
+        );
+        let error = block_on(sync_all(
+            &work,
+            &manifest,
+            Some(old.clone()),
+            &Upgrade::Nothing,
+            false,
+            false,
+            Some(given),
+            Read::Planned(&unread()),
+        ))
+        .unwrap_err();
+        let kept = std::fs::read_to_string(project.root.join(lock::FILE)).unwrap() == old.render();
+        (error, kept)
+    }
+
+    /// a listing names its files before any is downloaded, so a clash it shows stops the sync
+    /// before the download that would only learn the file's hash.
+    #[test]
+    fn a_clash_the_listing_shows_is_found_before_any_download() {
+        let mut listed = stated("README", "https://example.org/b/README", b"b");
+        listed.sha256 = None;
+        // the MD5 of b, as zenodo and S3 list it
+        listed.md5 = crate::digest::Md5::from_hex("92eb5ffee6ae2fec3ad71c777531578f");
+
+        let (error, kept) = sync_beside_a_readme(listed);
+
+        assert_eq!(error.kind, Kind::ProjectInvalid, "{error:?}");
+        assert_eq!(
+            error.message,
+            "datasets a and b would both place data/README"
+        );
+        assert!(kept, "data.lock changed though nothing could be placed");
+    }
+
+    /// a name only a guess from the link, which the server's name for the file replaces, cannot
+    /// clash before the download that tells it.
+    #[test]
+    fn a_name_the_server_gives_is_checked_once_downloaded() {
+        let mut guessed = stated("README", "https://example.org/b/README", b"b");
+        guessed.sha256 = None;
+        guessed.size = None;
+        guessed.named_by_server = true;
+
+        let (error, kept) = sync_beside_a_readme(guessed);
+
+        assert_eq!(error.kind, Kind::OfflineMissing, "{error:?}");
+        assert!(kept);
+    }
+
     /// kaggle may send a competition file as a zip of itself, which data.lock then pins as
     /// `<name>.zip`. a listing that also holds a real `<name>.zip` must not pin both on one path,
     /// or no later run could read data.lock.

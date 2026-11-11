@@ -183,6 +183,14 @@ impl<'a> Loop<'a> {
                 jobs.push(job);
             }
         }
+        if !jobs.is_empty() {
+            // a clash the listings already show stops the run before it downloads anything
+            let foreseen: Vec<Locked> = drafts
+                .iter()
+                .map(|draft| draft.foreseen(&self.cache))
+                .collect();
+            plan::foresee(manifest, kept.iter().chain(&foreseen), &self.cache)?;
+        }
         let fetched = self.download(jobs).await?;
         for ((draft, file), fetched) in slots.into_iter().zip(fetched) {
             if let Some(file) = file {

@@ -9,7 +9,7 @@ use crate::cache::{Cache, Member};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::project::lock::{Lock, LockedFile};
+use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest};
 
 /// one file a lock places.
@@ -61,6 +61,20 @@ pub(crate) fn from_cache<'a>(
     })
 }
 
+/// refuses, before anything is downloaded, a clash among the files of `datasets` whose place is
+/// already known, as the cache records what each archive unpacked to. an archive with no record
+/// is planned once it is unpacked, and checked then, before anything is placed.
+pub(crate) fn foresee<'a>(
+    manifest: &Manifest,
+    datasets: impl IntoIterator<Item = &'a Locked>,
+    cache: &Cache,
+) -> Result<(), Error> {
+    planned(manifest, datasets, &|file| {
+        cache.unpacked(&file.sha256, file.unpacks_to.as_ref())
+    })
+    .map(drop)
+}
+
 /// every file the lock places for the datasets data.toml lists, or the first clash. an archive
 /// is replaced by the files `members` says it unpacked to. datasets may share a folder, but no
 /// two files may share a path.
@@ -69,9 +83,17 @@ pub(crate) fn plan<'a>(
     lock: &'a Lock,
     members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
+    planned(manifest, &lock.datasets, members)
+}
+
+fn planned<'a>(
+    manifest: &Manifest,
+    datasets: impl IntoIterator<Item = &'a Locked>,
+    members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
+) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
-    for dataset in &lock.datasets {
+    for dataset in datasets {
         let Some(entry) = manifest.datasets.get(&dataset.name) else {
             continue;
         };

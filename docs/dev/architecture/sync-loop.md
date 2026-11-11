@@ -30,6 +30,8 @@ an entry's spec hash covers the manifest choices that decide which files are dow
 
 `Draft` prefers a usable source SHA-256, reusable old pins or a checked MD5-to-SHA-256 mapping. it downloads when those do not establish the pin. a new archive must be unpacked to learn its member tree. unchanged resolved data retain their old lock timestamp. `Draft::finish` refuses two files pinned on one path, as when kaggle sends a competition file as a zip of itself, which takes the name `<name>.zip`, beside a listed `<name>.zip`: such a `data.lock` could not be read again.
 
+before those downloads, `relock` refuses a clash among the destinations it already knows, through `plan::foresee`: the kept entries, and each draft as `Draft::foreseen` gives it, its files at the paths data.lock would pin and each archive standing for the members a cache record lists. a file whose path its download may change, a server's name for it or a zip its source wraps it in, waits with any archive that has no record for the plan `sync_all` checks before `write_lock`. a run with nothing to download skips this check, since that plan comes first anyway.
+
 `add` can match another spelling through an existing resolved reference only when that lock entry still records the current manifest reference. after a `ref` edit, its old resolved identity cannot stand for the new request.
 
 kept entries move from the old lock into the new one instead of being copied. `relock` returns the new lock with a `Before`, which holds the old entries it replaced or dropped and which of the new entries were kept, so `write_lock`, `tell_lock` and `tell_upgrades` compare with the old lock as it was.
@@ -83,7 +85,7 @@ before preparing downloads, `Loop::ask_room` sums what placing lacks, the archiv
 
 ## invariants and traps
 
-- `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files can still follow a written lock. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
+- `relock` refuses a clash the listings show before it downloads anything, and `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files, or between them and another dataset's files, can still follow a written lock, though it still comes before anything is placed. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
 - matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
 - use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
 - mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.

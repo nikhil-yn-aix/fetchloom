@@ -235,6 +235,59 @@ impl Draft {
         file.path = fetch::wrapped(cache, &file.remote, path, &fetched.digest);
     }
 
+    /// the entry as the clash check before any download sees it: each file at the path data.lock
+    /// would pin, with a stand-in for a hash only a download can learn, and each archive with the
+    /// tree this machine recorded for it. a file whose path [`Draft::learn`] may still change,
+    /// and an archive this machine never unpacked, stand as archives with no record, so the
+    /// check after the downloads takes them.
+    pub(super) fn foreseen(&self, cache: &Cache) -> Locked {
+        let mut files: Vec<LockedFile> = self
+            .files
+            .iter()
+            .map(|file| {
+                let label = format!("{}/{}", self.name, file.path);
+                let unrecorded = || Some(stand_in(&format!("{label} unpacked")));
+                let unpacks_to = if renamed_by_download(file) {
+                    unrecorded()
+                } else if self.unpacks(file) {
+                    file.unpacks_to
+                        .or_else(|| {
+                            file.known
+                                .and_then(|(sha256, _)| cache.unpacked_tree(&sha256))
+                        })
+                        .or_else(unrecorded)
+                } else {
+                    None
+                };
+                let (sha256, size) = file
+                    .known
+                    .unwrap_or_else(|| (stand_in(&label), file.remote.size.unwrap_or_default()));
+                LockedFile {
+                    path: file.path.clone(),
+                    size,
+                    sha256,
+                    md5: file.remote.md5,
+                    url: file.remote.url.to_string(),
+                    unpacks_to,
+                }
+            })
+            .collect();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Locked {
+            name: self.name.clone(),
+            reference: self.reference.clone(),
+            spec: self.spec.clone(),
+            extract: self.extract,
+            resolved: self.resolved.clone(),
+            title: None,
+            license: None,
+            doi: None,
+            access: self.access,
+            timestamp: String::new(),
+            files,
+        }
+    }
+
     /// the archives that must be unpacked to learn what they unpack to. an archive this machine
     /// unpacked before is known from its record and needs no unpacking.
     pub(super) fn unknown_archives(&mut self, cache: &Cache) -> Vec<ToUnpack> {
@@ -383,9 +436,19 @@ pub(super) fn link(dataset: &str, file: &LockedFile) -> Result<Url, Error> {
     })
 }
 
-/// a hash no bytes have, standing for one a dry run cannot learn without downloading.
+/// a hash no bytes have, standing for one only a download can learn, for a dry run or the clash
+/// check before any download.
 fn stand_in(what: &str) -> Sha256 {
     crate::digest::sha256(format!("fetchloom dry run stand-in for {what}").as_bytes())
+}
+
+/// whether downloading the file may still change its path, as [`Draft::learn`] changes it: a
+/// server's name for the file replaces a guess from its link, and a source may send it wrapped
+/// in a zip.
+fn renamed_by_download(file: &DraftFile) -> bool {
+    file.known.is_none()
+        && (file.remote.named_by_server
+            || (source::may_wrap(&file.remote.url) && archive::by_name(&file.path).is_none()))
 }
 
 /// the hash and size of the bytes an earlier download of this link proved match the MD5 its

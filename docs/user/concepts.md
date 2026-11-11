@@ -76,7 +76,7 @@ paths below are relative to the dataset or `get` folder:
 | `train.zip` and another file | only `a.csv` | `a.csv` |
 | `train.zip` and another file | `a.csv`, `b.csv` | `train/a.csv`, `train/b.csv` |
 
-a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file keeps its name; otherwise members go under the archive's stem. the archive's parent path is retained. colliding destinations fail.
+a sole archive loses one shared top folder. beside other selected files, a shared top folder or lone top-level file keeps its name; otherwise members go under the archive's stem. the archive's parent path is retained. colliding destinations fail, a member landing on another dataset's file too; sync finds that once the archive is unpacked, before it places anything.
 
 an archive with no regular files creates no dataset folder in a project. `get` still creates an empty output folder. members enter the cache before placement. packed bytes can then be removed unless a registered project needs them packed.
 

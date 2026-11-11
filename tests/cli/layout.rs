@@ -84,3 +84,70 @@ fn shared_folder_removal_keeps_the_other_dataset_and_extras() -> Result {
     );
     Ok(())
 }
+
+/// an S3 listing of one object at `key`, with the MD5 and size of `body` as S3 states them.
+#[cfg(debug_assertions)]
+fn listing(key: &str, body: &[u8]) -> Vec<crate::support::Part> {
+    use std::fmt::Write as _;
+
+    use md5::Digest as _;
+    let md5 = md5::Md5::digest(body)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    let xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>lab</Name><EncodingType>url</EncodingType><IsTruncated>false</IsTruncated><Contents><Key>{}</Key><LastModified>2020-08-21T20:24:12.000Z</LastModified><ETag>&quot;{md5}&quot;</ETag><Size>{}</Size></Contents></ListBucketResult>",
+        key.replace('/', "%2F"),
+        body.len()
+    );
+    crate::support::reply(
+        "200 OK",
+        &[("Content-Type", "application/xml")],
+        xml.as_bytes(),
+    )
+}
+
+/// a listing names its files before any is downloaded, so two datasets in one folder that both
+/// list a labels.csv are refused before either file is fetched, and nothing is written.
+#[cfg(debug_assertions)]
+#[test]
+fn a_clash_the_listings_show_stops_sync_before_any_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/lab.s3.amazonaws.com/";
+    let listed = |prefix: &str| format!("{base}?list-type=2&prefix={prefix}%2F&encoding-type=url");
+    let routes = crate::support::Routes::start(vec![
+        (listed("train"), listing("train/labels.csv", TRAIN)),
+        (listed("test"), listing("test/labels.csv", TEST)),
+        (format!("{base}train/labels.csv"), file(TRAIN, "\"v1\"")),
+        (format!("{base}test/labels.csv"), file(TEST, "\"v1\"")),
+    ])?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.train]\nref = \"s3://lab/train/\"\npath = \"splits\"\n\n[datasets.test]\nref = \"s3://lab/test/\"\npath = \"splits\"\n",
+    )?;
+
+    let output = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+        .output()?;
+
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.ends_with("\nerror: datasets test and train would both place data/splits/labels.csv\n  help: give datasets.test or datasets.train another path in data.toml\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Downloaded"), "{stderr}");
+    let mut asked = routes.targets();
+    asked.sort();
+    assert_eq!(
+        asked,
+        [listed("test"), listed("train")],
+        "a file was fetched"
+    );
+    assert!(!sandbox.work().join("data.lock").exists());
+    assert!(!sandbox.work().join("data").exists());
+    Ok(())
+}

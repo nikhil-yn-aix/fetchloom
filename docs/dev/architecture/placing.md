@@ -10,7 +10,7 @@ placement protects existing files while turning locked data and cached archive t
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs) | destination expansion and collision checks | `Plan`, `Target`, `Patterns`, `from_cache`, `expand`, `unpacked_paths`, `check` |
+| [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs) | destination expansion and collision checks | `Plan`, `Target`, `Patterns`, `folder`, `from_cache`, `foresee`, `expand`, `unpacked_paths`, `check` |
 | [cli/sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | action selection, adoption and state changes | `Placing`, `Action`, `Reason`, `decide`, `settle`, `settle_aside`, `remove_unwanted`, `adoption`, `link_adopted`, `keep_aside` |
 | [cli/sync/place/put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | batched placement and per-file observations | `Tally`, `put_all` |
 | [cli/sync/place/tell.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/tell.rs) | placement summaries | `tell` |
@@ -27,6 +27,8 @@ placement protects existing files while turning locked data and cached archive t
 `Plan` combines manifest folders, locked files and cached member trees. it is an in-memory destination plan; `Placing::preview` turns the actions decided from it into the lists `--dry-run` prints. unknown archive trees are returned separately so sync can unpack them before deciding destinations.
 
 a dataset consisting of one archive can drop a common top-level member folder. an archive beside other files expands beneath its own location. `path = "."` puts a dataset's targets straight in the data folder. datasets may share folders, so the resulting targets reject only what files clash on: two files on one path, even with the same bytes, a file where another target needs a folder, and folded-name collisions. a clash between two datasets names both and asks for another `path`. each placed file has one owning dataset in the state, and removal and sync cleanup delete a file only when no dataset places it now, so a shared folder keeps the other datasets' files.
+
+the check runs before anything is downloaded over the targets already known, through `foresee`, and again over the whole plan once the names a server gives and archive members are known, always before anything is placed; [the sync loop](sync-loop.md#resolve-only-changed-specifications) says which files wait for the second check, and [its traps](sync-loop.md#invariants-and-traps) when data.lock is written.
 
 ### choose an action
 
@@ -113,7 +115,7 @@ placement-order tests pause at the first metadata observation before later names
 |---|---|
 | [plan.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/plan.rs), [place/tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/tests.rs), [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | `cargo test --locked --lib plan::`; `cargo test --locked --lib place::`; `cargo test --locked --lib volume::` |
 | [sync/place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs), [put.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place/put.rs) | `cargo test --locked --lib cli::sync::place::` |
-| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
+| [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [layout.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/layout.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs), [moved.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/moved.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli layout::`; `cargo test --locked --test cli recovery::`; `cargo test --locked --test cli moved::` |
 
 ## related
 
