@@ -242,6 +242,52 @@ fn two_changes_to_one_dataset_need_a_choice() {
     assert_eq!(upgraded.lock.unwrap().datasets, [pinned(b"3,right")]);
 }
 
+/// `extract` and `access` sit beside the spec: a pin one side made again with archives kept
+/// packed, or with what its source now says about access, is that side's change.
+#[test]
+fn a_pin_one_side_made_again_for_extract_or_access_wins() {
+    let packed_toml = "[datasets.x]\nref = \"zenodo:1\"\nextract = false\n".to_owned();
+    let manifest = sides(
+        packed_toml.clone(),
+        toml(&[("x", "zenodo:1")]),
+        Some(toml(&[("x", "zenodo:1")])),
+    );
+    let mut unpacked = pin("x", "zenodo:1", b"x");
+    unpacked.files[0].unpacks_to = Some(digest::sha256(b"tree"));
+    let packed = Locked {
+        extract: false,
+        files: vec![LockedFile {
+            unpacks_to: None,
+            ..unpacked.files[0].clone()
+        }],
+        ..unpacked.clone()
+    };
+    let public = Locked {
+        access: Access::Public,
+        ..unpacked.clone()
+    };
+    let locks = sides(
+        lock(vec![packed.clone()]),
+        lock(vec![public.clone()]),
+        Some(lock(vec![unpacked.clone()])),
+    );
+    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    assert_eq!(error.details, ["x: each side changed it its own way"]);
+    let ours = merged(&manifest, &locks, &[("x", Side::Ours)]).unwrap();
+    assert_eq!(ours.manifest, packed_toml);
+    assert_eq!(ours.lock.unwrap().datasets, [packed]);
+    let only_access = sides(
+        lock(vec![unpacked.clone()]),
+        lock(vec![public.clone()]),
+        Some(lock(vec![unpacked])),
+    );
+    let text = toml(&[("x", "zenodo:1")]);
+    let same_toml = sides(text.clone(), text, None);
+    let theirs = merged(&same_toml, &only_access, &[]).unwrap();
+    assert_eq!(theirs.lock.unwrap().datasets, [public]);
+    assert_eq!(theirs.summary.from_theirs, ["x"]);
+}
+
 /// a dataset both sides changed in data.toml takes the chosen side's entry, and that side's pin
 /// when it answers the entry; otherwise it is left for `fetchloom lock` to pin.
 #[test]

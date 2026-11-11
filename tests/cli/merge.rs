@@ -154,6 +154,21 @@ fn lock_merges_independent_additions_offline() -> Result {
     let theirs =
         git(&sandbox, &sandbox.work(), &["show", "theirs:data.lock"])?.ok_or("git went away")?;
     let asked = routes.requests().len();
+    let conflicted = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    let previewed = run(&sandbox, &["lock", "--dry-run"])?;
+    succeeded(&previewed)?;
+    assert!(
+        text(&previewed.stderr)?.contains(
+            "Would merge data.toml and data.lock · alpha from ours, beta from theirs, 1 the same"
+        ),
+        "{}",
+        text(&previewed.stderr)?
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        conflicted,
+        "a dry run writes nothing"
+    );
     let output = run(&sandbox, &["--json", "lock"])?;
     succeeded(&output)?;
     let merge = &json(&output)?["result"]["merge"];
