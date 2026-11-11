@@ -552,6 +552,19 @@ fn parts(sandbox: &Sandbox) -> Result<Vec<String>> {
     Ok(parts)
 }
 
+/// the warnings of the json document `value` about lists git does not have, without those a
+/// disk adds, such as fat's copies.
+fn git_warnings(value: &serde_json::Value) -> Vec<String> {
+    value["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|warning| warning.contains("git does not have"))
+        .map(str::to_owned)
+        .collect()
+}
+
 /// a commit of changed files alone, as `git commit -a` makes, leaves a new list in data.lock.d
 /// out, and a clone of it cannot read data.lock: status names each list git does not have, with
 /// the git command that adds it, and says nothing once git has it.
@@ -577,14 +590,14 @@ fn status_names_lists_git_does_not_have() -> Result {
 
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
-        status["warnings"],
-        serde_json::json!([format!(
+        git_warnings(&status),
+        [format!(
             "data.lock names {part}, which git does not have; run `git add data.lock.d`, then commit it with data.lock, since a clone without it cannot read data.lock"
-        )])
+        )]
     );
     crate::merge::ok(&sandbox, &["add", "data.lock.d"])?;
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(status["warnings"], serde_json::json!([]));
+    assert_eq!(git_warnings(&status), Vec::<String>::new());
     Ok(())
 }
 
@@ -607,7 +620,11 @@ fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
         json(&output)
     };
     let outside = ran(&["--json", "add", &server.url, "--as", "first"])?;
-    assert_eq!(outside["warnings"], serde_json::json!([]), "no repository");
+    assert_eq!(
+        git_warnings(&outside),
+        Vec::<String>::new(),
+        "no repository"
+    );
     if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
         return Ok(());
     }
@@ -621,15 +638,15 @@ fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
         .find(|part| !before.contains(part))
         .ok_or("no new list")?;
     assert_eq!(
-        second["warnings"],
-        serde_json::json!([format!(
+        git_warnings(&second),
+        [format!(
             "git does not have {part}, which data.lock names now; run `git add data.lock.d` before you commit, since `git commit -a` leaves new files out"
-        )])
+        )]
     );
     let again = ran(&["--json", "sync"])?;
     assert_eq!(
-        again["warnings"],
-        serde_json::json!([]),
+        git_warnings(&again),
+        Vec::<String>::new(),
         "nothing new written"
     );
     #[cfg(target_os = "linux")]
