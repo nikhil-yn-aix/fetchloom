@@ -321,16 +321,6 @@ impl Cache {
         io::Error::new(err.kind(), Explained { words, cause: err })
     }
 
-    /// `err`, the refusal of a disk that can neither hardlink nor rename without replacing, in
-    /// words that say what to do.
-    fn unpublishable(&self, err: io::Error) -> io::Error {
-        let words = format!(
-            "the disk holding {} can neither link files nor rename one without replacing a file already at its new name, so the cache cannot take new files there; set FETCHLOOM_CACHE to a folder on another disk",
-            self.root.display()
-        );
-        io::Error::new(io::ErrorKind::Unsupported, Explained { words, cause: err })
-    }
-
     /// what unfinished downloads hold of the cache's disk and how to free it, when they hold
     /// anything.
     pub(crate) fn unfinished_held(&self) -> Option<String> {
@@ -480,8 +470,7 @@ impl Cache {
     /// edit through a writable hardlink changed, is marked as changed and replaced, since keeping
     /// it would place the edit in every project instead of these bytes. one that cannot be read
     /// stays: nothing shows it changed. a disk that makes no hardlinks takes a rename that refuses
-    /// a name already taken; one without that rename either is refused, since a rename that
-    /// replaces could take the name from a file another writer just published.
+    /// a name already taken, and one without that rename either takes a plain rename.
     fn link_new(&self, source: &Path, path: &Path, digest: &Sha256, size: u64) -> io::Result<bool> {
         let volume = &self.volume;
         let new = match volume.hard_link(source, path) {
@@ -497,7 +486,12 @@ impl Cache {
             Err(_) => match volume.rename_new(source, path) {
                 Ok(()) => return Ok(true),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
-                Err(err) if refuses_links(&err) => return Err(self.unpublishable(err)),
+                // an object's name is its verified sha-256 and every writer seals its copy first,
+                // so on a disk with no other way a rename that replaces swaps identical bytes
+                Err(err) if refuses_links(&err) => {
+                    volume.rename(source, path)?;
+                    return Ok(true);
+                }
                 Err(err) => return Err(err),
             },
         };
@@ -1239,24 +1233,20 @@ pub(crate) mod tests {
         assert_eq!(leftovers, 0, "nothing is left behind in tmp");
     }
 
-    /// a disk that can neither hardlink nor rename without replacing what may already be at the
-    /// name takes no object, since another writer may publish there at any moment.
+    /// a disk that can neither hardlink nor rename without replacing still takes objects: an
+    /// object's name is its verified sha-256, so the rename that replaces swaps identical bytes.
     #[test]
-    fn a_disk_that_renames_only_by_replacing_takes_no_object() {
+    fn a_disk_that_renames_only_by_replacing_still_takes_objects() {
         let (_dir, mut cache) = cache();
         cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), false).replacing_only());
         let mut object = cache.new_object().unwrap();
         object.write_all(b"bytes").unwrap();
 
-        let refused = object.seal(true).unwrap().publish(&cache).unwrap_err();
+        let stored = object.seal(true).unwrap().publish(&cache).unwrap();
 
-        assert_eq!(refused.kind(), io::ErrorKind::Unsupported);
-        let said = crate::error::Error::io("could not write to the cache", &refused).message;
-        assert!(
-            said.contains("set FETCHLOOM_CACHE to a folder on another disk"),
-            "{said}"
-        );
-        assert_eq!(cache.find(&digest::sha256(b"bytes"), None), None);
+        assert!(stored.new);
+        let found = cache.find(&digest::sha256(b"bytes"), None).unwrap();
+        assert_eq!(fs::read(found).unwrap(), b"bytes");
         assert_eq!(fs::read_dir(cache.root.join("tmp")).unwrap().count(), 0);
     }
 
