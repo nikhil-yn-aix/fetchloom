@@ -100,6 +100,7 @@ the step reads a private copy of each dataset in `from`, made from the files `da
 `fetchloom build --check` runs every step again from the inputs `data.lock` pins and compares what each makes with `data.lock`, file by file, without changing it or the data folder:
 
 ```text
+      Needs up to 135 B on the disk holding the cache, which has 329.1 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
     Checked clean · 1 of 1 files match data.lock

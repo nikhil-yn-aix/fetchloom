@@ -1496,6 +1496,36 @@ fn checks_report_every_step() -> Result {
     Ok(())
 }
 
+/// a check runs a step from the result data.lock pins for each recipe it reads, never from a
+/// rebuild: where that result is in no cache or mirror, as on a fresh machine after the check of
+/// the recipe made other files, the step is skipped, and the error says so.
+#[test]
+fn a_check_skips_a_step_whose_pinned_input_is_nowhere() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
+    with(&sandbox, &server, &format!("{}{tidy}", recipe(&["random"])))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let elsewhere = sandbox.folder("another cache")?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "build", "--check"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let steps = document["result"]["steps"].as_array().ok_or("no steps")?;
+    assert!(steps[0]["candidate"].is_string(), "{document}");
+    assert_eq!(steps[1]["action"], "skipped");
+    assert_eq!(steps[1]["check"], Value::Null);
+    let (kind, _, details, _, _) = error(&document);
+    assert_eq!(kind, "build.differs");
+    assert!(
+        details.contains(&"tidy was not checked: it reads a result data.lock pins that is not on this machine or a mirror"),
+        "{details:?}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 3, "tidy did not run in the check");
+    Ok(())
+}
+
 /// a check compares with what data.lock pins, so a recipe never built, or changed since it was,
 /// is `lock.outdated`, exit 1, before any step runs.
 #[test]

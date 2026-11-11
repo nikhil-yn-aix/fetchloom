@@ -6,6 +6,7 @@
 fetchloom build --dry-run
 fetchloom build
 fetchloom build clean
+fetchloom build --check
 fetchloom build --json
 ```
 
@@ -72,9 +73,10 @@ a step runs its `run` words as the program and its arguments, without a shell, s
 
 the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. on linux and macos the step runs in a process group of its own: when it ends, anything it started and left running is ended too, and ctrl-c ends the whole group. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does and ends the step's group at once; a second one quits as a second ctrl-c does. windows ends the step's own process only.
 
-while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. this output is from a run with `FETCHLOOM_BUILD_FLOOR=100T` on a disk with 339 GiB free, so the step stopped at its first look; the line under the error, left out here, says how much was free and where the cache is:
+while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. this output is from `FETCHLOOM_BUILD_FLOOR=100T fetchloom build --yes clean` on a disk with 329 GiB free, so `--yes` went on past the question and the step stopped at its first look; the line under the error, left out here, says how much was free and where the cache is:
 
 ```text
+      Needs up to 135 B on the disk holding the cache, which has 329.1 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
 error: stopped clean: the disk holding the cache has less than 100.0 TiB free; the step had written 0 B
   help: free space on that disk, or lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR; data.lock and data/clean are as they were
@@ -115,10 +117,11 @@ a recipe whose key `data.lock` already pins, but whose files the cache lacks, as
 `fetchloom build --check` asks whether each step still makes what `data.lock` pins. it runs every step the named recipes need, each from the inputs `data.lock` pins, a recipe it reads as its pinned result rather than as its own check made it, so each step is checked on its own. it compares what each makes with the files `data.lock` and `data.lock.d` list, so it needs no pinned result on the machine, and reports every step, not only the first that differs. this output is from a project with `clean`, which keeps rows of a table, and `emb`, whose step writes random bytes:
 
 ```text
-    Running clean · python3 clean.py <build>/in/raw <build>/out
-            kept 2 of 2 rows
+      Needs up to 159 B on the disk holding the cache, which has 329.1 GiB free
+    Running clean · python3 clean.py <build>/in/iris <build>/out
+            kept 2 of 3 rows
     Checked clean · 1 of 1 files match data.lock
-    Running emb · python3 embed.py <build>/in/raw <build>/out
+    Running emb · python3 embed.py <build>/in/iris <build>/out
             embedded 3 rows
     Differs emb · 0 of 1 files match data.lock
 error: emb differs from data.lock: 0 of 1 files match
@@ -126,7 +129,7 @@ error: emb differs from data.lock: 0 of 1 files match
   help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
 ```
 
-a check changes neither `data.lock` nor the data folder. every step that matches ends with `Ok every step made the files data.lock pins`, exit 0, and its files enter the cache as the pinned result, so a check on a fresh clone leaves the results there for `sync` to place. one that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check, as it stops a build. a step that reads a recipe whose check made other files, and whose pinned result neither the cache nor a mirror holds, cannot be checked: it is `Skipped`, and the error says so.
+a check changes neither `data.lock` nor the data folder. when every step matches, it ends with `Ok every step made the files data.lock pins`, exit 0. the files of a step that matches enter the cache as its pinned result, so a check on a fresh clone leaves the results there for `sync` to place. one that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check, as it stops a build. a step that reads a recipe whose check made other files, and whose pinned result neither the cache nor a mirror holds, cannot be checked: it is `Skipped`, and the error says so.
 
 a check compares with `data.lock` as it is, so it runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks: a fetched dataset whose entry changed, or a recipe never built or changed since it was built, is `lock.outdated`, exit 1:
 
@@ -155,7 +158,9 @@ error: data.lock is out of date: clean changed since it was built
 a step that runs again for a key `data.lock` pins, and makes other files than the ones it pins, stops the build with `build.differs`, exit 60. `data.lock`, `data.lock.d` and the data folder stay as they were, and the error says which files differ. this output is from a project where `emb` writes random bytes with `python3 embed.py`, built again after its file left the cache:
 
 ```text
-    Running emb · python3 embed.py <build>/in/raw <build>/out
+      Needs up to 96 B on the disk holding the cache, which has 329.1 GiB free
+ Up to date clean
+    Running emb · python3 embed.py <build>/in/iris <build>/out
             embedded 3 rows
     Differs emb · 0 of 1 files match data.lock
 error: emb differs from data.lock: 0 of 1 files match
