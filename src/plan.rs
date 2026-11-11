@@ -8,9 +8,10 @@ use crate::archive;
 use crate::cache::{Cache, Member};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
+use crate::glob::Glob;
 use crate::name;
 use crate::project::lock::{Lock, Locked, LockedFile};
-use crate::project::manifest::{self, Manifest};
+use crate::project::manifest::{self, Manifest, MemberFilter, Members, Source};
 
 /// one file a lock places.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,37 +99,102 @@ fn planned<'a>(
     let mut plan = Plan::default();
     for dataset in datasets {
         // a recipe's files come only from a build, never from a source pin left under its name
-        let Some(entry) = manifest
+        let Some((entry, source)) = manifest
             .datasets
             .get(&dataset.name)
-            .filter(|entry| entry.source().is_some())
+            .and_then(|entry| Some((entry, entry.source()?)))
         else {
             continue;
         };
-        expand(
+        let folder = folder(manifest, &dataset.name);
+        // a pin data.toml has moved past is planned as it stands until sync pins again, so its
+        // member filters may not fit it yet
+        let current = dataset.drift(entry).is_none();
+        if current {
+            archives_named(&dataset.name, source, dataset)?;
+        }
+        let (targets, unknown) = (plan.targets.len(), plan.unknown.len());
+        let expanded = expand(
             &mut plan,
             &dataset.name,
-            &folder(manifest, &dataset.name),
+            &folder,
             entry.copy,
             &dataset.files,
+            &source.members,
             members,
         );
+        if let Err(error) = expanded {
+            if current {
+                return Err(error);
+            }
+            plan.targets.truncate(targets);
+            plan.unknown.truncate(unknown);
+            let unfiltered = Members::new();
+            expand(
+                &mut plan,
+                &dataset.name,
+                &folder,
+                entry.copy,
+                &dataset.files,
+                &unfiltered,
+                members,
+            )?;
+        }
     }
     check(&plan.targets, Patterns::InDataToml)?;
     span.record("files", plan.targets.len());
     Ok(plan)
 }
 
+/// refuses a members table that names no archive the dataset's pin unpacks, as when an upgrade
+/// renamed it: the files it left out would come back without a word.
+fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Error> {
+    let archives: Vec<&str> = locked
+        .files
+        .iter()
+        .filter(|file| file.unpacks_to.is_some())
+        .map(|file| file.path.as_str())
+        .collect();
+    let Some((archive, filter)) = source
+        .members
+        .iter()
+        .find(|(archive, _)| !archives.contains(&archive.as_str()))
+    else {
+        return Ok(());
+    };
+    let error = Error::new(
+        Kind::ProjectInvalid,
+        format!("members.\"{archive}\" in datasets.{name} names no archive data.lock pins for it"),
+    );
+    let error = match filter.lines.get("members") {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    };
+    Err(error.help(match archives.first() {
+        Some(first) => format!("name an archive by its path in data.lock, such as \"{first}\""),
+        None => format!(
+            "datasets.{name} has no archive fetchloom unpacks, so remove its members tables"
+        ),
+    }))
+}
+
 /// adds where one dataset's files land in `folder`, an archive standing for the files `members`
-/// says it unpacked to.
+/// says it unpacked to that its table in `filters` keeps. where each kept file lands is decided
+/// from every file the archive holds, so a filter never moves another file.
+///
+/// # Errors
+///
+/// `project.invalid` for a table whose select matches no file of its archive, or that leaves the
+/// archive no file.
 pub(crate) fn expand<'a>(
     plan: &mut Plan<'a>,
     dataset: &'a str,
     folder: &str,
     copy: bool,
     files: &'a [LockedFile],
+    filters: &Members,
     members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
-) {
+) -> Result<(), Error> {
     let alone = files.len() == 1;
     for file in files {
         let target = |path: &str, sha256, size| Target {
@@ -148,13 +214,93 @@ pub(crate) fn expand<'a>(
             plan.unknown.push((dataset, file));
             continue;
         };
+        let filter = filters.get(&file.path);
+        if let Some(filter) = filter {
+            selected(dataset, &file.path, filter, &members)?;
+        }
+        let before = plan.targets.len();
         for (member, path) in members
             .iter()
             .zip(unpacked_paths(&file.path, alone, &members))
         {
-            plan.targets.push(target(&path, member.sha256, member.size));
+            if filter.is_none_or(|filter| filter.keeps(&member.path)) {
+                plan.targets.push(target(&path, member.sha256, member.size));
+            }
+        }
+        if let Some(filter) = filter
+            && plan.targets.len() == before
+            && !members.is_empty()
+        {
+            let error = Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "select and exclude in members.\"{}\" of datasets.{dataset} leave no file of {}",
+                    file.path,
+                    archive_name(&file.path)
+                ),
+            );
+            let line = ["exclude", "select", "members"]
+                .iter()
+                .find_map(|key| filter.lines.get(key));
+            return Err(match line {
+                Some(line) => error.detail(line.clone()),
+                None => error,
+            }
+            .help(format!(
+                "loosen the patterns, or exclude \"{}\" in datasets.{dataset} to leave the whole archive out",
+                crate::glob::escape(&file.path)
+            )));
         }
     }
+    Ok(())
+}
+
+/// refuses a select pattern of `filter` that matches no file the archive at `archive` holds,
+/// showing one, or the pattern that would match once the archive's top folder leads it.
+fn selected(
+    dataset: &str,
+    archive: &str,
+    filter: &MemberFilter,
+    members: &[Member],
+) -> Result<(), Error> {
+    if filter.select.is_empty() {
+        return Ok(());
+    }
+    let paths: HashSet<&str> = members.iter().map(|member| member.path.as_str()).collect();
+    let found = |glob: &Glob| match glob.literal() {
+        Some(path) => paths.contains(path.as_str()),
+        None => members.iter().any(|member| glob.matches(&member.path)),
+    };
+    let Some(unmatched) = filter.select.globs().iter().find(|glob| !found(glob)) else {
+        return Ok(());
+    };
+    let name = archive_name(archive);
+    let error = Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "the select pattern \"{}\" in members.\"{archive}\" of datasets.{dataset} matches no file inside {name}",
+            unmatched.as_str()
+        ),
+    );
+    let error = match filter.lines.get("select") {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    };
+    let topped = common_top(members)
+        .map(|top| format!("{top}/{}", unmatched.as_str().trim_start_matches('/')))
+        .filter(|topped| Glob::new(topped).is_ok_and(|glob| found(&glob)));
+    Err(error.help(match (topped, members.first()) {
+        (Some(topped), _) => {
+            format!("try \"{topped}\": paths inside an archive start with its top folder")
+        }
+        (None, Some(example)) => format!("paths inside {name} look like \"{}\"", example.path),
+        (None, None) => format!("{name} holds no files"),
+    }))
+}
+
+/// the last part of an archive's path, its file name.
+fn archive_name(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(_, name)| name)
 }
 
 /// where the patterns that decide a dataset's files are set, so a clash says where to change
@@ -455,6 +601,181 @@ mod tests {
         paths
     }
 
+    /// data.toml `text` with `datasets` pinned as it asks, each archive among them one that
+    /// unpacks.
+    fn pinned(text: &str, datasets: &[(&str, &[&str])]) -> (Manifest, Lock) {
+        let manifest = manifest(text);
+        let mut locked = lock(datasets);
+        for dataset in &mut locked.datasets {
+            if let Some(source) = manifest.datasets[&dataset.name].source() {
+                dataset.spec = crate::project::lock::spec(source);
+            }
+            for file in &mut dataset.files {
+                if archive::by_name(&file.path) == Some(archive::Packed::Archive) {
+                    file.unpacks_to = Some(digest::sha256(file.path.as_bytes()));
+                }
+            }
+        }
+        (manifest, locked)
+    }
+
+    /// where `lock` places its files when each archive unpacks to the members `archives` names
+    /// for its path, in the order planned.
+    fn placed_from(
+        manifest: &Manifest,
+        lock: &Lock,
+        archives: &[(&str, &[&str])],
+    ) -> Result<Vec<String>, Error> {
+        let members = |file: &LockedFile| {
+            archives
+                .iter()
+                .find(|(archive, _)| *archive == file.path)
+                .map(|(_, paths)| paths.iter().map(|path| member(path)).collect())
+        };
+        Ok(plan(manifest, lock, &members)?
+            .targets
+            .into_iter()
+            .map(|target| target.path)
+            .collect())
+    }
+
+    /// a filter decides which members are placed, never where: a kept file lands where it would
+    /// without the filter, though the files left show no folder they all share.
+    #[test]
+    fn member_filters_leave_other_members_where_they_were() {
+        let members: &[&str] = &["top/a.csv", "top/b.csv", "other.txt"];
+        let (plain, locked) = pinned(ONE, &[("a", &["x.zip"])]);
+        let everything = placed_from(&plain, &locked, &[("x.zip", members)]).unwrap();
+        assert_eq!(
+            everything,
+            ["data/a/top/a.csv", "data/a/top/b.csv", "data/a/other.txt"]
+        );
+        let (filtered, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"x.zip\"]\nexclude = \"other.txt\"\n"),
+            &[("a", &["x.zip"])],
+        );
+        assert_eq!(
+            placed_from(&filtered, &locked, &[("x.zip", members)]).unwrap(),
+            ["data/a/top/a.csv", "data/a/top/b.csv"]
+        );
+        let (selected, locked) = pinned(
+            &format!(
+                "{ONE}[datasets.a.members.\"x.zip\"]\nselect = \"top/*.csv\"\nexclude = \"top/a.csv\"\n"
+            ),
+            &[("a", &["x.zip"])],
+        );
+        assert_eq!(
+            placed_from(&selected, &locked, &[("x.zip", members)]).unwrap(),
+            ["data/a/top/b.csv"]
+        );
+    }
+
+    /// two archives of one dataset may hold the same path; a table names one archive.
+    #[test]
+    fn a_member_exclude_reaches_only_its_own_archive() {
+        let both: &[&str] = &["images/x.png", "labels.csv"];
+        let (manifest, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"train.zip\"]\nexclude = [\"images/x.png\"]\n"),
+            &[("a", &["test.zip", "train.zip"])],
+        );
+        assert_eq!(
+            placed_from(
+                &manifest,
+                &locked,
+                &[("train.zip", both), ("test.zip", both)]
+            )
+            .unwrap(),
+            [
+                "data/a/test/images/x.png",
+                "data/a/test/labels.csv",
+                "data/a/train/labels.csv"
+            ]
+        );
+    }
+
+    /// once an upgrade renames the archive, a table under its old name must follow it rather
+    /// than let the files it left out return. a pin data.toml has moved past is planned as it
+    /// stands until sync pins again.
+    #[test]
+    fn a_members_table_for_an_archive_the_lock_does_not_pin_is_refused() {
+        let text = format!("{ONE}\n[datasets.a.members.\"pets.zip\"]\nexclude = \"x\"\n");
+        let (manifest, locked) = pinned(&text, &[("a", &["README", "pets-v2.zip"])]);
+        let error = placed_from(&manifest, &locked, &[("pets-v2.zip", &["x", "y"])]).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "members.\"pets.zip\" in datasets.a names no archive data.lock pins for it"
+        );
+        assert_eq!(
+            error.details,
+            ["data.toml:4   [datasets.a.members.\"pets.zip\"]"]
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("name an archive by its path in data.lock, such as \"pets-v2.zip\"")
+        );
+        let (manifest, mut stale) = pinned(&text, &[("a", &["README", "pets-v2.zip"])]);
+        stale.datasets[0].spec = "sha256:older".to_owned();
+        assert_eq!(
+            placed_from(&manifest, &stale, &[("pets-v2.zip", &["x", "y"])]).unwrap(),
+            ["data/a/README", "data/a/pets-v2/x", "data/a/pets-v2/y"]
+        );
+    }
+
+    #[test]
+    fn an_unmatched_member_select_suggests_the_top_folder() {
+        let members: &[&str] = &["pets-v1/images/cat.png", "pets-v1/labels.csv"];
+        for (select, help) in [
+            (
+                "images/cat.png",
+                "try \"pets-v1/images/cat.png\": paths inside an archive start with its top folder",
+            ),
+            (
+                "pictures/*.png",
+                "paths inside pets.zip look like \"pets-v1/images/cat.png\"",
+            ),
+        ] {
+            let (manifest, locked) = pinned(
+                &format!("{ONE}[datasets.a.members.\"pets.zip\"]\nselect = [\"{select}\"]\n"),
+                &[("a", &["pets.zip"])],
+            );
+            let error = placed_from(&manifest, &locked, &[("pets.zip", members)]).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                format!(
+                    "the select pattern \"{select}\" in members.\"pets.zip\" of datasets.a matches no file inside pets.zip"
+                )
+            );
+            assert_eq!(
+                error.details,
+                [format!("data.toml:4   select = [\"{select}\"]")]
+            );
+            assert_eq!(error.help.as_deref(), Some(help));
+        }
+    }
+
+    #[test]
+    fn member_filters_that_leave_an_archive_no_file_are_refused() {
+        let (manifest, locked) = pinned(
+            &format!("{ONE}[datasets.a.members.\"pets.zip\"]\nexclude = [\"**\"]\n"),
+            &[("a", &["README", "pets.zip"])],
+        );
+        let error = placed_from(&manifest, &locked, &[("pets.zip", &["a/x", "a/y"])]).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(
+            error.message,
+            "select and exclude in members.\"pets.zip\" of datasets.a leave no file of pets.zip"
+        );
+        assert_eq!(error.details, ["data.toml:4   exclude = [\"**\"]"]);
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "loosen the patterns, or exclude \"pets.zip\" in datasets.a to leave the whole archive out"
+            )
+        );
+    }
+
     #[test]
     fn files_land_in_their_dataset_folder() {
         let locked = lock(&[("a", &["x.csv", "sub/y.csv"]), ("b", &["z.csv"])]);
@@ -644,8 +965,10 @@ mod tests {
             "",
             false,
             &locked.datasets[0].files,
+            &Members::new(),
             &|_| Some(members.clone()),
-        );
+        )
+        .unwrap();
         for (patterns, expected) in [
             (Patterns::InDataToml, "extract = false"),
             (Patterns::OnCommandLine, "--no-extract"),
@@ -675,8 +998,10 @@ mod tests {
                 "",
                 false,
                 &locked.datasets[0].files,
+                &Members::new(),
                 &|_| None,
-            );
+            )
+            .unwrap();
             for patterns in [Patterns::InDataToml, Patterns::OnCommandLine] {
                 let result = check(&planned.targets, patterns);
                 assert!(result.is_err(), "accepted metadata target: {path}");

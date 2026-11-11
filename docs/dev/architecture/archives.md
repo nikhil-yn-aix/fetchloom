@@ -85,6 +85,10 @@ when a locked tree differs, or decoding fails with an archive error, the sync la
 
 `shards` finds the largest group of at least 8 files in one folder of a listing named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. it makes one pass, keyed by slices of the listing's own paths, so a listing of 100,000 files or more costs a map entry for each group rather than a copy of each path. `cli/sync` asks for each dataset `draft` lists because it is new or its entry changed, not for an upgrade of an unchanged one, nor for an entry whose `extract` alone changed, which `Draft::switched` drafts without a listing; `cli/get` asks for each link once `prepare` has its files. both ask only while archives unpack and `Output::shows_hints` holds, so `-q`, `--json` and `FETCHLOOM_NO_HINTS=1` skip the work. the hint comes after the `Resolved` line and before any download or size question, while keeping the shards packed costs nothing; sync still drops an archive's own bytes once its files are in.
 
+### member filters
+
+a dataset's `members` tables in data.toml choose which members a project places. unpacking never sees them: an archive is always unpacked whole, every member is stored and recorded, and the tree data.lock pins covers them all, so a filter changes no pin and a project that keeps a member another one leaves out finds it cached. [planning](placing.md#expand-destinations-first) applies the filters to the targets once `unpacked_paths` placed every member.
+
 ## invariants and traps
 
 - no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.

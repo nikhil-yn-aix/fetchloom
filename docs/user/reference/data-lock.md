@@ -132,7 +132,7 @@ ref=zenodo:3608990
 
 the `ref=` line contains the manifest reference. when patterns are present, add all `select=` lines next, then all `exclude=` lines. keep each list in written order; empty lists add no lines.
 
-`extract`, `copy`, `path` and `project.data_dir` are excluded, since they decide what happens to the downloaded files, not which files are downloaded.
+`extract`, `members`, `copy`, `path` and `project.data_dir` are excluded, since they decide what happens to the downloaded files, not which files are downloaded.
 
 an unchanged spec and `extract` keep the existing lock entry unless an upgrade is requested. when only `extract` changed, the entry keeps every pinned file and learns again only what its archives unpack to: from this machine's record of an earlier unpacking, or from the cached archive, so the source is not listed again and a `--offline` run works while the archives are cached. an archive the cache lacks is downloaded by its pinned link. filter edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 

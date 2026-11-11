@@ -69,7 +69,7 @@ if the new input is intended, run the suggested upgrade, sync and commit the loc
 | status exits 0 with differences | differences are a successful result | inspect every status array |
 | an input is read-only | default placement protects shared bytes | set `copy = true` on the dataset and sync |
 | another account on the same machine downloads the same data again | each account has its own cache, readable by its owner only | share one cache among people who trust each other, as [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows |
-| a glob matches no files | it differs from listed paths or targets archive members | quote the glob and check [pattern rules](reference/data-toml.md#patterns) |
+| a glob matches no files | it differs from listed paths, or names a file inside an archive, which only a members table reaches | quote the glob and check [pattern rules](reference/data-toml.md#patterns); for files inside an archive, see [files inside archives](reference/data-toml.md#files-inside-archives) |
 | adding the same reference rejects different filters | the existing entry already owns that reference and settings | edit `data.toml` or pass an unused `--as` name |
 | an archive remains packed | the extension or bytes are unsupported, or extraction is disabled | check [archive rules](concepts.md#archives) |
 | `warning: sample/sample.rar stays packed, since fetchloom does not unpack rar` | fetchloom reads zip, 7z and tar, not rar | run the command in the `help:` line under it. it unpacks the archive into `sample-unpacked`, outside the data folder, with unrar on linux, unar on macos or 7-Zip on windows. `extract = false` on the dataset keeps it packed without the warning |

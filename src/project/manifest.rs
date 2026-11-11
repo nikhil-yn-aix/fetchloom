@@ -7,7 +7,7 @@ use std::ops::Range;
 use toml_edit::{Array, Document, DocumentMut, Item, Key, Table, TableLike, TomlError, Value};
 
 use crate::error::{Error, Kind};
-use crate::glob::Glob;
+use crate::glob::{self, Glob};
 use crate::name;
 use crate::recipe::{self, Slot, Template};
 
@@ -18,11 +18,13 @@ pub(crate) const DATA_DIR: &str = "data";
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 10] = [
-    "ref", "select", "exclude", "extract", "copy", "path", "from", "run", "code", "env",
+const DATASET_KEYS: [&str; 11] = [
+    "ref", "select", "exclude", "extract", "members", "copy", "path", "from", "run", "code", "env",
 ];
 /// the keys of a dataset fetched from a source, beside `ref`.
-const SOURCE_KEYS: [&str; 3] = ["select", "exclude", "extract"];
+const SOURCE_KEYS: [&str; 4] = ["select", "exclude", "extract", "members"];
+/// the keys of the table that chooses the files of one archive.
+const MEMBER_KEYS: [&str; 2] = ["select", "exclude"];
 /// the keys of a dataset a recipe makes.
 const RECIPE_KEYS: [&str; 4] = ["from", "run", "code", "env"];
 /// how a person writes a recipe's command, for the help of a mistake in one.
@@ -69,6 +71,29 @@ pub(crate) struct Source {
     pub(crate) select: Vec<Glob>,
     pub(crate) exclude: Vec<Glob>,
     pub(crate) extract: bool,
+    /// which files of each archive it unpacks the dataset keeps.
+    pub(crate) members: Members,
+}
+
+/// what a dataset keeps of the archives it unpacks, by each archive's path as data.lock gives it.
+pub(crate) type Members = BTreeMap<String, MemberFilter>;
+
+/// the files of one archive a dataset keeps, matched against the archive's own paths, its top
+/// folder included, before placing strips anything. they change where files go, not what
+/// data.lock pins, so they stay out of the dataset's spec.
+#[derive(Clone, Debug)]
+pub(crate) struct MemberFilter {
+    pub(crate) select: glob::Set,
+    pub(crate) exclude: glob::Set,
+    /// the table's line in data.toml, as `members`, and each key's, for messages.
+    pub(crate) lines: BTreeMap<&'static str, String>,
+}
+
+impl MemberFilter {
+    /// whether the dataset keeps the file at `path` inside the archive.
+    pub(crate) fn keeps(&self, path: &str) -> bool {
+        (self.select.is_empty() || self.select.matches(path)) && !self.exclude.matches(path)
+    }
 }
 
 /// a dataset made from other datasets by a command. only `fetchloom build` runs it.
@@ -384,12 +409,83 @@ impl Reader<'_> {
                     .filter_map(|pattern| Glob::new(pattern).ok()),
             );
         }
+        let extract = self.boolean(table.get("extract"), "extract", true)?;
         Ok(Source {
             reference,
             select,
             exclude: self.patterns(table.get("exclude"), "exclude")?,
-            extract: self.boolean(table.get("extract"), "extract", true)?,
+            extract,
+            members: self.members(table, name, extract)?,
         })
+    }
+
+    /// the tables under `members` that choose the files of each archive, by its path. they
+    /// choose among files fetchloom unpacks, so a dataset that keeps its archives packed refuses
+    /// them.
+    fn members(&self, table: &dyn TableLike, name: &str, extract: bool) -> Result<Members, Error> {
+        let Some(item) = table.get("members") else {
+            return Ok(Members::new());
+        };
+        let span = table
+            .key("members")
+            .and_then(Key::span)
+            .or_else(|| item.span());
+        let archives = item.as_table_like().ok_or_else(|| {
+            self.error(
+                span.clone(),
+                format!("members in datasets.{name} must be a table for each archive"),
+            )
+            .help(format!(
+                "write it as [datasets.{name}.members.\"<archive>\"] with select or exclude"
+            ))
+        })?;
+        let mut members = Members::new();
+        for (archive, item) in archives.iter() {
+            let span = archives
+                .key(archive)
+                .and_then(Key::span)
+                .or_else(|| item.span())
+                .or_else(|| span.clone());
+            if !extract {
+                return Err(self
+                    .error(
+                        span,
+                        format!("members in datasets.{name} chooses files inside archives, but extract = false keeps them packed"),
+                    )
+                    .help("remove the members tables, or remove extract = false"));
+            }
+            let filter = item.as_table_like().ok_or_else(|| {
+                self.error(
+                    span.clone(),
+                    format!(
+                        "members.\"{archive}\" in datasets.{name} must be a table with select or exclude"
+                    ),
+                )
+            })?;
+            self.known(
+                filter,
+                &MEMBER_KEYS,
+                &format!(" in datasets.{name}.members.\"{archive}\""),
+            )?;
+            let mut lines = BTreeMap::new();
+            lines.extend(span.map(|span| ("members", self.cite(span.start))));
+            for key in MEMBER_KEYS {
+                if let Some(span) = filter.key(key).and_then(Key::span) {
+                    lines.insert(key, self.cite(span.start));
+                }
+            }
+            let select = self.patterns(filter.get("select"), "select")?;
+            let exclude = self.patterns(filter.get("exclude"), "exclude")?;
+            members.insert(
+                archive.to_owned(),
+                MemberFilter {
+                    select: glob::Set::new(select),
+                    exclude: glob::Set::new(exclude),
+                    lines,
+                },
+            );
+        }
+        Ok(members)
     }
 
     /// the recipe of a dataset made from others, which `table` gives with from and run. the
@@ -1304,6 +1400,114 @@ mod tests {
         );
     }
 
+    const PETS: &str = "[datasets.pets]\nref = \"https://example.org/pets.zip\"\n";
+
+    /// a members table keeps or leaves out the files of one archive by their paths inside it,
+    /// top folder and all, whichever way the table is written.
+    #[test]
+    fn members_tables_choose_files_inside_each_archive() {
+        let manifest = parse(&format!(
+            "{PETS}\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/dog_010.png\", \"pets-v1/**/*.tmp\"]\n\n[datasets.pets.members.\"raw/b.tar.gz\"]\nselect = \"**/*.csv\"\nexclude = \"old/**\"\n"
+        ));
+        let members = &manifest.datasets["pets"].source().unwrap().members;
+        assert_eq!(
+            members.keys().collect::<Vec<_>>(),
+            ["pets.zip", "raw/b.tar.gz"]
+        );
+        let zip = &members["pets.zip"];
+        assert!(zip.keeps("pets-v1/images/cat_001.png"));
+        assert!(!zip.keeps("pets-v1/images/dog_010.png"));
+        assert!(!zip.keeps("pets-v1/a/b.tmp"));
+        assert!(
+            zip.keeps("images/dog_010.png"),
+            "the top folder is part of it"
+        );
+        let tar = &members["raw/b.tar.gz"];
+        assert!(tar.keeps("x/a.csv") && !tar.keeps("x/a.txt") && !tar.keeps("old/a.csv"));
+        assert_eq!(
+            zip.lines["exclude"],
+            "data.toml:5   exclude = [\"pets-v1/images/dog_010.png\", \"pets-v1/**/*.tmp\"]"
+        );
+        assert_eq!(
+            zip.lines["members"],
+            "data.toml:4   [datasets.pets.members.\"pets.zip\"]"
+        );
+        for written in [
+            format!("{PETS}members = {{ \"pets.zip\" = {{ exclude = [\"a/x.png\"] }} }}\n"),
+            format!("{PETS}members.\"pets.zip\".exclude = \"a/x.png\"\n"),
+        ] {
+            let manifest = parse(&written);
+            let zip = &manifest.datasets["pets"].source().unwrap().members["pets.zip"];
+            assert!(!zip.keeps("a/x.png") && zip.keeps("a/y.png"), "{written}");
+        }
+        assert!(
+            parse(PETS).datasets["pets"]
+                .source()
+                .unwrap()
+                .members
+                .is_empty()
+        );
+    }
+
+    /// member filters change where files go, not what data.lock pins, so they stay out of a
+    /// dataset's spec: editing them needs no network and `sync --locked` still passes.
+    #[test]
+    fn member_filters_stay_out_of_the_spec() {
+        let plain = parse(PETS);
+        let filtered = parse(&format!(
+            "{PETS}[datasets.pets.members.\"pets.zip\"]\nexclude = [\"a/x.png\"]\n"
+        ));
+        let spec = |manifest: &Manifest| {
+            crate::project::lock::spec(manifest.datasets["pets"].source().unwrap())
+        };
+        assert_eq!(spec(&plain), spec(&filtered));
+    }
+
+    #[test]
+    fn members_tables_refuse_what_cannot_apply() {
+        for (text, message, line) in [
+            (
+                format!(
+                    "{PETS}extract = false\n[datasets.pets.members.\"pets.zip\"]\nexclude = [\"a/x.png\"]\n"
+                ),
+                "members in datasets.pets chooses files inside archives, but extract = false keeps them packed",
+                "data.toml:4   [datasets.pets.members.\"pets.zip\"]",
+            ),
+            (
+                format!("{PETS}members = [\"pets.zip\"]\n"),
+                "members in datasets.pets must be a table for each archive",
+                "data.toml:3   members = [\"pets.zip\"]",
+            ),
+            (
+                format!("{PETS}members.\"pets.zip\" = \"a/x.png\"\n"),
+                "members.\"pets.zip\" in datasets.pets must be a table with select or exclude",
+                "data.toml:3   members.\"pets.zip\" = \"a/x.png\"",
+            ),
+            (
+                format!("{PETS}[datasets.pets.members.\"pets.zip\"]\nexclude = 7\n"),
+                "exclude in data.toml must be a pattern or a list of patterns",
+                "data.toml:4   exclude = 7",
+            ),
+            (
+                format!("{PETS}[datasets.pets.members.\"pets.zip\"]\nexclude = [\"a\\\\x.png\"]\n"),
+                "the exclude pattern \"a\\x.png\" has a \\. patterns use / between folders",
+                "data.toml:4   exclude = [\"a\\\\x.png\"]",
+            ),
+        ] {
+            let error = fails(&text);
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{text}");
+            assert_eq!(error.message, message, "{text}");
+            assert_eq!(error.details, [line], "{text}");
+        }
+        let made = fails(&format!(
+            "{PETS}[datasets.b]\nfrom = [\"pets\"]\nrun = [\"t\", \"{{pets}}\", \"{{out}}\"]\n[datasets.b.members.\"x.zip\"]\nexclude = \"a\"\n"
+        ));
+        assert_eq!(
+            made.message,
+            "members is for a dataset fetched from a source, and datasets.b is made by a recipe"
+        );
+    }
+
     #[test]
     fn mistakes_point_at_their_line_and_suggest_a_fix() {
         let typo = fails("[datasets.eeg]\nref = \"osf:abc12\"\nselct = [\"*.edf\"]\n");
@@ -1641,8 +1845,10 @@ mod tests {
     /// what data.toml states: the data folder, and each dataset's values without their lines.
     type Stated = (String, BTreeMap<String, Values>);
     type Values = (Option<Fetched>, Option<Made>, bool, Option<String>);
-    /// a source's ref, select, exclude and extract.
-    type Fetched = (String, Vec<String>, Vec<String>, bool);
+    /// a source's ref, select, exclude, extract and member filters.
+    type Fetched = (String, Vec<String>, Vec<String>, bool, Vec<Filtered>);
+    /// an archive's path, and the select and exclude patterns of its members table.
+    type Filtered = (String, Vec<String>, Vec<String>);
     /// a recipe's from, run, code and env.
     type Made = (
         Vec<String>,
@@ -1663,6 +1869,17 @@ mod tests {
                     patterns(&source.select),
                     patterns(&source.exclude),
                     source.extract,
+                    source
+                        .members
+                        .iter()
+                        .map(|(archive, filter)| {
+                            (
+                                archive.clone(),
+                                patterns(filter.select.globs()),
+                                patterns(filter.exclude.globs()),
+                            )
+                        })
+                        .collect(),
                 )
             });
             let made = entry.recipe().map(|recipe| {
@@ -1754,6 +1971,10 @@ mod tests {
                 };
                 let mut expected = before.clone();
                 let (fetched, _, _, _) = before.1[dataset].clone();
+                // a dataset is added without member filters, which only a person writes
+                let fetched = fetched.map(|(reference, select, exclude, extract, _)| {
+                    (reference, select, exclude, extract, Vec::new())
+                });
                 expected.1.insert(copy, (fetched, None, false, None));
                 let after = Manifest::parse(&added).map(|manifest| stated(&manifest));
                 assert_eq!(after.ok(), Some(expected), "{added:?}");
@@ -2173,7 +2394,12 @@ mod tests {
             (
                 "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
                 "data.toml:3   unknown_setting = true",
-                "the keys here are ref, select, exclude, extract, copy, path, from, run, code, env",
+                "the keys here are ref, select, exclude, extract, members, copy, path, from, run, code, env",
+            ),
+            (
+                "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",
+                "data.toml:4   exculde = ['a/b.csv']",
+                "did you mean `exclude`?",
             ),
         ] {
             let error = fails(text);

@@ -171,6 +171,15 @@ impl Set {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.globs.is_empty()
+    }
+
+    /// the patterns as written.
+    pub(crate) fn globs(&self) -> &[Glob] {
+        &self.globs
+    }
+
     pub(crate) fn matches(&self, path: &str) -> bool {
         self.literal.contains_key(path) || self.wild.iter().any(|at| self.globs[*at].matches(path))
     }

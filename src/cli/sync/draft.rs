@@ -1377,8 +1377,10 @@ mod tests {
             "data/titanic",
             false,
             files,
+            &crate::project::manifest::Members::new(),
             &members,
-        );
+        )
+        .unwrap();
         assert_eq!(planned.unknown.len(), 0, "every archive's files are known");
         planned
             .targets

@@ -907,3 +907,45 @@ mod shards {
         Ok(())
     }
 }
+
+/// a members table changes which files of an archive land, not what data.lock pins: editing it
+/// asks no server, `sync --locked` takes it, and taking it out brings the file back from the
+/// cache.
+#[test]
+fn a_member_filter_edit_makes_no_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    fs::write(
+        &manifest,
+        format!(
+            "{plain}\n[datasets.dataset.members.\"dataset.zip\"]\nexclude = [\"dataset/data/train.csv\"]\n"
+        ),
+    )?;
+    let filtered = sandbox.run(&["--json", "sync", "--locked"])?;
+    ok(&filtered)?;
+    let document = json(&filtered)?;
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(document["result"]["lock_changed"], false);
+    assert_eq!(document["result"]["placement"]["removed"], 1);
+    let folder = sandbox.work().join("data").join("dataset");
+    assert!(!folder.join("data/train.csv").exists());
+    assert_eq!(fs::read(folder.join("README.md"))?, FILES[0].1);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
+
+    fs::write(&manifest, plain)?;
+    let undone = sandbox.run(&["--json", "sync", "--locked"])?;
+    ok(&undone)?;
+    assert_eq!(json(&undone)?["work"]["requests"], 0);
+    holds_the_archive(&folder)?;
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}

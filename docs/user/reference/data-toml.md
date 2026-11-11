@@ -27,6 +27,7 @@ path = "measurements"
 | `select` | keep files matching any of these patterns | all files; for a `ref` that links one file or folder inside a dataset, that file or everything below that folder |
 | `exclude` | drop files matching any of these patterns | none |
 | `extract` | unpack recognized archive names | `true` |
+| `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
 | `from`, `run`, `code`, `env` | a recipe's inputs, command, code and variables; see [recipes](#recipes) | none |
@@ -138,7 +139,35 @@ a message about `env` cites its line by number only, as one about `ref` does, si
 
 each select pattern must match at least one listed path before exclusions, including a google docs entry in a drive folder. an unmatched pattern shows one example path. a selection that leaves no files fails. listing limits apply before selection.
 
-patterns select the files a source lists, before download and before a server-supplied name replaces a guessed name. they do not select members inside an archive. see [archives](../concepts.md#archives) for where those members land.
+patterns select the files a source lists, before download and before a server-supplied name replaces a guessed name. they do not reach files inside an archive; a [members table](#files-inside-archives) does. see [archives](../concepts.md#archives) for where those files land.
+
+## files inside archives
+
+`select` and `exclude` choose among the files a source lists, so an archive is one file to them. a `members` table chooses among the files inside one archive, named by the archive's path as data.lock gives it:
+
+```toml
+[datasets.pets]
+ref = "https://example.org/pets.zip"
+
+[datasets.pets.members."pets.zip"]
+exclude = [
+  "pets-v1/images/blurry_011.png",
+  "pets-v1/images/dog_010_corrupt.png",
+]
+```
+
+`select` and `exclude` in a members table take the [patterns](#patterns) above and match each file by its path inside the archive, its top folder included, before placing strips that folder. `pets-v1/images/dog_010_corrupt.png` above lands at `data/pets/images/dog_010_corrupt.png`, since a dataset that is one archive loses the folder all its files share. a file a table leaves out is not placed, and every other file lands where it would without the table. a table names one archive, so in a dataset of `train.zip` and `test.zip` that both hold `images/x.png`, a table under `"train.zip"` leaves `test.zip`'s copy in place.
+
+a members table changes which files land, not what data.lock pins, so editing one needs no network: sync removes the files it leaves out and places those it lets back in from the cache, and `sync --locked` accepts it. each of these is refused with `project.invalid`, exit 50, pointing at its line:
+
+| mistake | why |
+|---|---|
+| a table for an archive data.lock does not pin for the dataset | after an upgrade renames `pets.zip`, the table must follow it, or the files it left out would come back without a word |
+| a members table on a dataset with `extract = false` | its archives stay packed, so there are no files inside to choose |
+| a `select` pattern that matches no file inside its archive | the error shows a path inside the archive, or the pattern with the archive's top folder in front when that one matches |
+| patterns that leave an archive no file | to leave the whole archive out, `exclude` it in the dataset instead |
+
+an `exclude` that matches nothing is fine: the upstream may have fixed the file. the archive is still unpacked whole into the cache.
 
 ## encoding and validation
 

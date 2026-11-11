@@ -1103,7 +1103,15 @@ fn planned<'a>(cache: &Cache, files: &'a [LockedFile], trees: Trees) -> Result<P
             .remove(&(file.path.clone(), file.sha256, tree))
             .or_else(|| cache.unpacked(&file.sha256, Some(&tree)))
     };
-    plan::expand(&mut planned, "", "", false, files, &members);
+    plan::expand(
+        &mut planned,
+        "",
+        "",
+        false,
+        files,
+        &crate::project::manifest::Members::new(),
+        &members,
+    )?;
     if let Some((_, file)) = planned.unknown.first() {
         return Err(Error::new(
             Kind::LocalIo,
