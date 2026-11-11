@@ -4,19 +4,46 @@ use serde_json::Value;
 
 use crate::support::{Result, Sandbox, text};
 
-/// each shell and a line only its script has.
-const SHELLS: [(&str, &str); 5] = [
-    ("bash", "complete -F _fetchloom"),
-    ("zsh", "#compdef fetchloom"),
-    ("fish", "complete -c fetchloom"),
-    ("powershell", "Register-ArgumentCompleter"),
-    ("elvish", "edit:completion:arg-completer[fetchloom]"),
+/// each shell, a line only its script has, and the text that completes `fl` the same way for
+/// every way the shell may load the script.
+const SHELLS: [(&str, &str, &[&str]); 5] = [
+    (
+        "bash",
+        "complete -F _fetchloom",
+        &[
+            "complete -F _fetchloom -o nosort -o bashdefault -o default fetchloom fl\n",
+            "complete -F _fetchloom -o bashdefault -o default fetchloom fl\n",
+        ],
+    ),
+    (
+        "zsh",
+        "#compdef fetchloom",
+        &[
+            "#compdef fetchloom fl\n",
+            "compdef _fetchloom fetchloom fl\n",
+        ],
+    ),
+    (
+        "fish",
+        "complete -c fetchloom",
+        &["\ncomplete -c fl -w fetchloom\n"],
+    ),
+    (
+        "powershell",
+        "Register-ArgumentCompleter",
+        &["-CommandName 'fetchloom', 'fl' -ScriptBlock"],
+    ),
+    (
+        "elvish",
+        "edit:completion:arg-completer[fetchloom]",
+        &["\nset edit:completion:arg-completer[fl] = $edit:completion:arg-completer[fetchloom]\n"],
+    ),
 ];
 
 #[test]
 fn completions_print_a_script_for_each_shell() -> Result {
     let sandbox = Sandbox::new()?;
-    for (shell, marker) in SHELLS {
+    for (shell, marker, short) in SHELLS {
         let output = sandbox.run(&["completions", shell])?;
         assert!(
             output.status.success(),
@@ -30,6 +57,12 @@ fn completions_print_a_script_for_each_shell() -> Result {
         );
         let script = text(&output.stdout)?;
         assert!(script.contains(marker), "{shell} lacks {marker}");
+        for line in short {
+            assert!(
+                script.contains(line),
+                "{shell} does not complete fl: {line}"
+            );
+        }
         for word in ["sync", "status", "gc", "verify", "completions", "offline"] {
             assert!(script.contains(word), "{shell} lacks {word}");
         }
@@ -74,7 +107,7 @@ fn completions_refuse_json_and_unknown_shells() -> Result {
     assert_eq!(unknown.status.code(), Some(2));
     assert_eq!(text(&unknown.stdout)?, "");
     let stderr = text(&unknown.stderr)?;
-    for (shell, _) in SHELLS {
+    for (shell, _, _) in SHELLS {
         assert!(stderr.contains(shell), "{shell}: {stderr}");
     }
     Ok(())
@@ -105,17 +138,21 @@ fn completions_have_their_own_help() -> Result {
     Ok(())
 }
 
-/// bash loads the script it printed and completes fetchloom with it. skipped where bash is not
-/// installed.
+/// bash loads the script it printed, which completes fetchloom and fl, and `fl ca` becomes
+/// `fl cache` through whatever bash registered for fl. skipped where bash is not installed.
 #[cfg(unix)]
 #[test]
 fn bash_loads_the_script() -> Result {
     let sandbox = Sandbox::new()?;
     let script = sandbox.folder("scripts")?.join("fetchloom.bash");
     std::fs::write(&script, sandbox.run(&["completions", "bash"])?.stdout)?;
+    let complete = r#". "$1" && complete -p fetchloom && spec=$(complete -p fl) && echo "$spec" &&
+        function=${spec#*-F } && function=${function%% *} &&
+        COMP_WORDS=(fl ca) COMP_CWORD=1 COMP_LINE="fl ca" COMP_POINT=5 &&
+        "$function" fl ca fl && printf 'offered %s\n' "${COMPREPLY[@]}""#;
     let loaded = match std::process::Command::new("bash")
         .arg("-c")
-        .arg(r#". "$1" && complete -p fetchloom"#)
+        .arg(complete)
         .arg("bash")
         .arg(&script)
         .output()
@@ -125,6 +162,9 @@ fn bash_loads_the_script() -> Result {
         Err(err) => return Err(err.into()),
     };
     assert!(loaded.status.success(), "{}", text(&loaded.stderr)?);
-    assert!(text(&loaded.stdout)?.contains("-F _fetchloom fetchloom"));
+    let said = text(&loaded.stdout)?;
+    assert!(said.contains("-F _fetchloom fetchloom\n"), "{said}");
+    assert!(said.contains("-F _fetchloom fl\n"), "{said}");
+    assert!(said.lines().any(|line| line == "offered cache"), "{said}");
     Ok(())
 }

@@ -27,11 +27,36 @@ pub(super) fn print(context: &Context, shell: Shell, started: Instant) -> ExitCo
     finish(context, Some("completions"), outcome, started)
 }
 
-/// the completion script for `shell`, for a program on PATH as `fetchloom`.
+/// the completion script for `shell`, for a program on PATH as `fetchloom`, which completes
+/// `fl` the same way: the short name installers make for the same program.
 pub(super) fn script(shell: Shell) -> Vec<u8> {
     let mut script = Vec::new();
     clap_complete::generate(shell, &mut args::Args::command(), "fetchloom", &mut script);
-    script
+    with_short_name(shell, &String::from_utf8_lossy(&script)).into_bytes()
+}
+
+/// `script` with `fl` beside `fetchloom` wherever the shell names the commands it completes.
+fn with_short_name(shell: Shell, script: &str) -> String {
+    match shell {
+        Shell::Bash => script.replace("-o default fetchloom\n", "-o default fetchloom fl\n"),
+        // compinit reads the first line of a script in fpath; the last line serves one sourced
+        Shell::Zsh => script
+            .replacen("#compdef fetchloom\n", "#compdef fetchloom fl\n", 1)
+            .replace(
+                "compdef _fetchloom fetchloom\n",
+                "compdef _fetchloom fetchloom fl\n",
+            ),
+        Shell::PowerShell => script.replacen(
+            "-CommandName 'fetchloom' ",
+            "-CommandName 'fetchloom', 'fl' ",
+            1,
+        ),
+        Shell::Fish => format!("{script}complete -c fl -w fetchloom\n"),
+        Shell::Elvish => format!(
+            "{script}set edit:completion:arg-completer[fl] = $edit:completion:arg-completer[fetchloom]\n"
+        ),
+        _ => script.to_owned(),
+    }
 }
 
 fn write(script: &[u8]) -> Result<(), Error> {

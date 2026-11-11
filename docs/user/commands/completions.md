@@ -60,6 +60,17 @@ elvish: add `eval (fetchloom completions elvish | slurp)` to `~/.config/elvish/r
 
 open a new terminal afterwards. typing `fetchloom ca` and pressing tab then completes `cache`, and `fetchloom cache ` offers `gc` and `verify`.
 
+## completing fl
+
+each script also completes `fl`, the short name the installers make for fetchloom, the same way. zsh, powershell and elvish register it as they load the script. bash-completion and fish load a script the first time you complete the command it is named after, so `fl` completes only once `fetchloom` has, unless the saved script has a second name. where `fl` runs fetchloom, give it one:
+
+```sh
+ln -s fetchloom ~/.local/share/bash-completion/completions/fl
+ln -s fetchloom.fish ~/.config/fish/completions/fl.fish
+```
+
+zsh keeps the commands each script completes in `~/.zcompdump` and reads them again only when the number of scripts changes. after replacing a saved `_fetchloom`, delete `~/.zcompdump` once and open a new terminal. in powershell, `fl` is the alias of `Format-List`, which powershell completes as its own command.
+
 ## what it completes
 
 the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and paths after options such as `-C`, `-o` and `--dir`. they are written once from fetchloom's command line, so they do not complete dataset names or references.
