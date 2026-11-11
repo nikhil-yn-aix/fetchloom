@@ -111,7 +111,9 @@ def sync(
     kind ``unconfirmed`` unless ``yes=True`` approves it. ``offline=True`` prevents network
     requests. ``locked=True`` raises :class:`Error` with kind ``lock.outdated`` instead of
     updating a data.lock that is missing or out of date with data.toml, for the named
-    datasets alone when ``names`` names some.
+    datasets alone when ``names`` names some, and with kind ``build.needed`` when data.lock
+    does not pin a recipe as building it now would make, which only ``fetchloom build``
+    changes.
     """
     arguments = _options(["sync"], yes, offline, locked)
     named = [names] if isinstance(names, str) else list(names)
