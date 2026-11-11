@@ -220,3 +220,12 @@ error: the link data.lock gives x/extra-a.txt carries token, a secret fetchloom 
 ```
 
 a list in `data.lock.d` that holds such a link comes back from git with `data.lock` instead. an import's empty `url`, and a query that grants nothing, such as `?download=1` or `?versionId=`, read as written.
+
+a file's `size` must be the size of the bytes its `sha256` names. fetchloom compares the two where this machine already holds checked bytes, a cached copy with that SHA-256 or a placed file that hashes to it, and reads only a file whose size differs from its pin, so sound pins cost no extra reading. when they disagree, data.lock was edited or damaged, and no source or mirror can send what it pins: `status`, `lock --check`, `sync` and `push` stop with `project.invalid`, exit 50, and a null JSON `fix`. on stderr:
+
+```text
+error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine
+  help: data.lock was edited by hand or damaged: restore it from git, or set the size of small/small.csv to 12 in data.lock
+```
+
+missing or damaged bytes on this machine say nothing against the pin. `fetchloom lock --upgrade <name>` pins what the source serves now, which may be other bytes, and fetchloom never rewrites a pin's size by itself.
