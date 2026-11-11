@@ -77,7 +77,8 @@ relocking can download and unpack before it writes `data.lock`, because unknown 
 |---|---|---|
 | `Context` | [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs) | command settings, output, counters and stop signal |
 | `Project`, `Held` | [project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project.rs) | project root and mutation-lock lifetime |
-| `Manifest`, `Entry` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | requested datasets and selection rules |
+| `Manifest`, `Entry`, `Origin` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | requested datasets: a source with its selection rules, or a recipe |
+| `Template`, `Step`, `Change` | [recipe.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/recipe.rs) | a recipe's command, the recipe as it stands with its key, and what moved since its pin |
 | `Lock`, `Locked`, `LockedFile` | [project/lock.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock.rs) | resolved datasets and immutable byte pins |
 | `State`, `Placed`, `Look`, `Synced` | [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | placed files, their size and time, and the last sync's input hashes |
 | `Loop`, `Draft`, `Survey`, `Placing` | [sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs), [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs), [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs), [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | orchestration, learned pins, disk observations and placement decisions |
@@ -96,6 +97,7 @@ relocking can download and unpack before it writes `data.lock`, because unknown 
 | [CLI](cli.md) | where do flags, settings and commands enter? |
 | [sync loop](sync-loop.md) | when does a run resolve, hash, fetch or skip work? |
 | [project](project.md) | what persists, and who may change it? |
+| [recipes](recipes.md) | how is a recipe's result keyed, and when is its pin stale? |
 | [sources](sources.md) | how does a reference become a pinned listing? |
 | [network](network.md) | how do requests, retries, splits and hashing cooperate? |
 | [cache](cache.md) | when are bytes reusable, and when are they doubtful? |

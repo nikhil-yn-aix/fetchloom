@@ -76,6 +76,7 @@ a text form is complete or not written: `export` stops before writing anything w
 | what is missing | text forms | JSON field |
 |---|---|---|
 | a dataset `data.lock` does not pin as `data.toml` asks | all forms stop with `lock.outdated`, exit 1: run `fetchloom lock` first | `unlocked` |
+| a dataset a [recipe](../recipes.md) makes | left out of every form, since nothing places a result yet | none |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
 | a link that holds a login, a secret such as `token=`, a space or a control character | `links` and `aria2` stop with `project.invalid`, exit 50; fetchloom never pins such a link, so `data.lock` was changed by hand or by someone else | `no_link` |
 

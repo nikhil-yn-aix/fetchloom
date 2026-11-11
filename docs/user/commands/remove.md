@@ -26,6 +26,8 @@ fetchloom remove [options] <name>
 3. delete unchanged managed files belonging to it. in a folder it shares with other datasets, or in the data folder itself for `path = "."`, only its own files go, since each placed file belongs to one dataset.
 4. leave edited files and files fetchloom did not place where they are, and warn about each edited file and each folder those keep.
 
+a dataset a [recipe](../recipes.md) is made from is not removed while the recipe reads it: `remove` exits 2 with `clean is made from iris` and changes nothing. removing a recipe drops its pin from `data.lock` too.
+
 nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged, and then warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`; `--dry-run` warns the same way first. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.
 
 a dataset folder that still holds files fetchloom did not place, such as your own outputs or the `.changed` copies sync kept, stays with them, and remove names it (stderr), with `-v` naming each file:

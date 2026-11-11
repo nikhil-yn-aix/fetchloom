@@ -28,6 +28,10 @@ source checksum support covers MD5 and SHA-256. a known SHA-256 and size can all
 
 `sync` updates missing or stale locks first unless `--locked` requires an up-to-date lock. unchanged entries retain their pins. `lock --check` checks manifest membership and specs without changing files, while `lock --upgrade` deliberately asks sources again.
 
+## recipes
+
+a dataset can also be made from other datasets by a command of yours. a [recipe](recipes.md) in `data.toml` names the datasets it reads with `from`, the command with `run`, the files it depends on with `code` and its variables with `env`. fetchloom keys the result by the content of all of these, so `status`, `lock --check` and `sync --locked` say when data.lock's pin of it no longer matches. no command but `fetchloom build` will ever run a recipe, and this version only shows what a build would run, with `fetchloom build --dry-run`.
+
 ## cache
 
 the cache is local and content-addressed: objects are named by SHA-256. projects reuse the same bytes rather than downloading a separate copy for each project.
@@ -56,7 +60,7 @@ copy = true
 
 then run `fetchloom sync`. it replaces unchanged read-only files with writable reflinks or copies, never hardlinks. edited files stay. turning `copy` off leaves existing writable files as they are.
 
-keep results outside managed input paths. do not make a shared hardlink writable to edit it: every project using that link shares the change. sync treats such an edit as damage to the cache's copy: it downloads the file again and puts the pinned file back in each project still linked to the changed copy, keeping the changed copy beside it as `<path>.changed`. set `copy = true` on a dataset whose files you edit. [shared edits](commands/sync.md#local-changes) explains detection and repair, including how windows, whose folder listings can hide such a change, is checked.
+keep results of your own outside the data folder, or declare the step that makes them as a [recipe](recipes.md). do not make a shared hardlink writable to edit it: every project using that link shares the change. sync treats such an edit as damage to the cache's copy: it downloads the file again and puts the pinned file back in each project still linked to the changed copy, keeping the changed copy beside it as `<path>.changed`. set `copy = true` on a dataset whose files you edit. [shared edits](commands/sync.md#local-changes) explains detection and repair, including how windows, whose folder listings can hide such a change, is checked.
 
 sync preserves local conflicts unless forced. status differences and kept conflicts still exit 0. [scripting](scripting.md) shows how to inspect them.
 

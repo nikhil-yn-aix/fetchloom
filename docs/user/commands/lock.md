@@ -19,7 +19,7 @@ fetchloom lock [options]
 
 | option | effect |
 |---|---|
-| `--check` | check manifest membership, spec hashes and `extract` without changing anything |
+| `--check` | check manifest membership, spec hashes and `extract`, and that each recipe is built as data.lock pins it, without changing anything |
 | `--upgrade [name ...]` | resolve named datasets again; with no names, consider every dataset |
 | `-n`, `--dry-run` | list what locking would change without writing `data.lock` or downloading |
 | `--ours <name>` | after a git merge, keep the checked-out branch's side of a dataset the two sides changed each their own way; repeat it for more |
@@ -41,6 +41,8 @@ with `--json`, `result.datasets` names the datasets whose pins changed, as `sync
 already pinned ordinary files need not be cached. a source that supplies SHA-256 and size can allow locking without a download. an extracted archive needs its tree hash.
 
 `lock --check` is silent on success at normal verbosity. it checks the manifest against the lock, not local file contents. an empty manifest passes even without a lock; `sync --locked` instead requires `data.lock` to exist.
+
+a [recipe](../recipes.md) is pinned only by `fetchloom build`, so `lock` keeps a recipe's pin as it is while `data.toml` has the recipe, and drops it with the recipe. `lock --check` reads each recipe's code and fails with `build.needed`, exit 60, when data.lock pins no result for it or something it is made from moved since, after any `lock.outdated` finding.
 
 ## upgrading
 
@@ -87,7 +89,7 @@ with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`,
 
 ## exit codes
 
-0 means pins were updated, a merge was written or a check passed. a stale lock under `--check` exits 1 with `lock.outdated`, and a merge that needs a choice exits 1 with `unconfirmed`. incompatible options exit 2, as do `--ours` and `--theirs` without conflict lines, or naming a dataset that needs no choice. conflict lines out of git's order, or a side that does not read, exit 50 with `project.invalid`. resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).
+0 means pins were updated, a merge was written or a check passed. a stale lock under `--check` exits 1 with `lock.outdated`, a recipe data.lock does not pin as built now exits 60 with `build.needed`, and a merge that needs a choice exits 1 with `unconfirmed`. incompatible options exit 2, as do `--ours` and `--theirs` without conflict lines, or naming a dataset that needs no choice. conflict lines out of git's order, or a side that does not read, exit 50 with `project.invalid`. resolution, download and local failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

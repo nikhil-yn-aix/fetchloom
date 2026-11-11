@@ -44,7 +44,7 @@ error: dataset has no file or folder called not-a-file.csv
 
 ## exit codes
 
-0 returns a location. an unknown dataset, absent member or dataset whose archives contain no regular files exits 2 with `usage`. a missing lock, or a stale entry for the dataset, under `--locked` exits 1 with `lock.outdated`. implicit sync can also return its download, integrity or local [exit codes](../reference/exit-codes.md).
+0 returns a location. an unknown dataset, absent member or dataset whose archives contain no regular files exits 2 with `usage`. a dataset a [recipe](../recipes.md) makes exits 60 with `build.needed`, since its result is not in the data folder yet. a missing lock, or a stale entry for the dataset, under `--locked` exits 1 with `lock.outdated`. implicit sync can also return its download, integrity or local [exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

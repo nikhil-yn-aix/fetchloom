@@ -140,7 +140,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 
 ## exit codes
 
-0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder, and a [recipe](../recipes.md) data.lock does not pin as built now exits 60 with `build.needed`. sync itself resolves, downloads and runs nothing for a recipe, and places no result yet. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

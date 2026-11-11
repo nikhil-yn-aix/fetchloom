@@ -11,7 +11,7 @@ each line goes when its feature lands, in the same change that documents it in t
 4. `fetchloom export` writes SHA-256 sums, links or an aria2 input for placed files and source objects, and `list --json` gives each file's SHA-256 and link.
 5. `fetchloom lock` resolves a conflicted `data.toml` and `data.lock` offline, with `--ours` or `--theirs` for two changes to one dataset.
 6. `fetchloom add ./folder` pins local bytes, and a list of links with their SHA-256 imports in one step.
-7. recipes: datasets a command makes from other datasets, with `fetchloom build` and its `--check`, `--accept`, `--prepare` and `--locked`, and a peak-space preview.
+7. running recipes: `fetchloom build` runs the steps `build --dry-run` shows, captures and places their results, with `--check`, `--accept`, `--prepare`, `--locked`, `place = false` and a peak-space preview.
 8. `fetchloom push` to a folder mirror, with a `push_to` setting; reading mirrors and mirror-only mode are in place.
 9. `cache gc --inputs` frees inputs that a verified mirror holds, and `fetchloom cache` estimates needed, unneeded, linked and copied bytes.
 10. member filters for archives and `fetchloom drop <path>`.

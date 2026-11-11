@@ -84,7 +84,7 @@ reading checks every part's name, line, order and count against `data.lock`, and
 
 ## recipe results
 
-a table with `from` and `run` in place of `ref` pins a dataset a recipe made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, and it is still on the [roadmap](../../dev/roadmap.md); every other command reads and checks them and keeps them as they are. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
+a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, and running a build is still on the [roadmap](../../dev/roadmap.md); every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
 
 ```toml
 [[dataset]]
@@ -95,6 +95,7 @@ from = [
 run = ["python3", "clean.py", "{iris}", "{out}"]
 code = [
   { path = "clean.py", sha256 = "..." },
+  { path = "lib", tree = "sha256:..." },
 ]
 env = { SOURCE_DATE_EPOCH = "315532800" }
 key = "sha256:..."
@@ -110,14 +111,16 @@ files_sha256 = "sha256:0123456789ab..."
 |---|---|
 | `from` | the datasets it is made from, in `data.toml` order, each with its `name` and the `content` hash the key took, `sha256:` and 64 hex digits |
 | `run` | the command as `data.toml` writes it, with `{name}` and `{out}` not filled in |
-| `code` | the project files whose bytes entered the key, sorted by path, each with its SHA-256 as 64 hex digits without a prefix; `[]` when there are none |
+| `code` | the project files and folders whose bytes entered the key, sorted by path: a file with its `sha256`, 64 hex digits without a prefix, a folder with the `tree` of its files, `sha256:` and 64 hex digits; `[]` when there are none. [recipes](../recipes.md#what-fetchloom-keys) says how each is hashed |
 | `env` | the variables set for the command, by name; omitted when there are none |
-| `key` | `sha256:` and the hash of everything the result was made from |
+| `key` | `sha256:` and the hash of everything the result was made from, as [recipes](../recipes.md#what-fetchloom-keys) lists it |
 | `locked` | when the key or the tree last changed, in UTC |
 | `tree` | `sha256:` and the [tree hash](#the-tree-hash) of the files the result holds |
 | `files_in`, `file_count`, `file_bytes`, `files_sha256` | the result's list in `data.lock.d`, as for a [big dataset](#big-datasets) |
 
-a file's own hash has no prefix; a hash of something else, such as an input's content, a key, a tree or a list, starts with `sha256:`. a table that mixes these keys with those of a fetched dataset (`ref`, `spec`, `extract`, `resolved`, `title`, `license`, `doi`, `access` or `files`) is refused with `project.invalid`, as is one with no input, an input named twice or after the dataset itself, an empty program, a code path that leaves the project or comes twice, a variable whose name holds `=`, a NUL character in the command or a variable, or a list whose files do not hash to `tree`.
+a file's own hash has no prefix; a hash of something else, such as an input's content, a key, a tree or a list, starts with `sha256:`. a table that mixes these keys with those of a fetched dataset (`ref`, `spec`, `extract`, `resolved`, `title`, `license`, `doi`, `access` or `files`) is refused with `project.invalid`, as is one with no input, an input named twice or after the dataset itself, an empty program, a code path that leaves the project or comes twice, code with both or neither of `sha256` and `tree`, a variable whose name holds `=`, a NUL character in the command or a variable, or a list whose files do not hash to `tree`.
+
+each input's `content` is what the recipe read of it. for a fetched dataset it is the SHA-256 of one line a pinned file, sorted by path: `path`, `size` and `sha256` separated by tabs, then a tab and `sha256:` with the tree hash for an archive that unpacks, and a newline. for a recipe's result it is the result's `tree`.
 
 ## the spec hash
 

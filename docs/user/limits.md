@@ -4,7 +4,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 
 | outside fetchloom | what to use or expect |
 |---|---|
-| preprocessing and workflow execution | call fetchloom from make, snakemake, nextflow or your script |
+| running preprocessing steps and workflows | this version declares [recipes](recipes.md) and shows what a build would run; to run steps now, call fetchloom from make, snakemake, nextflow or your script |
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
 | cloud copying, and writing mirrors | use a transfer application such as rclone; fetchloom reads [mirrors](mirrors.md) but does not fill them |
