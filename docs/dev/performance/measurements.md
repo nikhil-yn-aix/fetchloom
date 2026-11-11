@@ -140,6 +140,18 @@ each service's public dataset from the [benchmark design](benchmark-design.md#to
 
 on hugging face, kaggle and figshare, fetchloom's slowest run was faster than the other tool's fastest. zenodo sends one file at its own pace, and its spread covers the difference: zenodo_get's fastest run beat fetchloom's fastest, and its slowest took more than twice as long. datahugger fetched dataverse's ingested `.tab` copy of a table instead of the published `.tsv`, which its own check reported as a checksum mismatch, so none of its runs counted; fetchloom fetched the published files. peak memory was 27 to 55 MiB for fetchloom and 36 to 127 MiB for the others.
 
+## pushing into a folder mirror, 2026-11-11
+
+`push` first flushed each file it wrote before reading it back and naming it, and on a busy disk that flush took about 20 ms a file. the change writes all of a push's files, puts them on the disk by the cache's batch rule, then reads each back and names it; both ways flush the folders that gained names at the end. one release build ran both behind a switch, both in every round, the order swapped each round, each run into a new mirror folder after a `syncfs` of the disk and 2 s of rest. the mirror, the cache and the project were on the os disk, ext4, of the shared 24-core machine, which other work kept at a load average of 44 to 62. every run ended with status 0, every file under its name and nothing left in `tmp/`, and in the first two rounds every file was hashed against its name. a ratio is the median, over rounds, of the time together over the time with each file flushed, with its 95% bootstrap interval.
+
+| workload | rounds | each file flushed, median and range | together, median and range | ratio |
+|---|---:|---|---|---|
+| 10,000 files of 9 to 13 bytes, first push | 6 | 36.73 s, 34.72 to 57.42 | 2.71 s, 2.06 to 5.67 | 0.074 [0.058, 0.121] |
+| 100 files of 10 MiB | 6 | 32.74 s, 26.69 to 61.59 | 20.02 s, 18.92 to 21.05 | 0.619 [0.378, 0.717] |
+| one file of 1 GiB | 12 | 20.62 s, 17.26 to 42.56 | 19.04 s, 17.81 to 37.05 | 0.988 [0.888, 1.065] |
+
+one file is under the batch rule's 64, so both ways flush it on its own; its row measures reading it back through a new handle after closing the one that wrote it, which cost nothing measurable. system cpu time was 2.91 s against 3.05 s for the small files, and the same for the large ones. on the final build, at a load average of 41, a first push of the 10,000 files took 3.09 to 3.35 s in three runs, and a second push, which finds each file with one look at its name and writes nothing, 0.02 s in nine.
+
 ## evidence limits
 
 the sections from here on are non-reproducible historical observations, not benchmark results from the current harness. raw run records and complete reproduction commands were not retained alongside these tables. commits establish the implementation, not the measured ratios. missing machines, profiles, counts or statistics remain unknown; do not infer them or treat a reported percentage as a current guarantee.

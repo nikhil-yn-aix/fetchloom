@@ -240,7 +240,9 @@ impl Batch {
         Batch { file, device }
     }
 
-    pub(super) fn covers(&self, metadata: &std::fs::Metadata) -> bool {
+    /// whether the batch's flush reaches the file `metadata` describes: it is on the batch's
+    /// filesystem.
+    pub(crate) fn covers(&self, metadata: &std::fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt as _;
 
         self.device == metadata.dev()

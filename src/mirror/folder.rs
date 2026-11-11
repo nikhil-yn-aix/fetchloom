@@ -7,6 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use super::{LARGEST_TREE, MARKER, MARKER_LINE, Wanted, below};
@@ -18,7 +20,7 @@ use crate::threads::Threads;
 use crate::volume::is_plain;
 
 /// copies from or to one folder mirror running at once, so a nas is not flooded.
-pub(crate) const COPIES: usize = 8;
+const COPIES: usize = 8;
 
 /// why a folder mirror cannot be used this run.
 pub(crate) enum Missing {
@@ -247,6 +249,32 @@ pub(crate) enum Fault {
     Mirror(io::Error),
 }
 
+/// why a push's files were not all written and named.
+#[derive(Debug)]
+pub(crate) enum Failed {
+    /// the file at this place among them, and why.
+    File(usize, Fault),
+    /// the flush that puts them all on the disk, or a stop asked before it, `Interrupted`.
+    Flush(io::Error),
+}
+
+/// one flush of a filesystem for a whole batch of new files, as the cache makes its new objects
+/// durable. windows has none, so each file there is flushed as it is written.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+type Batch = crate::cache::Batch;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+type Batch = std::convert::Infallible;
+
+/// a file a push wrote into `tmp/` and hashed, not named yet. dropped before it is named, it
+/// goes.
+struct Written<'a> {
+    temp: Temporary<'a>,
+    item: Item,
+    there: There,
+    /// the file as written: its device and its number there, so the file read back is that one.
+    identity: (u64, u64),
+}
+
 /// what is at `root`, a folder named as a mirror to push to, read without changing anything. a
 /// folder holding only the `tmp/` a push that stopped before its marker made is still new.
 ///
@@ -449,36 +477,11 @@ impl Target {
         Ok(())
     }
 
-    /// writes `item` from `source`, which must hold its bytes, where [`survey`] found `there`. the
-    /// bytes go into a new read-only file in `tmp/`, hashed as they are written; once they are on
-    /// the disk they are read back from it and hashed again, and only then does the file take
-    /// its name. it never takes it from another file: a damaged copy is moved aside first and
-    /// removed once the new file has the name, and a name another push gave a file of the
-    /// item's size meanwhile keeps that file. [`Target::prepare`] makes the folders first.
-    ///
-    /// # Errors
-    ///
-    /// a [`Fault`]; whatever went wrong, the file written goes and no name changes.
-    pub(crate) fn put(
-        &self,
-        item: &Item,
-        source: &mut impl Read,
-        there: There,
-    ) -> Result<Put, Fault> {
-        let most = item.size.saturating_add(1);
-        let mut temp = self.temporary().map_err(Fault::Mirror)?;
-        let file = temp.file().map_err(Fault::Mirror)?;
-        let written = copy_hashed(source, file, most, &self.stop)?;
-        if written != (item.size, item.digest) {
-            return Err(Fault::OtherBytes);
-        }
-        flush(file).map_err(Fault::Mirror)?;
-        #[cfg(test)]
-        tests::before_read_back(file);
-        if read_back(file, most, &self.stop).map_err(Fault::Mirror)? != (item.size, item.digest) {
-            return Err(Fault::ReadBack);
-        }
-        temp.close();
+    /// gives `temp`, which holds `item`'s checked bytes, the item's name, where [`survey`] found
+    /// `there`. it never takes the name from another file: a damaged copy is moved aside first
+    /// and removed once the new file has the name, and a name another push gave a file of the
+    /// item's size meanwhile keeps that file.
+    fn publish(&self, temp: &mut Temporary<'_>, item: &Item, there: There) -> Result<Put, Fault> {
         let name = place(&self.root, item.folder, &item.digest);
         let aside = match there {
             There::Damaged => match self.placer.move_aside(&name) {
@@ -514,6 +517,128 @@ impl Target {
         if self.placer.delete_file(aside).is_err() {
             let _ = self.placer.delete_folder(aside);
         }
+    }
+
+    /// writes each of `items`, from the bytes `source` gives for it, where [`survey`] found what
+    /// it says, a few at once within `threads`, and says what writing each gave, in order. each
+    /// goes into a new read-only file in `tmp/`, hashed as it is written. they reach the disk as
+    /// the cache's new objects do: each flushed on its own up to `MOST_FLUSHED_ALONE` files,
+    /// else, where the system can, all with one flush of their filesystem once the last is
+    /// written. only then is each read back from the disk, hashed again and named as
+    /// [`Target::publish`] names a file, so a name never points at bytes that were not on the disk.
+    /// `written` hears the size of each file written, and `named` that of each file named.
+    /// [`Target::prepare`] makes the folders first.
+    ///
+    /// # Errors
+    ///
+    /// the first file that could not be written, read back or named, or the flush. files named
+    /// before it keep their names; the others go.
+    pub(crate) fn put_all<S: Read>(
+        &self,
+        items: &[(Item, There)],
+        threads: Threads,
+        source: &(dyn Fn(&Item) -> io::Result<S> + Sync),
+        written: &(dyn Fn(u64) + Sync),
+        named: &(dyn Fn(u64) + Sync),
+    ) -> Result<Vec<Put>, Failed> {
+        let flushing = Failed::Flush;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let batch = if items.len() > crate::cache::MOST_FLUSHED_ALONE {
+            crate::cache::batch_in(&self.root.join(TMP)).map_err(flushing)?
+        } else {
+            None
+        };
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let batch: Option<Batch> = None;
+        #[cfg(all(test, target_os = "linux"))]
+        let batch = tests::failing_batch(&self.root).or(batch);
+        let failed = AtomicBool::new(false);
+        let threads = threads.at_most(COPIES);
+        let wrote = crate::place::run_all(items, threads, |(item, there)| {
+            if failed.load(Ordering::Relaxed) {
+                return None;
+            }
+            let result = source(item)
+                .map_err(Fault::Source)
+                .and_then(|mut bytes| self.write(item, &mut bytes, *there, batch.as_ref()));
+            match &result {
+                Ok(_) => written(item.size),
+                Err(_) => failed.store(true, Ordering::Relaxed),
+            }
+            Some(result)
+        });
+        let pending = waiting(wrote)?;
+        #[cfg(test)]
+        if tests::killed_before_naming(&self.root) {
+            // a killed push runs no destructors, so what it wrote stays where it was
+            std::mem::forget(pending);
+            return Err(flushing(io::ErrorKind::Interrupted.into()));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(batch) = batch {
+            batch.flush().map_err(flushing)?;
+        }
+        let puts = crate::place::run_all(&pending, threads, |slot| {
+            if failed.load(Ordering::Relaxed) {
+                return None;
+            }
+            let one = slot.lock().unwrap_or_else(PoisonError::into_inner).take()?;
+            let size = one.item.size;
+            let result = self.name(one);
+            match &result {
+                Ok(_) => named(size),
+                Err(_) => failed.store(true, Ordering::Relaxed),
+            }
+            Some(result)
+        });
+        gathered(puts)
+    }
+
+    /// writes `item` from `source` into a new read-only file in `tmp/`, hashed as it is written,
+    /// and puts it on the disk now, or leaves that to `batch`'s one flush, as [`settle`] says.
+    fn write(
+        &self,
+        item: &Item,
+        source: &mut impl Read,
+        there: There,
+        batch: Option<&Batch>,
+    ) -> Result<Written<'_>, Fault> {
+        let mut temp = self.temporary().map_err(Fault::Mirror)?;
+        let file = temp.file().map_err(Fault::Mirror)?;
+        let most = item.size.saturating_add(1);
+        if copy_hashed(source, file, most, &self.stop)? != (item.size, item.digest) {
+            return Err(Fault::OtherBytes);
+        }
+        settle(file, batch).map_err(Fault::Mirror)?;
+        #[cfg(test)]
+        tests::before_read_back(file);
+        let identity = identity(file).map_err(Fault::Mirror)?;
+        // a batch of thousands of files must not hold one open each
+        temp.close();
+        Ok(Written {
+            temp,
+            item: *item,
+            there,
+            identity,
+        })
+    }
+
+    /// reads `written` back from its disk, which it is on now, hashes it again and gives it its
+    /// name: never when the file read back is not the one written, or holds other bytes.
+    fn name(&self, mut written: Written<'_>) -> Result<Put, Fault> {
+        let item = written.item;
+        let mut file = read_unfollowed(&written.temp.path).map_err(Fault::Mirror)?;
+        if identity(&file).map_err(Fault::Mirror)? != written.identity {
+            return Err(Fault::ReadBack);
+        }
+        let most = item.size.saturating_add(1);
+        if read_back(&mut file, most, &self.stop).map_err(Fault::Mirror)?
+            != (item.size, item.digest)
+        {
+            return Err(Fault::ReadBack);
+        }
+        drop(file);
+        self.publish(&mut written.temp, &item, written.there)
     }
 
     /// removes the files pushes left unfinished in the mirror's `tmp/` more than a day before
@@ -623,6 +748,75 @@ fn holds(name: &Path, size: u64) -> bool {
     fs::symlink_metadata(name).is_ok_and(|found| is_plain(&found) && found.len() == size)
 }
 
+/// the files `wrote` gives, each in a slot a worker takes it from to name it, or the first that
+/// failed, in order. the others go with `wrote`.
+fn waiting(
+    wrote: Vec<Option<Result<Written<'_>, Fault>>>,
+) -> Result<Vec<Mutex<Option<Written<'_>>>>, Failed> {
+    let mut pending = Vec::with_capacity(wrote.len());
+    for (at, one) in wrote.into_iter().enumerate() {
+        match one {
+            Some(Ok(written)) => pending.push(Mutex::new(Some(written))),
+            Some(Err(fault)) => return Err(Failed::File(at, fault)),
+            None => {}
+        }
+    }
+    Ok(pending)
+}
+
+/// what naming each file gave, in order, or the first that failed.
+fn gathered(puts: Vec<Option<Result<Put, Fault>>>) -> Result<Vec<Put>, Failed> {
+    let mut gave = Vec::with_capacity(puts.len());
+    for (at, put) in puts.into_iter().enumerate() {
+        match put {
+            Some(Ok(put)) => gave.push(put),
+            Some(Err(fault)) => return Err(Failed::File(at, fault)),
+            None => {}
+        }
+    }
+    Ok(gave)
+}
+
+/// puts `file`, just written, on its disk now, unless `batch`'s one flush will: on linux when the
+/// file is on the batch's filesystem, and on macos after the plain fsync whose data the batch's
+/// full flush then takes out of the drive's cache, as the cache seals its objects.
+fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
+    let Some(batch) = batch else {
+        return flush(file);
+    };
+    #[cfg(target_os = "linux")]
+    {
+        if batch.covers(&file.metadata()?) {
+            Ok(())
+        } else {
+            flush(file)
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = batch;
+        rustix::fs::fsync(file).map_err(Into::into)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    match *batch {}
+}
+
+/// which file `file` is: its device and its number there, so a file opened again by its name can
+/// be told to be the one written.
+fn identity(file: &File) -> io::Result<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let found = file.metadata()?;
+        Ok((found.dev(), found.ino()))
+    }
+    #[cfg(windows)]
+    {
+        let found = winapi_util::file::information(file)?;
+        Ok((found.volume_serial_number(), found.file_index()))
+    }
+}
+
 /// copies at most `most` bytes of `source` into `file`, hashing them, and says how many there
 /// were and their SHA-256. a stop is looked for between blocks.
 fn copy_hashed(
@@ -730,6 +924,54 @@ pub(crate) mod tests {
         /// whether a pushed file's first byte is changed between writing it and reading it back,
         /// as a disk that loses a write would leave it.
         static LOSING_A_WRITE: Cell<bool> = const { Cell::new(false) };
+        /// what happens between a push writing its files and naming them.
+        static BETWEEN: Cell<Between> = const { Cell::new(Between::Nothing) };
+        /// whether a push's batch flush fails, as one that a disk's failed write-back fails does.
+        #[cfg(target_os = "linux")]
+        static FAILING_FLUSH: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// what a test makes happen between a push writing its files and naming them.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Between {
+        Nothing,
+        /// the push is killed.
+        Kill,
+        /// someone puts a file of the same bytes under each file's temporary name.
+        Swap,
+    }
+
+    /// whether the push is killed once it has written its files and before it names them, as a
+    /// test asks, which may also swap each file written for another holding its bytes.
+    pub(super) fn killed_before_naming(root: &Path) -> bool {
+        match BETWEEN.get() {
+            Between::Nothing => false,
+            Between::Kill => true,
+            Between::Swap => {
+                for entry in fs::read_dir(root.join(TMP)).unwrap() {
+                    let path = entry.unwrap().path();
+                    let bytes = fs::read(&path).unwrap();
+                    fs::rename(&path, path.with_extension("swapped")).unwrap();
+                    fs::write(&path, bytes).unwrap();
+                }
+                false
+            }
+        }
+    }
+
+    /// a batch whose flush fails, when a test asks: syncfs refuses an `O_PATH` handle, which is a
+    /// real flush error without a failing disk.
+    #[cfg(target_os = "linux")]
+    pub(super) fn failing_batch(root: &Path) -> Option<Batch> {
+        FAILING_FLUSH.get().then(|| {
+            let folder = rustix::fs::open(
+                root.join(TMP),
+                rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .unwrap();
+            crate::cache::Batch::with_file_for_test(File::from(folder))
+        })
     }
 
     /// changes the file a push wrote before it is read back, when a test asks.
@@ -869,14 +1111,14 @@ pub(crate) mod tests {
         let folder = tempfile::tempdir().unwrap();
         let pushed = item(b"pinned bytes");
         let target = target(folder.path(), &[pushed]);
-        let put = target.put(&pushed, &mut &b"pinned bytes"[..], There::Absent);
+        let put = put_one(&target, &pushed, b"pinned bytes", There::Absent);
         assert_eq!(put.unwrap(), Put::Copied);
         let name = place(&target.root, OBJECTS, &pushed.digest);
         assert_eq!(fs::read(&name).unwrap(), b"pinned bytes");
         assert!(fs::metadata(&name).unwrap().permissions().readonly());
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
         let other = item(b"pinned too");
-        let put = target.put(&other, &mut &b"other bytes"[..], There::Absent);
+        let put = put_one(&target, &other, b"other bytes", There::Absent);
         assert!(matches!(put, Err(Fault::OtherBytes)));
         assert!(!place(&target.root, OBJECTS, &other.digest).exists());
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
@@ -889,7 +1131,7 @@ pub(crate) mod tests {
         let pushed = item(b"pinned bytes");
         let target = target(folder.path(), &[pushed]);
         LOSING_A_WRITE.set(true);
-        let put = target.put(&pushed, &mut &b"pinned bytes"[..], There::Absent);
+        let put = put_one(&target, &pushed, b"pinned bytes", There::Absent);
         LOSING_A_WRITE.set(false);
         assert!(matches!(put, Err(Fault::ReadBack)), "{put:?}");
         assert!(!place(&target.root, OBJECTS, &pushed.digest).exists());
@@ -913,7 +1155,7 @@ pub(crate) mod tests {
         assert_eq!(there, [There::Present, There::Damaged]);
         let (mut target, _) = Target::open(&root, Arc::default()).unwrap();
         target.prepare(&[wrong]).unwrap();
-        let put = target.put(&wrong, &mut &b"wrong"[..], There::Damaged);
+        let put = put_one(&target, &wrong, b"wrong", There::Damaged);
         assert_eq!(put.unwrap(), Put::Replaced);
         assert_eq!(fs::read(&wrong_name).unwrap(), b"wrong");
         assert_eq!(fs::read(&good_name).unwrap(), b"good");
@@ -936,10 +1178,121 @@ pub(crate) mod tests {
         let target = target(folder.path(), &[pushed]);
         let name = place(&target.root, OBJECTS, &pushed.digest);
         fs::write(&name, b"pinned bytes").unwrap();
-        let put = target.put(&pushed, &mut &b"pinned bytes"[..], There::Absent);
+        let put = put_one(&target, &pushed, b"pinned bytes", There::Absent);
         assert_eq!(put.unwrap(), Put::Present);
         assert_eq!(fs::read(&name).unwrap(), b"pinned bytes");
         assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
+    }
+
+    /// what pushing `item` alone from `bytes` into `target` gives, where [`survey`] found `there`.
+    fn put_one(target: &Target, item: &Item, bytes: &[u8], there: There) -> Result<Put, Fault> {
+        let source = |_: &Item| Ok(bytes);
+        match target.put_all(
+            &[(*item, there)],
+            Threads::default(),
+            &source,
+            &|_| {},
+            &|_| {},
+        ) {
+            Ok(puts) => Ok(puts[0]),
+            Err(Failed::File(0, fault)) => Err(fault),
+            Err(failed) => panic!("{failed:?}"),
+        }
+    }
+
+    /// files named `items`, each holding the bytes `contents` gives, written by a push into a new
+    /// mirror in `folder`.
+    fn put_all(folder: &Path, contents: &[Vec<u8>]) -> (Target, Result<Vec<Put>, Failed>) {
+        let items: Vec<(Item, There)> = contents
+            .iter()
+            .map(|bytes| (item(bytes), There::Absent))
+            .collect();
+        let bytes: HashMap<Sha256, &[u8]> = contents
+            .iter()
+            .map(|bytes| (crate::digest::sha256(bytes), bytes.as_slice()))
+            .collect();
+        let only: Vec<Item> = items.iter().map(|(item, _)| *item).collect();
+        let target = target(folder, &only);
+        let source = |item: &Item| Ok(io::Cursor::new(bytes[&item.digest]));
+        let put = target.put_all(&items, Threads::default(), &source, &|_| {}, &|_| {});
+        (target, put)
+    }
+
+    /// more files than the batch rule flushes one by one, each different.
+    fn many() -> Vec<Vec<u8>> {
+        (0..=crate::cache::MOST_FLUSHED_ALONE)
+            .map(|n| format!("file {n}").into_bytes())
+            .collect()
+    }
+
+    /// files past the size the cache flushes one by one reach the disk together, then each is
+    /// read back and named.
+    #[test]
+    fn a_batch_of_files_is_named_once_it_is_on_the_disk() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = many();
+        let (target, put) = put_all(folder.path(), &contents);
+        assert_eq!(put.unwrap(), vec![Put::Copied; contents.len()]);
+        for bytes in &contents {
+            let name = place(&target.root, OBJECTS, &crate::digest::sha256(bytes));
+            assert_eq!(&fs::read(name).unwrap(), bytes);
+        }
+        assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
+    }
+
+    /// a flush that fails names nothing, since a name must never point at bytes that may not be
+    /// on the disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_batch_flush_names_nothing() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = many();
+        FAILING_FLUSH.set(true);
+        let (target, put) = put_all(folder.path(), &contents);
+        FAILING_FLUSH.set(false);
+        assert!(matches!(put, Err(Failed::Flush(_))), "{put:?}");
+        for bytes in &contents {
+            assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(bytes)).exists());
+        }
+        assert_eq!(unfinished(&target.root), Vec::<PathBuf>::new());
+    }
+
+    /// a push killed after writing its files and before naming them leaves each under its
+    /// temporary name, which no reader asks for and a later push sweeps, and no name at all.
+    #[test]
+    fn a_push_killed_before_naming_leaves_no_named_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = many();
+        BETWEEN.set(Between::Kill);
+        let (target, put) = put_all(folder.path(), &contents);
+        BETWEEN.set(Between::Nothing);
+        assert!(put.is_err());
+        for bytes in &contents {
+            assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(bytes)).exists());
+        }
+        let left = unfinished(&target.root);
+        assert_eq!(left.len(), contents.len());
+        assert!(left.iter().all(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_unfinished)
+        }));
+    }
+
+    /// the file read back must be the one written: another put under its temporary name, even
+    /// one holding the same bytes, never takes the name.
+    #[test]
+    fn a_file_swapped_before_its_read_back_never_takes_a_name() {
+        let folder = tempfile::tempdir().unwrap();
+        let contents = vec![b"pinned bytes".to_vec()];
+        BETWEEN.set(Between::Swap);
+        let (target, put) = put_all(folder.path(), &contents);
+        BETWEEN.set(Between::Nothing);
+        assert!(
+            matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            "{put:?}"
+        );
+        assert!(!place(&target.root, OBJECTS, &crate::digest::sha256(&contents[0])).exists());
     }
 
     /// a link someone planted in the mirror is refused, so no write follows it out of the mirror.
@@ -961,11 +1314,7 @@ pub(crate) mod tests {
         let (mut target, _) = Target::open(&root, Arc::default()).unwrap();
         let made = target.prepare(&[pushed]).unwrap_err();
         assert!(made.to_string().contains("is a link"), "{made}");
-        assert!(
-            target
-                .put(&pushed, &mut &b"pinned bytes"[..], There::Absent)
-                .is_err()
-        );
+        assert!(put_one(&target, &pushed, b"pinned bytes", There::Absent).is_err());
         assert_eq!(fs::read_dir(&outside).unwrap().count(), 0);
     }
 
@@ -978,7 +1327,7 @@ pub(crate) mod tests {
         let stop = Arc::new(Stop::default());
         stop.ask();
         target.stop = stop;
-        let put = target.put(&pushed, &mut &b"pinned bytes"[..], There::Absent);
+        let put = put_one(&target, &pushed, b"pinned bytes", There::Absent);
         assert!(
             matches!(&put, Err(Fault::Mirror(err)) if err.kind() == io::ErrorKind::Interrupted),
             "{put:?}"

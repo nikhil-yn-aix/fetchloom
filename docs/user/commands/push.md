@@ -37,9 +37,9 @@ from a real run, a project with a csv file and a zip that unpacks to five files,
          Ok every file iris and pets need is on the mirror
 ```
 
-each file is written under a temporary name in the mirror's `tmp/` folder, read-only, and hashed as it is written. it is flushed to its disk, read back from there and hashed again, and only then takes its name, with a rename that never replaces a file already there. a file that reads back other bytes than were written never gets a name, and push stops with `integrity.mismatch`, exit 30. so does a copy in the cache that no longer holds its pinned bytes. on linux push drops the file from memory before reading it back, and on macos asks to read past memory; a network disk, or windows, may still answer from memory, and every reader checks each file against its pin again.
+each file is written under a temporary name in the mirror's `tmp/` folder, read-only, and hashed as it is written. once all are written, they go to the disk as the cache's new files do: up to 64 flushed one by one, more with one flush of the whole disk where the system can. only then is each read back from the disk, hashed again and given its name, with a rename that never replaces a file already there. a file that reads back other bytes than were written never gets a name, and push stops with `integrity.mismatch`, exit 30. so does a copy in the cache that no longer holds its pinned bytes. on linux push drops the file from memory before reading it back, and on macos asks to read past memory; a network disk, or windows, may still answer from memory, and every reader checks each file against its pin again.
 
-a push stopped with ctrl-c keeps the files it finished and leaves no name on a half-written file. a later push removes temporary files in `tmp/` that are more than a day old.
+a push stopped with ctrl-c keeps the files that already have their names and gives no name to a file it has not read back. a push that is killed leaves its unfinished files under their temporary names, never under their own, and a later push removes temporary files in `tmp/` that are more than a day old.
 
 a file already there is found with one look at its name and size, and left as it is. pushing the same project again:
 

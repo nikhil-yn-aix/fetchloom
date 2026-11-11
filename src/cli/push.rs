@@ -5,10 +5,9 @@
 //! cache lacks is named with what to run first.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
 
 use serde::Serialize;
@@ -20,7 +19,7 @@ use super::sync::Scope;
 use crate::cache::{Cache, read_unfollowed};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::mirror::folder::{self, Fault, Item, Put, Refused, State, Target, There};
+use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
 use crate::mirror::{Location, OBJECTS, TREES};
 use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
@@ -622,8 +621,8 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
     let (files, lists): (Vec<_>, Vec<_>) = copy
         .into_iter()
         .partition(|(needed, _)| !matches!(needed.source, Source::List(_)));
-    let mut puts = copy_files(context, cache, &target, &files)?;
-    puts.extend(copy_lists(cache, &target, &lists)?);
+    let mut puts = put_files(context, cache, &target, &files)?;
+    puts.extend(put_lists(context, cache, &target, &lists)?);
     let written: Vec<Item> = files
         .iter()
         .chain(&lists)
@@ -646,9 +645,9 @@ fn write(context: &Context, cache: &Cache, planned: &Planned) -> Result<(bool, V
     Ok((started, puts))
 }
 
-/// writes `files` from the cache, a few at once within the bound a folder mirror takes, with a
-/// bar of the bytes. the first failure stops the rest.
-fn copy_files(
+/// writes `files` from the cache as [`Target::put_all`] does, with a bar of the bytes written,
+/// then, once they are on the disk, one of the bytes read back and named in its place.
+fn put_files(
     context: &Context,
     cache: &Cache,
     target: &Target,
@@ -656,75 +655,111 @@ fn copy_files(
 ) -> Result<Vec<Put>, Error> {
     let total = files.iter().map(|(needed, _)| needed.item.size).sum();
     let what = units::count(files.len() as u64, "file", "files");
-    let bar = context.output.bar("Pushing", what.clone());
-    bar.start(Some(total), 0);
-    let ticker = context.output.ticker(
-        "Pushing",
-        what,
-        files.iter().map(|(needed, _)| Some(needed.item.size)),
-    );
-    let failed = AtomicBool::new(false);
-    let threads = context.threads.at_most(folder::COPIES);
-    let puts = crate::place::run_all(files, threads, |(needed, there)| {
-        if failed.load(Ordering::Relaxed) {
-            return None;
+    let output = &context.output;
+    let stage = |verb| {
+        let bar = output.bar(verb, what.clone());
+        bar.start(Some(total), 0);
+        let sizes = files.iter().map(|(needed, _)| Some(needed.item.size));
+        (bar, output.ticker(verb, what.clone(), sizes))
+    };
+    let writing = Mutex::new(Some(stage("Pushing")));
+    let checking = OnceLock::new();
+    let wrote = |size| {
+        if let Some((bar, ticker)) = &*writing.lock().unwrap_or_else(PoisonError::into_inner) {
+            bar.advance(size);
+            ticker.advance(size);
         }
-        let put = read_unfollowed(&cache.object_path(&needed.item.digest))
-            .map_err(Fault::Source)
-            .and_then(|mut source| target.put(&needed.item, &mut source, *there));
-        bar.advance(needed.item.size);
-        ticker.advance(needed.item.size);
-        if put.is_err() {
-            failed.store(true, Ordering::Relaxed);
-        }
-        Some(put)
-    });
-    drop((bar, ticker));
-    let mut written = Vec::with_capacity(files.len());
-    let mut first = None;
-    for ((needed, _), put) in files.iter().zip(puts) {
-        match put {
-            Some(Ok(put)) => written.push(put),
-            Some(Err(fault)) => {
-                first.get_or_insert_with(|| failure(fault, needed, target.root()));
-            }
-            None => {}
-        }
-    }
-    match first {
-        Some(error) => Err(error),
-        None => Ok(written),
-    }
+    };
+    let checked = |size| {
+        let (bar, ticker) = checking.get_or_init(|| {
+            drop(
+                writing
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take(),
+            );
+            stage("Checking")
+        });
+        bar.advance(size);
+        ticker.advance(size);
+    };
+    let items: Vec<(Item, There)> = files
+        .iter()
+        .map(|(needed, there)| (needed.item, *there))
+        .collect();
+    let source = |item: &Item| read_unfollowed(&cache.object_path(&item.digest));
+    let put = target.put_all(&items, context.threads, &source, &wrote, &checked);
+    drop((writing, checking));
+    put.map_err(|failed| failed_put(failed, files, target.root()))
 }
 
-/// writes the lists of what archives unpack to, `lists`, from the cache's records of them.
-fn copy_lists(
+/// writes the lists of what archives unpack to, `lists`, rendered from the cache's records of
+/// them, as [`Target::put_all`] does.
+fn put_lists(
+    context: &Context,
     cache: &Cache,
     target: &Target,
     lists: &[(&Needed, There)],
 ) -> Result<Vec<Put>, Error> {
-    let mut written = Vec::with_capacity(lists.len());
-    for (needed, there) in lists {
-        let Source::List(archive) = needed.source else {
-            continue;
-        };
-        let Some(members) = cache.unpacked(&archive, Some(&needed.item.digest)) else {
-            return Err(Error::new(
-                Kind::OfflineMissing,
-                format!(
-                    "the cache no longer knows the files inside {}",
-                    needed.label
-                ),
-            )
-            .help("run `fetchloom sync` first, then push again"));
-        };
-        let bytes = crate::cache::tree(&members);
-        let put = target
-            .put(&needed.item, &mut bytes.as_bytes(), *there)
-            .map_err(|fault| failure(fault, needed, target.root()))?;
-        written.push(put);
+    let archives: HashMap<Sha256, Sha256> = lists
+        .iter()
+        .filter_map(|(needed, _)| match needed.source {
+            Source::List(archive) => Some((needed.item.digest, archive)),
+            Source::Pinned | Source::Result => None,
+        })
+        .collect();
+    let items: Vec<(Item, There)> = lists
+        .iter()
+        .map(|(needed, there)| (needed.item, *there))
+        .collect();
+    let source = |item: &Item| {
+        let members = archives
+            .get(&item.digest)
+            .and_then(|archive| cache.unpacked(archive, Some(&item.digest)))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "the cache no longer records what the archive unpacks to",
+                )
+            })?;
+        Ok(std::io::Cursor::new(
+            crate::cache::tree(&members).into_bytes(),
+        ))
+    };
+    target
+        .put_all(&items, context.threads, &source, &|_| {}, &|_| {})
+        .map_err(|failed| failed_list(failed, lists, target.root()))
+}
+
+/// the error for `failed`, from writing the lists `lists` into the mirror at `root`. a list the
+/// cache stopped recording after the push planned is missing, as before a sync.
+fn failed_list(failed: Failed, lists: &[(&Needed, There)], root: &Path) -> Error {
+    match failed {
+        Failed::File(at, Fault::Source(_)) => Error::new(
+            Kind::OfflineMissing,
+            format!(
+                "the cache no longer knows the files inside {}",
+                lists[at].0.label
+            ),
+        )
+        .help("run `fetchloom sync` first, then push again"),
+        failed => failed_put(failed, lists, root),
     }
-    Ok(written)
+}
+
+/// the error for `failed`, from writing `files` into the mirror at `root`.
+fn failed_put(failed: Failed, files: &[(&Needed, There)], root: &Path) -> Error {
+    match failed {
+        Failed::File(at, fault) => failure(fault, files[at].0, root),
+        Failed::Flush(err) if err.kind() == std::io::ErrorKind::Interrupted => Stop::stopped(),
+        Failed::Flush(err) => Error::io(
+            format_args!(
+                "could not put the files pushed to {} on its disk",
+                root.display()
+            ),
+            &err,
+        ),
+    }
 }
 
 /// the error for `fault`, from writing `needed` into the mirror at `root`.
@@ -1157,6 +1192,38 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             derived: Vec::new(),
         };
         assert!(asking(&manifest, &public, &["report".to_owned()]).is_empty());
+    }
+
+    /// a list the cache stopped recording after the push planned is missing, with what to run,
+    /// not a failure of the disk.
+    #[test]
+    fn a_list_the_cache_lost_is_missing_with_what_to_run() {
+        let digest = crate::digest::sha256(b"images.zip");
+        let needed = Needed {
+            item: Item {
+                folder: TREES,
+                digest: crate::digest::sha256(b"its list"),
+                size: 8,
+            },
+            label: "pets/images.zip".into(),
+            dataset: "pets".into(),
+            source: Source::List(digest),
+        };
+        let lost = std::io::Error::new(std::io::ErrorKind::NotFound, "no record");
+        let error = failed_list(
+            Failed::File(0, Fault::Source(lost)),
+            &[(&needed, There::Absent)],
+            Path::new("mirror"),
+        );
+        assert_eq!(error.kind, Kind::OfflineMissing);
+        assert_eq!(
+            error.message,
+            "the cache no longer knows the files inside pets/images.zip"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("run `fetchloom sync` first, then push again")
+        );
     }
 
     fn asks(dataset: &str, access: Access, from: &[&str]) -> Asking {
