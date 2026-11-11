@@ -119,7 +119,7 @@ gc keeps every object a registered project needs, whatever the project does with
 | `Input(Source)`, `Input(Imported)` | a fetched dataset with `place = false` that recipes read, each of them built; an import's bytes come back only from a mirror |
 | `Input(Derived)` | a recipe's result with `place = false` that recipes read, each of them built, which a build makes again |
 | `Pending` | a fetched dataset a recipe still to build reads |
-| `Output` | any other recipe's result |
+| `Output` | any other recipe's result, or a rebuild a project's state keeps for `build --accept` |
 | `Placed` | any other fetched dataset, one with `place = false` that no recipe reads included |
 
 an object two projects, or two datasets, use takes the use `Use::and` gives: an input only while every use is one, then from the supply that brings it back most readily. a project whose data.toml does not read tells no use but placed or output, so it keeps all its objects out of `inputs_only`.

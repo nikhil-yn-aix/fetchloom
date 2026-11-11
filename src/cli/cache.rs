@@ -724,7 +724,7 @@ fn needed_with(
         let (state, _) = project.state();
         for file in state.candidates.values().flat_map(|kept| &kept.files) {
             stop.check()?;
-            needed.objects.insert(file.sha256);
+            needed.add(file.sha256, Use::Output);
         }
         projects.push(project.root);
     }
@@ -1247,6 +1247,48 @@ mod tests {
             Use::Input(Supply::Derived)
         );
         assert_eq!(needed.uses[&stored["tidy"].digest], Use::Output);
+    }
+
+    /// a rebuild kept for `fetchloom build --accept` needs its files as a result does, so bytes
+    /// it shares with an input are no longer read only by builds.
+    #[test]
+    fn a_kept_rebuild_needs_its_files_as_a_result_does() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let project = Project {
+            root: folder.path().join("study"),
+        };
+        fs::create_dir(&project.root).unwrap();
+        let (_, lock, stored) = pinned(&project.root, &cache, RAW_AND_CLEAN, &["raw"], &["clean"]);
+        fs::write(project.manifest_path(), RAW_AND_CLEAN).unwrap();
+        project.write_lists(&lock).unwrap();
+        project.write(lock::FILE, lock.render().as_bytes()).unwrap();
+        cache.register(&project.root).unwrap();
+        let raw = &stored["raw"];
+        let used = || {
+            needed_with(&cache, None, &Stop::default(), false, Uses::Told)
+                .unwrap()
+                .needed
+                .uses[&raw.digest]
+        };
+        assert_eq!(used(), Use::Input(Supply::Source));
+        let clean = lock.result("clean").unwrap();
+        let mut state = crate::project::state::State::default();
+        state.candidates.insert(
+            "clean".to_owned(),
+            crate::project::state::Candidate {
+                key: clean.key,
+                tree: crate::digest::sha256(b"another tree"),
+                pinned: clean.tree,
+                files: vec![Member {
+                    path: "raw.csv".to_owned(),
+                    size: raw.size,
+                    sha256: raw.digest,
+                }],
+            },
+        );
+        project.write_state(&state).unwrap();
+        assert_eq!(used(), Use::Output);
     }
 
     #[test]
