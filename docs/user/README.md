@@ -7,7 +7,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [getting started](getting-started.md) | install fetchloom, add a first dataset, restore it and undo it |
 | [concepts](concepts.md) | understand pins, placement, archives and offline work |
 | [working with raw data](raw-data.md) | keep results apart from inputs, leave out bad samples, edit inputs and free space |
-| [other tools](other-tools.md) | move a download step from curl, gdown, kaggle, hf, aws, dvc or pooch to fetchloom, keep the tools you use, or leave |
+| [other tools](other-tools.md) | move a download step from curl, gdown, kaggle, hf, aws, dvc or pooch to fetchloom, keep the tools you use, work beside dvc, git-lfs or datalad, or leave |
 | [recipes](recipes.md) | declare a dataset your own command makes from others, build it, and see when it needs building again |
 | [commands](commands/README.md) | choose a command and check global options |
 | [add](commands/add.md) | put a dataset in a project and download it |
