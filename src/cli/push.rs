@@ -788,6 +788,14 @@ fn failure(fault: Fault, needed: &Needed, root: &Path) -> Error {
             ),
         )
         .help("check the disk that holds the mirror, then push again"),
+        Fault::Replaced => Error::new(
+            Kind::LocalIo,
+            format!(
+                "something replaced {label} in the mirror {} while push wrote it, so it was not given its name",
+                root.display()
+            ),
+        )
+        .help("stop whatever else writes into that folder, such as a sync client, a backup tool or antivirus, then push again"),
     }
 }
 
@@ -1223,6 +1231,40 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         assert_eq!(
             error.help.as_deref(),
             Some("run `fetchloom sync` first, then push again")
+        );
+    }
+
+    /// a file push read back other bytes from points at the disk, `integrity.mismatch`; one
+    /// something else put in its place in the mirror is a local problem, `local.io`, with what to
+    /// stop, since no disk fault caused it.
+    #[test]
+    fn a_replaced_file_is_told_apart_from_bytes_the_disk_changed() {
+        let needed = Needed {
+            item: object(crate::digest::sha256(b"small file\n"), 11),
+            label: "many/d00/f00".into(),
+            dataset: "many".into(),
+            source: Source::Pinned,
+        };
+        let root = Path::new("/mnt/lab/fetchloom");
+        let changed = failure(Fault::ReadBack, &needed, root);
+        assert_eq!(
+            (changed.kind, changed.kind.exit_code()),
+            (Kind::IntegrityMismatch, 30)
+        );
+        let replaced = failure(Fault::Replaced, &needed, root);
+        assert_eq!(
+            (replaced.kind, replaced.kind.exit_code()),
+            (Kind::LocalIo, 50)
+        );
+        assert_eq!(
+            replaced.message,
+            "something replaced many/d00/f00 in the mirror /mnt/lab/fetchloom while push wrote it, so it was not given its name"
+        );
+        assert_eq!(
+            replaced.help.as_deref(),
+            Some(
+                "stop whatever else writes into that folder, such as a sync client, a backup tool or antivirus, then push again"
+            )
         );
     }
 

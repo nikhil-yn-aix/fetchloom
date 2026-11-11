@@ -245,6 +245,10 @@ pub(crate) enum Fault {
     OtherBytes,
     /// the mirror's copy, read back from its disk, holds other bytes than were written.
     ReadBack,
+    /// another file took the place of the one written before it was read back: another
+    /// account's, one of another size, or on windows any with a new number, as when something
+    /// else writes into the mirror.
+    Replaced,
     /// writing the mirror failed, or a stop was asked, which is `Interrupted`.
     Mirror(io::Error),
 }
@@ -656,7 +660,7 @@ impl Target {
             #[cfg(unix)]
             renumbered(&file, found, &written)?;
             #[cfg(not(unix))]
-            return Err(Fault::ReadBack);
+            return Err(Fault::Replaced);
         }
         let most = item.size.saturating_add(1);
         if read_back(&mut file, most, &self.stop).map_err(Fault::Mirror)?
@@ -837,12 +841,13 @@ fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// [`Fault::ReadBack`] for a file another account owns or of another size, or the flush's error.
+/// [`Fault::Replaced`] for a file another account owns or of another size, which something else
+/// put there, or the flush's error.
 #[cfg(unix)]
 fn renumbered(file: &File, found: Identity, written: &Written<'_>) -> Result<(), Fault> {
     let size = file.metadata().map_err(Fault::Mirror)?.len();
     if found.owner != written.identity.owner || size != written.item.size {
-        return Err(Fault::ReadBack);
+        return Err(Fault::Replaced);
     }
     #[cfg(all(test, target_os = "linux"))]
     if let Some(handle) = tests::unflushable(tests::Flush::Renumbered, &written.temp.path) {
@@ -1408,7 +1413,7 @@ pub(crate) mod tests {
         #[cfg(not(unix))]
         {
             assert!(
-                matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+                matches!(put, Err(Failed::File(0, Fault::Replaced))),
                 "{put:?}"
             );
             assert!(!named);
@@ -1433,7 +1438,7 @@ pub(crate) mod tests {
     fn a_file_another_account_put_in_its_place_never_takes_a_name() {
         let (put, named) = one_put(Between::Foreign);
         assert!(
-            matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            matches!(put, Err(Failed::File(0, Fault::Replaced))),
             "{put:?}"
         );
         assert!(!named);
@@ -1449,7 +1454,7 @@ pub(crate) mod tests {
         #[cfg(target_os = "linux")]
         FAILING.set(None);
         assert!(
-            matches!(put, Err(Failed::File(0, Fault::ReadBack))),
+            matches!(put, Err(Failed::File(0, Fault::Replaced))),
             "{put:?}"
         );
         assert!(!named);
