@@ -77,12 +77,16 @@ no source can list an import again. `fetchloom lock --upgrade <name>` refuses it
 
 ### a clone without the files
 
-a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10:
+a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, naming the files it lacks, up to ten. with `--json`, `fix` is null, since sync fails again until the files are there:
 
 ```text
 error: flowers was imported from files, and this machine's cache does not hold them
-  help: copy them to data/flowers and run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
+  flowers/petals/red.csv
+  flowers/sepals.csv
+  help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
+
+a [mirror](../mirrors.md) that holds them gives them instead, as `fetchloom push` fills one. a file no mirror holds is named with what each mirror said, as in [what goes wrong](../mirrors.md#what-goes-wrong).
 
 files copied to `data/flowers` by hand are adopted when they hold the pinned bytes, and a build or a push takes them into the cache from there. `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset: the paths and sizes are compared with data.lock first, then the bytes as they are copied, and other files stop it with `local.io`, exit 50, naming the first difference, with data.toml and data.lock as they were. matching files change neither file:
 
@@ -153,4 +157,5 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 | `the project folder ... is read-only` | you may not write in the project folder | make the folder writable for you, then add again; on unix this is checked before anything downloads |
 | `"iris" is a folder here, so fetchloom did not search for it` | a plain word names a file or folder in the current folder | write it as a path, `fetchloom add ./iris`, to import it, or run `fetchloom search iris` |
 | `... was imported from files, and this machine's cache does not hold them` | a clone has the pins of an import but not its files | copy them to the dataset's folder and sync, or run `fetchloom add <folder> --as <name>` where they are |
+| `... was imported from files, and neither this machine's cache nor a mirror holds them` | the mirrors asked lack the files named, or hold damaged copies | ask whoever keeps the mirror to push them again, or copy them to the dataset's folder and sync |
 | `... does not hold the files data.lock pins for ...` | the folder supplied is not the one imported | supply the folder the files came from, or remove the dataset and import the new files |

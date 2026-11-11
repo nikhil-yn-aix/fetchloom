@@ -80,6 +80,14 @@ a mirror you name may be on this machine or your network, such as `http://10.0.0
 
 in [mirror-only mode](#mirror-only-mode) the source is never asked, so a file no mirror gives fails the run, named.
 
+a file [imported](commands/add.md#files-on-this-machine) from a folder has no source, so one no mirror gives fails the run in every mode, named as a missing download is: with `network.refused` in mirror-only mode and `offline.missing` offline, both exit 20, and otherwise with `reference.unresolved`, exit 10, and what each mirror said, from a real run:
+
+```text
+error: flowers was imported from files, and neither this machine's cache nor a mirror holds them
+  flowers/sepals.csv: not there on ../mirror
+  help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
+```
+
 a warning for a damaged copy, on stderr:
 
 ```text

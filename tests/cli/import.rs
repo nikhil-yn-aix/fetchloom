@@ -136,9 +136,15 @@ fn a_clone_without_the_bytes_recovers_by_copying_them() -> Result {
         "flowers was imported from files, and this machine's cache does not hold them"
     );
     assert_eq!(
-        error["help"],
-        "copy them to data/flowers and run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are"
+        error["details"],
+        serde_json::json!(["flowers/petals/red.csv", "flowers/sepals.csv"])
     );
+    assert_eq!(
+        error["help"],
+        "copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are"
+    );
+    // running sync again, before the files are copied, would only fail again
+    assert_eq!(error["fix"], serde_json::Value::Null);
     assert_eq!(document["work"]["requests"], 0);
     let data = clone.join("data/flowers");
     fs::create_dir_all(data.join("petals"))?;

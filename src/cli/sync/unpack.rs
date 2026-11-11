@@ -459,6 +459,7 @@ impl Loop<'_> {
                     return Err(local::imported_elsewhere(
                         &locked.name,
                         &plan::folder(manifest, &locked.name),
+                        false,
                     ));
                 }
                 let label = format!("{}/{}", locked.name, locked.files[at].path);
@@ -594,6 +595,10 @@ impl Loop<'_> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
+        let lacked: Vec<(&str, &LockedFile)> = lacking()
+            .map(|(dataset, file)| (dataset.as_str(), file))
+            .collect();
+        self.refuse_unfetchable(manifest, &lacked)?;
         let jobs = lacking()
             .map(|(dataset, file)| job(manifest, lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;

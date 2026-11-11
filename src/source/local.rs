@@ -63,15 +63,20 @@ pub(crate) fn no_newer(name: &str) -> Error {
 }
 
 /// the error for files of `name`, an import, that this machine's cache lacks, as a clone of the
-/// project's repository does: no link fetches them. `folder` is where the dataset's files go in
-/// the project.
-pub(crate) fn imported_elsewhere(name: &str, folder: &str) -> Error {
+/// project's repository does, and the mirrors too when `mirrored` says a run asked some: no link
+/// fetches them. `folder` is where the dataset's files go in the project.
+pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Error {
+    let lacking = if mirrored {
+        "neither this machine's cache nor a mirror holds them"
+    } else {
+        "this machine's cache does not hold them"
+    };
     Error::new(
         Kind::ReferenceUnresolved,
-        format!("{name} was imported from files, and this machine's cache does not hold them"),
+        format!("{name} was imported from files, and {lacking}"),
     )
     .help(format!(
-        "copy them to {folder} and run `fetchloom sync`, or run `fetchloom add <folder> --as {name}` where they are"
+        "copy them to {folder} by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as {name}` where they are"
     ))
 }
 

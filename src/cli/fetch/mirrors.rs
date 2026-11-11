@@ -292,7 +292,7 @@ pub(in crate::cli) fn sources_allowed(
         return Ok(());
     }
     let count = files.len();
-    let mut error = refused(
+    let error = refused(
         context,
         &format!(
             "{} data.lock names {} on no mirror",
@@ -300,16 +300,29 @@ pub(in crate::cli) fn sources_allowed(
             if count == 1 { "is" } else { "are" }
         ),
     );
-    for (label, digest) in files.iter().take(super::NAMED) {
-        error = error.detail(format!(
-            "{label}: {}",
-            context.mirrors.said(digest.as_ref())
-        ));
+    Err(lacked(context, files)
+        .into_iter()
+        .fold(error, Error::detail))
+}
+
+/// a line for each of the first `files` a run lacks, by its name and with what each mirror
+/// said of it, when it has mirrors, and how many more there are.
+pub(in crate::cli) fn lacked(context: &Context, files: &[(String, Option<Sha256>)]) -> Vec<String> {
+    let mut lines: Vec<String> = files
+        .iter()
+        .take(super::NAMED)
+        .map(|(label, digest)| {
+            if context.mirrors.mirrors.list.is_empty() {
+                label.clone()
+            } else {
+                format!("{label}: {}", context.mirrors.said(digest.as_ref()))
+            }
+        })
+        .collect();
+    if files.len() > super::NAMED {
+        lines.push(format!("and {} more", files.len() - super::NAMED));
     }
-    if count > super::NAMED {
-        error = error.detail(format!("and {} more", count - super::NAMED));
-    }
-    Err(error)
+    lines
 }
 
 /// the pinned files among `jobs` that the cache lacks, as a mirror is asked for them.

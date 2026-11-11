@@ -227,6 +227,78 @@ fn a_clone_gets_the_bytes_of_an_import_from_a_mirror() -> Result {
     Ok(())
 }
 
+/// a file of an import that a mirror lacks, or holds a damaged copy of, fails a clone's sync as a
+/// missing download does in the same mode: as `network.refused` in mirror-only mode and
+/// `offline.missing` offline, each naming the file, and otherwise with what each mirror said of
+/// it. no fix is offered, since no link fetches it.
+#[test]
+fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    let sepals = b"length,width\n5.1,3.5\n";
+    fs::write(flowers.join("petals.csv"), b"length\n1.4\n")?;
+    fs::write(flowers.join("sepals.csv"), sepals)?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let hex = sha256(sepals);
+    let object = root.join("objects").join(&hex[..2]).join(&hex[2..]);
+    delete(&object)?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let lacked = format!("flowers/sepals.csv: not there on {}", root.display());
+    for (mode, kind, code, detail) in [
+        (
+            "FETCHLOOM_MIRRORS_ONLY",
+            "network.refused",
+            20,
+            lacked.as_str(),
+        ),
+        ("--offline", "offline.missing", 20, "flowers/sepals.csv"),
+        ("", "reference.unresolved", 10, lacked.as_str()),
+    ] {
+        let mut arguments = vec!["--json", "sync", "--locked"];
+        if mode.starts_with("--") {
+            arguments.push(mode);
+        }
+        let mut command = sandbox.command_in(&folder, &arguments);
+        command
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", &root);
+        if mode.starts_with("FETCHLOOM_") {
+            command.env(mode, "1");
+        }
+        let output = command.output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{mode}: {}",
+            text(&output.stdout)?
+        );
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], kind, "{mode}");
+        assert_eq!(error["details"], serde_json::json!([detail]), "{mode}");
+        assert_eq!(error["fix"], serde_json::Value::Null, "{mode}");
+    }
+    fs::write(&object, b"other bytes\n")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS", &root)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?;
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["details"],
+        serde_json::json!([format!(
+            "flowers/sepals.csv: a damaged copy on {}",
+            root.display()
+        )])
+    );
+    assert!(!folder.join("data").exists());
+    Ok(())
+}
+
 #[test]
 fn a_damaged_mirror_copy_is_told_and_the_source_gives_the_file() -> Result {
     let sandbox = Sandbox::new()?;

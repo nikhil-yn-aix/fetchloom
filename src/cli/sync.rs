@@ -360,7 +360,8 @@ impl<'a> Loop<'a> {
             .find(|(_, file)| file.url.is_empty())
         {
             let folder = plan::folder(manifest, dataset);
-            return Err(local::imported_elsewhere(dataset, &folder).help(format!(
+            let mirrored = !self.context.mirrors.mirrors.list.is_empty();
+            return Err(local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
                 "copy them to {folder} and build again, or run `fetchloom add <folder> --as {dataset}` where they are"
             )));
         }
@@ -1058,33 +1059,20 @@ impl<'a> Loop<'a> {
         if files.is_empty() {
             return Ok(Vec::new());
         }
+        let available =
+            |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_some();
+        let lacking: Vec<(&str, &LockedFile)> = files
+            .iter()
+            .filter(|(_, file)| !available(file))
+            .map(|(dataset, file)| (dataset.as_str(), *file))
+            .collect();
+        self.refuse_unfetchable(manifest, &lacking)?;
         let mut descriptions = Vec::with_capacity(files.len());
         let mut urls = Vec::with_capacity(files.len());
         for (dataset, file) in files {
             let (description, url) = fetch::Description::take(job(manifest, lock, dataset, file)?);
             descriptions.push(description);
             urls.push(url);
-        }
-        let available =
-            |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_some();
-        if self.net.offline().enabled() {
-            let missing: Vec<_> = files
-                .iter()
-                .zip(&descriptions)
-                .filter(|((_, file), _)| !available(file))
-                .map(|(_, description)| description.label.as_str())
-                .collect();
-            if !missing.is_empty() {
-                return Err(self.offline_missing(&missing));
-            }
-        }
-        if self.context.mirrors.mirrors.only {
-            let lacking: Vec<(String, Option<Sha256>)> = files
-                .iter()
-                .filter(|(_, file)| !available(file))
-                .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
-                .collect();
-            fetch::mirrors::sources_allowed(self.context, &lacking)?;
         }
         crate::space::cache_holds(
             self.cache.root(),
@@ -1185,6 +1173,43 @@ impl<'a> Loop<'a> {
             return Err(error.help(self.net.offline().unlearned_help()));
         }
         Err(self.offline_missing(&missing))
+    }
+
+    /// refuses, before any link is read, what the cache still lacks of `lacking` once the data
+    /// folder and the mirrors were asked, when no download may fetch it: anything offline or in
+    /// mirror-only mode, and otherwise the files of an import, which no link fetches. each is
+    /// named as a missing download is, with what each mirror said of it.
+    fn refuse_unfetchable(
+        &self,
+        manifest: &Manifest,
+        lacking: &[(&str, &LockedFile)],
+    ) -> Result<(), Error> {
+        let named: Vec<(String, Option<Sha256>)> = lacking
+            .iter()
+            .map(|(dataset, file)| (format!("{dataset}/{}", file.path), Some(file.sha256)))
+            .collect();
+        if self.net.offline().enabled() && !named.is_empty() {
+            let labels: Vec<&str> = named.iter().map(|(label, _)| label.as_str()).collect();
+            return Err(self.offline_missing(&labels));
+        }
+        fetch::mirrors::sources_allowed(self.context, &named)?;
+        let Some((import, _)) = lacking.iter().find(|(_, file)| file.url.is_empty()) else {
+            return Ok(());
+        };
+        let imported: Vec<(String, Option<Sha256>)> = lacking
+            .iter()
+            .zip(named)
+            .filter(|((dataset, file), _)| dataset == import && file.url.is_empty())
+            .map(|(_, named)| named)
+            .collect();
+        let error = local::imported_elsewhere(
+            import,
+            &plan::folder(manifest, import),
+            !self.context.mirrors.mirrors.list.is_empty(),
+        );
+        Err(fetch::mirrors::lacked(self.context, &imported)
+            .into_iter()
+            .fold(error, Error::detail))
     }
 
     fn offline_missing(&self, missing: &[&str]) -> Error {
@@ -1686,6 +1711,7 @@ fn source_link(manifest: &Manifest, dataset: &str, file: &LockedFile) -> Result<
         return Err(local::imported_elsewhere(
             dataset,
             &plan::folder(manifest, dataset),
+            false,
         ));
     }
     draft::link(dataset, file)
