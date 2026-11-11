@@ -54,7 +54,9 @@ impl Joined {
         match input {
             Input::File(path) => {
                 let file = File::open(path).map_err(|err| (path.as_path(), err))?;
-                let size = file.metadata().map_err(|err| (path.as_path(), err))?.len();
+                let metadata = file.metadata().map_err(|err| (path.as_path(), err))?;
+                plain(path, &metadata)?;
+                let size = metadata.len();
                 Ok(Joined {
                     parts: vec![path.clone()],
                     starts: vec![0, size],
@@ -66,9 +68,9 @@ impl Joined {
                 let mut starts = Vec::with_capacity(parts.len() + 1);
                 starts.push(0);
                 for (path, size) in parts {
-                    let found = fs::metadata(path)
-                        .map_err(|err| (path.as_path(), err))?
-                        .len();
+                    let metadata = fs::metadata(path).map_err(|err| (path.as_path(), err))?;
+                    plain(path, &metadata)?;
+                    let found = metadata.len();
                     let end = starts
                         .last()
                         .and_then(|start: &u64| start.checked_add(*size))
@@ -200,6 +202,18 @@ impl Seek for Source<'_> {
     }
 }
 
+/// refuses `path` unless it is a plain file: linux opens a folder too, and the size its disk gives
+/// one would be read as an archive's.
+fn plain<'a>(path: &'a Path, metadata: &fs::Metadata) -> Result<(), (&'a Path, io::Error)> {
+    if metadata.is_file() {
+        return Ok(());
+    }
+    Err((
+        path,
+        io::Error::new(io::ErrorKind::InvalidInput, "it is not a file"),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, ErrorKind, Read, Seek, SeekFrom};
@@ -220,6 +234,24 @@ mod tests {
             start = end;
         }
         Input::Joined(parts)
+    }
+
+    /// a folder is no archive file, though linux opens one: it is refused at once as a local
+    /// problem, whatever size its disk gives a folder, never read as an archive cut short.
+    #[test]
+    fn a_folder_is_refused_as_no_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let part = folder.path().join("part");
+        std::fs::create_dir(&part).unwrap();
+        for input in [
+            Input::File(folder.path().to_path_buf()),
+            Input::Joined(vec![(part, 0)]),
+        ] {
+            let Err((_, refused)) = Joined::open(&input) else {
+                panic!("a folder opened as an archive");
+            };
+            assert_eq!(refused.kind(), ErrorKind::InvalidInput, "{refused}");
+        }
     }
 
     /// a read of up to `amount` bytes, whatever reads that takes, or a seek from the start, the
