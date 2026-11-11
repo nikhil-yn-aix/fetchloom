@@ -286,6 +286,40 @@ fn status_lists_a_result_no_cache_or_mirror_holds_as_unbuilt() -> Result {
     Ok(())
 }
 
+/// a project copied without `.fetchloom`, its data folder holding iris but not clean's result,
+/// to a machine whose cache is empty: status names clean's build alone, since the build copies
+/// iris from the data folder, as it does then with no request.
+#[test]
+fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let (folder, cache) = cloned(&sandbox, "copied")?;
+    let iris = Path::new("data").join("iris").join("iris.csv");
+    fs::create_dir_all(folder.join("data").join("iris"))?;
+    fs::copy(sandbox.work().join(&iris), folder.join(&iris))?;
+    let told = text(
+        &sandbox
+            .command_in(&folder, &["status"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?
+            .stderr,
+    )?;
+    assert!(
+        told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror\n"),
+        "{told}"
+    );
+    let output = building_in(&sandbox, &folder, &["--offline", "--json", "build"])?
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["work"]["data_folder_objects"], 1);
+    assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    Ok(())
+}
+
 /// a clone whose cache lacks a pinned result gets it from a folder mirror that holds it, with
 /// no request to the source and no step run, and status calls its files missing until then.
 #[test]

@@ -562,7 +562,11 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
                 }
                 &mut status.edited
             }
-            (Some(seen), None) if place::holds_target(target, seen, &file) => &mut status.adoptable,
+            // sync adopts it, and a build copies its bytes from here as from a placed file
+            (Some(seen), None) if place::holds_target(target, seen, &file) => {
+                status.holding.insert(target.sha256);
+                &mut status.adoptable
+            }
             (Some(_), None) => &mut status.untracked,
         };
         list.push(target.path.clone());
