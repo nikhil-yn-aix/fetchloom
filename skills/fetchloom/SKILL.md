@@ -15,6 +15,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 |---|---|
 | a project needs a dataset | `fetchloom add <ref> --json` |
 | a cloned project has data.toml but no data/ | `fetchloom sync --json` |
+| one dataset, without downloading or changing the others | `fetchloom sync <name> --json`; `result.selected` echoes the names. the other datasets keep their data.lock entries and files, and the next plain `fetchloom sync` still checks them all |
 | a script needs a dataset's path | `fetchloom path <name>`; stdout is the path, or `result.path` with `--json`, and it syncs first if needed. add `--locked` where data.lock must not change |
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json`: its files land straight in `data/`. datasets may share a folder unless two of their files land on one path, which exits 50 with `project.invalid` naming both |
 | download once, no project files | `fetchloom get <ref> --dir <folder> --json` |

@@ -95,7 +95,7 @@ pub(super) fn tell(
             None => output.warn(&because.said),
         }
     }
-    warn_kept(output, placement);
+    warn_kept(output, manifest, placement);
     warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -239,7 +239,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     }
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     left_behind(output, manifest, placement.left_behind.as_ref());
-    warn_kept(output, placement);
+    warn_kept(output, manifest, placement);
     warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -368,7 +368,7 @@ fn warn_retired(output: &Output, placement: &Placement) {
     }
 }
 
-fn warn_kept(output: &Output, placement: &Placement) {
+fn warn_kept(output: &Output, manifest: &Manifest, placement: &Placement) {
     // one warning for each entry in the way, however many files it keeps out
     let mut blocking: BTreeMap<&str, (&Blocker, u64)> = BTreeMap::new();
     for kept in &placement.kept {
@@ -378,7 +378,10 @@ fn warn_kept(output: &Output, placement: &Placement) {
     }
     for (blocker, files) in blocking.into_values() {
         let (said, help) = in_the_way(blocker, files);
-        output.warn_with(&said, help);
+        match &blocker.dataset {
+            Some(dataset) => output.warn_with(&said, &left_alone(manifest, dataset)),
+            None => output.warn_with(&said, help),
+        }
     }
     for kept in &placement.kept {
         let (message, help) = match kept.reason {
@@ -410,6 +413,20 @@ fn warn_kept(output: &Output, placement: &Placement) {
             ),
         };
         output.warn_with(&message, help);
+    }
+}
+
+/// what clears an entry in the way that is a file of `dataset`, or a folder of its files, which
+/// a sync of other datasets leaves alone.
+fn left_alone(manifest: &Manifest, dataset: &str) -> String {
+    if manifest.datasets.contains_key(dataset) {
+        format!(
+            "it belongs to {dataset}: run `fetchloom sync {dataset}` first, or `fetchloom sync` for every dataset"
+        )
+    } else {
+        format!(
+            "it belongs to {dataset}, which data.toml no longer has: `fetchloom sync` syncs every dataset and removes it"
+        )
     }
 }
 

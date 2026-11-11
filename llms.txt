@@ -10,7 +10,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives and offline preparation
 - [commands](docs/user/commands/README.md): command table, global options and terminal output
 - [add](docs/user/commands/add.md): add and pin datasets, matching current references; recovery copies stay out of logs
-- [sync](docs/user/commands/sync.md): restore pins, preserve local edits and preview required repairs
+- [sync](docs/user/commands/sync.md): restore pins, preserve local edits, sync named datasets alone and preview required repairs
 - [lock](docs/user/commands/lock.md): check or upgrade pins without placement, and merge data.toml and data.lock offline after a git merge, with `--ours` and `--theirs` for datasets both sides changed
 - [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
 - [export](docs/user/commands/export.md): SHA-256 lines for `sha256sum -c`, link lists and aria2c input files from the pins, complete or refused, with gaps named in JSON

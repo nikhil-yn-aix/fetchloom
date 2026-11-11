@@ -16,7 +16,7 @@ use tracing::Instrument as _;
 use super::args;
 use super::sync::disk::{self, Survey};
 use super::sync::place::{self, Changes, Download, Placement, Preview, Seen};
-use super::sync::{self as engine, Loop, Upgrade};
+use super::sync::{self as engine, Loop, Scope, Upgrade};
 use super::{Context, open_cache, peek_cache};
 use crate::digest;
 use crate::error::{Error, Kind};
@@ -35,6 +35,9 @@ use crate::units;
 #[derive(Default, Serialize)]
 pub(super) struct Report {
     pub(super) project: PathBuf,
+    /// for `sync`, the datasets it was asked for: their names, or null for every dataset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) selected: Option<Scope>,
     /// datasets added, removed or upgraded.
     pub(super) datasets: Vec<String>,
     pub(super) lock_changed: bool,
@@ -54,6 +57,7 @@ impl Report {
     pub(super) fn dry(project: PathBuf, datasets: Vec<String>, outcome: Outcome<Preview>) -> Self {
         Report {
             project,
+            selected: None,
             datasets,
             lock_changed: outcome.lock_changed,
             placement: Some(outcome.placed.placement),
@@ -121,6 +125,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         }
     };
     let (text, manifest) = project.manifest()?;
+    let scope = selected(&manifest, &args.names, "sync")?;
     let read = project.lock_and_text()?;
     if args.locked {
         locked(
@@ -137,10 +142,10 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     if dry_run {
-        return preview_sync(context, &project, &manifest, read, &seen, &args).await;
+        return preview_sync(context, &project, &manifest, read, &seen, &args, scope).await;
     }
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?);
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?).within(scope);
     let Outcome {
         lock_changed,
         pins,
@@ -164,17 +169,35 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         context,
         &project,
         &manifest,
+        &work.scope,
         lock_changed,
         &placement,
         args.verify,
     );
     Ok(Report {
+        selected: Some(work.scope.clone()),
         project: project.root,
         datasets: pins,
         lock_changed,
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// the datasets `names` asks `command` for: every one when it names none. a name data.toml does
+/// not have is refused before anything else happens, with the closest name it has.
+pub(super) fn selected(
+    manifest: &Manifest,
+    names: &[String],
+    command: &str,
+) -> Result<Scope, Error> {
+    if names.is_empty() {
+        return Ok(Scope::All);
+    }
+    for name in names {
+        known(manifest, name, command)?;
+    }
+    Ok(Scope::Only(names.iter().cloned().collect()))
 }
 
 /// a sync that would write nothing, found without the project's hold: data.toml and data.lock
@@ -187,6 +210,7 @@ fn settled_unheld(
     args: &args::Sync,
 ) -> Result<Option<Report>, Error> {
     let (text, manifest) = project.manifest()?;
+    let scope = selected(&manifest, &args.names, "sync")?;
     let Some((lock, lock_text)) = project.lock_and_text()? else {
         return Ok(None);
     };
@@ -210,7 +234,7 @@ fn settled_unheld(
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
     if args.verify {
-        survey.verify(&project.root)?;
+        survey.verify(&project.root, &scope)?;
     }
     let Some(placement) = place::untouched(project, &manifest, &survey, &seen, false)? else {
         return Ok(None);
@@ -221,9 +245,18 @@ fn settled_unheld(
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
-    tell_synced(context, project, &manifest, false, &placement, args.verify);
+    tell_synced(
+        context,
+        project,
+        &manifest,
+        &scope,
+        false,
+        &placement,
+        args.verify,
+    );
     Ok(Some(Report {
         project: project.root.clone(),
+        selected: Some(scope),
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
@@ -231,11 +264,12 @@ fn settled_unheld(
     }))
 }
 
-/// the last lines of a sync: nothing to do, or what it synced and what to do next.
+/// the last lines of a sync of `scope`: nothing to do, or what it synced and what to do next.
 fn tell_synced(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
+    scope: &Scope,
     lock_changed: bool,
     placement: &Placement,
     verified: bool,
@@ -244,40 +278,30 @@ fn tell_synced(
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
     {
+        let found = in_place(scope, verified);
         context.output.done(
             "Ok",
-            if verified {
-                "all pinned files are in place, checked byte for byte; nothing to do"
+            &if verified {
+                format!("{found}; nothing to do")
             } else {
-                "all pinned files are in place by size and time, nothing to do"
+                format!("{found}, nothing to do")
             },
         );
     } else {
-        let datasets = crate::units::count(manifest.datasets.len() as u64, "dataset", "datasets");
-        if placement.kept.is_empty() {
-            context
-                .output
-                .done("Synced", &format!("{datasets} into {}", manifest.data_dir));
-        } else {
-            let kept = crate::units::count(
-                placement.kept.len() as u64,
-                "file left unchanged",
-                "files left unchanged",
-            );
-            context.output.done(
-                "Synced",
-                &format!(
-                    "{datasets} into {}, {kept}; see the warnings above",
-                    manifest.data_dir
-                ),
-            );
-        }
+        context.output.done(
+            "Synced",
+            &synced_into(manifest, scope, placement.kept.len()),
+        );
+        let first = match scope {
+            Scope::All => manifest.datasets.keys().next(),
+            Scope::Only(names) => names.iter().next(),
+        };
         if lock_changed {
             context.output.next(&format!(
                 "commit {}, so other clones use these pins",
                 committed(project)
             ));
-        } else if let Some(name) = manifest.datasets.keys().next()
+        } else if let Some(name) = first
             && placement.placed + placement.replaced > 0
         {
             context.output.next(&format!(
@@ -287,8 +311,63 @@ fn tell_synced(
     }
 }
 
-/// `sync --dry-run`: what syncing would change, given data.lock as `read` and both files as
-/// `seen`.
+/// what a sync of `scope` that changed something synced, with how many other datasets it left
+/// as they were and how many files, `kept`, it left unchanged.
+fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize) -> String {
+    let (datasets, others) = match scope {
+        Scope::All => (
+            units::count(manifest.datasets.len() as u64, "dataset", "datasets"),
+            0,
+        ),
+        Scope::Only(names) => (
+            named(names),
+            manifest
+                .datasets
+                .keys()
+                .filter(|name| !names.contains(*name))
+                .count(),
+        ),
+    };
+    let mut said = format!("{datasets} into {}", manifest.data_dir);
+    if others > 0 {
+        let others = units::count(
+            others as u64,
+            "other dataset left as it was",
+            "other datasets left as they were",
+        );
+        said = format!("{said} · {others}");
+    }
+    if kept > 0 {
+        let kept = units::count(kept as u64, "file left unchanged", "files left unchanged");
+        said = format!("{said}, {kept}; see the warnings above");
+    }
+    said
+}
+
+/// what a sync of `scope` with nothing to do found in place: every pinned file, or the named
+/// datasets' files, by size and time or, `verified`, byte for byte.
+fn in_place(scope: &Scope, verified: bool) -> String {
+    let files = match scope {
+        Scope::All => "all pinned files".to_owned(),
+        Scope::Only(names) => format!("the pinned files of {}", named(names)),
+    };
+    if verified {
+        format!("{files} are in place, checked byte for byte")
+    } else {
+        format!("{files} are in place by size and time")
+    }
+}
+
+/// the datasets a sync was asked for, as its last line names them: the one name, or how many.
+fn named(names: &BTreeSet<String>) -> String {
+    match names.iter().next() {
+        Some(only) if names.len() == 1 => only.clone(),
+        _ => units::count(names.len() as u64, "dataset", "datasets"),
+    }
+}
+
+/// `sync --dry-run` of `scope`: what syncing would change, given data.lock as `read` and both
+/// files as `seen`.
 async fn preview_sync(
     context: &Context,
     project: &Project,
@@ -296,9 +375,10 @@ async fn preview_sync(
     read: Option<(Lock, String)>,
     seen: &Seen,
     args: &args::Sync,
+    scope: Scope,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?).within(scope);
     let outcome = preview_all(
         &work,
         manifest,
@@ -313,14 +393,15 @@ async fn preview_sync(
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
     dry_run_done(
         &context.output,
-        nothing.then_some(if args.verify {
-            "all pinned files are in place, checked byte for byte"
-        } else {
-            "all pinned files are in place by size and time"
-        }),
+        nothing
+            .then(|| in_place(&work.scope, args.verify))
+            .as_deref(),
     );
     let pins = outcome.pins.clone();
-    Ok(Report::dry(project.root.clone(), pins, outcome))
+    Ok(Report {
+        selected: Some(work.scope.clone()),
+        ..Report::dry(project.root.clone(), pins, outcome)
+    })
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {
@@ -448,6 +529,7 @@ async fn preview_lock(
     dry_run_done(output, nothing.then_some("data.lock is already up to date"));
     Ok(Report {
         project: project.root.clone(),
+        selected: None,
         datasets: engine::repinned(&dry.before, &dry.lock),
         lock_changed: changed,
         placement: None,
@@ -579,7 +661,7 @@ pub(super) async fn sync_all(
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
-        survey.verify(&work.project.root)?;
+        survey.verify(&work.project.root, &work.scope)?;
     }
     disk::audit(work.project, &survey, &work.cache)?;
     let seen = match read {
@@ -661,7 +743,7 @@ pub(super) async fn preview_all(
     let mut survey = Survey::read(work.project, &manifest.data_dir, work.context.threads);
     survey.check_doubted(&work.project.root, &work.cache)?;
     if verify {
-        survey.verify(&work.project.root)?;
+        survey.verify(&work.project.root, &work.scope)?;
     }
     let damaged = work.damaged_objects(&survey)?;
     if let Some(seen) = seen
@@ -832,14 +914,18 @@ pub(super) async fn hold_until<T>(
 }
 
 /// refuses a dataset name data.toml does not have, suggesting the closest one as the `command`
-/// that names it, such as `path` in `fetchloom path iris`.
+/// that names it, such as `path` in `fetchloom path iris`. a link given where a name belongs is
+/// shown with its secrets masked.
 pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Ok(());
     }
     let error = Error::new(
         Kind::Usage,
-        format!("data.toml has no dataset called {name}"),
+        format!(
+            "data.toml has no dataset called {}",
+            crate::net::mask_query(name)
+        ),
     );
     Err(
         match name::closest(name, manifest.datasets.keys().map(String::as_str)) {
@@ -1215,6 +1301,25 @@ pub(crate) mod tests {
             "data.lock lists a path twice"
         );
         assert!(Lock::parse(&old.render()).is_ok());
+    }
+
+    /// a name data.toml lacks is shown with any secret it holds masked, as when a link is given
+    /// where a dataset's name belongs.
+    #[test]
+    fn an_unknown_name_never_shows_a_secret() {
+        let manifest =
+            Manifest::parse("[datasets.iris]\nref = \"https://example.org/iris.csv\"\n").unwrap();
+
+        let error = known(
+            &manifest,
+            "https://example.org/x?token=AUDIT_CANARY",
+            "sync",
+        )
+        .unwrap_err();
+
+        let shown = format!("{} {:?} {:?}", error.message, error.details, error.help);
+        assert!(!shown.contains("AUDIT_CANARY"), "{shown}");
+        assert!(shown.contains("token=***"), "{shown}");
     }
 
     /// a sync that finds its project settled has nothing left to do, so a stop asked once it

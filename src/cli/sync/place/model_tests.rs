@@ -76,6 +76,7 @@ fn choice(action: &Action) -> Choice {
         | Action::Freed(_) => {
             panic!("the model puts nothing in a file's way")
         }
+        Action::Unselected => panic!("the model leaves no dataset out"),
     }
 }
 
@@ -284,6 +285,8 @@ fn a_damaged_file_is_replaced_without_force() {
     }
 }
 
+/// which records sync removes, keeps or forgets: only those of a dataset the run works on that
+/// no target wants, whatever else the run's scope names.
 #[test]
 fn unwanted_observations() {
     let run = tempfile::tempdir().unwrap();
@@ -291,62 +294,69 @@ fn unwanted_observations() {
         root: run.path().join("project"),
     };
     let file = locked(0);
-    for flags in 0_u8..32 {
-        let [wanted, unknown, missing, edited, different] =
-            std::array::from_fn(|bit| flags & (1 << bit) != 0);
-        let mut survey = Survey::read(&project, "data", Threads::default());
-        let look = Look {
-            size: 16,
-            modified: 123,
-        };
-        survey.state.files.insert(
-            PATH.to_owned(),
-            Placed {
-                dataset: "set".to_owned(),
-                sha256: file.sha256,
-                method: Method::Copy,
-                look,
-                writable: true,
-                checked: 123,
-                adopted: false,
-            },
-        );
-        if !missing {
-            survey.disk.insert(
+    let named = |name: &str| Scope::Only(std::collections::BTreeSet::from([name.to_owned()]));
+    for (scope, selected) in [
+        (Scope::All, true),
+        (named("set"), true),
+        (named("other"), false),
+    ] {
+        for flags in 0_u8..32 {
+            let [wanted, unknown, missing, edited, different] =
+                std::array::from_fn(|bit| flags & (1 << bit) != 0);
+            let mut survey = Survey::read(&project, "data", Threads::default());
+            let look = Look {
+                size: 16,
+                modified: 123,
+            };
+            survey.state.files.insert(
                 PATH.to_owned(),
-                Look {
-                    modified: if different { 124 } else { 123 },
-                    ..look
+                Placed {
+                    dataset: "set".to_owned(),
+                    sha256: file.sha256,
+                    method: Method::Copy,
+                    look,
+                    writable: true,
+                    checked: 123,
+                    adopted: false,
                 },
             );
-        }
-        if edited {
-            survey.edited.insert(PATH.to_owned());
-        }
-        let wanted = if wanted {
-            HashSet::from([PATH])
-        } else {
-            HashSet::new()
-        };
-        let unknown = if unknown {
-            vec![("set", &file)]
-        } else {
-            Vec::new()
-        };
-        let actual = unwanted(&survey, &wanted, &unknown);
-        let protected = !wanted.is_empty() || !unknown.is_empty();
-        if protected {
-            assert!(actual.is_empty());
-            continue;
-        }
-        assert_eq!(actual.len(), 1);
-        let actual = &actual[0].1;
-        if missing {
-            assert!(matches!(actual, Unwanted::Gone));
-        } else if edited || different {
-            assert!(matches!(actual, Unwanted::Keep));
-        } else {
-            assert!(matches!(actual, Unwanted::Remove(found) if *found == look));
+            if !missing {
+                survey.disk.insert(
+                    PATH.to_owned(),
+                    Look {
+                        modified: if different { 124 } else { 123 },
+                        ..look
+                    },
+                );
+            }
+            if edited {
+                survey.edited.insert(PATH.to_owned());
+            }
+            let wanted = if wanted {
+                HashSet::from([PATH])
+            } else {
+                HashSet::new()
+            };
+            let unknown = if unknown {
+                vec![("set", &file)]
+            } else {
+                Vec::new()
+            };
+            let actual = unwanted(&survey, &wanted, &unknown, &scope);
+            let protected = !wanted.is_empty() || !unknown.is_empty() || !selected;
+            if protected {
+                assert!(actual.is_empty(), "{scope:?} {flags:05b}");
+                continue;
+            }
+            assert_eq!(actual.len(), 1, "{scope:?} {flags:05b}");
+            let actual = &actual[0].1;
+            if missing {
+                assert!(matches!(actual, Unwanted::Gone));
+            } else if edited || different {
+                assert!(matches!(actual, Unwanted::Keep));
+            } else {
+                assert!(matches!(actual, Unwanted::Remove(found) if *found == look));
+            }
         }
     }
 }

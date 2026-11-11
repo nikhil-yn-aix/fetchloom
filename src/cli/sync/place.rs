@@ -17,6 +17,7 @@ use serde::Serialize;
 use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::tell_preview;
+use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
@@ -233,6 +234,8 @@ enum Action {
     /// the scan began and how it looks by name now.
     Vouch(Look),
     Leave(Reason),
+    /// a file of a dataset the run leaves alone: nothing happens to it, and nothing counts it.
+    Unselected,
 }
 
 /// the data folder compared with a lock, with what each file needs decided before anything
@@ -240,27 +243,33 @@ enum Action {
 pub(crate) struct Placing<'a> {
     project: &'a Project,
     manifest: &'a Manifest,
+    /// every file the lock places, those of datasets outside `scope` too, which stay wanted.
     targets: Vec<Target<'a>>,
+    /// the archives of datasets in `scope` that this machine never unpacked.
     unknown: Vec<(&'a str, &'a LockedFile)>,
     actions: Vec<Action>,
     survey: Survey,
+    /// the datasets this placing works on.
+    scope: Scope,
 }
 
 impl<'a> Placing<'a> {
     /// compares the data folder, as `survey` saw it, with `lock`, with each archive standing for
     /// the files the cache records it unpacked to. only files fetchloom did not place are hashed,
     /// to see whether they already hold the locked bytes. nothing is written, so a dry run can
-    /// show what applying it would do.
+    /// show what applying it would do. the files of datasets outside `scope` are left as they
+    /// are.
     pub(crate) fn new(
         project: &'a Project,
         manifest: &'a Manifest,
         lock: &'a Lock,
         cache: &Cache,
         force: bool,
+        scope: &Scope,
         survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         let plan = plan::from_cache(manifest, lock, cache)?;
-        Self::from_plan(project, manifest, plan, force, survey)
+        Self::from_plan(project, manifest, plan, force, scope, survey)
     }
 
     /// compares an already validated plan without reading archive member records again.
@@ -269,6 +278,7 @@ impl<'a> Placing<'a> {
         manifest: &'a Manifest,
         plan: plan::Plan<'a>,
         force: bool,
+        scope: &Scope,
         mut survey: Survey,
     ) -> Result<Placing<'a>, Error> {
         project.planned_data_dir(manifest)?;
@@ -277,32 +287,42 @@ impl<'a> Placing<'a> {
         let mut actions = plan
             .targets
             .iter()
-            .map(|target| decide(target, &survey, force, &project.root.join(&target.path)))
+            .map(|target| {
+                if scope.includes(target.dataset) {
+                    decide(target, &survey, force, &project.root.join(&target.path))
+                } else {
+                    Ok(Action::Unselected)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
+        let unknown: Vec<_> = plan
+            .unknown
+            .into_iter()
+            .filter(|(dataset, _)| scope.includes(dataset))
+            .collect();
         if actions
             .iter()
             .any(|action| matches!(action, Action::Blocked(_) | Action::Unblock(_)))
         {
-            let going = going(&survey, &plan.targets, &plan.unknown);
+            let wanted: HashSet<&str> = plan
+                .targets
+                .iter()
+                .map(|target| target.path.as_str())
+                .collect();
+            let going = removable(&survey, &wanted, &unknown, scope);
             actions = actions
                 .into_iter()
-                .map(|action| match action {
-                    Action::Blocked(blocker) | Action::Unblock(blocker)
-                        if survey.frees(&blocker, &going) =>
-                    {
-                        Action::Freed(blocker)
-                    }
-                    action => action,
-                })
+                .map(|action| clearing(action, &survey, &going, scope))
                 .collect();
         }
         Ok(Placing {
             project,
             manifest,
             targets: plan.targets,
-            unknown: plan.unknown,
+            unknown,
             actions,
             survey,
+            scope: scope.clone(),
         })
     }
 
@@ -401,6 +421,9 @@ impl<'a> Placing<'a> {
         self.preview_unwanted(&mut preview);
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
+            if matches!(action, Action::Unselected) {
+                continue;
+            }
             if !guessed.is_empty()
                 && self.survey.disk.contains_key(&target.path)
                 && guessed.contains(&format!("{}/{}", target.dataset, target.locked.path))
@@ -414,6 +437,7 @@ impl<'a> Placing<'a> {
                 continue;
             }
             match action {
+                Action::Unselected => {}
                 Action::Keep | Action::Vouch(_) => placement.unchanged += 1,
                 Action::Adopt(_) => {
                     placement.unchanged += 1;
@@ -489,7 +513,7 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| target.path.as_str())
             .collect();
-        let unwanted = unwanted(&self.survey, &wanted, &self.unknown);
+        let unwanted = unwanted(&self.survey, &wanted, &self.unknown, &self.scope);
         let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
         preview.placement.left_behind = self.survey.left_behind(&wanted, &going);
@@ -540,6 +564,7 @@ impl<'a> Placing<'a> {
             actions,
             mut survey,
             unknown,
+            scope,
         } = self;
         let data_dir = project.data_dir(manifest)?;
         let mut placement = Placement::default();
@@ -554,11 +579,13 @@ impl<'a> Placing<'a> {
             &mut survey,
             &wanted,
             &unknown,
+            &scope,
             &mut placement,
         )?;
         // told at once, since the state no longer records those files once this run writes it
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
-        sweep(project, &mut placer, &survey, &wanted);
+        let folders = swept(&scope, &targets, &actions);
+        sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
         let settled = settle(
@@ -611,8 +638,9 @@ impl<'a> Placing<'a> {
             && adding
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
         flushed?;
-        let complete =
-            !stopped && failure.is_none() && placement.kept.is_empty() && unknown.is_empty();
+        // a run of named datasets never vouches for the others, so the next sync looks at all
+        let whole = scope == Scope::All && unknown.is_empty();
+        let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
         let resynced = state.synced != synced;
         state.synced = synced;
@@ -648,6 +676,7 @@ impl<'a> Placing<'a> {
             targets,
             mut survey,
             unknown,
+            scope,
             ..
         } = self;
         let data_dir = project.data_dir(manifest)?;
@@ -660,6 +689,7 @@ impl<'a> Placing<'a> {
             &mut survey,
             &wanted,
             &unknown,
+            &scope,
             &mut placement,
         )?;
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
@@ -909,11 +939,13 @@ fn settle<'t, 'a>(
         // removal follows this dataset
         if let Some(placed) = survey.state.files.get_mut(&target.path)
             && placed.dataset != target.dataset
+            && !matches!(action, Action::Unselected)
         {
             target.dataset.clone_into(&mut placed.dataset);
             adopted = true;
         }
         match action {
+            Action::Unselected => {}
             Action::Keep => placement.unchanged += 1,
             Action::Unblock(blocker) => {
                 let gone = if let Some(gone) = cleared.get(&blocker.path) {
@@ -1275,17 +1307,18 @@ fn decide(
     }
 }
 
-/// deletes files fetchloom placed that no dataset needs now, unless someone changed them. says
-/// whether the state lost a file.
+/// deletes files fetchloom placed for a dataset in `scope` that no dataset needs now, unless
+/// someone changed them. says whether the state lost a file.
 fn remove_unwanted(
     project: &Project,
     placer: &mut Placer,
     survey: &mut Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
+    scope: &Scope,
     placement: &mut Placement,
 ) -> Result<bool, Error> {
-    let unwanted = unwanted(survey, wanted, unknown);
+    let unwanted = unwanted(survey, wanted, unknown, scope);
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
@@ -1319,13 +1352,24 @@ fn remove_unwanted(
     Ok(changed)
 }
 
-/// deletes what an interrupted placement left under the hidden names it stages files in. the
-/// project lock keeps any other sync from staging files meanwhile. a leftover that changed since
-/// the scan, or that cannot be deleted, stays for a later sync.
-fn sweep(project: &Project, placer: &mut Placer, survey: &Survey, wanted: &HashSet<&str>) {
+/// deletes what an interrupted placement left under the hidden names it stages files in, in
+/// `folders` when it names some. the project lock keeps any other sync from staging files
+/// meanwhile. a leftover that changed since the scan, or that cannot be deleted, stays for a
+/// later sync.
+fn sweep(
+    project: &Project,
+    placer: &mut Placer,
+    survey: &Survey,
+    wanted: &HashSet<&str>,
+    folders: Option<&HashSet<&str>>,
+) {
     for path in survey.leftovers() {
         if placer.stop().is_asked() {
             break;
+        }
+        let folder = path.rsplit_once('/').map_or("", |(folder, _)| folder);
+        if folders.is_some_and(|folders| !folders.contains(folder)) {
+            continue;
         }
         let file = project.root.join(path);
         if !wanted.contains(path.as_str())
@@ -1337,6 +1381,23 @@ fn sweep(project: &Project, placer: &mut Placer, survey: &Survey, wanted: &HashS
     }
 }
 
+/// the folders a sweep of staging leftovers covers: those `actions` place files in for a run of
+/// named datasets, and every folder, as none, for a run of all.
+fn swept<'t>(
+    scope: &Scope,
+    targets: &'t [Target<'_>],
+    actions: &[Action],
+) -> Option<HashSet<&'t str>> {
+    (*scope != Scope::All).then(|| {
+        targets
+            .iter()
+            .zip(actions)
+            .filter(|(_, action)| !matches!(action, Action::Unselected))
+            .filter_map(|(target, _)| target.path.rsplit_once('/').map(|(folder, _)| folder))
+            .collect()
+    })
+}
+
 /// the files fetchloom placed that no dataset among `targets` needs now and nobody changed, which
 /// sync removes before it places anything, so they stand in no file's way.
 pub(crate) fn going(
@@ -1345,19 +1406,66 @@ pub(crate) fn going(
     unknown: &[(&str, &LockedFile)],
 ) -> HashSet<String> {
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    unwanted(survey, &wanted, unknown)
+    removable(survey, &wanted, unknown, &Scope::All)
+}
+
+/// the files fetchloom placed for a dataset in `scope` that no target of `wanted` needs now and
+/// nobody changed, which sync removes before it places anything.
+fn removable(
+    survey: &Survey,
+    wanted: &HashSet<&str>,
+    unknown: &[(&str, &LockedFile)],
+    scope: &Scope,
+) -> HashSet<String> {
+    unwanted(survey, wanted, unknown, scope)
         .into_iter()
         .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
         .collect()
 }
 
-/// what becomes of each file fetchloom placed that no dataset needs now. the files of a dataset
-/// with an archive this machine never unpacked stay, since nothing tells which of them it still
-/// needs.
+/// what becomes of a file an entry keeps out, as `action` decided: placed once removing what
+/// sync removes first, `going`, clears the way. an entry that is a file of a dataset outside
+/// `scope`, or a folder holding one, stays even with `--force` and names that dataset.
+fn clearing(action: Action, survey: &Survey, going: &HashSet<String>, scope: &Scope) -> Action {
+    let (Action::Blocked(blocker) | Action::Unblock(blocker)) = &action else {
+        return action;
+    };
+    if survey.frees(blocker, going) {
+        return Action::Freed(blocker.clone());
+    }
+    if *scope == Scope::All {
+        return action;
+    }
+    let below = format!("{}/", blocker.path);
+    let files = &survey.state.files;
+    let alone = files
+        .get(&blocker.path)
+        .into_iter()
+        .chain(
+            files
+                .range(below.clone()..)
+                .take_while(|(path, _)| path.starts_with(&below))
+                .map(|(_, placed)| placed),
+        )
+        .map(|placed| &placed.dataset)
+        .find(|dataset| !scope.includes(dataset));
+    match alone {
+        Some(dataset) => Action::Blocked(Blocker {
+            dataset: Some(dataset.clone()),
+            ..blocker.clone()
+        }),
+        None => action,
+    }
+}
+
+/// what becomes of each file fetchloom placed for a dataset in `scope` that no dataset needs
+/// now. the files of a dataset with an archive this machine never unpacked stay, since nothing
+/// tells which of them it still needs.
 fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
+    scope: &Scope,
 ) -> Vec<(String, Unwanted)> {
     let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
     survey
@@ -1365,7 +1473,9 @@ fn unwanted(
         .files
         .iter()
         .filter(|(path, placed)| {
-            !wanted.contains(path.as_str()) && !unsure.contains(placed.dataset.as_str())
+            !wanted.contains(path.as_str())
+                && !unsure.contains(placed.dataset.as_str())
+                && scope.includes(&placed.dataset)
         })
         .map(|(path, placed)| {
             let fate = match survey.disk.get(path) {
@@ -1560,6 +1670,7 @@ mod tests {
             unknown: Vec::new(),
             actions: vec![Action::Keep],
             survey: surveyed(&project),
+            scope: Scope::All,
         };
 
         placing
@@ -1575,6 +1686,104 @@ mod tests {
 
         let (recorded, _) = project.state();
         assert_eq!(recorded.files["data/weather.csv"].dataset, "weather");
+    }
+
+    /// a sync of named datasets never takes another dataset's file out of a named file's way,
+    /// even with `--force`: the file stays, and the named file is kept out as blocked, naming
+    /// the dataset the file is of. a sync of every dataset clears it first, as no dataset needs
+    /// it now.
+    #[test]
+    fn a_named_sync_never_clears_another_datasets_file_from_the_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let data = project.root.join("data");
+        fs::create_dir_all(&data).unwrap();
+        // a dataset gone from data.toml placed a file where the named one now needs a folder
+        let shared = data.join("shared");
+        fs::write(&shared, b"old\n").unwrap();
+        let mut state = State::default();
+        state.files.insert(
+            "data/shared".to_owned(),
+            Placed {
+                dataset: "old".to_owned(),
+                sha256: crate::digest::sha256(b"old\n"),
+                method: Method::Copy,
+                look: now(&shared).unwrap(),
+                writable: true,
+                checked: 0,
+                adopted: false,
+            },
+        );
+        project.write_state(&state).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.new]\nref = \"https://example.org/new.csv\"\npath = \"shared\"\n",
+        )
+        .unwrap();
+        let locked = LockedFile {
+            path: "new.csv".to_owned(),
+            size: 4,
+            sha256: crate::digest::sha256(b"new\n"),
+            md5: None,
+            url: "https://example.org/new.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let plan = || plan::Plan {
+            targets: vec![Target {
+                dataset: "new",
+                path: "data/shared/new.csv".to_owned(),
+                sha256: locked.sha256,
+                size: locked.size,
+                copy: false,
+                locked: &locked,
+            }],
+            unknown: Vec::new(),
+        };
+        let all = Placing::from_plan(
+            &project,
+            &manifest,
+            plan(),
+            true,
+            &Scope::All,
+            surveyed(&project),
+        )
+        .unwrap();
+        let named = Scope::Only(std::collections::BTreeSet::from(["new".to_owned()]));
+        let placing = Placing::from_plan(
+            &project,
+            &manifest,
+            plan(),
+            true,
+            &named,
+            surveyed(&project),
+        )
+        .unwrap();
+
+        assert!(matches!(all.actions[..], [Action::Freed(_)]));
+        let placed = placing
+            .apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            )
+            .unwrap();
+
+        assert_eq!(fs::read(&shared).unwrap(), b"old\n");
+        let [kept] = &placed.kept[..] else {
+            panic!("{placed:?}")
+        };
+        assert_eq!(kept.reason, Reason::Blocked);
+        assert_eq!(
+            kept.blocker
+                .as_ref()
+                .and_then(|blocker| blocker.dataset.as_deref()),
+            Some("old")
+        );
     }
 
     #[test]
@@ -1650,6 +1859,7 @@ mod tests {
             unknown: Vec::new(),
             actions,
             survey,
+            scope: Scope::All,
         };
         placing
             .apply(
@@ -1716,6 +1926,7 @@ mod tests {
                 unknown: Vec::new(),
                 actions: vec![Action::Overwrite(Reason::Foreign)],
                 survey: surveyed(&project),
+                scope: Scope::All,
             };
 
             let placed = placing.apply(
@@ -1786,6 +1997,7 @@ mod tests {
                 unknown: Vec::new(),
                 actions: vec![Action::Unblock(blocker)],
                 survey,
+                scope: Scope::All,
             };
 
             let placed = placing.apply(
@@ -1859,6 +2071,7 @@ mod tests {
             unknown: Vec::new(),
             actions: Vec::new(),
             survey,
+            scope: Scope::All,
         };
 
         placing
@@ -1899,7 +2112,7 @@ mod tests {
         fs::rename(root.join("weather"), root.join("saved")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("weather")).unwrap();
         let mut placer = Placer::new(&root);
-        sweep(&project, &mut placer, &survey, &HashSet::new());
+        sweep(&project, &mut placer, &survey, &HashSet::new(), None);
         assert_eq!(fs::read(&foreign).unwrap(), b"foreign!");
     }
 

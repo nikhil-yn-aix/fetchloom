@@ -30,11 +30,11 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files it place
 
     pub(super) const SYNC: &str = "examples:
   fetchloom sync
-  fetchloom sync --locked
-  fetchloom sync --verify
-  fetchloom sync --force --dry-run
+  fetchloom sync iris
+  fetchloom sync --locked --verify
+  fetchloom sync --force iris --dry-run
 
-on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and adds data/ to a git project's .gitignore. reports files it cannot replace without --force. --dry-run writes nothing";
+on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and adds data/ to a git project's .gitignore. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock
@@ -454,7 +454,7 @@ pub(crate) enum Command {
     Remove(Remove),
 
     /// put the files data.lock lists into the data folder
-    #[command(override_usage = "fetchloom sync [options]", help_template = TEMPLATE, after_help = examples::SYNC)]
+    #[command(override_usage = "fetchloom sync [options] [name]...", help_template = TEMPLATE, after_help = examples::SYNC)]
     Sync(Sync),
 
     /// update data.lock from data.toml, without changing the data folder
@@ -698,6 +698,11 @@ pub(crate) struct Remove {
 /// put the files data.lock lists into the data folder
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Sync {
+    /// the datasets to sync, by their names in data.toml; all of them when none is named. the
+    /// others keep their entries in data.lock and their files as they are
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
+
     /// replace edited files, and files fetchloom did not place, at the paths data.lock lists,
     /// naming each. it finds changes by size and time; add --verify for changes that kept both
     #[arg(long, help_heading = "options")]

@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
+use super::Scope;
 use super::place::local;
 use crate::cache::{self, Cache};
 use crate::digest::Sha256;
@@ -103,6 +104,10 @@ pub(crate) struct Blocker {
     /// whether `sync --force` may remove it. a folder holding anything stays, since its files
     /// may be someone's work.
     pub(crate) clearable: bool,
+    /// the dataset the entry is a file of, or whose files a folder in the way holds, when the
+    /// run leaves that dataset alone, as a sync of other datasets does. such an entry stays
+    /// even with `--force`.
+    pub(crate) dataset: Option<String>,
 }
 
 impl Survey {
@@ -432,6 +437,7 @@ impl Survey {
                 found,
                 folder: true,
                 clearable: true,
+                dataset: None,
             });
         }
         let found = *self.entries.get(path)?;
@@ -441,6 +447,7 @@ impl Survey {
             found,
             folder: false,
             clearable,
+            dataset: None,
         })
     }
 
@@ -590,18 +597,19 @@ impl Survey {
         Ok(())
     }
 
-    /// hashes every placed file that still looks as placed and that nothing here hashed or put
-    /// in doubt already, so changed bytes that kept their size and time show too, as `--verify`
-    /// asks. a hardlink found changed is the cache's copy, so it joins `elsewhere`; any other
-    /// file joins `damaged`. a file that cannot be read stops the check. returns the files it
-    /// found changed, which a plain sync cannot see.
-    pub(crate) fn verify(&mut self, root: &Path) -> Result<HashSet<String>, Error> {
+    /// hashes every placed file of a dataset in `scope` that still looks as placed and that
+    /// nothing here hashed or put in doubt already, so changed bytes that kept their size and
+    /// time show too, as `--verify` asks. a hardlink found changed is the cache's copy, so it
+    /// joins `elsewhere`; any other file joins `damaged`. a file that cannot be read stops the
+    /// check. returns the files it found changed, which a plain sync cannot see.
+    pub(crate) fn verify(&mut self, root: &Path, scope: &Scope) -> Result<HashSet<String>, Error> {
         let files: Vec<(&String, &crate::project::state::Placed)> = self
             .state
             .files
             .iter()
             .filter(|(path, placed)| {
-                self.disk.get(*path) == Some(&placed.look)
+                scope.includes(&placed.dataset)
+                    && self.disk.get(*path) == Some(&placed.look)
                     && !self.edited.contains(*path)
                     && !self.elsewhere.contains(*path)
                     && !self.vouched.contains(*path)
@@ -1140,7 +1148,8 @@ mod tests {
 
     /// a change that keeps a file's size and time shows in no listing; only hashing every placed
     /// file finds it. a hardlink found so is the cache's copy, any other file is damaged, and
-    /// files hashing already settled are not hashed again.
+    /// files hashing already settled are not hashed again, nor are those of a dataset the run
+    /// leaves alone.
     #[test]
     fn verifying_finds_changes_that_kept_their_size_and_time() {
         let dir = tempfile::tempdir().unwrap();
@@ -1154,6 +1163,7 @@ mod tests {
             ("lone", Method::Hardlink),
             ("intact", Method::Copy),
             ("edited", Method::Copy),
+            ("other", Method::Copy),
         ];
         for (name, _) in placed {
             fs::write(project.root.join("data").join(name), b"original").unwrap();
@@ -1167,10 +1177,13 @@ mod tests {
         let mut survey = Survey::read(&project, "data", Threads::default());
         for (name, method) in placed {
             let path = format!("data/{name}");
-            let record = record(&project.root, &path, b"original", method);
+            let mut record = record(&project.root, &path, b"original", method);
+            if name == "other" {
+                "another set".clone_into(&mut record.dataset);
+            }
             survey.state.files.insert(path, record);
         }
-        for name in ["copy", "link", "lone", "edited"] {
+        for name in ["copy", "link", "lone", "edited", "other"] {
             let path = project.root.join("data").join(name);
             let modified = fs::metadata(&path).unwrap().modified().unwrap();
             fs::write(&path, b"Original").unwrap();
@@ -1183,7 +1196,8 @@ mod tests {
         }
         survey.edited.insert("data/edited".to_owned());
 
-        survey.verify(&project.root).unwrap();
+        let named = Scope::Only(std::collections::BTreeSet::from(["set".to_owned()]));
+        survey.verify(&project.root, &named).unwrap();
 
         let (shared, alone): (Vec<_>, Vec<_>) = ["data/copy", "data/link", "data/lone"]
             .into_iter()
@@ -1198,7 +1212,7 @@ mod tests {
             survey.state.files["data/intact"].look,
         );
         assert!(
-            survey.verify(&project.root).is_err(),
+            survey.verify(&project.root, &Scope::All).is_err(),
             "an unreadable file stops it"
         );
     }

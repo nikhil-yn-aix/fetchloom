@@ -10,8 +10,8 @@
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering, settled-run entry and dry runs | `sync`, `sync_all`, `preview_all`, `register` |
-| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Upgrade`, `relock`, `relock_dry`, `preview`, `write_lock`, `place`, `pinned` |
+| [cli/project.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/project.rs) | command ordering, settled-run entry and dry runs | `sync`, `Run`, `sync_all`, `preview_all`, `selected`, `register` |
+| [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | resolution, lock writing and transfer orchestration | `Loop`, `Scope`, `Upgrade`, `relock`, `relock_dry`, `preview`, `write_lock`, `place`, `pinned` |
 | [draft.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/draft.rs) | selected files whose pins are still being learned | `Draft`, `ToUnpack`, `jobs`, `learn`, `finish`, `filter` |
 | [disk.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/disk.rs) | scan, racy hashes, aliases, hardlink audit, and what a removal leaves | `Survey`, `hash_racy`, `check_doubted`, `audit`, `retarget`, `smudge_edited`, `retired`, `left_behind` |
 | [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/place.rs) | actions, previews and state updates | `Placing`, `Placement`, `Preview`, `Changes`, `Action`, `Seen`, `untouched`, `decide`, `apply` |
@@ -23,6 +23,12 @@
 ### locked entry
 
 `sync --locked` runs the same manifest-membership, spec and `extract` check as `lock --check` before opening the cache or entering `sync_all`. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
+
+### named datasets
+
+`sync <name>...` gives its `Loop` a `Scope::Only` of those names with `Loop::within`, and every step reads the scope from there, so relocking and placing cannot disagree about which datasets a run touches. a name data.toml lacks is refused by `selected` before anything else happens. `draft` keeps the entry of every dataset outside the scope as data.lock has it, even one data.toml changed or dropped, and drafts no dataset data.toml added outside it, so their sources get no request. `plan::from_cache` still expands and checks every dataset's targets, since any of them can clash with a named one. `Placing::from_plan` decides only the scope's targets; every other target gets `Action::Unselected`, which places, replaces and counts nothing and stays wanted. removal takes only records of the scope's datasets, and an entry in a named file's way that the state records for another dataset, or a folder holding such a file, is never cleared, even with `--force`: its `Blocker` names that dataset for the warning. only the scope's unknown archives are unpacked, `Survey::verify` hashes only the scope's records, and the sweep of staging leftovers covers only the folders the run places files in. relocking and deciding cost o(named), while the scan and the plan stay o(all files).
+
+`apply` marks the state complete only for `Scope::All`. the settled-sync shortcut stays whole-project, so a settled project has nothing to do for any names, while a named run never settles one: the next plain sync plans every dataset, placing what the named run left out and removing the files of datasets gone from data.toml. one project hold covers the run, as for any sync.
 
 ### resolve only changed specifications
 
@@ -65,7 +71,7 @@ directory traversal and no-follow file-type checks stay serial; file metadata is
 
 `Synced` stores the SHA-256 of the exact manifest and lock text plus a completion flag. `untouched` requires matching inputs, complete state, matching recorded files and no doubt left by the scan. files the scan hashed only because they were as new as the state, and found intact, do not stop it: the shortcut writes the state again so later runs need not hash them, and a project folder that refuses that write fails nothing. it skips relocking, archive-member records and planning, but still registers the project with the cache. `sync_all` hashes the lock text `write_lock` wrote, so the lock is rendered once. `status` asks `untouched` the same question after the same doubt checks, before it plans, so it reports a settled project as sync finds it, listing only files no record claims as extra, even after `cache gc --now` dropped the records of what its archives hold.
 
-a run that leaves files out, preserves edits or encounters a placement failure records incomplete state. `add` records data.toml as it wrote it and `path`, when it has to sync, data.toml and data.lock as it read them under the project lock, so the sync after either can take the shortcut. they plan even so, through `Read::Planned`, since they answer from what planning learns, such as the files an archive whose record is gone holds. `remove`, which places nothing, clears the settled record. whitespace changes to inputs invalidate the byte-hash shortcut even if their parsed meaning is unchanged.
+a run that leaves files out, preserves edits, encounters a placement failure or works on named datasets alone records incomplete state. `add` records data.toml as it wrote it and `path`, when it has to sync, data.toml and data.lock as it read them under the project lock, so the sync after either can take the shortcut. they plan even so, through `Read::Planned`, since they answer from what planning learns, such as the files an archive whose record is gone holds. `remove`, which places nothing, clears the settled record. whitespace changes to inputs invalidate the byte-hash shortcut even if their parsed meaning is unchanged.
 
 ### plan before fetching
 
@@ -86,6 +92,7 @@ before preparing downloads, `Loop::ask_room` sums what placing lacks, the archiv
 ## invariants and traps
 
 - `relock` refuses a clash the listings show before it downloads anything, and `sync_all` plans the new lock before `write_lock`, so a destination clash refuses the run with `data.lock` unchanged. an archive this machine never unpacked is planned only once it is, so a clash among its files, or between them and another dataset's files, can still follow a written lock, though it still comes before anything is placed. failed `add` restores the previous manifest and lock when recovery writes succeed; cached bytes remain for the next try, while `Placing::apply` takes back the files it placed for the added dataset and the records of files it took as placed, since only `add` names a dataset to apply as `told`.
+- under `Scope::Only`, every create, replace or delete is on a path whose target or state record belongs to a named dataset, and data.lock changes only in named entries.
 - matching size and time alone cannot establish a racy file's bytes or a marked hardlink's bytes.
 - use the scan's start for `Placed.checked`; using the end could hide a mark written during placement.
 - mutable URLs and OSF nodes cannot recreate an older listing merely because a filter edit reused their reference. hashes still pin selected bytes.

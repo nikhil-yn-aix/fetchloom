@@ -4,6 +4,7 @@
 
 ```sh
 fetchloom sync
+fetchloom sync iris
 fetchloom sync --offline
 fetchloom sync --locked
 fetchloom sync --verify
@@ -13,8 +14,10 @@ fetchloom sync --force --dry-run
 ## usage
 
 ```sh
-fetchloom sync [options]
+fetchloom sync [options] [name]...
 ```
+
+name datasets, by their names in data.toml, to sync only those, as [named datasets](#named-datasets) describes; with no name, sync syncs every dataset.
 
 | option | effect |
 |---|---|
@@ -34,7 +37,7 @@ fetchloom sync [options]
 5. save project state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed, as `add` does, so a repository started after the first `add` stops listing `data/`.
 
-with `--json`, `result.datasets` names the datasets whose pins changed: pinned for the first time, pinned to other data, or no longer in `data.lock`. [JSON output](../reference/json-output.md) describes the rest.
+with `--json`, `result.datasets` names the datasets whose pins changed: pinned for the first time, pinned to other data, or no longer in `data.lock`. `result.selected` lists the names the sync was given, or is null when it was given none. [JSON output](../reference/json-output.md) describes the rest.
 
 placement tries a reflink, then a hardlink, then a copy; read-only placement on windows tries hardlinks first. files are read-only by default. recognized synced folders skip hardlinks. `copy = true` requests writable reflinks or copies. see [placement](../concepts.md#placement).
 
@@ -47,6 +50,25 @@ error: iris/iris.csv is not the file data.lock records
 ```
 
 follow the upgrade hint only when you intend to change the input. [recovery](../concepts.md#recovery) covers expired download URLs and interrupted transfers.
+
+## named datasets
+
+`fetchloom sync small` works on small alone. it resolves small when its entry in data.toml changed, downloads and places small's files, and removes the files fetchloom placed for small that small no longer pins. every other dataset keeps its entry in data.lock and its files as they are, even one data.toml changed, dropped or added: nothing of theirs is resolved, downloaded, placed, replaced or removed. stderr in a fresh clone of a project with datasets small and large, from a real run:
+
+```text
+ Downloaded 1 file · 1 B in 26 ms
+     Placed data/small · 1 file linked to the cache
+     Synced small into data · 1 other dataset left as it was
+```
+
+`--force small` replaces edits in small's files only, `--verify small` hashes small's files only, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
+
+```text
+error: data.toml has no dataset called smal
+  help: did you mean `fetchloom sync small`?
+```
+
+a named sync never records the project as fully synced, so the next plain `sync` looks at every dataset again: it places what the named sync left out, and removes the files of a dataset gone from data.toml. a file of another dataset that stands where a named dataset needs a folder stays, even with `--force`, and its warning says to sync that dataset first, or every dataset.
 
 ## already in place
 
@@ -118,7 +140,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 
 ## exit codes
 
-0 includes success with preserved conflicts or a registration warning. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -128,6 +150,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 | offline sync needs resolution | the manifest changed or pins are missing | prepare the project online before disconnecting |
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
+| status still lists another dataset after `sync <name>` | a named sync leaves the other datasets as they are | run `fetchloom sync` |
 
 ## stopping a sync
 

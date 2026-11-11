@@ -24,6 +24,7 @@ mod project;
 mod proxy;
 mod recovery;
 mod remove;
+mod scope;
 mod search;
 mod secrets;
 mod split;

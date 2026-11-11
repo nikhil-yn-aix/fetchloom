@@ -78,6 +78,7 @@ pub(super) fn merge(
     );
     Ok(Some(Report {
         project: project.root.clone(),
+        selected: None,
         datasets: merged.repinned,
         lock_changed,
         placement: None,

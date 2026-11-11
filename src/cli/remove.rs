@@ -4,7 +4,7 @@
 use super::args::Remove;
 use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known};
 use super::sync::disk::Survey;
-use super::sync::place;
+use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
 use crate::error::Error;
 use crate::project::lock;
@@ -30,7 +30,15 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         open_cache()?
     };
     let survey = Survey::read(&project, &new_manifest.data_dir, context.threads);
-    let placing = place::Placing::new(&project, &new_manifest, &lock, &cache, false, survey)?;
+    let placing = place::Placing::new(
+        &project,
+        &new_manifest,
+        &lock,
+        &cache,
+        false,
+        &Scope::All,
+        survey,
+    )?;
     if dry_run {
         let preview = placing.preview_removal();
         context.output.step(

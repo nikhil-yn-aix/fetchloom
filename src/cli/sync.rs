@@ -52,6 +52,33 @@ impl Upgrade {
     }
 }
 
+/// the datasets a run works on: every one, or only those a person named. a run of named
+/// datasets resolves, downloads, places, replaces and removes nothing of any other, and JSON
+/// reports it as `selected`: the names, or null for every dataset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    All,
+    Only(BTreeSet<String>),
+}
+
+impl Scope {
+    pub(crate) fn includes(&self, name: &str) -> bool {
+        match self {
+            Scope::All => true,
+            Scope::Only(names) => names.contains(name),
+        }
+    }
+}
+
+impl serde::Serialize for Scope {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Scope::All => serializer.serialize_none(),
+            Scope::Only(names) => serializer.collect_seq(names),
+        }
+    }
+}
+
 /// a project and what working on it needs.
 pub(super) struct Loop<'a> {
     pub(super) context: &'a Context,
@@ -62,6 +89,8 @@ pub(super) struct Loop<'a> {
     unpacked: Mutex<Vec<Sha256>>,
     /// the dataset the command's last line tells about, so its lock and placement lines stay out.
     told: Option<String>,
+    /// the datasets this run works on.
+    pub(super) scope: Scope,
     /// whether this run wrote data.lock, so a download cancelled later no longer left everything
     /// as it was.
     wrote_lock: AtomicBool,
@@ -84,6 +113,7 @@ impl<'a> Loop<'a> {
             cache,
             unpacked: Mutex::default(),
             told: None,
+            scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
         }
@@ -91,6 +121,13 @@ impl<'a> Loop<'a> {
 
     pub(super) fn telling(mut self, name: &str) -> Self {
         self.told = Some(name.to_owned());
+        self
+    }
+
+    /// the run works on `scope` alone: it keeps every other dataset's entry in data.lock and its
+    /// files as they are.
+    pub(super) fn within(mut self, scope: Scope) -> Self {
+        self.scope = scope;
         self
     }
 
@@ -127,13 +164,22 @@ impl<'a> Loop<'a> {
         for (said, help) in plan::file_shaped_paths(manifest, &plan) {
             self.context.output.warn_with(&said, &help);
         }
-        let mut placing = Placing::from_plan(self.project, manifest, plan, force, survey)?;
+        let mut placing =
+            Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
         self.ask_room(&placing)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
             self.unpack_locked(lock, &unknown).await?;
             let survey = placing.into_survey();
-            placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
+            placing = Placing::new(
+                self.project,
+                manifest,
+                lock,
+                &self.cache,
+                force,
+                &self.scope,
+                survey,
+            )?;
         }
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
@@ -160,9 +206,10 @@ impl<'a> Loop<'a> {
         )
     }
 
-    /// the lock data.toml asks for, beside data.lock as it was. datasets whose entry changed are
-    /// resolved again, and files whose hash no source states are downloaded to learn it. `given`
-    /// is a listing already resolved for one dataset.
+    /// the lock data.toml asks for, beside data.lock as it was. datasets of the run's scope
+    /// whose entry changed are resolved again, and files whose hash no source states are
+    /// downloaded to learn it; every other entry stays as data.lock has it. `given` is a
+    /// listing already resolved for one dataset.
     pub(super) async fn relock(
         &self,
         manifest: &Manifest,
@@ -270,9 +317,9 @@ impl<'a> Loop<'a> {
         })
     }
 
-    /// datasets whose entry is unchanged, moved from data.lock as it has them, and drafts of the
-    /// others with every hash known without a download: from data.lock's files when only
-    /// `extract` changed, otherwise resolved again.
+    /// datasets whose entry is unchanged or outside the run's scope, moved from data.lock as it
+    /// has them, and drafts of the others with every hash known without a download: from
+    /// data.lock's files when only `extract` changed, otherwise resolved again.
     async fn draft(
         &self,
         manifest: &Manifest,
@@ -284,6 +331,11 @@ impl<'a> Loop<'a> {
         let mut others = Vec::new();
         let mut drafts = Vec::new();
         for locked in old.datasets {
+            // another dataset's entry stays as it is, even one data.toml changed or dropped
+            if !self.scope.includes(&locked.name) {
+                kept.push(locked);
+                continue;
+            }
             match manifest.datasets.get(&locked.name) {
                 Some(entry) if !upgrade.includes(&locked.name) => match locked.drift(entry) {
                     None => kept.push(locked),
@@ -305,7 +357,10 @@ impl<'a> Loop<'a> {
             let is_kept = kept
                 .binary_search_by(|locked| locked.name.as_str().cmp(name))
                 .is_ok();
-            if !is_kept && !drafts.iter().any(|(drafted, _)| drafted == name) {
+            if self.scope.includes(name)
+                && !is_kept
+                && !drafts.iter().any(|(drafted, _)| drafted == name)
+            {
                 asks.push((
                     name.clone(),
                     pinned(entry, others.get(name), upgrade.includes(name)),
@@ -381,7 +436,15 @@ impl<'a> Loop<'a> {
         damaged: &HashSet<Sha256>,
         guessed: &HashSet<String>,
     ) -> Result<Preview, Error> {
-        let placing = Placing::new(self.project, manifest, lock, &self.cache, force, survey)?;
+        let placing = Placing::new(
+            self.project,
+            manifest,
+            lock,
+            &self.cache,
+            force,
+            &self.scope,
+            survey,
+        )?;
         let mut unpack = Vec::new();
         for (dataset, file) in placing
             .unknown()
@@ -1544,6 +1607,60 @@ mod tests {
             assert!(!error.message.contains("private-value"));
             assert_eq!(context.work.counts().requests, 0);
         }
+    }
+
+    /// a run of named datasets resolves only those: every other entry stays as data.lock has
+    /// it, though data.toml changed one, dropped one and added one beside them, and no source
+    /// of theirs is asked anything.
+    #[test]
+    fn relock_in_scope_keeps_other_records() {
+        use crate::cli::project::tests::{listed, pinned, pinned_file, stated};
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let context = context();
+        let manifest = Manifest::parse(
+            "[datasets.a]\nref = \"https://example.org/a\"\n\n[datasets.b]\nref = \"https://example.org/b2\"\n\n[datasets.d]\nref = \"https://example.org/d\"\n",
+        )
+        .unwrap();
+        let file = |name: &str| {
+            vec![pinned_file(
+                &format!("{name}.csv"),
+                &format!("https://example.org/{name}"),
+                name.as_bytes(),
+            )]
+        };
+        let old = Lock {
+            datasets: vec![
+                pinned("a", lock::spec(&manifest.datasets["a"]), file("a")),
+                pinned("b", "sha256:an older entry".to_owned(), file("b")),
+                pinned("c", "sha256:a dropped entry".to_owned(), file("c")),
+            ],
+            ..Lock::default()
+        };
+        let relock = |names: &[&str], given| {
+            let scope = Scope::Only(names.iter().map(|name| (*name).to_owned()).collect());
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let runner =
+                Loop::new(&context, &project, Arc::new(context.net()), cache).within(scope);
+            block_on(runner.relock(&manifest, Some(old.clone()), &Upgrade::Nothing, given))
+        };
+
+        let (alone, before) = relock(&["a"], None).unwrap();
+        let listing = listed(
+            "https://example.org/d",
+            vec![stated("d.csv", "https://example.org/d", b"d")],
+        );
+        let (with_d, before_d) = relock(&["a", "d"], Some(("d".to_owned(), listing))).unwrap();
+
+        assert_eq!(alone, old);
+        assert!(before.holds(&alone));
+        assert_eq!(repinned(&before_d, &with_d), ["d"]);
+        for name in ["a", "b", "c"] {
+            assert_eq!(with_d.get(name), old.get(name), "{name}");
+        }
+        assert_eq!(context.work.counts().requests, 0);
     }
 
     #[test]

@@ -38,7 +38,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 
 | command | result fields |
 |---|---|
-| `add`, `remove`, `sync`, `lock` | `project`: absolute path; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); for a `lock` that merged both sides of a git merge, also `merge`, below |
+| `add`, `remove`, `sync`, `lock` | `project`: absolute path; for `sync`, `selected`: the dataset names it was given, or null when it was given none; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); for a `lock` that merged both sides of a git merge, also `merge`, below |
 | `get` | `file`: the absolute path of the file `-o` wrote or found, else null; `folder`: absolute path, the file's folder with `-o`, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, nullable `access` (`public`, `login`, `terms` or `unknown`, as the source said), and nullable `locked_files`, an array of `path`, `size`, `sha256` and `url` records, `url` null for a link holding a login, a secret or a control character; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
@@ -52,7 +52,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `help` | `options`: the options fetchloom itself takes, which are those every command takes and `--version`; `commands`: each command with `name`, `about`, `usage`, `arguments` and `examples`. each argument has `name`, `short`, `value`, `help`, `required` and `repeats` |
 | `cache verify` | `objects`: examined count; `bytes`: examined payload bytes; `changed`: hash array; `stuck`: hashes whose change marks could not be written; `unreadable`: failure records for contents, metadata or directory entries that could not be read |
 
-project `datasets` names the dataset added by `add` or removed by `remove`. for `sync` and `lock`, and for their dry runs, it names the datasets whose pins changed, or would change: pinned for the first time, pinned to another version or other files, or no longer in `data.lock`. an entry whose `data.toml` settings changed without changing what it pins is not named. a duplicate `add`, a `sync` that changes no pin and a successful `lock --check` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement, and a successful `lock --check` has `lock_changed = false`.
+project `datasets` names the dataset added by `add` or removed by `remove`. for `sync` and `lock`, and for their dry runs, it names the datasets whose pins changed, or would change: pinned for the first time, pinned to another version or other files, or no longer in `data.lock`. a `sync` given names changes no other dataset's pin, so its `datasets` holds only names from its `selected`, and its `placement` counts only their files. an entry whose `data.toml` settings changed without changing what it pins is not named. a duplicate `add`, a `sync` that changes no pin and a successful `lock --check` return an empty array. `remove` always reports `lock_changed = true`, including when the removed dataset had no lock entry. `lock` has null placement, and a successful `lock --check` has `lock_changed = false`.
 
 `merge` has the dataset-name arrays `from_ours`, taken from the checked-out branch, `from_theirs`, taken from the merged branch, `same`, `removed` and `unpinned`, in the merged `data.toml` with no pin of either side that answers it. `datasets` then names the pins that changed from the checked-out branch's. a merge that needs a choice fails with `unconfirmed` and keeps `result.project` and `result.merge`, whose `conflicts` names each dataset to choose a side for with `--ours` or `--theirs`; its `fix` is null. [after a git merge](../commands/lock.md#after-a-git-merge) has the rules.
 
@@ -103,10 +103,10 @@ for `add`, `remove` and `sync`, `lock_changed` says whether `data.lock` would ch
 
 a file already standing where a file goes whose hash only its download can learn is in neither `place` nor `replace`, nor in the counts: only that download, listed in `download`, tells whether it holds the pinned bytes.
 
-`result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a test run with the project path shortened:
+`result` of `fetchloom --json sync --dry-run` in a fresh clone whose locked file is already in the cache, from a real run with the project path shortened:
 
 ```json
-{"project":"/home/me/study","datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[],"overwritten":[],"changed_copies":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
+{"project":"/home/me/study","selected":null,"datasets":[],"lock_changed":false,"placement":{"placed":1,"replaced":0,"removed":0,"unchanged":0,"kept":[],"restored":[],"overwritten":[],"changed_copies":[]},"dry_run":true,"changes":{"place":["data/iris/iris.csv"],"replace":[],"remove":[],"download":[],"unpack":[]}}
 ```
 
 for `lock`, `lock_changed` and `datasets` say whether `data.lock` would change and which pins, as far as is known without downloading; `placement` is null. `changes.download` lists the files locking would download first, to learn a hash or, with `--upgrade`, to check a file no checksum pins, which the dry run counts as unchanged until then. `changes.unpack` lists the archives it would unpack to learn what they hold. `place`, `replace` and `remove` are empty.

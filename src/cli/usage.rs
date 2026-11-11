@@ -348,7 +348,7 @@ mod tests {
     fn extra_positionals_are_arguments_not_options() -> Result<(), Box<dyn std::error::Error>> {
         for (arguments, expected) in [
             (
-                &["fetchloom", "sync", "iris"][..],
+                &["fetchloom", "status", "iris"][..],
                 "unexpected argument \"iris\"",
             ),
             (
@@ -356,7 +356,7 @@ mod tests {
                 "unexpected argument \"iris\"",
             ),
             (
-                &["fetchloom", "sync", "--", "-iris"],
+                &["fetchloom", "status", "--", "-iris"],
                 "unexpected argument \"-iris\"",
             ),
         ] {
@@ -374,7 +374,7 @@ mod tests {
     fn a_secret_in_a_mistyped_link_stays_masked() -> Result<(), Box<dyn std::error::Error>> {
         let link = "https://example.org/file?token=AUDIT_CANARY";
         for arguments in [
-            &["fetchloom", "sync", link][..],
+            &["fetchloom", "status", link][..],
             &["fetchloom", link],
             &[
                 "fetchloom",
@@ -467,8 +467,8 @@ mod tests {
                 "`fetchloom get --help` says what it takes",
             ),
             (
-                &["fetchloom", "sync", "iris"],
-                "`fetchloom sync --help` says what it takes",
+                &["fetchloom", "status", "iris"],
+                "`fetchloom status --help` says what it takes",
             ),
             (
                 &["fetchloom", "cache", "verify", "--wat"],

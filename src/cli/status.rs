@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::Context;
 use super::sync::disk::{Blocker, Entry, Survey};
-use super::sync::place;
+use super::sync::{Scope, place};
 use crate::digest;
 use crate::error::Error;
 use crate::output::Output;
@@ -156,7 +156,7 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
     if verify {
-        status.hashed_only = survey.verify(&project.root)?;
+        status.hashed_only = survey.verify(&project.root, &Scope::All)?;
     }
     if place::untouched(project, &manifest, &survey, &seen, false)?.is_some() {
         let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();

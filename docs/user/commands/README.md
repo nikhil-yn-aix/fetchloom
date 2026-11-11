@@ -5,7 +5,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | command | what it does | when to use it |
 |---|---|---|
 | [`add`](add.md) | add a dataset, lock its files and sync the project | start using a dataset in a project |
-| [`sync`](sync.md) | place locked files, updating a stale lock first | restore data after cloning or changing the manifest |
+| [`sync`](sync.md) | place locked files, updating a stale lock first, for every dataset or only those named | restore data after cloning or changing the manifest |
 | [`lock`](lock.md) | update or check pins without placing files | review an input change before syncing |
 | [`list`](list.md) | show dataset references, locked sizes and folders | inspect the project manifest and lock |
 | [`export`](export.md) | write the SHA-256 of placed files, or the links of downloaded ones | check files with `sha256sum`, or download them with another tool |
