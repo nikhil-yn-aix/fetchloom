@@ -29,7 +29,14 @@ fetchloom export [options] [name]...
 
 ## what it writes
 
-`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything, takes no project hold, makes no cache and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../recipes.md)'s result is in the `sha256` form like any placed dataset, from the list of its files `data.lock` keeps, and in no list of links, since nothing downloads it.
+`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything, takes no project hold, makes no cache and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../recipes.md)'s result is in the `sha256` form like any placed dataset, from the list of its files `data.lock` keeps, and in no list of links, since nothing downloads it. its files reach the data folder when a build places them, or a sync from a cache or [mirror](../mirrors.md) that holds them, so in a fresh clone `sha256sum -c` cannot open them until `fetchloom build` has run. stdout of `sha256sum -c` in such a clone, after a sync that left `clean` out:
+
+```text
+data/clean/clean.csv: FAILED open or read
+data/iris/iris.csv: OK
+```
+
+after `fetchloom build`, which ran the step and placed `clean`, both lines say `OK`.
 
 the `sha256` paths start at the project's folder, so check them from there. from a real run with a zenodo dataset and a zip from UCI, which unpacks to four files:
 
