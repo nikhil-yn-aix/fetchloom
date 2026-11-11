@@ -360,9 +360,14 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
         json!(["data/pets/images/cat_001.png", "data/pets/labels.csv"])
     );
     assert_eq!(document["result"]["placement"]["placed"], 2);
-    assert_eq!(
-        document["warnings"][0],
-        "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom drop data/pets/images/cat_001.png`; keep files of your own in a folder outside data/"
+    // a drive that cannot link warns of that too, so the warning is found, not counted
+    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom drop data/pets/images/cat_001.png`; keep files of your own in a folder outside data/";
+    assert!(
+        document["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|told| told == warning)),
+        "{}",
+        document["warnings"]
     );
     assert_eq!(fs::read(folder.join("mine/cat_001.png"))?, b"cat");
     Ok(())
