@@ -995,6 +995,36 @@ fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
     Ok(())
 }
 
+/// shards in a folder on a lab disk are the likely inode-quota case, so a folder import hints as
+/// a bucket does, before anything is copied into the cache.
+#[test]
+fn a_folder_of_shards_hints_keeping_them_packed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("shards")?;
+    for number in 0..8 {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        builder.append_data(&mut header, format!("sample-{number}.txt"), &b"x"[..])?;
+        fs::write(
+            folder.join(format!("part-{number:03}.tar")),
+            builder.into_inner()?,
+        )?;
+    }
+    let added = sandbox.run(&["add", "../shards"])?;
+    ok(&added)?;
+    let stderr = text(&added.stderr)?;
+    let hinted = stderr.find(
+        "  hint: ../shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml\n",
+    );
+    assert!(
+        hinted.is_some() && hinted < stderr.find("Imported"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// webdataset shards: many numbered tars, which loaders read packed. a server stands in for S3,
 /// which only debug builds can be pointed at.
 #[cfg(debug_assertions)]

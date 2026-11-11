@@ -118,7 +118,7 @@ the parts of an archive missing one are placed as plain files. rar volumes and s
 
 ### webdataset shards
 
-webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket:
+webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. an `add` of a folder on this machine hints the same way before it copies anything into the cache, naming the folder as typed, as in `hint: ./shards holds 8 numbered .tar shards`. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket:
 
 ```text
    Resolved s3://wds/shards/ · 1,024 files · 10.0 MiB

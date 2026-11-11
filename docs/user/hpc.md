@@ -59,7 +59,7 @@ a cluster's disk usually limits how many files you may keep, an inode quota, whi
 fetchloom add s3://bucket/shards/ --no-extract
 ```
 
-or set `extract = false` on the dataset in `data.toml` before its first sync. `add`, `get` and `sync` hint this before downloading when a dataset holds at least 8 numbered `.tar` shards in one folder; [webdataset shards](concepts.md#webdataset-shards) shows the hint.
+or set `extract = false` on the dataset in `data.toml` before its first sync. `add`, `get` and `sync` hint this before downloading when a dataset holds at least 8 numbered `.tar` shards in one folder, and `add` of a folder of them before copying it into the cache; [webdataset shards](concepts.md#webdataset-shards) shows the hint.
 
 ## the cache on a shared disk
 

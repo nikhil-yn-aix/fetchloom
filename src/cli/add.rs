@@ -20,6 +20,7 @@ use super::sync::disk::{self, Survey};
 use super::sync::place::{Changes, Placement};
 use super::sync::{self as engine, Given, Loop, Upgrade};
 use super::{Context, fetch, open_cache, peek_cache};
+use crate::archive;
 use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
@@ -503,20 +504,7 @@ async fn import_held(
         &project.root.join(&manifest.data_dir),
         cache.root(),
     )?;
-    let supplied = args
-        .name
-        .as_deref()
-        .filter(|name| {
-            manifest
-                .datasets
-                .get(*name)
-                .is_some_and(manifest::Entry::is_import)
-        })
-        .map(str::to_owned);
-    let source = import_entry(manifest, supplied.as_deref(), args)?;
-    let walked = import::walk(&start, shown, &source, &context.stop)?;
-    tell_skipped(&context.output, shown, &walked.skipped);
-    tell_system(&context.output, shown, &walked.system);
+    let (supplied, source, walked) = walk_import(context, manifest, args, &start, shown)?;
     let pinned = supplied
         .as_ref()
         .and_then(|name| current(old.as_ref(), name, &manifest.datasets[name.as_str()]));
@@ -866,6 +854,42 @@ fn preview_import(
         }),
         merge: None,
     }
+}
+
+/// what an import of the folder at `start`, typed as `shown`, takes: the dataset it supplies
+/// files for, when `--as` names an import data.toml has, the entry it makes, and the files a walk
+/// of the folder found. it says what the walk left out, and for a new dataset that unpacks, hints
+/// keeping numbered tar shards packed, as a bucket of them hints, before anything is copied.
+fn walk_import(
+    context: &Context,
+    manifest: &Manifest,
+    args: &Add,
+    start: &Path,
+    shown: &str,
+) -> Result<(Option<String>, Source, Walked), Error> {
+    let supplied = args
+        .name
+        .as_deref()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(manifest::Entry::is_import)
+        })
+        .map(str::to_owned);
+    let source = import_entry(manifest, supplied.as_deref(), args)?;
+    let walked = import::walk(start, shown, &source, &context.stop)?;
+    let output = &context.output;
+    tell_skipped(output, shown, &walked.skipped);
+    tell_system(output, shown, &walked.system);
+    if supplied.is_none()
+        && source.extract
+        && output.shows_hints()
+        && let Some(shards) = archive::shards(walked.files.iter().map(|file| file.path.as_str()))
+    {
+        output.hint(&shards.hint(shown, "--no-extract, or extract = false in data.toml"));
+    }
+    Ok((supplied, source, walked))
 }
 
 /// warns about the links and special files below `shown` that an import left out.
