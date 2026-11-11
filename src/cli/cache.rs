@@ -9,7 +9,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Usage};
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
@@ -22,10 +22,8 @@ use crate::units;
 #[derive(Serialize)]
 pub(super) struct Info {
     path: PathBuf,
-    objects: u64,
-    bytes: u64,
-    /// bytes some registered project's data.lock needs.
-    needed: u64,
+    #[serde(flatten)]
+    usage: Usage,
     projects: Vec<PathBuf>,
     /// downloads a run stopped before they finished, kept so a later run can continue them.
     unfinished_downloads: u64,
@@ -42,21 +40,15 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
     }
-    let objects = scan.objects;
-    let bytes: u64 = objects.iter().map(|object| object.size).sum();
-    let kept: u64 = objects
-        .iter()
-        .filter(|object| needed.objects.contains(&object.digest))
-        .map(|object| object.size)
-        .sum();
+    let usage = Usage::measure(&scan, &needed, SystemTime::now());
     let output = &context.output;
     output.step(
         "Cache",
         &format!(
             "{} · {} · {}",
             cache.root().display(),
-            units::count(objects.len() as u64, "file", "files"),
-            units::size(bytes)
+            units::count(usage.objects, "file", "files"),
+            units::size(usage.bytes)
         ),
     );
     for project in &projects {
@@ -73,33 +65,99 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
             ),
         );
     }
-    if objects.is_empty() {
-        output.done("Ok", "the cache has no data files");
-    } else if objects
-        .iter()
-        .all(|object| needed.objects.contains(&object.digest))
-    {
-        output.done("Ok", "every cached file is needed by a project");
-    } else {
-        output.done(
-            "Ok",
-            &format!("{} of it is needed by a project", units::size(kept)),
-        );
-        output.hint("`fetchloom cache gc` frees the rest once it is a day old; `fetchloom cache gc --now` frees it now");
-    }
+    tell_usage(output, &usage, projects.len());
     if unfinished.downloads > 0 {
         output.hint("`fetchloom cache gc --now` also frees unfinished downloads no fetchloom is running; those start over next time");
     }
     output.answer_untold(&cache.root().display().to_string());
     Ok(Info {
         path: cache.root().to_path_buf(),
-        objects: objects.len() as u64,
-        bytes,
-        needed: kept,
+        usage,
         projects,
         unfinished_downloads: unfinished.downloads,
         unfinished_bytes: unfinished.bytes,
     })
+}
+
+/// where the cache's space goes: what the `projects` registered need, what no project needs and
+/// what gc frees of it.
+fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
+    if usage.objects == 0 {
+        output.done("Ok", "the cache has no data files");
+        return;
+    }
+    if projects > 0 {
+        output.step("Needed", &needed_line(usage, projects));
+    }
+    let Some(unneeded) = unneeded_line(usage) else {
+        output.done("Ok", "every cached file is needed by a project");
+        return;
+    };
+    output.step("Unneeded", &unneeded);
+    // gc frees nothing of what folders outside the cache link
+    if usage.unneeded == 0 || usage.freeable + usage.young > 0 {
+        output.hint("`fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now");
+    }
+}
+
+/// what the projects need, and how much of it deleting would not free.
+fn needed_line(usage: &Usage, projects: usize) -> String {
+    let mut line = format!(
+        "{} by {}",
+        units::size(usage.needed),
+        units::count(projects as u64, "project", "projects")
+    );
+    if usage.linked > 0 {
+        line.push_str(" · ");
+        line.push_str(&linked_part(usage.linked, usage.needed));
+    }
+    line
+}
+
+/// what no project needs and when gc frees it, if any object is unneeded.
+fn unneeded_line(usage: &Usage) -> Option<String> {
+    if usage.unneeded_objects == 0 {
+        return None;
+    }
+    let (freeable, young) = (usage.freeable, usage.young);
+    let elsewhere = usage.unneeded.saturating_sub(freeable + young);
+    let size = units::size;
+    let mut parts = Vec::new();
+    match (freeable, young) {
+        (0, 0) => {}
+        (_, 0) if elsewhere == 0 => parts.push("gc frees it now".to_owned()),
+        (0, _) if elsewhere == 0 => parts.push("gc frees it once it is a day old".to_owned()),
+        (_, _) if elsewhere == 0 => parts.push(format!(
+            "gc frees {} now, the rest once it is a day old",
+            size(freeable)
+        )),
+        (_, 0) => parts.push(format!("gc frees {} now", size(freeable))),
+        (0, _) => parts.push(format!("gc frees {} once it is a day old", size(young))),
+        (_, _) => parts.push(format!(
+            "gc frees {} now and {} once it is a day old",
+            size(freeable),
+            size(young)
+        )),
+    }
+    if elsewhere > 0 {
+        parts.push(linked_part(elsewhere, usage.unneeded));
+    }
+    let mut line = size(usage.unneeded);
+    if !parts.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&parts.join("; "));
+    }
+    Some(line)
+}
+
+/// says that `linked` bytes of `whole` have a name outside the cache too.
+fn linked_part(linked: u64, whole: u64) -> String {
+    let what = if linked == whole {
+        "all of it".to_owned()
+    } else {
+        format!("{} of it", units::size(linked))
+    };
+    format!("{what} is linked outside the cache too, so deleting it would free nothing")
 }
 
 /// what `cache gc` freed, or with `--dry-run` would free, as `--json` prints it.
@@ -474,20 +532,8 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
     let Ok(scan) = cache.scan_objects(stop) else {
         return;
     };
-    // only what gc would free and what frees disk space: past its day, and not also a file a
-    // folder made by `get` still links to
-    let freeable: u64 = scan
-        .objects
-        .iter()
-        .filter(|object| {
-            !needed.objects.contains(&object.digest)
-                && now
-                    .duration_since(object.changed)
-                    .is_ok_and(|age| age >= crate::cache::GRACE)
-                && !crate::place::has_other_names(&object.path)
-        })
-        .map(|object| object.size)
-        .sum();
+    // what `fetchloom cache` says gc frees now, so the two never disagree
+    let freeable = Usage::measure(&scan, &needed, now).freeable;
     if freeable >= REMIND_FROM {
         output.hint(&format!(
             "the cache holds {} no project needs; `fetchloom cache gc` frees it",
@@ -755,5 +801,44 @@ mod tests {
         let mut unread = Needed::default();
         add_with_stop(&mut unread, &cache, &lock, None, &Stop::default()).unwrap();
         assert!(unread.objects.contains(&archive.digest));
+    }
+
+    /// what gc frees of what no project needs: now, once a day old, or nothing, for what a folder
+    /// outside the cache links too.
+    #[test]
+    fn the_unneeded_line_says_what_gc_frees_now_later_and_never() {
+        for ((freeable, young, linked), said) in [
+            ((1024, 0, 0), "1.0 KiB · gc frees it now"),
+            ((0, 1024, 0), "1.0 KiB · gc frees it once it is a day old"),
+            (
+                (1024, 2048, 0),
+                "3.0 KiB · gc frees 1.0 KiB now, the rest once it is a day old",
+            ),
+            (
+                (1024, 2048, 3072),
+                "6.0 KiB · gc frees 1.0 KiB now and 2.0 KiB once it is a day old; 3.0 KiB of it \
+                 is linked outside the cache too, so deleting it would free nothing",
+            ),
+            (
+                (0, 0, 1024),
+                "1.0 KiB · all of it is linked outside the cache too, so deleting it would free \
+                 nothing",
+            ),
+            ((0, 0, 0), "0 B"),
+        ] {
+            let usage = Usage {
+                unneeded: freeable + young + linked,
+                freeable,
+                young,
+                unneeded_objects: 1,
+                ..Usage::default()
+            };
+            assert_eq!(unneeded_line(&usage).as_deref(), Some(said));
+        }
+        assert_eq!(
+            unneeded_line(&Usage::default()),
+            None,
+            "all of it is needed"
+        );
     }
 }

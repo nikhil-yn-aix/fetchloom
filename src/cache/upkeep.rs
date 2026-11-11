@@ -29,6 +29,9 @@ pub(crate) struct Object {
     /// the modification time back to when the download began, a day before for one a later run
     /// finished.
     pub(crate) changed: SystemTime,
+    /// how many names its file has, more than one while a hardlink, such as a project's, shares
+    /// it. none where a folder's listing does not tell, as on windows.
+    pub(crate) names: Option<u64>,
 }
 
 #[derive(Default)]
@@ -230,13 +233,20 @@ impl Cache {
                     let modified = metadata.modified()?;
                     let changed = super::object::changed(&metadata)
                         .map_or(modified, |changed| changed.max(modified));
-                    Ok((metadata.len(), changed))
+                    // the metadata unix gives counts names, so this takes no further call; what a
+                    // windows listing gives does not count them
+                    #[cfg(unix)]
+                    let names = Some(std::os::unix::fs::MetadataExt::nlink(&metadata));
+                    #[cfg(not(unix))]
+                    let names = None;
+                    Ok((metadata.len(), changed, names))
                 }) {
-                    Ok((size, changed)) => scan.objects.push(Object {
+                    Ok((size, changed, names)) => scan.objects.push(Object {
                         digest,
                         size,
                         path: entry.path(),
                         changed,
+                        names,
                     }),
                     Err(err) => scan.unreadable.push(Failure::new(&entry.path(), &err)),
                 }

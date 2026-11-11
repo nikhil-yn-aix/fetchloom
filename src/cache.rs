@@ -9,6 +9,7 @@ mod partial;
 mod staging;
 mod unpacked;
 mod upkeep;
+mod usage;
 
 #[cfg(test)]
 mod link_tests;
@@ -36,6 +37,7 @@ pub(crate) use partial::{
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
+pub(crate) use usage::Usage;
 
 use crate::digest::{self, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};

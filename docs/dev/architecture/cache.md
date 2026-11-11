@@ -20,6 +20,7 @@ objects are read-only files named by their content digest. the cache owns public
 | [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `record_tree_bytes`, `unpacked`, `holds_unpacked` |
 | [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
 | [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `scan_objects`, `sweep_with_stop`, `verify_scanned` |
+| [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/usage.rs) | where the cache's space goes, for `fetchloom cache` and the weekly reminder | `Usage`, `measure` |
 
 ## how it works
 
@@ -99,6 +100,8 @@ exclusive cache access fails on every lock error, so gc never treats failed excl
 
 archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation.
 
+`Usage::measure` tells where the space goes, from one object scan and the needs walk gc uses: what registered projects need and how much of it has another name, unneeded bytes gc frees now, those that wait for their day, and those a name outside the cache keeps, which gc removes without freeing. all are payload bytes, as gc counts them. on unix the scan's own metadata gives each object's link count, so this costs no extra call; a windows listing does not count links, so there `place::has_other_names` opens each object once. `fetchloom cache` renders it and the weekly reminder in cli/cache.rs uses its `freeable`, so the two cannot disagree. `inputs_only` stays none until recipes tell which inputs only builds read.
+
 `cache verify` rehashes all objects and marks damage without deleting it. if the OS refuses a verification worker, the caller completes that work instead. those marks also tell project scans to check already placed hardlinks.
 
 inspection, verification reads and cleanup retain each failed path with its I/O kind, OS error code when available, and original message. JSON `not_removed` and `unreadable` contain these failure records, not bare paths. warnings and error details retain the same causes; storage failures do not receive permission-only advice.
@@ -121,7 +124,7 @@ cache-lock tests keep conflicting guards alive while checking wait and stop beha
 
 | files | cargo filter |
 |---|---|
-| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs), [link_tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/link_tests.rs), [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs), [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | `cargo test --locked --lib cache::` |
+| [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs), [link_tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/link_tests.rs), [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs), [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs), [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/usage.rs) | `cargo test --locked --lib cache::` |
 | [partial tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/tests.rs), [hash worker tests](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing/tests.rs) | `cargo test --locked --lib cache::partial::` |
 | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/cache.rs), [concurrent.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/concurrent.rs) | `cargo test --locked --test cli cache::`; `cargo test --locked --test cli concurrent::` |
 | [placing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/placing.rs), [recovery.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/recovery.rs) | `cargo test --locked --test cli placing::`; `cargo test --locked --test cli recovery::` |

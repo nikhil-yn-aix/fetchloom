@@ -1,0 +1,9 @@
+---
+source: tests/cli/cache.rs
+expression: story
+---
+      Cache [sandbox]/cache · 3 files · 162 B
+    Used by [sandbox]/work
+     Needed 81 B by 1 project · all of it is linked outside the cache too, so deleting it would free nothing
+   Unneeded 81 B · gc frees 49 B once it is a day old; 32 B of it is linked outside the cache too, so deleting it would free nothing
+  hint: `fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now

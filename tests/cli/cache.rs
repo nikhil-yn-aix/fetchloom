@@ -2,10 +2,12 @@
 
 use std::fs;
 
-use crate::support::{Result, Sandbox, Server, file, partial_files, text};
+use crate::support::{Result, Routes, Sandbox, Server, file, json, partial_files, text};
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
+const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
+const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 
 #[test]
 fn a_download_sealed_but_never_published_is_fetched_again() -> Result {
@@ -162,11 +164,56 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
     fs::write(object, b"")?;
     let output = sandbox.run(&["cache"])?;
     let stderr = text(&output.stderr)?;
-    assert!(
-        stderr.contains("0 B of it is needed by a project"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("Unneeded 0 B"), "{stderr}");
+    assert!(!stderr.contains("needed by a project"), "{stderr}");
     assert!(stderr.contains("fetchloom cache gc"), "{stderr}");
+    Ok(())
+}
+
+/// `fetchloom cache` tells where the cache's space goes: what the registered projects need and
+/// how much of it is linked into their folders too, which deleting the cache would not free,
+/// and what no project needs, which gc frees once it is a day old, except what a folder outside
+/// the cache links, as one `get` made does. a file younger than a day, as every one here is,
+/// waits for its day.
+#[test]
+fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        ("/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+        ("/notes.txt".to_owned(), file(NOTES, "\"n1\"")),
+    ])?;
+    let url = |name: &str| format!("{}/{name}", routes.url);
+    let downloads = sandbox.folder("downloads")?;
+    for (folder, args) in [
+        (sandbox.work(), vec!["add".to_owned(), url("iris.csv")]),
+        (sandbox.work(), vec!["add".to_owned(), url("wine.csv")]),
+        (sandbox.work(), vec!["remove".to_owned(), "wine".to_owned()]),
+        (downloads, vec!["get".to_owned(), url("notes.txt")]),
+    ] {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = sandbox.command_in(&folder, &args).output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    let links = sandbox.links()?;
+    // read-only files are links to the cache's copy where the drive makes them, and gc frees
+    // nothing of a file a folder outside the cache links
+    let linked = if links.hardlinks_read_only() {
+        IRIS.len()
+    } else {
+        0
+    };
+    let report = json(&sandbox.run(&["--json", "cache"])?)?;
+    let result = &report["result"];
+    assert_eq!(result["needed"], IRIS.len(), "{report}");
+    assert_eq!(result["linked"], linked, "{report}");
+    assert_eq!(result["unneeded"], WINE.len() + NOTES.len(), "{report}");
+    assert_eq!(result["freeable"], 0, "{report}");
+    assert_eq!(result["inputs_only"], serde_json::Value::Null, "{report}");
+    let story = text(&sandbox.run(&["cache"])?.stderr)?;
+    if links.hardlinks_read_only() && !links.reflink {
+        sandbox.filters().bind(|| insta::assert_snapshot!(story));
+    }
     Ok(())
 }
 
