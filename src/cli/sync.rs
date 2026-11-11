@@ -232,6 +232,14 @@ impl<'a> Loop<'a> {
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
+        // no download can bring bytes of the size data.lock pins for a SHA-256 the cache holds
+        // at another
+        for (dataset, file) in &files {
+            if let Some(actual) = place::cached_other_size(&self.cache, &file.sha256, file.size) {
+                let label = format!("{dataset}/{}", file.path);
+                return Err(place::mispinned(&label, file.size, actual));
+            }
+        }
         self.download_prepared(manifest, lock, &files).await?;
         self.unpack_locked(manifest, lock, &archives::of(lock, unpacking))
             .await?;

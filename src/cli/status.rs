@@ -365,7 +365,7 @@ fn check(
         .map(|(dataset, file)| format!("{}/{}", plan::folder(&manifest, dataset), file.path))
         .collect();
     survey.retarget(&project.root, &planned.targets);
-    compare(&mut status, project, &survey, &planned);
+    compare(&mut status, project, &survey, &planned)?;
     for path in &status.unneeded {
         if let Some(placed) = survey.state.files.get(path)
             && status.unplaced.contains(&placed.dataset)
@@ -554,7 +554,12 @@ fn held(cache: &Cache, holding: &HashSet<Sha256>, locked: &Locked, members: &Mem
 
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and
 /// lists as extra every other file in the data folder.
-fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &plan::Plan<'_>) {
+fn compare(
+    status: &mut Status,
+    project: &Project,
+    survey: &Survey,
+    planned: &plan::Plan<'_>,
+) -> Result<(), Error> {
     let targets = &planned.targets;
     let mut going = None;
     for target in targets {
@@ -590,6 +595,12 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
             (Some(seen), Some(record))
                 if record.look == *seen && !survey.edited.contains(&target.path) =>
             {
+                if let Some(label) = place::pinned_label(target)
+                    && let Some(actual) =
+                        place::placed_other_size(&file, record, &target.sha256, target.size)
+                {
+                    return Err(place::mispinned(&label, target.size, actual));
+                }
                 if record.sha256 == target.sha256 {
                     if place::fits(target, record, survey) {
                         status.holding.insert(target.sha256);
@@ -634,6 +645,7 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
     (status.unneeded, status.extra) = extra(survey, &wanted)
         .into_iter()
         .partition(|path| going.contains(path));
+    Ok(())
 }
 
 /// the files in the data folder that no dataset places, sorted. what an interrupted placement

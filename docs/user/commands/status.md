@@ -102,3 +102,4 @@ human output shows at most 20 paths per file category. unlocked or removed datas
 | fewer paths appear in the terminal | human categories are limited to 20 paths | use `--json` |
 | an unchanged file is outdated after `copy = true` | it still needs writable placement | run `fetchloom sync` |
 | `warning: data.lock names data.lock.d/clean.450ae405bf79.tsv.zst, which git does not have` | a build or a big dataset wrote a new list, and `git commit -a` left it out | run `git add data.lock.d`, then commit |
+| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | someone edited a file's size in data.lock by hand, or data.lock was damaged. the file fetchloom placed, or the cache's copy, hashes to that SHA-256 at its real size, so no source or mirror can send what data.lock pins | restore data.lock from git, or set that size back by hand; `lock --check` and sync stop the same way until then |

@@ -795,10 +795,43 @@ fn check(
     if let Some(error) = needs_building(&unbuilt) {
         return Err(error);
     }
+    if let Some(error) = mispinned(project, manifest, old, scope) {
+        return Err(error);
+    }
     Ok(Report {
         project: project.root.clone(),
         ..Report::default()
     })
+}
+
+/// a file data.lock pins in `scope` at another size than the bytes its SHA-256 names, as a file
+/// fetchloom placed shows them: one the state records with that SHA-256 that still looks as
+/// placed and hashes to it. only a file the state records at another size is read.
+fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope) -> Option<Error> {
+    let (state, _) = project.state();
+    if state.files.is_empty() {
+        return None;
+    }
+    for locked in lock
+        .datasets
+        .iter()
+        .filter(|locked| scope.includes(&locked.name))
+    {
+        let folder = plan::folder(manifest, &locked.name);
+        for file in locked.files.iter().filter(|file| file.unpacks_to.is_none()) {
+            let path = format!("{folder}/{}", file.path);
+            let Some(placed) = state.files.get(&path) else {
+                continue;
+            };
+            if let Some(actual) =
+                place::placed_other_size(&project.root.join(&path), placed, &file.sha256, file.size)
+            {
+                let label = format!("{}/{}", locked.name, file.path);
+                return Some(place::mispinned(&label, file.size, actual));
+            }
+        }
+    }
+    None
 }
 
 /// the error for recipes whose result data.lock does not pin as building them now would make,

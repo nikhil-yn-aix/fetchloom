@@ -17,7 +17,7 @@ use super::Context;
 use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{find, known, locked};
-use super::sync::Scope;
+use super::sync::{Scope, place};
 use crate::cache::{Cache, read_unfollowed};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -364,8 +364,26 @@ fn settle(
         .iter()
         .map(|at| &planned.needed[*at])
         .collect();
-    let error = missing(&lacked, &planned.unknown, planned.selected.is_some());
+    let error = mispinned(cache, lock, &lacked)
+        .unwrap_or_else(|| missing(&lacked, &planned.unknown, planned.selected.is_some()));
     Err(with_report(error, &report(planned, Outcome::Stopped)))
+}
+
+/// the error for a file of `lacked` that `lock` pins at another size than the bytes its SHA-256
+/// names, which the cache holds: a sync could bring no other bytes, so it would not help.
+fn mispinned(cache: &Cache, lock: &Lock, lacked: &[&Needed]) -> Option<Error> {
+    lacked
+        .iter()
+        .filter(|needed| matches!(needed.source, Source::Pinned))
+        .find_map(|needed| {
+            let (digest, size) = (needed.item.digest, needed.item.size);
+            let actual = place::cached_other_size(cache, &digest, size)?;
+            let file = lock.get(&needed.dataset)?.files.iter().find(|file| {
+                file.unpacks_to.is_none() && file.sha256 == digest && file.size == size
+            })?;
+            let label = format!("{}/{}", needed.dataset, file.path);
+            Some(place::mispinned(&label, size, actual))
+        })
 }
 
 /// takes into the cache the files `planned.taking` names, from the data folder, each only when

@@ -2112,11 +2112,14 @@ fn a_cancelled_download_of_a_sync_says_nothing_changed_only_when_so() -> Result 
         let output = sandbox.run(&["add", &server.url, "--as", name])?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     }
-    // data.lock now pins 2 GiB for the file, which the cache does not hold, so placing it again
-    // asks first
+    // data.lock now pins 2 GiB of other bytes for the file, which the cache does not hold, so
+    // placing it again asks first
     let pinned = fs::read_to_string(work.join("data.lock"))?;
-    let grown = pinned.replace("size = 11,", "size = 2147483648,");
-    assert_ne!(grown, pinned);
+    let grown = pinned
+        .replace("size = 11,", "size = 2147483648,")
+        .replace(&sha256(b"eleven byte"), &sha256(b"two gibibytes"));
+    assert_eq!(grown.matches("2147483648").count(), 1, "{grown}");
+    assert!(grown.contains(&sha256(b"two gibibytes")), "{grown}");
     fs::write(work.join("data.lock"), &grown)?;
     delete(&work.join("data/huge/huge.bin"))?;
     let sync = sandbox.command(&["sync"]);
@@ -2377,5 +2380,51 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     }
     assert_eq!(fs::read(&train)?, b"id,y\n1,0\n");
     assert_eq!(fs::read(&test)?, b"id\n3\n", "sync put it back");
+    Ok(())
+}
+
+/// a size in data.lock edited by hand, its SHA-256 left as it was. the file fetchloom placed
+/// hashes to that SHA-256 at its real size, so no source or mirror can send bytes that have
+/// both: status, lock --check and sync say data.lock is wrong rather than find everything in
+/// place, and once it is restored, sync has nothing to do.
+#[test]
+fn a_size_the_pinned_bytes_do_not_have_stops_until_data_lock_is_restored() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let size = format!("size = {}", IRIS.len());
+    assert!(pinned.contains(&size), "{pinned}");
+    fs::write(
+        &lock,
+        pinned.replace(&size, &format!("size = {}", IRIS.len() + 1)),
+    )?;
+    let said = format!(
+        "data.lock pins iris/iris.csv at {} bytes, but its SHA-256 is that of {} bytes on this machine",
+        IRIS.len() + 1,
+        IRIS.len()
+    );
+    for args in [
+        &["--json", "status"][..],
+        &["--json", "lock", "--check"],
+        &["--json", "sync"],
+        &["--json", "sync", "--force"],
+    ] {
+        let output = sandbox.run(args)?;
+        let document = json(&output)?;
+        let error = &document["errors"][0];
+        assert_eq!(output.status.code(), Some(50), "{args:?}: {document}");
+        assert_eq!(error["kind"], "project.invalid", "{args:?}");
+        assert_eq!(error["message"], said.as_str(), "{args:?}");
+        assert!(error["fix"].is_null(), "{args:?}: {error}");
+    }
+    assert_eq!(fs::read(sandbox.work().join("data/iris/iris.csv"))?, IRIS);
+    fs::write(&lock, &pinned)?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("nothing to do"), "{stderr}");
+    assert_eq!(server.requests().len(), 1, "only the add downloaded");
     Ok(())
 }

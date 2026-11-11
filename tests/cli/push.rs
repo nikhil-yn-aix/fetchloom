@@ -615,3 +615,36 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
     assert_eq!(error["fix"], "fetchloom sync iris");
     Ok(())
 }
+
+/// a size in data.lock edited by hand: the cache holds the bytes its SHA-256 names at their
+/// real size, so push says data.lock is wrong rather than send the person to a sync that would
+/// find nothing to do.
+#[test]
+fn a_size_the_cached_bytes_do_not_have_sends_no_one_to_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let size = format!("size = {}", IRIS.len());
+    assert!(pinned.contains(&size), "{pinned}");
+    fs::write(
+        &lock,
+        pinned.replace(&size, &format!("size = {}", IRIS.len() + 1)),
+    )?;
+    let mirror = sandbox.folder("mirror")?;
+    let pushed = sandbox.run(&["--json", "push", "--to", &mirror.to_string_lossy(), "--yes"])?;
+    let document = json(&pushed)?;
+    let error = &document["errors"][0];
+    assert_eq!(pushed.status.code(), Some(50), "{document}");
+    assert_eq!(error["kind"], "project.invalid");
+    assert_eq!(
+        error["message"],
+        format!(
+            "data.lock pins iris/iris.csv at {} bytes, but its SHA-256 is that of {} bytes on this machine",
+            IRIS.len() + 1,
+            IRIS.len()
+        )
+    );
+    assert!(error["fix"].is_null(), "{error}");
+    Ok(())
+}

@@ -21,7 +21,7 @@ use super::Scope;
 use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
-use crate::error::Error;
+use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::place::{self, Method, Placer};
 use crate::plan::{self, Target};
@@ -1562,6 +1562,12 @@ fn decide(
             Ok(Action::Replace)
         }
         Some(placed) if survey.vouched.contains(path) => {
+            if placed.sha256 == target.sha256
+                && look.size != target.size
+                && let Some(label) = pinned_label(target)
+            {
+                return Err(mispinned(&label, target.size, look.size));
+            }
             let fits = fits(target, placed, survey);
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Vouch(*look)
@@ -1570,6 +1576,12 @@ fn decide(
             })
         }
         Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
+            if let Some(label) = pinned_label(target)
+                && let Some(actual) =
+                    placed_other_size(destination, placed, &target.sha256, target.size)
+            {
+                return Err(mispinned(&label, target.size, actual));
+            }
             let fits = fits(target, placed, survey);
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
@@ -1883,6 +1895,54 @@ pub(crate) fn fits(target: &Target, placed: &Placed, survey: &Survey) -> bool {
     } else {
         placed.method != Method::Hardlink || !survey.writable.contains(&target.path)
     }
+}
+
+/// the size of the bytes `sha256` names when the file at `path`, which the state records as
+/// `placed` with them and which still looks so, hashes to them at another size than `size`.
+/// only such a file is read.
+pub(crate) fn placed_other_size(
+    path: &Path,
+    placed: &Placed,
+    sha256: &Sha256,
+    size: u64,
+) -> Option<u64> {
+    (placed.sha256 == *sha256
+        && placed.look.size != size
+        && now(path) == Some(placed.look)
+        && Sha256::of_file(path).is_ok_and(|digest| digest == *sha256))
+    .then_some(placed.look.size)
+}
+
+/// the size of the bytes `sha256` names when the cache holds them at another size than `size`,
+/// hashed to be sure, since a damaged copy proves nothing.
+pub(crate) fn cached_other_size(cache: &Cache, sha256: &Sha256, size: u64) -> Option<u64> {
+    let path = cache.find(sha256, None)?;
+    let found = fs::symlink_metadata(&path).ok()?.len();
+    (found != size && Sha256::of_file(&path).is_ok_and(|digest| digest == *sha256)).then_some(found)
+}
+
+/// the error for `label`, which data.lock pins at `size` bytes though the bytes its SHA-256
+/// names have `actual`: no source or mirror can send bytes that have both, so only data.lock
+/// can be wrong, and only a person can tell what it said before.
+pub(crate) fn mispinned(label: &str, size: u64, actual: u64) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "data.lock pins {label} at {size} bytes, but its SHA-256 is that of {actual} bytes on this machine"
+        ),
+    )
+    .help(format!(
+        "data.lock was edited by hand or damaged: restore it from git, or set the size of {label} to {actual} in data.lock"
+    ))
+}
+
+/// the label errors give `target` when data.lock pins it as a file of its own, not one inside
+/// an archive or a recipe's result: its dataset and its path there.
+pub(crate) fn pinned_label(target: &Target) -> Option<String> {
+    target
+        .file()
+        .filter(|file| file.unpacks_to.is_none())
+        .map(|file| format!("{}/{}", target.dataset, file.path))
 }
 
 pub(super) fn local(path: &Path, err: &std::io::Error) -> Error {
@@ -2486,6 +2546,38 @@ mod tests {
         let found = untouched(&project, &manifest, &survey, &seen, false).unwrap();
 
         assert!(found.is_none(), "a settled sync would leave the copy");
+    }
+
+    /// only cached bytes that hash to their name tell the size they have: a copy damaged to
+    /// another size says nothing of data.lock, even one the cache trusts unread, since it looks
+    /// as sealed: read-only, with its old time.
+    #[test]
+    fn only_intact_cached_bytes_show_a_pin_has_another_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::cache::tests::store(&cache, b"twelve bytes").digest;
+        assert_eq!(cached_other_size(&cache, &digest, 13), Some(12));
+        assert_eq!(cached_other_size(&cache, &digest, 12), None);
+        let object = cache.object_path(&digest);
+        let sealed = fs::metadata(&object).unwrap();
+        let mut permissions = sealed.permissions();
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "the test damages the object, then seals it again"
+        )]
+        permissions.set_readonly(false);
+        fs::set_permissions(&object, permissions.clone()).unwrap();
+        fs::write(&object, b"eleven byte").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&object)
+            .unwrap()
+            .set_modified(sealed.modified().unwrap())
+            .unwrap();
+        permissions.set_readonly(true);
+        fs::set_permissions(&object, permissions).unwrap();
+        assert!(cache.find(&digest, None).is_some(), "trusted unread");
+        assert_eq!(cached_other_size(&cache, &digest, 13), None);
     }
 
     /// the cache takes an object's bytes only from a file placing found holding them, kept,

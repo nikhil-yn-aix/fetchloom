@@ -215,6 +215,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 | inputs reject writes | placement is read-only | set `copy = true` in the dataset and sync |
 | the lock changed unexpectedly | sync updates stale locks | use `sync --locked` in a job that requires committed pins |
 | status still lists another dataset after `sync <name>` | a named sync leaves the other datasets as they are | run `fetchloom sync` |
+| `error: data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine`, exit 50 | someone edited a file's size in data.lock by hand, or data.lock was damaged. the file fetchloom placed, or the cache's copy, hashes to that SHA-256 at its real size, so no source or mirror can send what data.lock pins | restore data.lock from git, or set that size back by hand. `--force` does not help, and `fetchloom lock --upgrade` pins what the source serves now, which may be other bytes |
 | `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one of them. sync warns when it lists the source again and the pattern matches none of those files | run the [`fetchloom drop`](drop.md) the help names, which writes the archive's [members table](../reference/data-toml.md#files-inside-archives); a dry run warns the same way |
 
 ## stopping a sync

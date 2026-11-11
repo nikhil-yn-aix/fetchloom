@@ -156,7 +156,7 @@ push asks no server anything, so the work counters count no request; `data_folde
 
 ## exit codes
 
-0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that neither the cache nor the data folder holds files it needs; 30 that a pushed file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that neither the cache nor the data folder holds files it needs; 30 that a pushed file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, that data.lock pins a file at a size its cached bytes do not have, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
@@ -164,6 +164,7 @@ push asks no server anything, so the work counters count no request; `data_folde
 |---|---|---|
 | `holds files, but no fetchloom-mirror file says it is a mirror` | `--to` names a folder that is not a mirror, or a network disk that is not mounted | name an empty folder or a mirror's top folder, and mount the disk |
 | `this machine's cache lacks files the push needs` | this machine never synced those datasets, or `cache gc` freed them, and the data folder does not hold them with their pinned bytes | run `fetchloom sync`, then push again |
+| `data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine` | someone edited a file's size in data.lock by hand, or data.lock was damaged, and the cache holds the bytes of that SHA-256 at their real size. a sync could bring no other bytes | restore data.lock from git, or set that size back by hand, then push again |
 | `... so pushing them needs a yes` | a source wanted an account or accepted terms, or did not say who may read the data | check that everyone who can read the mirror may have it, then answer yes or add `--yes` |
 | `..., read back from ..., holds other bytes than were written, so it was not given its name` | the disk lost or changed a write, so the file read back is not what push wrote | check the disk that holds the mirror, then push again |
 | `something replaced ... in the mirror ... while push wrote it, so it was not given its name` | another program writes into the mirror's folder, such as a sync client, a backup tool or antivirus, and put another file in place of one push wrote | stop that program, or keep it out of the folder, then push again |
