@@ -568,10 +568,9 @@ impl Target {
         written: &(dyn Fn(u64) + Sync),
         named: &(dyn Fn(u64) + Sync),
     ) -> Result<Vec<Put>, Failed> {
-        let flushing = Failed::Flush;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let batch = if items.len() > crate::cache::MOST_FLUSHED_ALONE {
-            crate::cache::batch_in(&self.root.join(TMP)).map_err(flushing)?
+            crate::cache::batch_in(&self.root.join(TMP)).map_err(Failed::Flush)?
         } else {
             None
         };
@@ -599,11 +598,11 @@ impl Target {
         if tests::killed_before_naming(&self.root, &pending) {
             // a killed push runs no destructors, so what it wrote stays where it was
             std::mem::forget(pending);
-            return Err(flushing(io::ErrorKind::Interrupted.into()));
+            return Err(Failed::Flush(io::ErrorKind::Interrupted.into()));
         }
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(batch) = batch {
-            batch.flush().map_err(flushing)?;
+            batch.flush().map_err(Failed::Flush)?;
         }
         let puts = crate::place::run_all(&pending, threads, |slot| {
             if failed.load(Ordering::Relaxed) {
@@ -996,7 +995,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::mirror::{OBJECTS, TREES};
+    use crate::mirror::OBJECTS;
 
     thread_local! {
         /// whether a pushed file's first byte is changed between writing it and reading it back,
@@ -1558,7 +1557,7 @@ pub(crate) mod tests {
             Some(rustix::io::Errno::BADF.raw_os_error())
         );
         assert!(!root.join(OBJECTS).exists());
-        assert!(!root.join(TREES).exists());
+        assert!(!root.join(crate::mirror::TREES).exists());
         assert_eq!(unfinished(&root), Vec::<PathBuf>::new());
     }
 
