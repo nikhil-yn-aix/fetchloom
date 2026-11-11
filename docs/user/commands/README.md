@@ -23,7 +23,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`settings`](settings.md) | show each setting, its value and where it came from | check what a run will use, and why |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands and options |
-| `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy | learn the [project model](../concepts.md) |
+| `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy, then recipes, `place = false`, mirrors and how to edit a dataset's files | learn the [project model](../concepts.md) |
 | `help environment`, `help exit-codes` | summarize settings, or explain what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |
 | `help <command>` | show a command's help | check syntax at the terminal |
 | bare `fetchloom` | show project status or the welcome | find your next command |

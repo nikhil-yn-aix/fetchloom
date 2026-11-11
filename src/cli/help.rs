@@ -34,7 +34,19 @@ same bytes. if a source changes a file, sync stops and says so.
 
 the cache keeps each file once, under its fingerprint. a file in data/ is a
 link to it where the disk allows, or a copy, so projects that use the same file
-store it once. files in data/ are read-only by default.
+store it once. files in data/ are read-only by default. to edit a dataset's
+files, set copy = true for it in data.toml.
+
+a recipe is a dataset made from others by a command of yours, written with
+from and run in data.toml. only `fetchloom build` runs it: it pins what the
+command wrote in data.lock and places it in data/ like any dataset.
+
+place = false keeps a dataset pinned in data.lock but out of data/, as for raw
+data that only a recipe reads. a build takes its files from the cache.
+
+a mirror is a folder or web server that keeps pinned files, such as a lab
+disk. fetchloom asks the mirrors you name before the sources, and
+`fetchloom push` copies a project's pinned files into a folder mirror.
 
 commit data.toml and data.lock with your code, with data.lock.d when a big
 dataset keeps its file list there, and leave data/ out. anyone who clones the

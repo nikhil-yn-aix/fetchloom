@@ -386,7 +386,7 @@ fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
     let output = sandbox.run(&["help", "concepts"])?;
     assert!(output.status.success(), "{}", text(&output.stderr)?);
     let stdout = text(&output.stdout)?;
-    assert!(stdout.lines().count() < 30, "{stdout}");
+    assert!(stdout.lines().count() < 45, "{stdout}");
     for line in ANALOGY {
         assert!(stdout.contains(&format!("\n  {line}\n")), "{line}");
     }
