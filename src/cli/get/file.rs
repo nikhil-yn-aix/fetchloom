@@ -16,6 +16,7 @@ use super::{
     Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, selected,
     tell_fetched, vet,
 };
+use crate::archive::{self, Packed};
 use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -528,7 +529,33 @@ fn settle(
         if replace { "Replaced" } else { "Saved" },
         &destination.shown,
     );
+    warn_packed(context, remote, fetched, destination);
     Ok(written(destination, record(Some(how))))
+}
+
+/// warns of an archive saved under a name that does not say so, as a zip saved as `data.csv`:
+/// `-o` keeps it packed, which a reader of that name would not expect.
+fn warn_packed(context: &Context, remote: &Remote, fetched: &Fetched, destination: &Destination) {
+    let came = fetched.name.as_deref().unwrap_or(&remote.path);
+    let saved = destination
+        .path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if archive::by_name(came) != Some(Packed::Archive) || archive::by_name(&saved).is_some() {
+        return;
+    }
+    let file = came.rsplit('/').next().unwrap_or(came);
+    context.output.warn_with(
+        &format!(
+            "{} holds the archive {file}, kept packed as it came",
+            destination.shown
+        ),
+        &format!(
+            "use `--dir {}` to unpack it into a folder",
+            crate::name::folder_for(file)
+        ),
+    );
 }
 
 /// refuses a file its source sent inside a zip, as kaggle may send a competition's file: `-o`

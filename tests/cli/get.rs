@@ -457,6 +457,33 @@ fn a_folder_asks_whether_the_bytes_its_file_holds_changed() -> Result {
     Ok(())
 }
 
+/// an archive saved with `-o` under a name that does not say so, as a zip saved as `.csv`, stays
+/// packed as every `-o` file does, and one warning says what it holds and how to unpack it. a
+/// name that says zip needs none.
+#[test]
+fn an_archive_saved_under_another_kind_of_name_gets_a_warning() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zipped = b"PK\x03\x04 a zip as the server sent it";
+    let server = Server::start(
+        "/static/public/53/iris.zip",
+        vec![file(zipped, "\"z1\""), file(zipped, "\"z1\"")],
+    )?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "iris_uci.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(fs::read(sandbox.work().join("iris_uci.csv"))?, zipped);
+    assert_eq!(
+        json(&output)?["warnings"],
+        serde_json::json!([
+            "iris_uci.csv holds the archive iris.zip, kept packed as it came; use `--dir iris` to unpack it into a folder"
+        ])
+    );
+    let named = sandbox.run(&["get", &server.url, "-o", "iris.zip"])?;
+    let stderr = text(&named.stderr)?;
+    assert_eq!(named.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    Ok(())
+}
+
 /// a server that compresses a file on its way, as `Content-Encoding: gzip` says, leaves gzip
 /// bytes under the file's own name: they are kept as sent, which a published hash matches, and a
 /// warning says so once. a name that says gzip already needs no warning.
