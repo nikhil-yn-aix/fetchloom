@@ -952,6 +952,13 @@ pub(super) async fn sync_all(
         .instrument(tracing::debug_span!("relock"))
         .await
         .map_err(|error| work.before_placing(error))?;
+    // a renamed recipe's kept rebuild follows its pin to the new name
+    for (old, new) in before.renamed() {
+        if let Some(candidate) = survey.state.candidates.remove(old) {
+            survey.state.candidates.insert(new.to_owned(), candidate);
+            survey.needs_writing = true;
+        }
+    }
     // a lock whose files cannot all land is refused before it is written, so data.lock never
     // pins what no sync can place. archives not unpacked here yet are checked once they are
     let plan = plan::from_cache(manifest, &lock, &work.cache)?;

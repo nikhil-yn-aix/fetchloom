@@ -31,7 +31,7 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 ## what happens
 
 1. find the project and read its manifest and lock.
-2. fail if `--locked` finds a missing or stale lock; otherwise update it, retaining unchanged entries. a dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title, file count and size, so an entry whose id has a typo and pins an unrelated record stands out.
+2. fail if `--locked` finds a missing or stale lock; otherwise update it, retaining unchanged entries. a dataset [renamed](../reference/data-toml.md#dataset-names) in data.toml keeps its pin under the new name, with no request, and says `Renamed iris to flowers in data.lock · its pin stays`. a dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title, file count and size, so an entry whose id has a typo and pins an unrelated record stands out.
 3. reuse unchanged local files and cached objects, copy what the cache lacks from another file in the data folder that holds its pinned bytes, as [already in place](#already-in-place) describes, then from the [mirrors](../mirrors.md) you named, and download the rest when online. in [mirror-only mode](../mirrors.md#mirror-only-mode) a file no mirror holds fails the run before any download. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.

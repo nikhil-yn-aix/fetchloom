@@ -37,7 +37,7 @@ path = "measurements"
 
 `fetchloom add ./flowers` writes `ref = "local"` for files it imports from a folder or a file on this machine. the entry names no path: a path would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, and the cache holds the bytes. `select`, `exclude` and `extract` apply to the imported files as they do to a source's listing.
 
-no source can list an import again, so a changed `select` or `exclude`, or `ref = "local"` written by hand for a dataset data.lock does not pin, is refused with `reference.unresolved`, exit 10, before any request. to pin other files, run `fetchloom remove <name>`, then `fetchloom add <folder> --as <name>`. a changed `extract` keeps the pinned files. [add](../commands/add.md#files-on-this-machine) says how a clone without the files gets them.
+no source can list an import again, so a changed `select` or `exclude`, or `ref = "local"` written by hand for a dataset data.lock does not pin, is refused with `reference.unresolved`, exit 10, before any request. an import [renamed](#dataset-names) in data.toml keeps its pin. to pin other files, run `fetchloom remove <name>`, then `fetchloom add <folder> --as <name>`. a changed `extract` keeps the pinned files. [add](../commands/add.md#files-on-this-machine) says how a clone without the files gets them.
 
 ## dataset names
 
@@ -57,6 +57,8 @@ if the generated name is taken, fetchloom tries `-2` through `-99`, then fails i
 warning: iris was taken, so this one is iris-2
   help: choose a name with --as <name>
 ```
+
+to rename a dataset, change its table's name in data.toml, as `[datasets.iris]` to `[datasets.flowers]`, and the `from` and `{iris}` words of any recipe that reads it. the next `fetchloom sync` or `fetchloom lock` moves its pin in data.lock to the new name without asking the source, as long as the table asks for the same `ref`, `select`, `exclude` and `extract` as before, and says so, as in `Renamed iris to flowers in data.lock · its pin stays`; sync then places the files in the new name's folder. a rename together with one of those edits, or a new name that two old names, or two new names that one old name, would answer equally, resolves the new name again, which may pin newer data, as a new dataset does. `sync flowers` or `path flowers` copies the pin to the new name and keeps the old entry, since a run of named datasets changes no other entry, until a sync or lock of every dataset removes it. a recipe renamed with the rest of its table as it was keeps its pinned result the same way, since its key never held its name; a recipe that reads a renamed dataset has a new `from` and `run`, so it needs `fetchloom build`.
 
 an explicitly supplied `--as` name that is taken is refused. a name that breaks the rules above is refused with the rule it breaks, such as its length or the characters it holds, and a suggestion made from it: lowercase, with accents dropped from letters (`ïris` gives `iris`), other characters turned into `-`, at most 40 characters, and `-data` after a name windows keeps for a device, such as `con`. generated names drop accents the same way.
 

@@ -4,6 +4,7 @@
 pub(super) mod disk;
 mod draft;
 pub(super) mod place;
+mod rename;
 pub(super) mod unpack;
 
 use std::collections::{BTreeSet, HashSet};
@@ -17,6 +18,7 @@ use url::Url;
 use self::disk::Survey;
 use self::draft::Draft;
 use self::place::{Download, Placement, Placing, Preview};
+use self::rename::Rename;
 use super::Context;
 use super::fetch::data_folder::DataFolder;
 use super::fetch::{self, Again, Job};
@@ -397,6 +399,7 @@ impl<'a> Loop<'a> {
             mut pinned,
             others,
             results,
+            renamed,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -440,6 +443,7 @@ impl<'a> Loop<'a> {
                 existed,
                 others,
                 kept,
+                renamed,
             },
         ))
     }
@@ -461,6 +465,7 @@ impl<'a> Loop<'a> {
             pinned,
             others,
             results,
+            renamed,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -494,6 +499,7 @@ impl<'a> Loop<'a> {
             existed,
             others,
             kept,
+            renamed,
         };
         Ok(DryRelock {
             lock,
@@ -505,8 +511,9 @@ impl<'a> Loop<'a> {
     }
 
     /// datasets whose entry is unchanged or outside the run's scope, moved from data.lock as it
-    /// has them, and drafts of the others with every hash known without a download: from
-    /// data.lock's files when only `extract` changed, otherwise resolved again.
+    /// has them, those data.toml renamed, carried over to their new names, and drafts of the
+    /// others with every hash known without a download: from data.lock's files when only
+    /// `extract` changed, otherwise resolved again.
     async fn draft(
         &self,
         manifest: &Manifest,
@@ -523,18 +530,25 @@ impl<'a> Loop<'a> {
             }
         }
         let Sorted {
-            kept,
-            others,
+            mut kept,
+            mut others,
             mut drafts,
         } = self.sorted(manifest, old.datasets, upgrade, &mut whole)?;
-        // only `fetchloom build` pins a recipe's result, so one stays while data.toml has the
-        // recipe, and otherwise goes as a dropped dataset does
-        let (results, dropped) = old.derived.into_iter().partition(|result| {
-            manifest
-                .datasets
-                .get(&result.name)
-                .is_some_and(|entry| entry.recipe().is_some())
-        });
+        let (results, dropped, moved) = rename::results(manifest, old.derived);
+        let given: Vec<&str> = listed
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .chain(whole.iter().map(|locked| locked.name.as_str()))
+            .collect();
+        let mut renamed = rename::carry(
+            manifest,
+            &self.scope,
+            upgrade,
+            &given,
+            &mut kept,
+            &mut others,
+        );
+        renamed.extend(moved);
         let others = Lock {
             datasets: others,
             derived: dropped,
@@ -603,6 +617,7 @@ impl<'a> Loop<'a> {
             pinned: whole,
             others,
             results,
+            renamed,
         })
     }
 
@@ -1306,6 +1321,8 @@ struct Drafted {
     others: Lock,
     /// the results of the recipes data.toml has, which [`settled`] moves into the new lock.
     results: Vec<Derived>,
+    /// the entries carried over to the names data.toml gives them now.
+    renamed: Vec<Rename>,
 }
 
 /// the lock of `kept` and `drafted` entries and the `results` of recipes, by name, and for each
@@ -1348,6 +1365,8 @@ pub(super) struct Before {
     others: Lock,
     /// for each dataset of the new lock, in its order, whether it was kept from the old one.
     kept: Vec<bool>,
+    /// the entries relocking carried over to the names data.toml gives them now.
+    renamed: Vec<Rename>,
 }
 
 impl Before {
@@ -1358,6 +1377,7 @@ impl Before {
             existed: old.is_some(),
             others: old.unwrap_or_default(),
             kept: Vec::new(),
+            renamed: Vec::new(),
         }
     }
 
@@ -1375,12 +1395,22 @@ impl Before {
     /// whether `lock` is exactly what data.lock held.
     pub(super) fn holds(&self, lock: &Lock) -> bool {
         self.existed
+            && self.renamed.is_empty()
             && lock
                 .datasets
                 .iter()
                 .all(|dataset| self.get(lock, &dataset.name) == Some(dataset))
             && self.dropped(lock).next().is_none()
             && self.others.derived.is_empty()
+    }
+
+    /// each entry relocking moved to the name data.toml gives it now, as its old name and its
+    /// new one.
+    pub(super) fn renamed(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.renamed
+            .iter()
+            .filter(|rename| rename.moved)
+            .map(|rename| (rename.old.as_str(), rename.new.as_str()))
     }
 
     /// the old datasets `lock` no longer has.
@@ -1401,6 +1431,8 @@ pub(super) struct Verbs {
     pinned: &'static str,
     /// for datasets data.lock no longer has.
     dropped: &'static str,
+    /// for entries carried over to the names data.toml gives them now.
+    renamed: &'static str,
 }
 
 impl Verbs {
@@ -1408,16 +1440,19 @@ impl Verbs {
         locked: "Locked",
         pinned: "Pinned",
         dropped: "Removed",
+        renamed: "Renamed",
     };
     pub(super) const WOULD: Verbs = Verbs {
         locked: "Would lock",
         pinned: "Would pin",
         dropped: "Would remove",
+        renamed: "Would rename",
     };
 }
 
 /// the datasets whose pins `lock` changes beside data.lock as it was `before`: pinned for the
-/// first time, pinned to other data or files, or no longer pinned, by name.
+/// first time, pinned to other data or files, or no longer pinned, by name. a rename pins its new
+/// name and, when the old entry went, no longer pins the old one.
 pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
     let mut names: Vec<String> = lock
         .datasets
@@ -1436,8 +1471,13 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
                 .iter()
                 .map(|result| result.name.clone()),
         )
+        .chain(before.renamed.iter().flat_map(|rename| {
+            let old = rename.moved.then(|| rename.old.clone());
+            std::iter::once(rename.new.clone()).chain(old)
+        }))
         .collect();
     names.sort();
+    names.dedup();
     names
 }
 
@@ -1512,6 +1552,30 @@ fn lock_lines(
                 lock::FILE
             ),
         ));
+    }
+    for rename in &before.renamed {
+        if told == Some(rename.new.as_str()) {
+            continue;
+        }
+        lines.push(if rename.moved {
+            (
+                verbs.renamed,
+                format!(
+                    "{} to {} in {} · its pin stays",
+                    rename.old,
+                    rename.new,
+                    lock::FILE
+                ),
+            )
+        } else {
+            (
+                verbs.pinned,
+                format!(
+                    "{}, renamed from {} · its pin stays",
+                    rename.new, rename.old
+                ),
+            )
+        });
     }
     let dropped = before
         .dropped(lock)
@@ -2454,6 +2518,7 @@ mod tests {
             existed: true,
             others,
             kept,
+            renamed: Vec::new(),
         };
         for name in ["a", "b", "c", "d", "e"] {
             assert_eq!(before.get(&lock, name), old.get(name), "{name}");
@@ -2482,6 +2547,7 @@ mod tests {
                 ..Lock::default()
             },
             kept,
+            renamed: Vec::new(),
         };
         assert!(unchanged.holds(&same));
         let absent = Before {

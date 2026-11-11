@@ -134,6 +134,47 @@ fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
     Ok(())
 }
 
+/// a recipe renamed in data.toml, the rest of its table as it was, keeps its pinned result: its
+/// key never held its name, so relocking carries the result over and nothing needs a build. a
+/// build then runs nothing, and a locked sync places the result in the new name's folder.
+#[test]
+fn a_renamed_recipe_keeps_its_result() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let before = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        before.replace("[datasets.clean]\n", "[datasets.tidy]\n"),
+    )?;
+
+    let locked = sandbox.run(&["lock"])?;
+    let stderr = text(&locked.stderr)?;
+    assert_eq!(locked.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Renamed clean to tidy in data.lock · its pin stays\n"),
+        "{stderr}"
+    );
+    assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    let again = build(&sandbox, &["build"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    let synced = sandbox.run(&["sync", "--locked"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data/tidy/clean.csv"))?,
+        b"done"
+    );
+    assert_eq!(
+        runs(&sandbox.work())?,
+        1,
+        "only the first build ran the step"
+    );
+    Ok(())
+}
+
 /// `lock` keeps a changed recipe's pin, since only a build pins one, so it still succeeds: it
 /// says what moved as sync does, with the build and commit that bring data.lock up to date, and
 /// its last line never calls data.lock up to date, dry run or not.

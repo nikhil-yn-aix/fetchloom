@@ -650,6 +650,62 @@ fn a_new_list_git_does_not_have_is_named_at_the_end() -> Result {
     Ok(())
 }
 
+/// renaming a dataset's table in data.toml keeps its pin: relocking carries the entry over to the
+/// new name without asking the source, which here serves other bytes now, and says so. a sync of
+/// the new name alone, as `path` makes, copies it, since it changes no other entry, and the next
+/// lock of every dataset removes the old one.
+#[test]
+fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
+    let sandbox = Sandbox::new()?;
+    let changed = || file(b"species\nsetosa\n", "\"v2\"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), changed(), changed()])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let rename = |from: &str, to: &str| -> Result {
+        let text = fs::read_to_string(&manifest)?;
+        let table = format!("[datasets.{from}]\n");
+        assert!(text.contains(&table), "{text}");
+        fs::write(
+            &manifest,
+            text.replace(&table, &format!("[datasets.{to}]\n")),
+        )?;
+        Ok(())
+    };
+    let pinned = |name: &str| -> Result<bool> {
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        Ok(lock.contains(&format!("name = \"{name}\"")) && lock.contains(&sha256(IRIS)))
+    };
+
+    rename("iris", "flowers")?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Renamed iris to flowers in data.lock · its pin stays\n"),
+        "{stderr}"
+    );
+    assert!(pinned("flowers")? && !pinned("iris")?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data/flowers/iris.csv"))?,
+        IRIS
+    );
+    assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+
+    rename("flowers", "petals")?;
+    let found = sandbox.run(&["path", "petals"])?;
+    assert_eq!(found.status.code(), Some(0), "{}", text(&found.stderr)?);
+    assert!(pinned("petals")? && pinned("flowers")?);
+    let locked = sandbox.run(&["lock"])?;
+    assert!(
+        text(&locked.stderr)?.contains("Removed flowers from data.lock\n"),
+        "{}",
+        text(&locked.stderr)?
+    );
+    assert!(pinned("petals")? && !pinned("flowers")?);
+    assert_eq!(server.requests().len(), 1, "only the add asked the source");
+    Ok(())
+}
+
 #[test]
 fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     let sandbox = Sandbox::new()?;
