@@ -1024,6 +1024,15 @@ mod tests {
         assert_eq!(outcome.unwrap_err().kind, Kind::Interrupted);
     }
 
+    /// a wait for a host's limit is told in whole seconds, rounded up, with the limit it stated.
+    #[test]
+    fn a_rate_limit_wait_names_the_limit_it_waits_for() {
+        assert_eq!(
+            rate_wait("127.0.0.1", Some(133), None, Duration::from_millis(600)),
+            "1 s for 127.0.0.1, whose limit of 133 requests is used up"
+        );
+    }
+
     #[test]
     fn a_key_no_header_can_carry_is_told_once_per_run() {
         let context = Context::new(Output::new(
