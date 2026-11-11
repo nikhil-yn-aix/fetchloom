@@ -12,7 +12,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 use tokio::task::JoinSet;
@@ -358,13 +358,12 @@ async fn one_link(
     let fetched = fetch::all(context, net, &cache, jobs)
         .await
         .map_err(Error::unchanged)?;
-    let elapsed = Fetched::transfer(&fetched, started);
     let done = finish(
         context,
         &cache,
         wanted,
         fetched,
-        elapsed,
+        started,
         &mut Taken::default(),
     )
     .await?;
@@ -451,7 +450,6 @@ async fn many(
             fetched[owner].push(result);
         }
     }
-    let elapsed = Fetched::transfer(fetched.iter().flatten().flatten(), started);
     let mut items = Vec::with_capacity(links.len());
     let mut failed = Vec::new();
     let mut taken = Taken::default();
@@ -464,7 +462,7 @@ async fn many(
                 continue;
             }
         };
-        match settle(context, &cache, wanted, fetched, elapsed, &mut taken).await {
+        match settle(context, &cache, wanted, fetched, started, &mut taken).await {
             Ok(done) => {
                 context.output.answer(&done.folder.display().to_string());
                 items.push(Item::done(link, &done));
@@ -710,7 +708,7 @@ async fn settle(
     cache: &Cache,
     wanted: Wanted,
     fetched: Vec<Result<Fetched, Error>>,
-    elapsed: Duration,
+    started: Instant,
     taken: &mut Taken,
 ) -> Result<Done, Error> {
     let labels: Vec<String> = wanted.files.iter().map(|file| file.path.clone()).collect();
@@ -725,7 +723,7 @@ async fn settle(
     if let Some(error) = fetch::together(&labels, failed) {
         return Err(error);
     }
-    finish(context, cache, wanted, found, elapsed, taken).await
+    finish(context, cache, wanted, found, started, taken).await
 }
 
 /// checks what arrived, unpacks archives and puts every file in the link's folder, unless an
@@ -735,7 +733,7 @@ async fn finish(
     cache: &Cache,
     wanted: Wanted,
     fetched: Vec<Fetched>,
-    elapsed: Duration,
+    started: Instant,
     taken: &mut Taken,
 ) -> Result<Done, Error> {
     let Wanted {
@@ -776,7 +774,7 @@ async fn finish(
     if chosen.is_none() {
         folder::check_generated_root(&folder)?;
     }
-    tell_fetched(context, &paths, &fetched, &files, elapsed);
+    tell_fetched(context, &paths, &fetched, &files, started);
     vouch(&folder, &paths, &fetched, expected.as_ref(), taken)?;
     let mut locked: Vec<LockedFile> = files
         .iter()
@@ -1344,57 +1342,74 @@ fn folder_for(
     parent.map_or_else(|| PathBuf::from(&name), |parent| parent.join(&name))
 }
 
+/// tells what one link's downloads brought, as [`fetched_step`] words it, with each file's full
+/// hash for `-v`.
 fn tell_fetched(
     context: &Context,
     paths: &[String],
     fetched: &[Fetched],
     files: &[Remote],
-    elapsed: Duration,
+    started: Instant,
 ) {
-    let output = &context.output;
+    let (verb, text) = fetched_step(paths, fetched, files, started);
+    context.output.step(verb, &text);
+    if let [fetched] = fetched {
+        context.output.detail(&format!("sha256 {}", fetched.digest));
+    }
+}
+
+/// the step that tells what one link's downloads brought: downloaded, checked unchanged or found
+/// in the cache, with the time since `started` their bytes took to arrive. the time a slow disk
+/// takes to keep them comes after, so it does not count against the link.
+fn fetched_step(
+    paths: &[String],
+    fetched: &[Fetched],
+    files: &[Remote],
+    started: Instant,
+) -> (&'static str, String) {
+    let took = Fetched::transfer(fetched, started);
     if let ([path], [fetched], [remote]) = (paths, fetched, files) {
-        match fetched.origin {
-            Origin::Network => {
-                let text = format!(
+        return match fetched.origin {
+            Origin::Network => (
+                "Downloaded",
+                format!(
                     "{path} · {}",
-                    units::downloaded([(fetched.size, fetched.moved)], elapsed)
-                );
-                output.step("Downloaded", &text);
-            }
-            Origin::NotModified => output.step(
-                "Checked",
-                &format!("{path} · unchanged on {}", net::host(&remote.url)),
+                    units::downloaded([(fetched.size, fetched.moved)], took)
+                ),
             ),
-            Origin::Cache => output.step("Found", &format!("{path} in the cache")),
-        }
-        output.detail(&format!("sha256 {}", fetched.digest));
-        return;
+            Origin::NotModified => (
+                "Checked",
+                format!("{path} · unchanged on {}", net::host(&remote.url)),
+            ),
+            Origin::Cache => ("Found", format!("{path} in the cache")),
+        };
     }
     let downloaded: Vec<&Fetched> = fetched
         .iter()
         .filter(|fetched| fetched.origin == Origin::Network)
         .collect();
     if downloaded.is_empty() {
-        output.step(
+        return (
             "Found",
-            &format!(
+            format!(
                 "{} · in the cache or unchanged",
                 units::count(fetched.len() as u64, "file", "files")
             ),
         );
-        return;
     }
-    let text = format!(
-        "{} · {}",
-        units::count(downloaded.len() as u64, "file", "files"),
-        units::downloaded(
-            downloaded
-                .iter()
-                .map(|fetched| (fetched.size, fetched.moved)),
-            elapsed
-        )
-    );
-    output.step("Downloaded", &text);
+    (
+        "Downloaded",
+        format!(
+            "{} · {}",
+            units::count(downloaded.len() as u64, "file", "files"),
+            units::downloaded(
+                downloaded
+                    .iter()
+                    .map(|fetched| (fetched.size, fetched.moved)),
+                took
+            )
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -1451,6 +1466,37 @@ mod tests {
             "https://***@example.org/a.csv?token=***&v=1"
         );
         assert_eq!(shown("zenodo:1"), "zenodo:1");
+    }
+
+    /// a download is told by when its last byte arrived, so the time a slow disk takes to keep
+    /// the file, as `-o` waits for, does not count against the link.
+    #[test]
+    fn a_download_is_told_by_when_its_last_byte_arrived() {
+        let started = Instant::now();
+        let fetched = Fetched {
+            digest: crate::digest::sha256(b"iris"),
+            size: 3072,
+            moved: 3072,
+            name: None,
+            origin: Origin::Network,
+            version: None,
+            arrived: Some(started + std::time::Duration::from_secs(3)),
+        };
+        let remote = Remote {
+            path: "iris.csv".to_owned(),
+            size: None,
+            sha256: None,
+            md5: None,
+            url: url::Url::parse("https://example.org/iris.csv").unwrap(),
+            named_by_server: false,
+        };
+        assert_eq!(
+            fetched_step(&["iris.csv".to_owned()], &[fetched], &[remote], started),
+            (
+                "Downloaded",
+                "iris.csv · 3.0 KiB in 3.0 s · 1.0 KiB/s".to_owned()
+            )
+        );
     }
 
     /// links that a stop kept from their folders end the run as that stop, which says first that

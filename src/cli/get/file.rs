@@ -412,7 +412,7 @@ async fn download(
         std::slice::from_ref(&remote.path),
         std::slice::from_ref(&fetched),
         std::slice::from_ref(remote),
-        started.elapsed(),
+        started,
     );
     Ok(fetched)
 }
