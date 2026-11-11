@@ -18,7 +18,7 @@ copy = true
 path = "measurements"
 ```
 
-`project` and `datasets` are optional tables. each dataset entry has these keys:
+`project` and `datasets` are optional tables. a dataset is fetched from a source, named by `ref`, or made from other datasets by a [recipe](#recipes), named by `from` and `run`. each dataset entry has these keys:
 
 | key | meaning | default |
 |---|---|---|
@@ -29,6 +29,7 @@ path = "measurements"
 | `extract` | unpack recognized archive names | `true` |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
+| `from`, `run`, `code`, `env` | a recipe's inputs, command, code and variables; see [recipes](#recipes) | none |
 
 ## imported files
 
@@ -90,6 +91,37 @@ file paths refuse control characters, including the bidi controls U+061C, U+200E
 `add` keeps comments and table order, but cannot add to an inline `datasets` table. `remove` also removes comments attached to the deleted table and strips leading blank lines.
 
 `copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. an untracked read-only file with exactly the pinned bytes is also replaced with a writable file, without changing permissions through any other hardlink to it. differing untracked bytes still stay unless force is requested. turning it off leaves writable files as they are.
+
+## recipes
+
+a recipe makes a dataset from others with a command of yours. [recipes](../recipes.md) explains how fetchloom keys and checks them; this section lists the rules data.toml follows.
+
+```toml
+[datasets.clean]
+from = ["iris"]
+run = ["python3", "clean.py", "{iris}", "{out}"]
+code = ["clean.py", "lib/"]
+env = { SOURCE_DATE_EPOCH = "315532800" }
+```
+
+| key | meaning | rules |
+|---|---|---|
+| `from` | the datasets it is made from, by name | required; a list of names data.toml has, each once, not empty. `out` cannot be one, since `{out}` names the result's folder. recipes cannot be made from each other, directly or through others |
+| `run` | the program and its arguments | required; a list of words, since no shell reads it. `{name}` stands for the folder of a dataset in `from`, `{out}` for the result's folder and `{{` and `}}` for one brace, anywhere inside a word. it names every dataset in `from` and `{out}`, and no other name. a brace that is not part of these, a control character or an empty program is refused |
+| `code` | project files and folders whose bytes enter the key | optional list. each path uses `/`, may end in `/`, and stays inside the project: no absolute path, drive, backslash, `.` or `..`, no repository metadata such as `.git`, not `data.lock` or `data.lock.d`, and neither inside the data folder nor holding it. a link or a special file on the way is refused when the code is read |
+| `env` | variables set for the step alone | optional table of strings. names use letters, digits and `_` and do not start with a digit. names starting with `FETCHLOOM_` are refused, and so are names that look like a secret: a word ending in `TOKEN`, a word holding `SECRET`, `PASSWORD`, `PASSWD` or `CREDENTIAL`, or the words `API_KEY`, `ACCESS_KEY` or `PRIVATE_KEY`, ignoring case. `MAX_TOKENS` and `TOKENIZERS_PARALLELISM` stay usable. a value cannot hold a NUL character |
+
+a recipe takes `copy` and `path` as a fetched dataset does. `ref`, `select`, `exclude` and `extract` belong to fetched datasets: beside `from` they are refused, and choosing files belongs inside the step. every mistake is `project.invalid`, exit 50, pointing at its line:
+
+for a `clean` whose `run`, on line 7 of data.toml, leaves out `{out}`:
+
+```text
+error: run in datasets.clean never names {out}, so the step has nowhere to write
+  data.toml:7   run = ["python3", "clean.py", "{iris}"]
+  help: put {out} where the step takes the folder to write the result in
+```
+
+a message about `env` cites its line by number only, as one about `ref` does, since either may hold a secret.
 
 ## patterns
 

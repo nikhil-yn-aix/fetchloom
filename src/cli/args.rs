@@ -44,6 +44,13 @@ on disk: updates the data folder from data.lock, writing data.lock first if need
 
 on disk: writes data.lock and may add files to the cache. after a git merge, it merges data.toml and data.lock without downloading. --check and --dry-run write nothing";
 
+    pub(super) const BUILD: &str = "examples:
+  fetchloom build --dry-run
+  fetchloom build --dry-run clean
+  fetchloom build -n --json
+
+on disk: nothing. this fetchloom only shows what building would run: --dry-run reads data.toml, data.lock and each recipe's code";
+
     pub(super) const STATUS: &str = "examples:
   fetchloom status
   fetchloom status --verify
@@ -466,6 +473,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
+    /// show what the recipes in data.toml would run
+    #[command(override_usage = "fetchloom build [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(BUILD_DRY_RUN)), after_help = examples::BUILD)]
+    Build(Build),
+
     /// list files that are missing, changed locally or extra
     #[command(override_usage = "fetchloom status [options]", help_template = TEMPLATE, after_help = examples::STATUS)]
     Status(Status),
@@ -518,6 +529,7 @@ impl Command {
             Command::Remove(_) => "remove",
             Command::Sync(_) => "sync",
             Command::Lock(_) => "lock",
+            Command::Build(_) => "build",
             Command::Status(_) => "status",
             Command::List(_) => "list",
             Command::Export(_) => "export",
@@ -658,6 +670,10 @@ pub(crate) struct Filter {
 /// `--dry-run` help for commands that never ask a source anything.
 const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it";
 
+/// `--dry-run` help for `build`, which says what would run.
+const BUILD_DRY_RUN: &str =
+    "say what each step would run, what it reads and where its result goes; run nothing";
+
 /// `--dry-run`, for the commands that change files.
 #[derive(Clone, Copy, Debug, clap::Args)]
 pub(crate) struct DryRun {
@@ -767,6 +783,18 @@ pub(crate) struct Lock {
     /// after a git merge, keep the merged branch's side of such a dataset. repeat it for more
     #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
     pub(crate) theirs: Vec<String>,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
+}
+
+/// show what the recipes in data.toml would run
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Build {
+    /// the recipes to build, by their names in data.toml, with the recipes they are made from;
+    /// all of them when none is named
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

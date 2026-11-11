@@ -6,6 +6,7 @@
 pub(crate) mod code;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt::{self, Write as _};
 use std::path::Path;
 
@@ -105,6 +106,20 @@ impl Template {
             Piece::Folder(name) => Some(Slot::Input(name)),
         })
     }
+
+    /// the word as the step gets it, with each folder `folder` gives in place. a folder stays
+    /// inside one argument, spaces and all, since no shell splits it.
+    pub(crate) fn expand(&self, folder: &dyn Fn(Slot<'_>) -> OsString) -> OsString {
+        let mut word = OsString::new();
+        for piece in &self.pieces {
+            match piece {
+                Piece::Text(text) => word.push(text),
+                Piece::Folder(name) if name == OUT => word.push(folder(Slot::Out)),
+                Piece::Folder(name) => word.push(folder(Slot::Input(name))),
+            }
+        }
+        word
+    }
 }
 
 /// every dataset in an order where each comes after the datasets it is made from, ties by name:
@@ -169,6 +184,27 @@ pub(crate) fn order(datasets: &BTreeMap<String, Entry>) -> Result<Vec<&str>, Vec
     let mut cycle = path.split_off(start);
     cycle.push(at);
     Err(cycle)
+}
+
+/// `names` and every dataset they are made from, directly or not, in the order [`order`] gives.
+pub(crate) fn closure<'a>(datasets: &'a BTreeMap<String, Entry>, names: &[&str]) -> Vec<&'a str> {
+    let mut needed: BTreeSet<&str> = BTreeSet::new();
+    let mut next: Vec<&str> = names.to_vec();
+    while let Some(name) = next.pop() {
+        let Some((name, entry)) = datasets.get_key_value(name) else {
+            continue;
+        };
+        if needed.insert(name)
+            && let Some(recipe) = entry.recipe()
+        {
+            next.extend(recipe.from.iter().map(String::as_str));
+        }
+    }
+    order(datasets)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|name| needed.contains(name))
+        .collect()
 }
 
 /// what a recipe reads of a dataset fetched from a source: each file data.lock pins, an archive
@@ -248,13 +284,22 @@ fn json(text: &str) -> String {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Step {
     pub(crate) name: String,
-    /// each dataset it reads, in data.toml's order, with the content data.lock pins of it, or
-    /// none while data.lock pins none.
-    pub(crate) inputs: Vec<(String, Option<Sha256>)>,
+    /// each dataset it reads, in data.toml's order.
+    pub(crate) inputs: Vec<Read>,
     pub(crate) run: Vec<String>,
     /// each file or folder of its code, sorted by path, or none where nothing is.
     pub(crate) code: Vec<(String, Option<Code>)>,
     pub(crate) env: BTreeMap<String, String>,
+}
+
+/// a dataset a step reads, as data.lock pins it now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Read {
+    pub(crate) name: String,
+    /// the content data.lock pins of it, or none while it pins none.
+    pub(crate) content: Option<Sha256>,
+    /// whether a recipe makes it, so only a build pins it.
+    pub(crate) made: bool,
 }
 
 impl Step {
@@ -276,7 +321,14 @@ impl Step {
         let inputs = recipe
             .from
             .iter()
-            .map(|input| (input.clone(), pinned(manifest, lock, input)))
+            .map(|input| Read {
+                name: input.clone(),
+                content: pinned(manifest, lock, input),
+                made: manifest
+                    .datasets
+                    .get(input)
+                    .is_some_and(|entry| entry.recipe().is_some()),
+            })
             .collect();
         let mut hashed = Vec::with_capacity(recipe.code.len());
         for path in &recipe.code {
@@ -301,10 +353,10 @@ impl Step {
     pub(crate) fn from(&self) -> Option<Vec<Input>> {
         self.inputs
             .iter()
-            .map(|(name, content)| {
+            .map(|read| {
                 Some(Input {
-                    name: name.clone(),
-                    content: (*content)?,
+                    name: read.name.clone(),
+                    content: read.content?,
                 })
             })
             .collect()
@@ -326,8 +378,14 @@ impl Step {
         let unpinned = self
             .inputs
             .iter()
-            .filter(|(_, content)| content.is_none())
-            .map(|(name, _)| Change::Unpinned(name.clone()));
+            .filter(|read| read.content.is_none())
+            .map(|read| {
+                if read.made {
+                    Change::Unmade(read.name.clone())
+                } else {
+                    Change::Unpinned(read.name.clone())
+                }
+            });
         let Some(pinned) = pinned else {
             return std::iter::once(Change::Unbuilt).chain(unpinned).collect();
         };
@@ -335,7 +393,7 @@ impl Step {
         let now: BTreeMap<&str, Sha256> = self
             .inputs
             .iter()
-            .filter_map(|(name, content)| Some((name.as_str(), (*content)?)))
+            .filter_map(|read| Some((read.name.as_str(), read.content?)))
             .collect();
         let was: BTreeMap<&str, Sha256> = pinned
             .from
@@ -346,7 +404,7 @@ impl Step {
         for name in read {
             match (now.get(name), was.get(name)) {
                 (Some(now), Some(was)) if now == was => {}
-                (None, Some(_)) if self.inputs.iter().any(|(input, _)| input == name) => {}
+                (None, Some(_)) if self.inputs.iter().any(|read| read.name == name) => {}
                 _ => changes.push(Change::Input(name.to_owned())),
             }
         }
@@ -393,8 +451,10 @@ fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
 pub(crate) enum Change {
     /// data.lock pins no result of it yet.
     Unbuilt,
-    /// data.lock pins nothing yet of a dataset it reads.
+    /// data.lock pins nothing yet of a fetched dataset it reads.
     Unpinned(String),
+    /// data.lock pins no result yet of a recipe it reads.
+    Unmade(String),
     /// a dataset it reads holds other content, or it reads another set of datasets.
     Input(String),
     Run,
@@ -412,6 +472,7 @@ impl fmt::Display for Change {
         match self {
             Change::Unbuilt => f.write_str("not built yet"),
             Change::Unpinned(input) => write!(f, "{input} is not pinned yet"),
+            Change::Unmade(input) => write!(f, "{input} is not built yet"),
             Change::Input(input) => write!(f, "{input} changed"),
             Change::Run => f.write_str("run changed"),
             Change::Code(path) => write!(f, "{path} changed"),
@@ -480,6 +541,25 @@ mod tests {
             code.to_vec(),
             env.into_iter().collect(),
         )
+    }
+
+    /// a build reads what each recipe is made from first: every dataset a name needs comes
+    /// before it, ties go by name, and datasets nothing named needs stay out.
+    #[test]
+    fn closure_orders_what_names_need() {
+        let manifest = Manifest::parse(
+            "[datasets.raw]\nref = \"zenodo:1\"\n\n[datasets.labels]\nref = \"zenodo:2\"\n\n[datasets.unused]\nref = \"zenodo:3\"\n\n[datasets.b]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n\n[datasets.a]\nfrom = [\"labels\", \"b\"]\nrun = [\"t\", \"{labels}\", \"{b}\", \"{out}\"]\n\n[datasets.c]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            closure(&manifest.datasets, &["a"]),
+            ["labels", "raw", "b", "a"]
+        );
+        assert_eq!(
+            closure(&manifest.datasets, &["c", "a"]),
+            ["labels", "raw", "b", "a", "c"]
+        );
+        assert_eq!(closure(&manifest.datasets, &["raw"]), ["raw"]);
     }
 
     /// the key's JSON, as python's `json.dumps(obj, separators=(",", ":"), ensure_ascii=False)`
@@ -703,6 +783,16 @@ mod tests {
             template.slots().collect::<Vec<_>>(),
             [Slot::Input("pets"), Slot::Out]
         );
+        let folder = |slot: Slot<'_>| match slot {
+            Slot::Input(name) => OsString::from(format!("/in/{name} and more")),
+            Slot::Out => OsString::from("/out"),
+        };
+        assert_eq!(
+            template.expand(&folder),
+            "--images=/in/pets and more/{a}:/out",
+            "a folder with spaces stays inside its one argument"
+        );
+        assert_eq!(Template::parse("plain").unwrap().expand(&folder), "plain");
         for (text, reason) in [
             ("{pets", "has a { with no } after it"),
             ("{a{b}", "has a { with no } after it"),

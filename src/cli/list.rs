@@ -215,6 +215,7 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
                     units::count(files, "file", "files"),
                     units::size(bytes)
                 ),
+                _ if dataset.from.is_some() => "not built yet".to_owned(),
                 _ => "not locked yet".to_owned(),
             };
             let mut row = vec![dataset.name.clone()];

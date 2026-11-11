@@ -171,7 +171,8 @@ fn status_names_what_changed() -> Result {
         "{stderr}"
     );
     assert!(
-        stderr.contains("hint: `fetchloom build --dry-run` shows the commands that would build the recipes again"),
+        stderr
+            .contains("hint: `fetchloom build --dry-run` shows the commands that would build them"),
         "{stderr}"
     );
     assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
@@ -242,7 +243,7 @@ fn list_names_what_a_recipe_is_made_from() -> Result {
             "from",
             "iris",
             "not",
-            "locked",
+            "built",
             "yet",
             "data/clean"
         ],
@@ -278,5 +279,176 @@ fn a_dataset_a_recipe_reads_is_not_removed() -> Result {
     let removed = sandbox.run(&["remove", "clean"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
     assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("clean"));
+    Ok(())
+}
+
+/// a recipe that makes `tidy` from clean, which [`CLEAN`] makes from iris.
+const TIDY: &str = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"python3\", \"tidy.py\", \"{clean}\", \"--out={out}\"]\nenv = { SEED = \"1\" }\n";
+
+/// a dry run says, in the order steps would run, each step's command with its folders in place,
+/// what it reads and where its result goes, and runs nothing.
+#[test]
+fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with_recipe(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("{}{TIDY}", fs::read_to_string(&manifest)?),
+    )?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = sandbox.run(&["build", "--dry-run"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let stderr = text(&output.stderr)?;
+    for line in [
+        "  Would run clean · not built yet\n",
+        "            python3 clean.py <build>/in/iris <build>/out\n",
+        "            reads iris and clean.py; writes data/clean\n",
+        "  Would run tidy · not built yet; clean is not built yet\n",
+        "            python3 tidy.py <build>/in/clean --out=<build>/out\n",
+        "            reads clean, with SEED=1; writes data/tidy\n",
+        "         Ok dry run, nothing was run or changed\n",
+    ] {
+        assert!(stderr.contains(line), "{line:?} in\n{stderr}");
+    }
+    assert!(stderr.find("clean · not built") < stderr.find("tidy · not built"));
+    let document = json(&sandbox.run(&["--json", "build", "-n", "tidy"])?)?;
+    let result = &document["result"];
+    assert_eq!(document["command"], "build");
+    assert_eq!(result["dry_run"], true);
+    assert_eq!(result["selected"], serde_json::json!(["tidy"]));
+    let steps = result["steps"].as_array().ok_or("no steps")?;
+    let names: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| step["name"].as_str())
+        .collect();
+    assert_eq!(names, ["clean", "tidy"], "a step comes after what it reads");
+    let clean = &steps[0];
+    assert_eq!(clean["action"], "would_run");
+    assert_eq!(clean["changes"], serde_json::json!(["not built yet"]));
+    assert_eq!(
+        clean["run"],
+        serde_json::json!(["python3", "clean.py", "<build>/in/iris", "<build>/out"])
+    );
+    assert_eq!(clean["inputs"][0]["name"], "iris");
+    assert_eq!(clean["inputs"][0]["folder"], "<build>/in/iris");
+    assert_eq!(clean["code"], serde_json::json!(["clean.py"]));
+    assert_eq!(clean["output"], "data/clean");
+    assert!(
+        clean["key"]
+            .as_str()
+            .is_some_and(|key| key.starts_with("sha256:")),
+        "{clean}"
+    );
+    let tidy = &steps[1];
+    assert_eq!(tidy["key"], Value::Null, "its input is not pinned yet");
+    assert_eq!(tidy["env"], serde_json::json!({"SEED": "1"}));
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert!(!sandbox.work().join("data").join("clean").exists());
+    Ok(())
+}
+
+/// a step data.lock pins as built now does not run again, until something it is made from
+/// moves.
+#[test]
+fn a_dry_run_tells_up_to_date_steps_from_changed_ones() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with_recipe(&sandbox, &server)?;
+    pin_clean(&sandbox, CODE, &[])?;
+    let output = sandbox.run(&["--json", "build", "--dry-run", "clean"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let step = &document["result"]["steps"][0];
+    assert_eq!(step["action"], "up_to_date");
+    assert_eq!(step["changes"], serde_json::json!([]));
+    let stderr = text(&sandbox.run(&["build", "--dry-run"])?.stderr)?;
+    assert!(stderr.contains(" Up to date clean\n"), "{stderr}");
+    assert!(
+        stderr.contains("         Ok every recipe is built as data.lock pins it; dry run, nothing was run or changed\n"),
+        "{stderr}"
+    );
+    fs::write(sandbox.work().join("clean.py"), "print('edited')\n")?;
+    let stderr = text(&sandbox.run(&["build", "--dry-run"])?.stderr)?;
+    assert!(
+        stderr.contains("  Would run clean · clean.py changed\n"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// build runs only recipes, and names them right.
+#[test]
+fn build_names_only_recipes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with_recipe(&sandbox, &server)?;
+    for (args, code, said) in [
+        (
+            &["build", "--dry-run", "iris"][..],
+            2,
+            "iris is fetched, not built; `fetchloom sync` places it",
+        ),
+        (
+            &["build", "--dry-run", "claen"],
+            2,
+            "data.toml has no dataset called claen",
+        ),
+        (
+            &["build"],
+            2,
+            "this fetchloom shows what building would run, and cannot run recipes yet",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}");
+        let stderr = text(&output.stderr)?;
+        assert!(stderr.contains(said), "{args:?}: {stderr}");
+    }
+    let document = json(&sandbox.run(&["--json", "build", "clean"])?)?;
+    assert_eq!(
+        document["errors"][0]["fix"], "fetchloom build --dry-run clean",
+        "a dry run runs nothing, so a script may run it"
+    );
+    Ok(())
+}
+
+/// only `fetchloom build` may run a project's code: no other command runs a step, here one that
+/// would leave a file behind.
+#[cfg(unix)]
+#[test]
+fn no_other_command_runs_a_step() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let recipe = "\n[datasets.marked]\nfrom = [\"iris\"]\nrun = [\"sh\", \"-c\", \"touch ran\", \"{iris}\", \"{out}\"]\n";
+    fs::write(
+        &manifest,
+        format!("{}{recipe}", fs::read_to_string(&manifest)?),
+    )?;
+    for args in [
+        &["sync"][..],
+        &["sync", "--locked"],
+        &["lock"],
+        &["lock", "--check"],
+        &["lock", "--upgrade"],
+        &["status"],
+        &["status", "--verify"],
+        &["list"],
+        &["export"],
+        &["path", "iris"],
+        &["path", "marked"],
+        &["build", "--dry-run"],
+        &["build"],
+        &["remove", "marked", "--dry-run"],
+    ] {
+        sandbox.run(args)?;
+        assert!(
+            !sandbox.work().join("ran").exists(),
+            "{args:?} ran the step"
+        );
+    }
     Ok(())
 }

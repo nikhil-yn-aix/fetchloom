@@ -82,7 +82,8 @@ struct Problem<'a> {
 /// the first `fetchloom` command quoted in `help`, without its backticks. an example ("as in"),
 /// a guess ("did you mean") or a command meant for a person's own terminal is no fix: an agent
 /// running it would act on a dataset nobody named or ask the same question again. a command
-/// that first needs a broken file deleted, or a file edited by hand, is not ready to run either.
+/// that first needs a broken file deleted, or a file edited by hand, is not ready to run either,
+/// and a build runs the project's code, which only a person may agree to.
 fn fix(help: &str) -> Option<&str> {
     const NOT_A_FIX: [&str; 8] = [
         "as in",
@@ -108,6 +109,7 @@ fn fix(help: &str) -> Option<&str> {
             && part.starts_with("fetchloom ")
             && !part.contains(['<', '>'])
             && crate::cli::runs(part)
+            && !crate::cli::runs_code(part)
         {
             return Some(part);
         }
@@ -1528,6 +1530,15 @@ mod tests {
         assert_eq!(
             super::fix("delete git's conflict lines by hand, then run `fetchloom lock`"),
             None
+        );
+        assert_eq!(
+            super::fix("run `fetchloom build clean`, then commit data.lock and data.lock.d"),
+            None,
+            "a build runs the project's code"
+        );
+        assert_eq!(
+            super::fix("run `fetchloom build -n clean` to see what it runs"),
+            Some("fetchloom build -n clean")
         );
     }
 

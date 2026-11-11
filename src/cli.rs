@@ -3,6 +3,7 @@
 mod add;
 mod args;
 mod auth;
+mod build;
 mod cache;
 mod completions;
 mod export;
@@ -550,6 +551,17 @@ pub(crate) fn runs(command: &str) -> bool {
         .is_some_and(|words| args::Args::try_parse_from(words).is_ok())
 }
 
+/// whether `command`, as help quotes it, runs the project's code: `fetchloom build` without
+/// `--dry-run`. only a person may agree to that, so no script is handed it as the next step.
+pub(crate) fn runs_code(command: &str) -> bool {
+    use clap::Parser;
+    command_words(command, cfg!(windows))
+        .and_then(|words| args::Args::try_parse_from(words).ok())
+        .is_some_and(
+            |args| matches!(args.command, Some(args::Command::Build(build)) if !build.dry.dry_run),
+        )
+}
+
 /// reads the literal quoting in suggestions without interpreting expansions or shell operators.
 fn command_words(command: &str, windows: bool) -> Option<Vec<String>> {
     let mut words = Vec::new();
@@ -628,6 +640,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         }
         args::Command::Lock(args) => {
             let outcome = block_on(context, project::lock(context, args));
+            finish(context, name, outcome, started)
+        }
+        args::Command::Build(args) => {
+            let outcome = blocking(context, move |context| build::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Status(args) => {

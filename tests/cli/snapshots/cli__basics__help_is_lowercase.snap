@@ -25,6 +25,7 @@ commands:
   remove       remove a dataset and the unchanged files fetchloom placed for it
   sync         put the files data.lock lists into the data folder
   lock         update data.lock from data.toml, without changing the data folder
+  build        show what the recipes in data.toml would run
   status       list files that are missing, changed locally or extra
   list         list the project's datasets: source, size and folder
   export       write the SHA-256 or link of each file, for other tools

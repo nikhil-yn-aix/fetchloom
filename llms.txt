@@ -8,9 +8,11 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [user guide](docs/user/README.md): every user page and when to read it
 - [getting started](docs/user/getting-started.md): install from source until the first release, first project, restoring and undoing it
 - [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives and offline preparation
+- [recipes](docs/user/recipes.md): datasets a command makes from others, declared with from, run, code and env, keyed by content, and reported as `build.needed` when they change
 - [commands](docs/user/commands/README.md): command table, global options and terminal output
 - [add](docs/user/commands/add.md): add and pin datasets, matching current references, a list of links with `-i`, or files on this machine pinned by their bytes with `ref = "local"`; recovery copies stay out of logs
 - [sync](docs/user/commands/sync.md): restore pins, preserve local edits, sync named datasets alone and preview required repairs
+- [build](docs/user/commands/build.md): `build --dry-run` shows each recipe step's command, what it reads and where its result goes, in order, and runs nothing; this version runs no step
 - [lock](docs/user/commands/lock.md): check or upgrade pins without placement, and merge data.toml and data.lock offline after a git merge, with `--ours` and `--theirs` for datasets both sides changed
 - [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
 - [export](docs/user/commands/export.md): SHA-256 lines for `sha256sum -c`, link lists and aria2c input files from the pins, complete or refused, with gaps named in JSON

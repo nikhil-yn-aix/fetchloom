@@ -15,7 +15,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `export`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
+| `command` | `add`, `remove`, `sync`, `lock`, `build`, `status`, `list`, `export`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
@@ -39,9 +39,10 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | command | result fields |
 |---|---|
 | `add`, `remove`, `sync`, `lock` | `project`: absolute path; for `sync`, `selected`: the dataset names it was given, or null when it was given none; `datasets`: name array; `lock_changed`: boolean; `placement`: object below or null; with `--dry-run`, also `dry_run` and `changes`, [below](#dry-runs); for a `lock` that merged both sides of a git merge, also `merge`, below |
+| `build` | with `--dry-run`, the only build this version runs: `project`: absolute path; `selected`: the recipes named, or every recipe; `dry_run`: `true`; `steps`: one record a step in build order, with `name`, `action` (`would_run`, `may_run` or `up_to_date`), nullable `key`, `changes`, `run`, `env`, `inputs` of `name` and `folder`, `code` and `output`; [build](../commands/build.md#json) |
 | `get` | `file`: the absolute path of the file `-o` wrote or found, else null; `folder`: absolute path, the file's folder with `-o`, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
-| `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, nullable `access` (`public`, `login`, `terms` or `unknown`, as the source said), and nullable `locked_files`, an array of `path`, `size`, `sha256` and `url` records, `url` null for a link holding a login, a secret or a control character; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
+| `list` | `datasets`: records with `name`, `ref`, null for a dataset a recipe makes, `from`, the datasets a recipe makes it from or null for a fetched one, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, nullable `access` (`public`, `login`, `terms` or `unknown`, as the source said), and nullable `locked_files`, an array of `path`, `size`, `sha256` and `url` records, `url` null for a link holding a login, a secret or a control character; counts and `locked_files` describe locked source files, not archive members, or the files of a recipe's pinned result, whose `url` is null. `list <name>` returns only that dataset |
 | `export` | `file`: the absolute path `-o` wrote, or null; `placed`: a record for each file in the data folder, archive members included, with `dataset`, project-relative `path`, `size`, `sha256` and `unpacked_from`, the archive's path in its dataset or null; `sources`: a record for each downloaded file with `dataset`, `path` in the dataset, `size`, `sha256` and `url`, null when the link is not written; `unlocked`: dataset names data.lock does not pin as data.toml asks; `not_unpacked`: project-relative paths of archives whose files this machine does not know; `no_link`: `<dataset>/<path>` of files whose link holds a login, a secret or a control character. without `-o` it lists what is known and exits 0; with `-o` it fails as the text forms do. [export](../commands/export.md#what-it-leaves-out) |
 | `path` | `path`: the absolute path of the dataset, file or subfolder |
 | `status` | `project`: absolute path; the arrays below |
@@ -66,8 +67,8 @@ status arrays:
 
 | field | entries |
 |---|---|
-| `unlocked` | dataset names missing from the lock or with a changed spec or `extract` |
-| `removed` | dataset names in data.lock but no longer in data.toml |
+| `unlocked` | dataset names missing from the lock or with a changed spec or `extract`, and recipes whose result data.lock does not pin as building them now would make, which `fetchloom build` pins; human output says what moved |
+| `removed` | dataset names in data.lock but no longer in data.toml, recipe results included |
 | `missing` | absent target paths |
 | `edited` | managed paths treated as locally changed; matching wanted bytes can clear a metadata-only change; hashing files modified too close to the state write can detect edits with unchanged metadata |
 | `untracked` | existing target paths without state records |

@@ -1,0 +1,85 @@
+# recipes
+
+a recipe makes a dataset from other datasets with a command of yours, such as a script that cleans a raw table. `data.toml` declares it, `data.lock` pins what it made, and fetchloom tells you when the pin no longer matches the recipe. this version declares recipes, keys them and shows what a build would run with `fetchloom build --dry-run`; running the steps comes in the next version, so no command here runs your code.
+
+## declare a recipe
+
+a recipe is a dataset with `from` and `run` instead of `ref`:
+
+```toml
+[datasets.iris]
+ref = "hf:datasets/scikit-learn/iris"
+select = "Iris.csv"
+
+[datasets.clean]
+from = ["iris"]
+run = ["python3", "clean.py", "{iris}", "{out}"]
+code = ["clean.py"]
+env = { SOURCE_DATE_EPOCH = "315532800" }
+```
+
+| key | meaning |
+|---|---|
+| `from` | the datasets it is made from, by their names in `data.toml`: fetched datasets or other recipes |
+| `run` | the program and its arguments, one word each, never read by a shell. `{iris}` stands for the folder holding a copy of iris's files, `{out}` for the folder the step writes its result in, and `{{` and `}}` for a brace of their own |
+| `code` | files and folders of the project whose bytes the result depends on, such as the script and the lock file of its environment |
+| `env` | variables set for the step alone |
+
+[data.toml](reference/data-toml.md#recipes) lists every rule. the ones you meet first:
+
+- a dataset is fetched or made, never both: a recipe has no `ref`, `select`, `exclude` or `extract`, and choosing files belongs inside the step.
+- `run` names the folder of every dataset in `from` and `{out}`, so the step can find what it reads and has somewhere to write.
+- recipes cannot be made from each other: `datasets a and b are made from each other: a → b → a`.
+- `code` stays inside the project and out of the data folder, `data.lock`, `data.lock.d` and repository metadata.
+- `env` never sets fetchloom's own variables or anything named like a secret, such as `HF_TOKEN`, since `data.toml` and `data.lock` are shared. the step will inherit the environment of whoever builds it, so keys stay there.
+
+a step will run in the project folder, so `clean.py` in `run` is the project's own file.
+
+## what fetchloom keys
+
+a recipe's result is named by a key: the SHA-256 of what it is made from. the key holds
+
+- the content of each dataset in `from`, as `data.lock` pins it: each file's path, size and SHA-256, and for an archive that unpacks, the tree of what it unpacks to. links, versions and when it was pinned stay out, so a source that moves its files keeps the content. a recipe made from another recipe takes that recipe's result tree, so a rebuild that gives the same files changes nothing after it.
+- `run` as written, before any folder is put in.
+- the bytes of each file of `code`, a folder as the tree of its files. a text file, one with no NUL byte in its first 8,000 bytes as git decides, counts with each CRLF made LF, since git for windows checks files out with CRLF; a linux and a windows clone get one key. a folder leaves out `.git`, `.hg`, `.svn`, `__pycache__`, `.ipynb_checkpoints`, `.DS_Store` and `Thumbs.db`, and a link or a special file anywhere in `code` is refused.
+- `env`.
+
+the key holds nothing of the machine: no path, user, system, time or fetchloom version, and not the recipe's own name. a moved project, a renamed data folder or a renamed recipe keeps its key. your environment is in the key only as far as `code` names its lock files, such as `uv.lock`, `requirements.txt` or `environment.yml`.
+
+## when a recipe needs building
+
+`data.lock` pins a recipe's result with its key, once a build makes it. a recipe needs building when there is no pin yet, or when what its key holds moved since the pin: a dataset in `from` was pinned to other content, `run` or `env` changed, or a file of `code` changed or went missing.
+
+`fetchloom status` lists such a recipe under `unlocked`, with what moved:
+
+```text
+   Unlocked clean · clean.py changed; env changed
+      Found 1 difference from data.lock
+  hint: `fetchloom build --dry-run` shows the commands that would build them
+```
+
+`fetchloom lock --check` and `fetchloom sync --locked` fail with `build.needed`, exit 60, naming what moved:
+
+```text
+error: data.lock is out of date: clean changed since it was built
+  clean: clean.py changed
+  help: run `fetchloom build clean`, then commit data.lock and data.lock.d
+```
+
+a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, since `fetchloom lock` must pin it before a build can read it. the JSON `fix` of `build.needed` is always null: building runs the project's code, so a script or an agent asks a person first.
+
+`sync`, `lock`, `status`, `list` and every other command leave recipes alone: they resolve and download nothing for them and run nothing. `sync` and `lock` keep a recipe's pin while `data.toml` has the recipe, and drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` of a recipe fails with `build.needed`, since its result is not in the data folder yet.
+
+## see what a build would run
+
+`fetchloom build --dry-run` lists the steps in the order a build runs them, each with its command, what it reads and where its result goes, and runs nothing:
+
+```text
+  Would run clean · not built yet
+            python3 clean.py <build>/in/iris <build>/out
+            reads iris and clean.py; writes data/clean
+         Ok dry run, nothing was run or changed
+  hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
+```
+
+read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. [build](commands/build.md) has the details and the JSON.
