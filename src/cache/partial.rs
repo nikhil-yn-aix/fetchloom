@@ -325,6 +325,15 @@ impl Partial {
         let _ = fs::remove_file(&self.record);
     }
 
+    /// forgets a download that kept no byte, as one refused at its question or failed before its
+    /// first byte arrived. a later run could continue nothing, so `partial/` keeps nothing of it,
+    /// and its lock goes once the claim ends.
+    pub(crate) fn discard_unstarted(&self) {
+        if !fs::symlink_metadata(&self.bytes).is_ok_and(|kept| kept.len() > 0) {
+            self.discard();
+        }
+    }
+
     /// the file for the bytes, cut to their first `offset` unless `keep` keeps what lies past
     /// them, and when this run made it, its [`super::object::begun`] time. bytes an earlier run
     /// kept are used only when this process may continue them.

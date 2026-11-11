@@ -460,7 +460,11 @@ impl Net {
         {
             return Ok(fetched(record, Origin::Cache));
         }
-        self.transfer(fetch, cache, &partial, known, on).await
+        let done = self.transfer(fetch, cache, &partial, known, on).await;
+        if done.is_err() {
+            partial.discard_unstarted();
+        }
+        done
     }
 
     /// tries one download until its bytes are in the cache and checked.

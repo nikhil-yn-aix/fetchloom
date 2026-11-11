@@ -943,12 +943,18 @@ fn a_large_download_needs_a_yes_when_nobody_can_answer() -> Result {
     assert_eq!(output.status.code(), Some(1));
     let stderr = text(&output.stderr)?;
     sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
-    // the question comes before the body is read, so nothing was downloaded or kept
-    let document = json(&sandbox.run(&["--json", "get", &server.url])?)?;
+    // the question comes before the body is read, so nothing was downloaded or kept, not even
+    // an empty unfinished download that `fetchloom cache` would count
+    let document = json(&sandbox.run(&["--json", "get", &server.url, "-o", "huge.bin"])?)?;
     assert_eq!(document["errors"][0]["kind"], "unconfirmed");
     assert_eq!(document["work"]["bytes_down"], 0);
     assert_eq!(document["work"]["objects_written"], 0);
     assert!(!sandbox.work().join("huge").exists());
+    assert!(!sandbox.work().join("huge.bin").exists());
+    assert_eq!(
+        partial_files(&sandbox.cache()),
+        Vec::<std::path::PathBuf>::new()
+    );
     Ok(())
 }
 
@@ -982,6 +988,11 @@ fn a_large_download_cancelled_at_its_question_is_no_error() -> Result {
         );
         assert!(!screen.contains("error:"), "{keys:?}: {screen}");
         assert!(!sandbox.work().join("huge").exists(), "{screen}");
+        assert_eq!(
+            partial_files(&sandbox.cache()),
+            Vec::<std::path::PathBuf>::new(),
+            "{keys:?}"
+        );
     }
     Ok(())
 }
