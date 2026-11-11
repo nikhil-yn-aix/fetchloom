@@ -2,6 +2,8 @@
 //! `*` and `?` stay within one folder, `**` spans any number of folders, and `[...]` matches one
 //! character from a set.
 
+use std::collections::HashMap;
+
 /// a checked pattern, split into its folder parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Glob {
@@ -120,6 +122,57 @@ impl Glob {
             names.push(name);
         }
         (!names.is_empty()).then(|| names.join("/"))
+    }
+
+    /// the one path the pattern matches, when it has no wildcard: a plain path, or one
+    /// [`escape`] wrote.
+    pub(crate) fn literal(&self) -> Option<String> {
+        let names: Option<Vec<String>> = self
+            .parts
+            .iter()
+            .map(|part| match part {
+                Part::Name(tokens) => literal(tokens),
+                Part::Any => None,
+            })
+            .collect();
+        names.map(|names| names.join("/"))
+    }
+}
+
+/// patterns that match a path when any one of them does. a pattern without wildcards, as `drop`
+/// writes one for each file it leaves out, is looked up by its path, and only the others are
+/// tried in turn, so ten thousand of them cost one lookup per path.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Set {
+    /// every pattern, as written.
+    globs: Vec<Glob>,
+    /// the path each pattern without wildcards matches, with the place of the first such pattern.
+    literal: HashMap<String, usize>,
+    /// the places of the patterns with wildcards, in order.
+    wild: Vec<usize>,
+}
+
+impl Set {
+    pub(crate) fn new(globs: Vec<Glob>) -> Set {
+        let mut literal = HashMap::new();
+        let mut wild = Vec::new();
+        for (at, glob) in globs.iter().enumerate() {
+            match glob.literal() {
+                Some(path) => {
+                    literal.entry(path).or_insert(at);
+                }
+                None => wild.push(at),
+            }
+        }
+        Set {
+            globs,
+            literal,
+            wild,
+        }
+    }
+
+    pub(crate) fn matches(&self, path: &str) -> bool {
+        self.literal.contains_key(path) || self.wild.iter().any(|at| self.globs[*at].matches(path))
     }
 }
 
@@ -365,6 +418,69 @@ mod tests {
         for anywhere in ["*.csv", "x.csv", "**/x.csv", "*/x.csv", "[ab]/x.csv"] {
             assert_eq!(folder(anywhere), None, "{anywhere}");
         }
+    }
+
+    /// a fixed-seed xorshift walk, so a failing case repeats.
+    struct Walk(u64);
+
+    impl Walk {
+        fn below(&mut self, bound: usize) -> usize {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            usize::try_from(self.0 % bound as u64).unwrap()
+        }
+
+        fn joined(&mut self, words: &[&str]) -> String {
+            let count = 1 + self.below(3);
+            (0..count)
+                .map(|_| words[self.below(words.len())])
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+    }
+
+    #[test]
+    fn patterns_agree_with_globs_on_random_paths() {
+        let names = ["a", "b", "ab", "a*b", "x[1]", "x?", "é.csv", "a.csv"];
+        let parts = [
+            "a", "b", "*", "?", "**", "a*", "[ab]", "[!a]", "[*]", "x[[]1]", "*.csv", "é.csv",
+        ];
+        let mut walk = Walk(0x9e37_79b9_7f4a_7c15);
+        for _ in 0..400 {
+            let mut globs = Vec::new();
+            for _ in 0..walk.below(6) {
+                let text = match walk.below(3) {
+                    0 => escape(&walk.joined(&names)),
+                    1 => format!("/{}", walk.joined(&parts)),
+                    _ => walk.joined(&parts),
+                };
+                globs.extend(Glob::new(&text).ok());
+            }
+            let patterns = Set::new(globs.clone());
+            for _ in 0..40 {
+                let path = walk.joined(&names);
+                let expected = globs.iter().any(|glob| glob.matches(&path));
+                assert_eq!(patterns.matches(&path), expected, "{path} by {globs:?}");
+            }
+        }
+    }
+
+    /// drop writes one escaped path per file it leaves out, so a set of ten thousand of them
+    /// must cost a lookup per path, not ten thousand tries.
+    #[test]
+    fn literal_patterns_are_looked_up_rather_than_tried() {
+        let mut globs: Vec<Glob> = (0..10_000)
+            .map(|n| Glob::new(&escape(&format!("pets/images/{n}[1]*.png"))).unwrap())
+            .collect();
+        globs.push(Glob::new("**/*.tmp").unwrap());
+        globs.push(Glob::new("/top/README").unwrap());
+        let patterns = Set::new(globs);
+        assert_eq!(patterns.wild.len(), 1, "only **/*.tmp is tried in turn");
+        assert!(patterns.matches("pets/images/9999[1]*.png"));
+        assert!(!patterns.matches("pets/images/99991.png"));
+        assert!(patterns.matches("top/README"));
+        assert!(patterns.matches("x/y.tmp"));
     }
 
     #[test]

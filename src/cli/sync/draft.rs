@@ -10,7 +10,7 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
-use crate::glob::Glob;
+use crate::glob::{self, Glob};
 use crate::name;
 use crate::net::{Expect, Fetch, Fetched};
 use crate::plan::Patterns;
@@ -579,10 +579,12 @@ pub(in crate::cli) fn filter(
             return Err(unmatched(name, entry, glob, listing));
         }
     }
-    let selected = |path: &str| {
-        (source.select.is_empty() || source.select.iter().any(|glob| glob.matches(path)))
-            && !source.exclude.iter().any(|glob| glob.matches(path))
-    };
+    let (select, exclude) = (
+        glob::Set::new(source.select.clone()),
+        glob::Set::new(source.exclude.clone()),
+    );
+    let selected =
+        |path: &str| (source.select.is_empty() || select.matches(path)) && !exclude.matches(path);
     let unavailable: Vec<_> = listing
         .unavailable
         .iter()
