@@ -1115,6 +1115,49 @@ fn the_log_is_private_and_bounded() -> Result {
     Ok(())
 }
 
+/// a build says how much room the steps it runs may take on the disk holding the cache, and asks
+/// first when that disk has less free above `build_floor`: with no one to ask it stops with
+/// `unconfirmed`, exit 1, before anything runs, and `--yes` goes on.
+#[test]
+fn a_build_short_of_room_asks_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY_CODE)?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    // the result data.lock pinned last is as big as iris, 32 B, so the rerun may take more than
+    // the 20 B free above a floor of 1 B, whether or not the disk clones files
+    let short = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &sandbox.work(), args)?
+            .env("FETCHLOOM_TEST_FREE", "20")
+            .env("FETCHLOOM_BUILD_FLOOR", "1")
+            .output()?)
+    };
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = short(&["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, _, _) = error(&document);
+    assert_eq!(kind, "unconfirmed");
+    assert!(
+        message.starts_with("this build needs at least "),
+        "{message}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 1, "nothing ran");
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    let output = short(&["--yes", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let told = text(&output.stderr)?;
+    assert!(told.contains("      Needs up to "), "{told}");
+    assert!(
+        told.contains(" on the disk holding the cache, which has 20 B free\n"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 2);
+    Ok(())
+}
+
 /// a step stops once the disk holding the cache has less free than `build_floor`, before it can
 /// fill the disk, and data.lock and the data folder stay as they were.
 #[test]

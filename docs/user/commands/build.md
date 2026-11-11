@@ -36,20 +36,22 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 1. find the project and take its lock, which the build holds until it ends.
 2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet. with `--locked`, a fetched dataset whose entry changed, a recipe never built or changed since it was built, or a pin building would change, as one of a recipe `data.toml` no longer has, stops the build with `lock.outdated`, exit 1, before anything is fetched or run.
-3. take each recipe in order, each after the datasets it is made from, ties by name:
+3. say how much room the steps that will run may take on the disk holding the cache, as `Needs up to 91 B on the disk holding the cache, which has 341.3 GiB free`: the files they read that the cache lacks, their results as `data.lock` last pinned them, besides results never built before, which the line names, and, where the disk does not clone files, the copies of what the largest step reads. when that and the `build_floor` [setting](settings.md) are more than the disk has free, it asks first; `--yes` answers yes, and with no one to ask the build stops with `unconfirmed`, exit 1, before anything runs.
+4. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
    - `Fetched` when `data.lock` pins what building it now would make and a [mirror](../mirrors.md) holds the files the cache lacks, which it copies into the cache;
    - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
    - otherwise put in the cache the files of the datasets it reads, from a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache lacks it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`: a copy in the data folder is no input.
-4. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
-5. place the datasets the build took in the data folder, as `fetchloom sync` with their names would.
+5. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
+6. place the datasets the build took in the data folder, as `fetchloom sync` with their names would.
 
 this output is from a project where `clean` is made from `iris` with `python3 clean.py`:
 
 ```text
+      Needs up to 72 B, besides what clean writes, on the disk holding the cache, which has 341.4 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
-      Built clean · 1 file, 46 B in 31 ms
+      Built clean · 1 file, 63 B in 32 ms
      Placed data/clean · 1 file linked to the cache
          Ok pinned clean's result in data.lock
 ```
@@ -237,4 +239,4 @@ the JSON `fix` of a build's error is always null, since building runs the projec
 
 ## exit codes
 
-0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2, and so is an `--accept` that finds nothing to pin. `--locked` and `--check` fail with `lock.outdated`, exit 1, when `data.lock` does not pin what the steps need as `data.toml` asks. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c, or SIGTERM on linux and macos, stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.
+0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2, and so is an `--accept` that finds nothing to pin. `--locked` and `--check` fail with `lock.outdated`, exit 1, when `data.lock` does not pin what the steps need as `data.toml` asks, and a build short of room that cannot ask fails with `unconfirmed`, exit 1. a step the `build_floor` setting stopped is `local.io`, exit 50. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c, or SIGTERM on linux and macos, stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.

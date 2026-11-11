@@ -49,6 +49,16 @@ impl Staging {
         &self.folder
     }
 
+    /// whether the disk holding the cache clones files, as a probe in this folder finds: a step's
+    /// copies of what it reads then take no room of their own until it changes them.
+    pub(crate) fn clones(&self) -> bool {
+        let probe = self.folder.join("probe");
+        std::fs::write(&probe, b"probe").is_ok()
+            && crate::place::Placer::without_hardlinks(&self.folder)
+                .copy_file(&probe, &self.folder.join("clone"), false)
+                .is_ok_and(|method| method == crate::place::Method::Reflink)
+    }
+
     /// the bytes of the files the step wrote into `out` so far, found without following a link.
     pub(crate) fn written(&self) -> u64 {
         let mut bytes = 0;

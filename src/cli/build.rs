@@ -9,6 +9,7 @@
 //! before it stay in the cache, so a build run again reuses them.
 
 mod accept;
+mod room;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -195,6 +196,7 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         building.prepare(args.check).await?;
         return Ok(Report::Built(Box::new(building.report)));
     }
+    building.room(args.check)?;
     if args.check {
         building.check().await?;
         return Ok(Report::Built(Box::new(building.report)));

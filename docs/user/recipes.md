@@ -87,9 +87,10 @@ no command but `build` runs a step. `sync` places a pinned result from the cache
 read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
 
 ```text
+      Needs up to 72 B, besides what clean writes, on the disk holding the cache, which has 341.4 GiB free
     Running clean · python3 clean.py <build>/in/iris <build>/out
             kept 2 of 3 rows
-      Built clean · 1 file, 46 B in 31 ms
+      Built clean · 1 file, 63 B in 32 ms
      Placed data/clean · 1 file linked to the cache
          Ok pinned clean's result in data.lock
 ```

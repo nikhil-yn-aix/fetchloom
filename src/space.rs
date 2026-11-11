@@ -245,6 +245,35 @@ pub(crate) fn floor(set: Option<u64>, total: Option<u64>) -> u64 {
     set.unwrap_or_else(|| (1 << 30).max(total.unwrap_or(0) / 100))
 }
 
+/// what one step of a build may take on the disk holding the cache, as far as fetchloom can tell
+/// before it runs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Needs {
+    /// the files it reads that the cache lacks, as their downloads bring them, with what an
+    /// archive among them unpacks to, or its size again while that is not known.
+    pub(crate) downloads: u64,
+    /// the files it reads, which its private copies take where the disk does not clone files.
+    pub(crate) inputs: u64,
+    /// the result data.lock pinned for it last, none when it was never built.
+    pub(crate) result: Option<u64>,
+}
+
+/// the most a build of `steps` may take on the disk holding the cache: every download and result
+/// stays there, while a step's copies of what it reads go when it ends, so only the largest step's
+/// count, and only on a disk that does not `clone` files. a result never built counts as nothing.
+pub(crate) fn peak(steps: &[Needs], clones: bool) -> u64 {
+    let stays = steps
+        .iter()
+        .map(|step| step.downloads.saturating_add(step.result.unwrap_or(0)))
+        .fold(0, u64::saturating_add);
+    let copies = if clones {
+        0
+    } else {
+        steps.iter().map(|step| step.inputs).max().unwrap_or(0)
+    };
+    stays.saturating_add(copies)
+}
+
 /// how far `needed` bytes pass what a disk has `free`, none when they fit or the disk does not say.
 pub(crate) fn short(needed: u64, free: Option<u64>) -> Option<u64> {
     free.and_then(|free| needed.checked_sub(free))
@@ -287,6 +316,27 @@ mod tests {
         for magic in [-1, 0, 0xef53, 0x5846_5342] {
             assert_eq!(Filesystem::from_magic(magic), Filesystem::Other);
         }
+    }
+
+    /// downloads and results add up over the steps, while copies of what a step reads count once,
+    /// for the step that reads most, and not at all where the disk clones files.
+    #[test]
+    fn the_estimate_counts_copies_only_without_clones() {
+        let steps = [
+            Needs {
+                downloads: 50,
+                inputs: 100,
+                result: Some(20),
+            },
+            Needs {
+                downloads: 5,
+                inputs: 300,
+                result: None,
+            },
+        ];
+        assert_eq!(peak(&steps, true), 75);
+        assert_eq!(peak(&steps, false), 375);
+        assert_eq!(peak(&[], false), 0);
     }
 
     /// a floor set is kept as it is; otherwise it is 1% of the disk, never under 1 GiB.

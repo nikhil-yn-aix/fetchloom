@@ -197,6 +197,9 @@ impl Sandbox {
             .env("LOCALAPPDATA", &home)
             // a test never reads or writes the credential store of the machine running it
             .env("FETCHLOOM_KEYRING", "0")
+            // a build's floor would follow the free space of the disk the tests run on; a test
+            // of the floor sets its own
+            .env("FETCHLOOM_BUILD_FLOOR", "1")
             .env("AWS_CONFIG_FILE", self.root.join("no-aws-config"))
             .env(
                 "AWS_SHARED_CREDENTIALS_FILE",
