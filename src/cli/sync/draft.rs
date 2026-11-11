@@ -758,7 +758,7 @@ pub(in crate::cli) fn filter(
 ) -> Result<Vec<Remote>, Error> {
     for glob in &source.select {
         if !listing.paths().any(|path| glob.matches(path)) {
-            return Err(unmatched(name, entry, glob, listing));
+            return Err(unmatched(name, entry, source, glob, listing));
         }
     }
     let (select, exclude) = (
@@ -890,7 +890,7 @@ fn kind(entry: &Entry) -> Kind {
     }
 }
 
-fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error {
+fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &Listing) -> Error {
     let mut error = Error::new(
         kind(entry),
         format!(
@@ -922,12 +922,17 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
         };
         error = error.detail(format!("{considered} considered, for example {example}"));
     }
-    match deeper {
-        Some(deeper) => error.help(format!(
+    // an archive is one file to select, so a pattern meant for what it holds matches nothing
+    let archive = listing
+        .paths()
+        .find(|path| source.extract && archive::by_name(path) == Some(Packed::Archive));
+    match (deeper, archive) {
+        (Some(deeper), _) => error.help(format!(
             "patterns match the whole path. try \"{}\"",
             deeper.as_str()
         )),
-        None => error.help(match written(entry) {
+        (None, Some(archive)) => error.help(inside(name, glob, archive, written(entry))),
+        (None, None) => error.help(match written(entry) {
             Patterns::OnCommandLine => {
                 "compare the pattern with the paths above, then fix --select"
             }
@@ -935,6 +940,20 @@ fn unmatched(name: &str, entry: &Entry, glob: &Glob, listing: &Listing) -> Error
                 "compare the pattern with the paths above, then fix select in data.toml"
             }
         }),
+    }
+}
+
+/// how to keep only the files inside `archive` that `glob`, a select pattern of dataset `name`
+/// that matched no file the source lists, was most likely meant for: a members table, or drop.
+fn inside(name: &str, glob: &Glob, archive: &str, patterns: Patterns) -> String {
+    let select = toml_edit::Value::from(glob.as_str());
+    match patterns {
+        Patterns::OnCommandLine => format!(
+            "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, add the link without --select, then name them in a members table, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or leave files out with `fetchloom drop <path>`"
+        ),
+        Patterns::InDataToml => format!(
+            "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `fetchloom drop <path>`"
+        ),
     }
 }
 

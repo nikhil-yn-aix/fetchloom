@@ -144,7 +144,8 @@ the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a nam
 
 | symptom | cause | fix |
 |---|---|---|
-| a pattern matches nothing | it targets an archive member or a different source path | inspect listed paths and [pattern rules](../reference/data-toml.md#patterns) |
+| a pattern matches nothing | it targets a different source path | inspect listed paths and [pattern rules](../reference/data-toml.md#patterns) |
+| `--select` matches nothing in a link to a zip | select chooses among the files a link lists, and the zip is one of them; the help says so whenever the link lists an archive | add the link without `--select`, then keep files inside the zip with a [members table](../reference/data-toml.md#files-inside-archives) or leave some out with [`fetchloom drop`](drop.md) |
 | a shell expands a pattern | the glob was not quoted | use `--select "**/*.csv"` |
 | the same reference rejects new filters | the existing entry has different settings | edit its manifest entry, or use an unused `--as` name |
 | adding fails for inline `datasets` | `add` cannot extend an inline table | use `[datasets.name]` tables |

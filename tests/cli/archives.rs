@@ -168,6 +168,24 @@ fn a_zip_finder_made_lands_as_one_made_elsewhere() -> Result {
     Ok(())
 }
 
+/// select chooses among the files a link lists, so a pattern meant for the files inside a zip
+/// matches nothing; the help points at the members table and drop, which reach inside.
+#[test]
+fn a_select_meant_for_inside_an_archive_points_at_its_members_table() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    let refused = sandbox.run(&["add", &server.url, "--select", "**/*.csv"])?;
+    let stderr = text(&refused.stderr)?;
+    assert_eq!(refused.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains(
+            "  help: --select chooses among the files the link lists, and dataset.zip is one of them, unpacked whole. to keep only some files inside it, add the link without --select, then name them in a members table, as select = [\"**/*.csv\"] under [datasets.<name>.members.\"dataset.zip\"] in data.toml, or leave files out with `fetchloom drop <path>`\n"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 #[test]
 fn an_unsafe_archive_is_refused_whole() -> Result {
     let sandbox = Sandbox::new()?;
