@@ -23,7 +23,7 @@ fetchloom remove [options] <name>
 
 1. open the cache and plan removal before changing project metadata.
 2. remove the dataset from `data.toml` and `data.lock`.
-3. delete unchanged managed files belonging to it.
+3. delete unchanged managed files belonging to it. in a folder it shares with other datasets, or in the data folder itself for `path = "."`, only its own files go, since each placed file belongs to one dataset.
 4. leave edited files and files fetchloom did not place where they are, and warn about each edited file and each folder those keep.
 
 nothing is downloaded. an existing file adopted because it matched the lock counts as managed. `remove` can delete it if unchanged, and then warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`; `--dry-run` warns the same way first. removal compares the saved size and modification time, so touching a file can keep it even when its bytes still match the pin and status reports no edit.

@@ -35,10 +35,26 @@ pub(super) fn tell(
             ),
         );
     }
+    // datasets that share a folder share its line, where the first of them comes
+    let mut folders: Vec<(String, Tally)> = Vec::new();
     for (dataset, tally) in tallies
         .iter()
         .filter(|(dataset, _)| told != Some(**dataset))
     {
+        let folder = plan::folder(manifest, dataset);
+        let at = folders
+            .iter()
+            .position(|(seen, _)| *seen == folder)
+            .unwrap_or_else(|| {
+                folders.push((folder, Tally::default()));
+                folders.len() - 1
+            });
+        let sum = &mut folders[at].1;
+        sum.files += tally.files;
+        sum.links += tally.links;
+        sum.copied += tally.copied;
+    }
+    for (folder, tally) in &folders {
         let how = match (tally.links, tally.files - tally.links) {
             (_, 0) => "linked to the cache".to_owned(),
             (0, _) => format!("copied, {}", units::size(tally.copied)),
@@ -47,8 +63,7 @@ pub(super) fn tell(
         output.step(
             "Placed",
             &format!(
-                "{} · {} {how}",
-                plan::folder(manifest, dataset),
+                "{folder} · {} {how}",
                 units::count(tally.files, "file", "files")
             ),
         );

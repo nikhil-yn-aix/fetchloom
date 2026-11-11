@@ -35,10 +35,17 @@ fn flat_layout_keeps_data_train_csv() -> Result {
 
     let synced = sandbox.run(&["sync"])?;
 
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
     let data = sandbox.work().join("data");
     assert_eq!(fs::read(data.join("train.csv"))?, TRAIN);
     assert_eq!(fs::read(data.join("test.csv"))?, TEST);
+    assert_eq!(
+        stderr.matches("Placed").count(),
+        1,
+        "one line for the folder both share: {stderr}"
+    );
+    assert!(stderr.contains("Placed data · 2 files"), "{stderr}");
     let path = sandbox.run(&["path", "train/train.csv"])?;
     assert_eq!(
         text(&path.stdout)?.trim_end(),
