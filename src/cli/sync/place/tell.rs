@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::put::Tally;
-use super::{Blocker, ChangedCopy, Entry, Placement, Preview, Reason};
+use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Preview, Reason};
 use crate::output::Output;
 use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
@@ -223,6 +223,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
         }
     }
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
+    left_behind(output, manifest, placement.left_behind.as_ref());
     warn_kept(output, placement);
     warn_retired(output, placement);
     for path in &placement.restored {
@@ -276,6 +277,48 @@ fn tell_adoptions(output: &Output, manifest: &Manifest, dataset: &str, files: &[
         "Would adopt",
         &format!("{} · {said}", plan::folder(manifest, dataset)),
     );
+    for path in files {
+        output.detail(path);
+    }
+}
+
+/// a warning for the files fetchloom placed before `data_dir` changed, which stay where they are:
+/// a sync deletes nothing outside the data folder.
+pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&LeftBehind>) {
+    let Some(LeftBehind { folder, files }) = left else {
+        return;
+    };
+    let Some(first) = files.first() else {
+        return;
+    };
+    let before = format!("before data_dir changed to {}", manifest.data_dir);
+    let (said, help) = match (folder, files.len()) {
+        (Some(folder), 1) => (
+            format!(
+                "{folder} still holds {first}, a file fetchloom placed {before}. fetchloom leaves it there"
+            ),
+            format!("delete {folder} when you no longer need what it holds"),
+        ),
+        (Some(folder), count) => (
+            format!(
+                "{folder} still holds {count} files fetchloom placed {before}, such as {first}. fetchloom leaves them there"
+            ),
+            format!("delete {folder} when you no longer need what it holds"),
+        ),
+        (None, 1) => (
+            format!(
+                "{first}, a file fetchloom placed {before}, is outside the data folder now. fetchloom leaves it there"
+            ),
+            "delete it when you no longer need it".to_owned(),
+        ),
+        (None, count) => (
+            format!(
+                "{count} files fetchloom placed {before} are outside the data folder now, such as {first}. fetchloom leaves them there"
+            ),
+            "delete them when you no longer need them".to_owned(),
+        ),
+    };
+    output.warn_with(&said, &help);
     for path in files {
         output.detail(path);
     }

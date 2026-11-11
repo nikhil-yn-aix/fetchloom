@@ -17,7 +17,7 @@ use serde::Serialize;
 use self::put::put_all;
 use self::tell::tell;
 pub(crate) use self::tell::tell_preview;
-use super::disk::{Blocker, Entry, Retired, Survey};
+use super::disk::{Blocker, Entry, LeftBehind, Retired, Survey};
 use crate::cache::{Cache, Doubt};
 use crate::digest::Sha256;
 use crate::error::Error;
@@ -70,6 +70,9 @@ pub(crate) struct Placement {
     /// folders no dataset uses now that still hold files fetchloom did not place, so they stay.
     #[serde(skip)]
     pub(crate) retired: Vec<Retired>,
+    /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
+    #[serde(skip)]
+    pub(crate) left_behind: Option<LeftBehind>,
 }
 
 /// a file `--force` moved aside to replace it, which goes once what replaces it is in place and
@@ -489,6 +492,7 @@ impl<'a> Placing<'a> {
         let unwanted = unwanted(&self.survey, &wanted, &self.unknown);
         let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
+        preview.placement.left_behind = self.survey.left_behind(&wanted, &going);
         for (path, fate) in unwanted {
             match fate {
                 Unwanted::Remove(_) => {
@@ -552,6 +556,8 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
+        // told at once, since the state no longer records those files once this run writes it
+        tell::left_behind(output, manifest, placement.left_behind.as_ref());
         sweep(project, &mut placer, &survey, &wanted);
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
@@ -656,6 +662,7 @@ impl<'a> Placing<'a> {
             &unknown,
             &mut placement,
         )?;
+        tell::left_behind(output, manifest, placement.left_behind.as_ref());
         survey.smudge_edited();
         let forgot = survey.state.synced.take().is_some();
         if removed || forgot || survey.needs_writing {
@@ -1274,6 +1281,7 @@ fn remove_unwanted(
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
+    placement.left_behind = survey.left_behind(wanted, &going);
     for (path, fate) in unwanted {
         placer.stop().check()?;
         let Some(before) = survey.state.files.remove(&path) else {

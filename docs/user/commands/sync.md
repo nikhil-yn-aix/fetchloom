@@ -67,7 +67,14 @@ warning: data/pets still holds data/pets/own.txt, a file fetchloom did not place
   help: `fetchloom status` lists it as extra; delete it when you no longer need it
 ```
 
-a dry run warns the same way, and `-v` names each file.
+when `data_dir` changes, sync places the files in the new data folder and deletes nothing in the old one, which is outside the data folder now. the sync that does so names the old folder, once, since its state then stops recording those files (stderr):
+
+```text
+warning: data still holds 2 files fetchloom placed before data_dir changed to inputs/raw, such as data/iris/iris.csv. fetchloom leaves them there
+  help: delete data when you no longer need what it holds
+```
+
+a dry run warns the same way, and `-v` names each file. when the old folder holds the new one, as when `data_dir` goes from `inputs` to `inputs/raw`, the warning names the files rather than a folder to delete.
 
 ## local changes
 

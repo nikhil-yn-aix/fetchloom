@@ -132,7 +132,7 @@ at a download question, a sign-in prompt or the dataset picker, ctrl-c cancels t
 
 a data-use agreement can require deleting a dataset's bytes from a machine. fetchloom keeps them in more than one place, and frees only the ones it manages:
 
-1. in each project that uses the dataset, run `fetchloom remove <name>`, after `fetchloom remove <name> --dry-run` to see what goes. it keeps files you edited and other files in the dataset's folder, such as the `<path>.changed` copies sync kept, and names them in warnings: delete those yourself. deleting a whole project folder works too.
+1. in each project that uses the dataset, run `fetchloom remove <name>`, after `fetchloom remove <name> --dry-run` to see what goes. it keeps files you edited and other files in the dataset's folder, such as the `<path>.changed` copies sync kept, and names them in warnings: delete those yourself. a data folder that `data_dir` no longer names keeps all its files, which sync named once when `data_dir` changed: delete that folder yourself too. deleting a whole project folder works too.
 2. delete the folders `fetchloom get` wrote; no project records them.
 3. run `fetchloom cache gc --now`, after `fetchloom cache gc --now --dry-run` to see what goes. it deletes the cached files no project needs, including what a deleted project folder alone needed, and every unfinished download no running fetchloom holds. temporary files under the cache's `tmp/` folder keep their one-day grace period even then.
 4. repeat this on each machine and cache that fetched the dataset, such as other computers, CI caches, container volumes and a lab's shared cache.

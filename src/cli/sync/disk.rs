@@ -55,6 +55,19 @@ pub(crate) struct Survey {
     pub(crate) entries: HashMap<String, Entry>,
     /// the data folder's path in the project, below which entries can stand in a file's way.
     data_dir: String,
+    /// the files the state records outside the data folder that are still there, by their paths
+    /// in the project, in order: what fetchloom placed before `data_dir` changed. a sync never
+    /// deletes them.
+    outside: Vec<String>,
+}
+
+/// the files fetchloom placed before `data_dir` changed that are still outside the data folder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LeftBehind {
+    /// the folder they are in, when it can be named without naming the data folder too.
+    pub(crate) folder: Option<String>,
+    /// their paths in the project, in order.
+    pub(crate) files: Vec<String>,
 }
 
 /// a folder that held files fetchloom placed which no dataset needs now, and that holds none a
@@ -119,13 +132,59 @@ impl Survey {
             temporaries,
             entries,
             data_dir: data_dir.to_owned(),
+            outside: Vec::new(),
         };
         let other_device = !survey.state.files.is_empty()
             && apart(&project.root.join(data_dir), &project.own_folder());
         survey.hash_racy(&project.root, written, other_device);
         // after hash_racy, so a record found under another spelling is looked through too
         survey.look_through_links(&project.root);
+        survey.outside = outside(&project.root, data_dir, &survey.state, &survey.disk);
         survey
+    }
+
+    /// the files among `going`, the records a run drops, that fetchloom placed before `data_dir`
+    /// changed and that are still outside the data folder, with the folder they are in: the part
+    /// of their paths before the path a file of `wanted` has below the data folder now, as when
+    /// only `data_dir` changed, else the folder they share. none when no file was left behind.
+    pub(crate) fn left_behind(
+        &self,
+        wanted: &HashSet<&str>,
+        going: &HashSet<&str>,
+    ) -> Option<LeftBehind> {
+        let files: Vec<String> = self
+            .outside
+            .iter()
+            .filter(|path| going.contains(path.as_str()))
+            .cloned()
+            .collect();
+        let first = files.first()?;
+        let below: HashSet<&str> = wanted
+            .iter()
+            .filter_map(|path| path.strip_prefix(self.data_dir.as_str())?.strip_prefix('/'))
+            .collect();
+        let before = |path: &'_ str| {
+            path.match_indices('/')
+                .map(|(end, _)| end)
+                .find(|end| below.contains(&path[end + 1..]))
+                .map(|end| path[..end].to_owned())
+        };
+        let folder = before(first)
+            .filter(|folder| {
+                files
+                    .iter()
+                    .all(|path| before(path).as_ref() == Some(folder))
+            })
+            .unwrap_or_else(|| shared_folder(&files));
+        // naming the data folder's own parent would ask the person to delete the data folder too
+        let holds_data = |folder: &str| {
+            let (data, folder) = (name::fold(&self.data_dir), name::fold(folder));
+            data == folder || data.starts_with(&format!("{folder}/"))
+        };
+        Some(LeftBehind {
+            folder: Some(folder).filter(|folder| !folder.is_empty() && !holds_data(folder)),
+            files,
+        })
     }
 
     /// the folders that held files fetchloom placed, `going`, which no file of `wanted` needs now,
@@ -662,6 +721,79 @@ fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
 /// the step of the coarsest clock a data folder may sit on: fat cuts a file's time down to two
 /// seconds.
 const COARSE: u64 = 2_000_000_000;
+
+/// the files `state` records outside the data folder `data_dir`, as fetchloom placed them before
+/// `data_dir` changed, that are still plain files in real folders under `root`, in order. a path
+/// that names a file `disk` lists in the data folder under another spelling, as a disk that
+/// ignores case reads it, is that file.
+fn outside(
+    root: &Path,
+    data_dir: &str,
+    state: &State,
+    disk: &HashMap<String, Look>,
+) -> Vec<String> {
+    let inside = format!("{data_dir}/");
+    let mut real = HashMap::new();
+    state
+        .files
+        .keys()
+        .filter(|path| !path.starts_with(&inside) && !disk.contains_key(*path))
+        .filter(|path| name::escapes(path).is_none())
+        .filter(|path| plain_in_real_folders(root, path, &mut real))
+        .filter(|path| !same_inside(root, path, data_dir))
+        .cloned()
+        .collect()
+}
+
+/// the deepest folder holding every one of `paths`, by path in the project. empty when that is
+/// the project itself.
+fn shared_folder(paths: &[String]) -> String {
+    let mut shared: Option<Vec<&str>> = None;
+    for path in paths {
+        let mut folder: Vec<&str> = path.split('/').collect();
+        folder.pop();
+        shared = Some(match shared {
+            None => folder,
+            Some(mut shared) => {
+                let same = shared
+                    .iter()
+                    .zip(&folder)
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                shared.truncate(same);
+                shared
+            }
+        });
+    }
+    shared.unwrap_or_default().join("/")
+}
+
+/// whether `path` below `root` is a plain file whose folders are real, never links. `real` keeps
+/// what each folder was found to be.
+fn plain_in_real_folders(root: &Path, path: &str, real: &mut HashMap<String, bool>) -> bool {
+    let folders_real = path.match_indices('/').all(|(end, _)| {
+        let folder = &path[..end];
+        *real.entry(folder.to_owned()).or_insert_with(|| {
+            fs::symlink_metadata(root.join(folder))
+                .is_ok_and(|found| found.is_dir() && !found.file_type().is_symlink())
+        })
+    });
+    folders_real
+        && fs::symlink_metadata(root.join(path)).is_ok_and(|found| crate::volume::is_plain(&found))
+}
+
+/// whether `path`, outside the data folder `data_dir` as written, is the same file as the one at
+/// its place in the data folder, as on a disk that ignores case `data/x` and `Data/x` are.
+fn same_inside(root: &Path, path: &str, data_dir: &str) -> bool {
+    let parts = data_dir.split('/').count();
+    let mut split = path.splitn(parts + 1, '/');
+    let outer: Vec<&str> = split.by_ref().take(parts).collect();
+    let Some(rest) = split.next() else {
+        return false;
+    };
+    name::fold(&outer.join("/")) == name::fold(data_dir)
+        && same_file::is_same_file(root.join(path), root.join(data_dir).join(rest)).unwrap_or(false)
+}
 
 /// whether `a` and `b` sit on different devices, whose filesystems may keep times to different
 /// steps. folders that cannot be read count as apart.
@@ -1750,5 +1882,93 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// a file the state records outside the data folder is left behind only while it is a plain
+    /// file reached through real folders, and the same file under another spelling of the data
+    /// folder, as a disk that ignores case gives, is not.
+    #[cfg(unix)]
+    #[test]
+    fn only_real_files_outside_the_data_folder_are_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for path in [
+            "data/iris/iris.csv",
+            "elsewhere/x.csv",
+            "inputs/raw/new.csv",
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"bytes").unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join("linked")).unwrap();
+        fs::create_dir(root.join("special")).unwrap();
+        std::os::unix::fs::symlink(root.join("elsewhere/x.csv"), root.join("special/x.csv"))
+            .unwrap();
+        let mut state = State::default();
+        for path in [
+            "data/iris/iris.csv",
+            "data/gone.csv",
+            "linked/x.csv",
+            "special/x.csv",
+            "../outside.csv",
+            "inputs/raw/new.csv",
+        ] {
+            state.files.insert(
+                path.to_owned(),
+                record(root, "elsewhere/x.csv", b"bytes", Method::Copy),
+            );
+        }
+
+        assert_eq!(
+            outside(root, "inputs/raw", &state, &HashMap::new()),
+            ["data/iris/iris.csv"]
+        );
+        let names_alias = root.join("INPUTS").try_exists().unwrap();
+        assert_eq!(
+            outside(root, "INPUTS/raw", &state, &HashMap::new())
+                .contains(&"inputs/raw/new.csv".to_owned()),
+            !names_alias
+        );
+    }
+
+    /// the folder named for files left behind is the data folder they were placed in, found from
+    /// where the same files sit now, else the folder they share, and never one that holds the
+    /// data folder, which deleting it would delete too.
+    #[test]
+    fn the_folder_left_behind_never_holds_the_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().to_path_buf(),
+        };
+        let left = |data_dir: &str, outside: &[&str], wanted: &[&str]| {
+            let mut survey = Survey::read(&project, data_dir, Threads::default());
+            survey.outside = outside.iter().map(|path| (*path).to_owned()).collect();
+            let going: HashSet<&str> = outside.iter().copied().collect();
+            let wanted: HashSet<&str> = wanted.iter().copied().collect();
+            survey.left_behind(&wanted, &going).map(|left| left.folder)
+        };
+
+        let moved = ["data/iris/iris.csv", "data/pets/pets.csv"];
+        assert_eq!(
+            left("inputs", &moved[..1], &["inputs/iris/iris.csv"]),
+            Some(Some("data".to_owned())),
+            "the data folder, though one dataset alone was in it"
+        );
+        assert_eq!(
+            left("inputs", &moved, &["inputs/iris/iris.csv"]),
+            Some(Some("data".to_owned())),
+            "the folder they share"
+        );
+        assert_eq!(
+            left("data/new", &moved, &["data/new/iris/iris.csv"]),
+            Some(None)
+        );
+        assert_eq!(
+            left("Data", &moved, &[]),
+            Some(None),
+            "a disk that ignores case"
+        );
+        assert_eq!(left("inputs", &[], &["inputs/iris/iris.csv"]), None);
     }
 }
