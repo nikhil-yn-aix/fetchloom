@@ -144,39 +144,31 @@ fn rows(context: &Context) -> Vec<Shown> {
         settings.archive_ratio.value,
         settings.archive_ratio.origin,
     ));
-    let origins: Vec<String> = settings
-        .allowed_origins
-        .value
-        .iter()
-        .map(url::Origin::ascii_serialization)
-        .collect();
+    shown.push(list(
+        "allowed_origins",
+        settings
+            .allowed_origins
+            .value
+            .iter()
+            .map(url::Origin::ascii_serialization),
+        settings.allowed_origins.origin,
+    ));
+    shown.push(list(
+        "s3_buckets",
+        settings.s3_buckets.value.iter().map(ToString::to_string),
+        settings.s3_buckets.origin,
+    ));
+    shown.push(list(
+        "mirrors",
+        settings.mirrors.value.iter().map(ToString::to_string),
+        settings.mirrors.origin,
+    ));
     shown.push(Shown {
-        name: "allowed_origins",
-        said: if origins.is_empty() {
-            "none".to_owned()
-        } else {
-            origins.join(", ")
-        },
-        value: json!(origins),
-        origin: settings.allowed_origins.origin,
-        variable: crate::settings::variable("allowed_origins"),
-    });
-    let buckets: Vec<String> = settings
-        .s3_buckets
-        .value
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    shown.push(Shown {
-        name: "s3_buckets",
-        said: if buckets.is_empty() {
-            "none".to_owned()
-        } else {
-            buckets.join(", ")
-        },
-        value: json!(buckets),
-        origin: settings.s3_buckets.origin,
-        variable: crate::settings::variable("s3_buckets"),
+        name: "mirrors_only",
+        value: json!(settings.mirrors_only.value),
+        origin: settings.mirrors_only.origin,
+        variable: crate::settings::variable("mirrors_only"),
+        said: settings.mirrors_only.value.to_string(),
     });
     shown.extend(variables(context));
     shown
@@ -241,6 +233,22 @@ fn count(name: &'static str, value: impl Into<Value> + ToString + Copy, origin: 
         origin,
         variable: crate::settings::variable(name),
         said: value.to_string(),
+    }
+}
+
+/// a setting that holds a list, shown as its items separated by commas, or none.
+fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Origin) -> Shown {
+    let items: Vec<String> = items.collect();
+    Shown {
+        name,
+        said: if items.is_empty() {
+            "none".to_owned()
+        } else {
+            items.join(", ")
+        },
+        value: json!(items),
+        origin,
+        variable: crate::settings::variable(name),
     }
 }
 

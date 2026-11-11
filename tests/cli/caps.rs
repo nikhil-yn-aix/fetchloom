@@ -21,7 +21,7 @@ fn settings_file(sandbox: &Sandbox) -> Result<PathBuf> {
 }
 
 /// the entry `fetchloom settings --json` reports for `name`.
-fn shown<'a>(document: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+pub(crate) fn shown<'a>(document: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
     document["result"]["settings"]
         .as_array()
         .into_iter()
@@ -114,7 +114,7 @@ fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, each a number or text"
+        "the settings file takes cache, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, mirrors, mirrors_only, each a number or text"
     );
     for arguments in [
         &["--version"][..],

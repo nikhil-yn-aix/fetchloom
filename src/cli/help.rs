@@ -76,6 +76,10 @@ const ENVIRONMENT: &str = "fetchloom environment
                        http://lab.local:8080, separated by commas
   FETCHLOOM_S3_BUCKETS private S3 buckets your AWS keys may sign for, as
                        s3://lab-data, separated by commas
+  FETCHLOOM_MIRRORS    folders or web addresses to copy files from before
+                       their sources, separated by commas
+  FETCHLOOM_MIRRORS_ONLY
+                       true turns on mirror-only mode
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff

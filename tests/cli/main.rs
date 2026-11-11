@@ -16,6 +16,7 @@ mod get;
 mod hints;
 mod layout;
 mod merge;
+mod mirrors;
 mod moved;
 mod path;
 mod placing;

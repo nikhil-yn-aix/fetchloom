@@ -8,7 +8,7 @@ $env:FETCHLOOM_JOBS = '4'
 $env:FETCHLOOM_RATE = '2.5M'
 ```
 
-[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings, the allowed origins and the S3 buckets your keys may sign for, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
+[CLI options](../commands/README.md#global-options) set per-run behavior. the [settings file](#settings-file) keeps the cache, job, retry, timeout, approval, memory, file-count and archive settings, the allowed origins, the S3 buckets your keys may sign for and the mirrors, for every run; a variable wins over it. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from.
 
 | variable | effect |
 |---|---|
@@ -26,6 +26,8 @@ $env:FETCHLOOM_RATE = '2.5M'
 | `FETCHLOOM_ARCHIVE_RATIO` | integer from 1 to 1,000,000,000; the most bytes one archive may unpack to for each compressed byte read, counted once 4 MiB are out. unset or empty means 1000, which nearly all zip data stays under while compression bombs pass it. these three guard against archives built to fill a disk, so only this environment and the settings file move them, never `data.toml`. an archive past one stops with `source.invalid`, exit 10, naming it |
 | `FETCHLOOM_ALLOWED_ORIGINS` | origins on this machine or its network that a host written in data.toml, data.lock or a `get -i` list may reach, separated by commas, such as `http://lab.local:8080,http://10.0.0.5:9000`. each is a scheme, a host and a port when it is not the usual one, without a path; another port or scheme on that host stays refused. unset or empty allows none. such a host on a private, loopback or link-local address is otherwise refused with `network.refused`, exit 20, before any request, since a cloned project could point it at your network; a link typed on the command line may reach one for that run |
 | `FETCHLOOM_S3_BUCKETS` | the private S3 buckets your [AWS keys](#aws-keys) may sign requests for, separated by commas: `s3://<bucket>`, or the bare name, for a bucket on AWS, and `s3:https://<host>[:<port>]/<bucket>` for one at another service that speaks S3's API, such as `s3://lab-raw,s3:https://minio.lab.example:9000/scans`. unset or empty signs for none. a request for a listed bucket goes without a key first and is signed once S3 refuses it; a bucket not listed never gets a key, whatever data.toml names. see [private S3 buckets](../sources/buckets.md#private-s3-buckets) |
+| `FETCHLOOM_MIRRORS` | mirrors, separated by commas: folders, and `http://` or `https://` addresses, such as `/mnt/lab/fetchloom,https://data.lab.example/fetchloom`. text holding `://` is an address and anything else a folder, so `C:\lab` is a folder. a relative folder is taken from the working folder, after `-C`, and a folder whose name holds a comma goes in the settings file's list. unset or empty names none. another scheme, `file://` included, or an address holding a login, a query or a fragment fails with `usage`, exit 2 |
+| `FETCHLOOM_MIRRORS_ONLY` | `true` or `1` turns on mirror-only mode, and `false` or `0` turns it off. unset or empty means false |
 | `FETCHLOOM_SETTINGS` | nonempty path of the [settings file](#settings-file) to read instead of the default one; the file must exist |
 | `FETCHLOOM_RATE` | one shared response-body byte budget for metadata, downloads and retries. positive bytes per second, optionally with an uppercase binary suffix `K`, `M`, `G` or `T`, such as `500K` or `2.5M`; unset or empty means no cap |
 | `FETCHLOOM_THREADS` | integer from 1 to 256; caps [local worker groups and async runtime workers](../../dev/architecture/primitives.md#worker-budgets), not total OS threads. unset or empty keeps the defaults; surrounding whitespace is accepted |
@@ -79,9 +81,10 @@ ask_above = "50G"
 memory = "8G"
 allowed_origins = ["http://lab.local:8080"]
 s3_buckets = ["s3://lab-raw"]
+mirrors = ["/mnt/lab/fetchloom", "https://data.lab.example/fetchloom"]
 ```
 
-the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size`, `archive_ratio`, `allowed_origins` and `s3_buckets`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes; `allowed_origins` and `s3_buckets` also take a list of text. a relative `cache` is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
+the keys are `cache`, `jobs`, `host_jobs`, `retries`, `timeout`, `ask_above`, `memory`, `most_files`, `archive_files`, `archive_size`, `archive_ratio`, `allowed_origins`, `s3_buckets`, `mirrors` and `mirrors_only`. each takes what its `FETCHLOOM_*` variable takes, as a whole number or text in quotes; `allowed_origins`, `s3_buckets` and `mirrors` also take a list of text, and `mirrors_only` takes `true` or `false`. a relative `cache`, or a relative folder in `mirrors`, is taken from the settings file's folder. an unknown key, a value of another type or a file that is not TOML fails every named command with kind `usage` and exit 2, naming the file; help, version and completions still run.
 
 each value comes from the first of these that sets it: its variable, the settings file, this machine, fetchloom's default. so `FETCHLOOM_JOBS=4 fetchloom sync` changes one run without editing the file. [`fetchloom settings`](../commands/settings.md) shows each value and where it came from. the other variables on this page have no key in the file.
 

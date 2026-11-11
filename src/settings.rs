@@ -14,6 +14,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
+use crate::mirror::Location;
 use crate::source::Bucket;
 use crate::units;
 
@@ -39,7 +40,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 13] = [
+const KEYS: [(&str, &str); 15] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -53,10 +54,14 @@ const KEYS: [(&str, &str); 13] = [
     ("archive_ratio", "FETCHLOOM_ARCHIVE_RATIO"),
     ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
     ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
+    ("mirrors", "FETCHLOOM_MIRRORS"),
+    ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 2] = ["allowed_origins", "s3_buckets"];
+const LISTS: [&str; 3] = ["allowed_origins", "s3_buckets", "mirrors"];
+/// the keys that hold true or false.
+const BOOLEANS: [&str; 1] = ["mirrors_only"];
 
 /// where a setting's value came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -104,8 +109,8 @@ impl<T> Set<T> {
 pub(crate) struct File {
     /// where the file is, or would be.
     pub(crate) path: Option<PathBuf>,
-    /// its values by key, as text, when it was there.
-    values: Vec<(String, String)>,
+    /// its values by key, when it was there.
+    values: Vec<(String, Value)>,
     pub(crate) found: bool,
 }
 
@@ -167,17 +172,20 @@ impl File {
         })
     }
 
-    fn get(&self, key: &str) -> Option<&str> {
+    fn get(&self, key: &str) -> Option<&Value> {
         self.values
             .iter()
             .find(|(set, _)| set == key)
-            .map(|(_, value)| value.as_str())
+            .map(|(_, value)| value)
     }
 
     /// the cache folder the file names, if any. a relative folder is taken from the file's own
     /// folder, so the file means the same wherever fetchloom starts.
     pub(crate) fn cache(&self) -> Option<PathBuf> {
-        let folder = PathBuf::from(self.get("cache")?);
+        let Value::Text(folder) = self.get("cache")? else {
+            return None;
+        };
+        let folder = PathBuf::from(folder);
         Some(match self.path.as_deref().and_then(Path::parent) {
             Some(parent) if folder.is_relative() => parent.join(folder),
             _ => folder,
@@ -185,9 +193,16 @@ impl File {
     }
 }
 
-/// the settings file's values as text, refusing a key it does not take, so a mistyped key is
-/// told rather than quietly ignored.
-fn parse(path: &Path, text: &str) -> Result<Vec<(String, String)>, Error> {
+/// a value in the settings file: text, or for a key that holds a list, the list's items.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Value {
+    Text(String),
+    List(Vec<String>),
+}
+
+/// the settings file's values, refusing a key it does not take, so a mistyped key is told rather
+/// than quietly ignored.
+fn parse(path: &Path, text: &str) -> Result<Vec<(String, Value)>, Error> {
     let invalid = |message: String| {
         Error::new(Kind::Usage, message).help(format!(
             "the settings file takes {}, each a number or text",
@@ -210,21 +225,25 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, String)>, Error> {
                     path.display()
                 )));
             }
-            let text = match value {
-                toml::Value::String(text) => text,
-                toml::Value::Integer(number) => number.to_string(),
-                toml::Value::Array(items) if LISTS.contains(&key.as_str()) => items
-                    .into_iter()
-                    .map(|item| match item {
-                        toml::Value::String(text) => Ok(text),
-                        other => Err(invalid(format!(
-                            "{key} in the settings file {} holds a {}, not text in quotes",
-                            path.display(),
-                            other.type_str()
-                        ))),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-                    .join(","),
+            let value = match value {
+                toml::Value::String(text) => Value::Text(text),
+                toml::Value::Integer(number) => Value::Text(number.to_string()),
+                toml::Value::Boolean(yes) if BOOLEANS.contains(&key.as_str()) => {
+                    Value::Text(yes.to_string())
+                }
+                toml::Value::Array(items) if LISTS.contains(&key.as_str()) => Value::List(
+                    items
+                        .into_iter()
+                        .map(|item| match item {
+                            toml::Value::String(text) => Ok(text),
+                            other => Err(invalid(format!(
+                                "{key} in the settings file {} holds a {}, not text in quotes",
+                                path.display(),
+                                other.type_str()
+                            ))),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
                 other => {
                     return Err(invalid(format!(
                         "{key} in the settings file {} is a {}, not a whole number or text in quotes",
@@ -233,7 +252,7 @@ fn parse(path: &Path, text: &str) -> Result<Vec<(String, String)>, Error> {
                     )));
                 }
             };
-            Ok((key, text))
+            Ok((key, value))
         })
         .collect()
 }
@@ -264,6 +283,10 @@ pub(crate) struct Settings {
     /// the S3 buckets a request may be signed for with this machine's AWS keys, after S3 refused
     /// it without one.
     pub(crate) s3_buckets: Set<Vec<Bucket>>,
+    /// the folders and web servers asked for pinned files before their sources, in order.
+    pub(crate) mirrors: Set<Vec<Location>>,
+    /// whether requests may go to the mirrors alone, never to a source.
+    pub(crate) mirrors_only: Set<bool>,
 }
 
 impl Settings {
@@ -291,6 +314,8 @@ impl Settings {
             archive_ratio: Set::default(crate::archive::Limits::default().ratio),
             allowed_origins: Set::default(Vec::new()),
             s3_buckets: Set::default(Vec::new()),
+            mirrors: Set::default(Vec::new()),
+            mirrors_only: Set::default(false),
             memory,
         }
     }
@@ -334,6 +359,8 @@ impl Settings {
             )?,
             allowed_origins: origins(&given, "allowed_origins")?,
             s3_buckets: buckets(&given, "s3_buckets")?,
+            mirrors: mirrors(&given, "mirrors")?,
+            mirrors_only: boolean(&given, "mirrors_only", false)?,
             memory,
             file,
         })
@@ -383,24 +410,48 @@ struct Given<'a> {
 }
 
 impl Given<'_> {
-    /// the text `key` holds, where it came from, and how to name it in a message.
+    /// the text `key` holds, where it came from, and how to name it in a message. a list in the
+    /// settings file reads as its items separated by commas.
     fn get(&self, key: &str) -> Option<(String, Origin, String)> {
+        self.list(key)
+            .map(|(items, origin, named)| (items.join(","), origin, named))
+    }
+
+    /// the items `key` lists, where they came from, and how to name it in a message: text
+    /// separated by commas, or the items of a list in the settings file as they are.
+    fn list(&self, key: &str) -> Option<(Vec<String>, Origin, String)> {
         let variable = variable(key);
         if let Some(value) = (self.var)(variable).filter(|value| !value.is_empty()) {
             return Some((
-                value.to_string_lossy().into_owned(),
+                split(&value.to_string_lossy()),
                 Origin::Environment,
                 variable.to_owned(),
             ));
         }
-        let value = self.file.get(key)?;
-        let path = self.file.path.as_deref().unwrap_or(Path::new(FILE));
+        let items = match self.file.get(key)? {
+            Value::Text(text) => split(text),
+            Value::List(items) => items.clone(),
+        };
         Some((
-            value.to_owned(),
+            items,
             Origin::File,
-            format!("{key} in the settings file {}", path.display()),
+            format!("{key} in the settings file {}", self.file_path().display()),
         ))
     }
+
+    fn file_path(&self) -> &Path {
+        self.file.path.as_deref().unwrap_or(Path::new(FILE))
+    }
+}
+
+/// text separated by commas, as a list's variable holds it, each item trimmed and empty ones
+/// left out.
+fn split(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// the variable that sets `key`.
@@ -471,13 +522,13 @@ fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Err
 /// the origins `key` lists, separated by commas: each a scheme, a host and a port when it is not
 /// the usual one, without a path. none when it is unset or empty.
 fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error> {
-    let Some((text, origin, named)) = given.get(key) else {
+    let Some((entries, origin, named)) = given.list(key) else {
         return Ok(Set::default(Vec::new()));
     };
     let mut origins = Vec::new();
-    for entry in text
-        .split(',')
-        .map(str::trim)
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
         .filter(|entry| !entry.is_empty())
     {
         let url = url::Url::parse(entry).ok().filter(|url| {
@@ -512,13 +563,13 @@ fn origins(given: &Given<'_>, key: &str) -> Result<Set<Vec<url::Origin>>, Error>
 /// the buckets `key` lists, separated by commas: an AWS bucket as `s3://name`, or a bare name,
 /// and one at another S3 service as `s3:https://host:port/name`. none when it is unset or empty.
 fn buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<Bucket>>, Error> {
-    let Some((text, origin, named)) = given.get(key) else {
+    let Some((entries, origin, named)) = given.list(key) else {
         return Ok(Set::default(Vec::new()));
     };
     let mut buckets = Vec::new();
-    for entry in text
-        .split(',')
-        .map(str::trim)
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
         .filter(|entry| !entry.is_empty())
     {
         let Some(bucket) = Bucket::parse(entry) else {
@@ -542,6 +593,70 @@ fn buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<Bucket>>, Error> {
         value: buckets,
         origin,
     })
+}
+
+/// the mirrors `key` lists, in order: folders, and http or https addresses. a relative folder in
+/// the settings file is taken from the file's folder, as `cache` is, and one in a variable from
+/// the working folder. none when it is unset or empty.
+fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
+    let Some((entries, origin, named)) = given.list(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let base = match origin {
+        Origin::File => given.file_path().parent(),
+        _ => None,
+    };
+    let mut mirrors = Vec::new();
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+    {
+        let location = Location::parse(entry, base).map_err(|refusal| {
+            Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{}\", which is no mirror: {}",
+                    crate::net::mask_query(entry),
+                    refusal.reason
+                ),
+            )
+            .help(format!(
+                "{}, or {} to ask no mirror",
+                refusal.instead,
+                undo(origin, key)
+            ))
+        })?;
+        if !mirrors.contains(&location) {
+            mirrors.push(location);
+        }
+    }
+    Ok(Set {
+        value: mirrors,
+        origin,
+    })
+}
+
+/// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default`.
+fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Error> {
+    let Some((text, origin, named)) = given.get(key) else {
+        return Ok(Set::default(default));
+    };
+    let value = match text.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => true,
+        "false" | "0" => false,
+        _ => {
+            return Err(Error::new(
+                Kind::Usage,
+                format!("{named} is \"{text}\", which is not true or false"),
+            )
+            .help(format!(
+                "{} to use the default of {default}, or set it to true or false",
+                undo(origin, key)
+            )));
+        }
+    };
+    Ok(Set { value, origin })
 }
 
 /// the whole seconds `key` holds, within `range`, or `default`.
@@ -987,5 +1102,100 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn mirrors_come_from_the_variable_or_else_the_file_in_their_order() {
+        let folder = |path: &str| Location::Folder(PathBuf::from(path));
+        let set = read(
+            &[(
+                "FETCHLOOM_MIRRORS",
+                " /mnt/lab/fetchloom , https://data.corp.internal/fetchloom,",
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(set.mirrors.origin, Origin::Environment);
+        assert_eq!(
+            set.mirrors.value,
+            [
+                folder("/mnt/lab/fetchloom"),
+                Location::parse("https://data.corp.internal/fetchloom", None).unwrap(),
+            ]
+        );
+        // a folder whose name holds a comma keeps it in the file's list
+        let listed = file("mirrors = [\"mirror\", \"/mnt/a,b\"]\nmirrors_only = true\n").unwrap();
+        let set = Settings::read(&env(&[]), listed.clone(), machine(None)).unwrap();
+        assert_eq!(set.mirrors.origin, Origin::File);
+        assert_eq!(
+            set.mirrors.value,
+            [
+                folder("/home/ada/.config/fetchloom/mirror"),
+                folder("/mnt/a,b")
+            ]
+        );
+        assert_eq!(
+            set.mirrors_only,
+            Set {
+                value: true,
+                origin: Origin::File
+            }
+        );
+        let set = Settings::read(
+            &env(&[
+                ("FETCHLOOM_MIRRORS", "/usb"),
+                ("FETCHLOOM_MIRRORS_ONLY", "0"),
+            ]),
+            listed,
+            machine(None),
+        )
+        .unwrap();
+        assert_eq!(set.mirrors.value, [folder("/usb")]);
+        assert!(!set.mirrors_only.value);
+        assert_eq!(read(&[], None).unwrap().mirrors, Set::default(Vec::new()));
+        assert_eq!(read(&[], None).unwrap().mirrors_only, Set::default(false));
+    }
+
+    #[test]
+    fn a_mirror_that_is_no_folder_or_web_address_is_a_usage_error() {
+        let error = read(&[("FETCHLOOM_MIRRORS", "file:///mnt/lab")], None).unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            "FETCHLOOM_MIRRORS holds \"file:///mnt/lab\", which is no mirror: a file:// address names a folder"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("write the folder path itself, or unset FETCHLOOM_MIRRORS to ask no mirror")
+        );
+        let error = Settings::read(
+            &env(&[]),
+            file("mirrors = [\"https://ada:hunter2@lab.example/m\"]\n").unwrap(),
+            machine(None),
+        )
+        .unwrap_err();
+        assert!(!error.message.contains("hunter2"), "{}", error.message);
+        assert!(
+            error
+                .help
+                .as_deref()
+                .is_some_and(|help| help.contains("`fetchloom auth login lab.example`")
+                    && help.ends_with("remove mirrors from the settings file to ask no mirror")),
+            "{:?}",
+            error.help
+        );
+        let error = read(&[("FETCHLOOM_MIRRORS_ONLY", "yes")], None).unwrap_err();
+        assert_eq!(
+            error.message,
+            "FETCHLOOM_MIRRORS_ONLY is \"yes\", which is not true or false"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "unset FETCHLOOM_MIRRORS_ONLY to use the default of false, or set it to true or false"
+            )
+        );
+        let wrong = file("mirrors_only = [true]\n").unwrap_err();
+        assert_eq!(wrong.kind, Kind::Usage);
     }
 }

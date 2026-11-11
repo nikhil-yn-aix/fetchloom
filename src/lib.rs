@@ -10,6 +10,7 @@ mod digest;
 mod error;
 mod glob;
 mod machine;
+mod mirror;
 mod name;
 mod net;
 mod output;
