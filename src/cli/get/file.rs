@@ -589,6 +589,10 @@ fn take(object: &Path, path: &Path, replace: bool) -> io::Result<bool> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "windows always copies, where unix may fail to name the file"
+)]
 fn take(_object: &Path, _path: &Path, _replace: bool) -> io::Result<bool> {
     Ok(false)
 }
@@ -760,6 +764,7 @@ mod tests {
     }
 
     /// the names in `folder`, sorted.
+    #[cfg(unix)]
     fn names_in(folder: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(folder)
             .unwrap()
