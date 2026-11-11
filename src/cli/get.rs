@@ -375,16 +375,17 @@ async fn one_link(
         .and_then(|kept| {
             remembered::listing(&parsed, &kept, asked.expected.as_ref().map(|e| e.sha256))
         });
-    let listing = if let Some(listing) = remembered {
-        listing
+    let (listing, files) = if let Some(listing) = remembered {
+        let files = selected(args, &parsed, &listing)?;
+        (listing, files)
     } else {
         net.trust(parsed.reference.written_host());
         let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
         let listing = engine::resolve(&context.output, &parsed.reference, net, folders.as_deref())
             .await
             .map_err(|error| unlisted_offline(context.offline, error))?;
-        engine::tell_resolved(&context.output, &listing);
-        listing
+        let files = told(context, args, &parsed, &listing)?;
+        (listing, files)
     };
     if let Some(path) = &args.output {
         let (file, done) = file::one(
@@ -393,8 +394,7 @@ async fn one_link(
             &cache,
             args,
             path,
-            &parsed,
-            &listing,
+            (&parsed, &listing, files),
             key.as_deref(),
         )
         .await?;
@@ -404,7 +404,7 @@ async fn one_link(
         &cache,
         args,
         (args.dir.as_deref(), None),
-        (parsed, listing),
+        (parsed, listing, files),
         asked.expected,
     )?;
     hint_shards(context, &wanted);
@@ -567,9 +567,8 @@ async fn resolve_all(
     cache: &Cache,
     args: &Get,
     links: &[String],
-) -> Result<Vec<Result<(Parsed, Listing), Error>>, Error> {
-    let mut results: Vec<Option<Result<(Parsed, Listing), Error>>> =
-        links.iter().map(|_| None).collect();
+) -> Result<Vec<Result<Resolved, Error>>, Error> {
+    let mut results: Vec<Option<Result<Resolved, Error>>> = links.iter().map(|_| None).collect();
     let mut tasks = JoinSet::new();
     let mut asked = Vec::new();
     for (index, link) in links.iter().enumerate() {
@@ -587,7 +586,8 @@ async fn resolve_all(
             .and_then(|key| cache.url_record(&key))
             .and_then(|kept| remembered::listing(&parsed, &kept, None))
         {
-            results[index] = Some(Ok((parsed, listing)));
+            let files = selected(args, &parsed, &listing);
+            results[index] = Some(files.map(|files| (parsed, listing, files)));
             continue;
         }
         // a list comes from a file anyone could have written, as data.toml does
@@ -624,14 +624,16 @@ async fn resolve_all(
                 format!("resolving stopped unexpectedly: {err}"),
             )
         })?;
-        match &resolved {
+        let resolved = match resolved {
             Err(error) if error.kind == Kind::Interrupted => {
                 tasks.abort_all();
-                return Err(error.clone());
+                return Err(error);
             }
-            Err(_) => {}
-            Ok((_, listing)) => engine::tell_resolved(&context.output, listing),
-        }
+            Err(error) => Err(error),
+            Ok((parsed, listing)) => {
+                told(context, args, &parsed, &listing).map(|files| (parsed, listing, files))
+            }
+        };
         results[index] = Some(resolved);
     }
     Ok(results
@@ -649,10 +651,9 @@ fn prepare(
     cache: &Cache,
     args: &Get,
     (chosen, parent): (Option<&Path>, Option<&Path>),
-    (parsed, listing): (Parsed, Listing),
+    (parsed, listing, files): Resolved,
     expected: Option<Expected>,
 ) -> Result<Wanted, Error> {
-    let files = selected(args, &parsed, &listing)?;
     if let Some(expected) = &expected {
         one_file(&files, expected, &parsed)?;
     }
@@ -1333,6 +1334,23 @@ fn wanted_patterns(args: &Get, parsed: &Parsed) -> Vec<String> {
     } else {
         args.filter.select.clone()
     }
+}
+
+/// a link resolved to its listing, and the files of it this get keeps.
+type Resolved = (Parsed, Listing, Vec<Remote>);
+
+/// the files a link its source listed keeps, told on the Resolved line, which counts them among
+/// all the listing holds: one file of a repository's four reads as one of four.
+fn told(
+    context: &Context,
+    args: &Get,
+    parsed: &Parsed,
+    listing: &Listing,
+) -> Result<Vec<Remote>, Error> {
+    let files = selected(args, parsed, listing);
+    let kept = files.as_deref().unwrap_or(listing.files.as_slice());
+    engine::tell_kept(&context.output, listing, kept);
+    files
 }
 
 /// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.

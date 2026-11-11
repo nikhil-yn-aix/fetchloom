@@ -1256,3 +1256,28 @@ fn get_folder_of_a_listed_link_runs_again_offline() -> Result {
     assert_eq!(routes.requests().len(), asked, "offline asks nothing");
     Ok(())
 }
+
+/// a get that keeps some of the files a link lists counts what it keeps on its Resolved line, as
+/// one of a repository's files, and the whole listing when it keeps every file.
+#[test]
+fn get_counts_the_files_it_keeps_when_it_resolves() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = openneuro()?;
+    let one = [&["get"][..], &LISTED, &["-o", "p.tsv"]].concat();
+    let output = command(&sandbox, &routes, &one).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Resolved s3://openneuro.org/ds000001/ · 1 of 3 files · 28 B\n"),
+        "{stderr}"
+    );
+    let all = ["get", LISTED[0], "--dir", "all"];
+    let output = command(&sandbox, &routes, &all).output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Resolved s3://openneuro.org/ds000001/ · 3 files · 62 B\n"),
+        "{stderr}"
+    );
+    Ok(())
+}

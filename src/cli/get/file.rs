@@ -13,8 +13,7 @@ use super::super::Context;
 use super::super::args::Get;
 use super::super::fetch;
 use super::{
-    Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, selected,
-    tell_fetched, vet,
+    Done, Expected, Got, Written, approve, folder_for, matches_sha256, one_file, tell_fetched, vet,
 };
 use crate::archive::{self, Packed};
 use crate::cache::{Cache, UrlRecord};
@@ -187,24 +186,19 @@ struct Destination {
     path: PathBuf,
 }
 
-/// fetches the one file `listing` keeps and writes it at `path`, unless a file there holds its
-/// bytes already. returns the file's absolute path and what it holds. `key` remembers what the
-/// link kept, for a link only its source can list.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the run's context and the link, as get resolved it"
-)]
+/// fetches the one file of `files`, what the link keeps of `listing`, and writes it at `path`,
+/// unless a file there holds its bytes already. returns the file's absolute path and what it
+/// holds. `key` remembers what the link kept, for a link only its source can list.
 pub(super) async fn one(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     args: &Get,
     path: &Path,
-    parsed: &Parsed,
-    listing: &Listing,
+    (parsed, listing, files): (&Parsed, &Listing, Vec<Remote>),
     key: Option<&str>,
 ) -> Result<(PathBuf, Done), Error> {
-    let remote = only(selected(args, parsed, listing)?, parsed, listing)?;
+    let remote = only(files, parsed, listing)?;
     put(context, net, cache, args, path, parsed, &remote, None, key).await
 }
 

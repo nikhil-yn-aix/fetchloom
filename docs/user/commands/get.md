@@ -35,7 +35,7 @@ fetchloom get [options] <link>...
 
 without `-o`:
 
-1. resolve the reference and filter the source's listed files. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
+1. resolve the reference and filter the source's listed files. a `Resolved` line on stderr names what the reference resolved to and counts the files kept, as `1 of 4 files` with their size, when a pasted file link, `--select` or `--exclude` keeps fewer files than the source lists. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
 2. reuse checksummed cached bytes or fetch the missing data. unpinned URLs can be checked with `ETag` or `Last-Modified`.
 3. unpack recognized archives unless disabled, then place the files in the output folder.
 4. print the absolute output folder on stdout. no manifest, lock or project state is written.

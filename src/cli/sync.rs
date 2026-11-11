@@ -34,7 +34,7 @@ use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
-use crate::source::{self, Listing, Reference, local};
+use crate::source::{self, Listing, Reference, Remote, local};
 use crate::units;
 
 /// the most of a title the `Resolved` line shows.
@@ -1768,13 +1768,19 @@ fn short_revision(reference: String) -> String {
 /// prints what a reference resolved to, before any file of it downloads, then what its source
 /// warned about.
 pub(super) fn tell_resolved(output: &Output, listing: &Listing) {
-    tell_facts(output, listing);
+    tell_kept(output, listing, &listing.files);
+}
+
+/// prints what a reference resolved to as [`tell_resolved`] does, counting the files of it `kept`
+/// when they are fewer than it lists, as `1 of 4 files`, with their size alone.
+pub(super) fn tell_kept(output: &Output, listing: &Listing, kept: &[Remote]) {
+    tell_facts(output, listing, kept);
     for warning in &listing.warnings {
         output.warn(warning);
     }
 }
 
-fn tell_facts(output: &Output, listing: &Listing) {
+fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
     // a plain link has nothing to tell before its bytes arrive
     if matches!(listing.resolved, Reference::Url(_)) {
         return;
@@ -1786,21 +1792,26 @@ fn tell_facts(output: &Output, listing: &Listing) {
             .as_deref()
             .map(|title| output.clip(title, TITLE)),
     );
-    let files = units::count(listing.files.len() as u64, "file", "files");
+    let listed = units::count(listing.files.len() as u64, "file", "files");
+    let narrowed = kept.len() < listing.files.len();
+    let files = if narrowed {
+        format!("{} of {listed}", kept.len())
+    } else {
+        listed
+    };
     facts.push(if listing.within.is_empty() {
         files
     } else {
         format!("{files} in {}", listing.within.join(", "))
     });
-    let size = listing
-        .files
+    let size = kept
         .iter()
         .try_fold(0, |total: u64, file| Some(total.saturating_add(file.size?)));
     facts.extend(
-        size.filter(|_| listing.unavailable.is_empty())
+        size.filter(|_| narrowed || listing.unavailable.is_empty())
             .map(units::size),
     );
-    if !listing.unavailable.is_empty() {
+    if !narrowed && !listing.unavailable.is_empty() {
         facts.push(units::count(
             listing.unavailable.len() as u64,
             "unfetchable entry",
