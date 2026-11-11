@@ -192,6 +192,9 @@ impl Survey {
     /// hold, as the survey listed it before anything was removed. a folder holding nothing else
     /// goes with its last file, so it is not among them.
     pub(crate) fn retired(&self, wanted: &HashSet<&str>, going: &HashSet<&str>) -> Vec<Retired> {
+        if going.is_empty() {
+            return Vec::new();
+        }
         let mut sorted: Vec<&str> = wanted.iter().copied().collect();
         sorted.sort_unstable();
         let holds_wanted = |folder: &str| {
