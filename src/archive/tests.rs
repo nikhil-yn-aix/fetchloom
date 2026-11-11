@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use super::guard::{Guard, Meter};
 use super::samples::{Scratch, compress, seven_zip, tar_of, zip_of, zstd_asking_for};
-use super::{Detected, Format, Limits, Unpacked, detect, unpack};
+use super::{Detected, Format, Limits, System, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
 
 /// the tree hash of the folder every good fixture archives, as python computed it from the files
@@ -389,6 +389,40 @@ fn only_names_decide_what_may_unpack() {
     ] {
         assert_eq!(super::by_name(whole), None, "{whole}");
     }
+}
+
+#[test]
+fn a_rar_left_packed_has_a_next_step_for_each_system() {
+    let step =
+        |system| super::unpack_elsewhere(system, "data/sample/sample.rar", "", "extract = false");
+    assert_eq!(
+        step(System::Linux),
+        "unpack it with unar from your package manager: `unar -D -o sample-unpacked data/sample/sample.rar`. extract = false stops this warning"
+    );
+    assert_eq!(
+        step(System::Macos),
+        "unpack it with unar: `brew install unar`, then `unar -D -o sample-unpacked data/sample/sample.rar`. extract = false stops this warning"
+    );
+    assert_eq!(
+        step(System::Windows),
+        r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x data\sample\sample.rar -osample-unpacked`. extract = false stops this warning"#
+    );
+}
+
+/// run below the project's folder, the command reaches the archive and the project's folder from
+/// there, and quotes what its shell would split or expand as that shell reads it.
+#[test]
+fn a_next_step_runs_as_typed_where_fetchloom_ran() {
+    let step =
+        |system| super::unpack_elsewhere(system, "../data/my data/it's.RAR", "../", "--no-extract");
+    assert_eq!(
+        step(System::Linux),
+        r"unpack it with unar from your package manager: `unar -D -o '../it'\''s-unpacked' '../data/my data/it'\''s.RAR'`. --no-extract stops this warning"
+    );
+    assert_eq!(
+        step(System::Windows),
+        r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x '..\data\my data\it''s.RAR' '-o..\it''s-unpacked'`. --no-extract stops this warning"#
+    );
 }
 
 #[test]

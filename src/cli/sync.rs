@@ -267,7 +267,7 @@ impl<'a> Loop<'a> {
                 drafts[draft].learn(file, &fetched, &self.cache);
             }
         }
-        self.unpack_drafts(&mut drafts).await?;
+        self.unpack_drafts(manifest, &mut drafts).await?;
         self.unpack_pinned(manifest, &mut pinned).await?;
         let now = lock::timestamp(SystemTime::now());
         let mut drafted = drafts

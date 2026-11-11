@@ -10,7 +10,7 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits and entry points | `Packed`, `Limits`, `Unpacked`, `by_name`, `stem`, `unpack`, `unpack_cached` |
+| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits, entry points and the next step for an archive left packed | `Packed`, `Limits`, `Unpacked`, `System`, `by_name`, `stem`, `unpack`, `unpack_cached`, `unpack_elsewhere` |
 | [detect.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
 | [guard.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
 | [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | the archive file zip and 7z read: buffered, seekable and metered | `open`, `Source` |
@@ -26,6 +26,8 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 ### names choose candidates, bytes choose decoders
 
 `by_name` selects zip, 7z and tar names, including supported compressed tar endings. `.npz` and `.xlsx` stay whole even though they are zip containers. `detect` then inspects bytes; a misleading extension cannot force a decoder. `rar` is recognized as unsupported and left packed.
+
+the warning for a rar left packed, from `cli/sync/unpack` and `cli/get`, takes its help from `unpack_elsewhere`: a command that unpacks the archive into `<name>-unpacked`, outside the data folder, with unar on linux and macos and 7-Zip on windows, quoted for a unix shell or powershell. `System::RUNNING` picks the system with `cfg!` at compile time, while `unpack_elsewhere` takes the system as an argument, so the tests check all three texts on any machine. paths start from the folder fetchloom ran in, with `../` for each level below the project's folder. [decisions](../decisions.md#storage-and-requests) records why it names these programs and not the systems' own `tar`.
 
 zip first bounds central-directory entry counts, raw path lengths and 256 MiB of directory/ZIP64 metadata work before the decoder collects entries. a separate footer scan reads at most 65,558 bytes. wrapper probes use the same preflight with a one-entry ceiling. zip then checks decoded names and entry kinds before reading members. tar reads sequentially, including gzip, xz, zstd and bzip2 decoding. 7z reads its header within the archive memory, and refuses more entries than the limit or any encrypted block before decoding. it then decodes each block in order on one thread, so its entries reach the guard as tar entries do; lzma2's threaded decoder would hold a whole block in memory first. all three pass names and member bodies through the same guard, and 7z data under an entry no file keeps counts toward the ratio.
 

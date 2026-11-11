@@ -353,14 +353,15 @@ impl Draft {
         self.files[index].unpacks_to = tree;
     }
 
-    /// archives in this dataset that fetchloom leaves packed, each with its format.
-    pub(super) fn left_packed(&self) -> Vec<(String, &'static str)> {
+    /// archives in this dataset that fetchloom leaves packed: the dataset's name, each archive's
+    /// path in it and its format.
+    pub(super) fn left_packed(&self) -> Vec<(&str, &str, &'static str)> {
         self.files
             .iter()
             .filter(|_| self.extract)
             .filter_map(|file| match archive::by_name(&file.path) {
                 Some(Packed::Unsupported(format)) => {
-                    Some((format!("{}/{}", self.name, file.path), format))
+                    Some((self.name.as_str(), file.path.as_str(), format))
                 }
                 _ => None,
             })

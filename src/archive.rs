@@ -86,6 +86,81 @@ pub(crate) fn stem(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+/// the operating systems a next step for an archive left packed is written for. any other unix
+/// is told what linux is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum System {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl System {
+    /// the system this build runs on.
+    pub(crate) const RUNNING: System = if cfg!(windows) {
+        System::Windows
+    } else if cfg!(target_os = "macos") {
+        System::Macos
+    } else {
+        System::Linux
+    };
+
+    /// `text` as one word of a command typed into this system's usual shell, a unix shell or
+    /// powershell, with `\` between folders on windows. a word either shell would split or
+    /// expand is single-quoted.
+    fn word(self, text: &str) -> String {
+        let text = match self {
+            System::Windows => text.replace('/', "\\"),
+            System::Linux | System::Macos => text.to_owned(),
+        };
+        let plain = match self {
+            System::Windows => "-_.:+=\\",
+            System::Linux | System::Macos => "-_.:+=/@%,",
+        };
+        if !text.is_empty()
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || plain.contains(c))
+        {
+            return text;
+        }
+        let quote = match self {
+            System::Windows => "''",
+            System::Linux | System::Macos => r"'\''",
+        };
+        format!("'{}'", text.replace('\'', quote))
+    }
+}
+
+/// how a person on `system` unpacks the archive at `path`, which fetchloom leaves packed: a
+/// command that unpacks it into a folder named after it in `parent`, both as they read from
+/// where fetchloom runs, then `stop`, what keeps the archive packed without this warning.
+/// `parent` is outside the data folder, so status lists none of the unpacked files.
+pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let named = name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(name);
+    let folder = format!("{parent}{named}-unpacked");
+    let archive = system.word(path);
+    match system {
+        System::Linux => format!(
+            "unpack it with unar from your package manager: `unar -D -o {} {archive}`. {stop} stops this warning",
+            system.word(&folder)
+        ),
+        System::Macos => format!(
+            "unpack it with unar: `brew install unar`, then `unar -D -o {} {archive}`. {stop} stops this warning",
+            system.word(&folder)
+        ),
+        System::Windows => format!(
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {archive} {}`. {stop} stops this warning"#,
+            system.word(&format!("-o{folder}"))
+        ),
+    }
+}
+
 /// what an archive may unpack to. every limit counts the bytes actually written, never the sizes
 /// the archive declares. they guard against archives built to fill a disk, so only the person
 /// running fetchloom moves them, through `FETCHLOOM_ARCHIVE_*` or the settings file, and never a

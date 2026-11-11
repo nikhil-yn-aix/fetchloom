@@ -694,3 +694,70 @@ fn an_archive_past_a_limit_names_the_setting_that_lifts_it() -> Result {
     );
     Ok(())
 }
+
+/// the start of a rar5 archive. fetchloom unpacks no rar, so the name alone keeps it packed and
+/// nothing reads further.
+const RAR: &[u8] = b"Rar!\x1a\x07\x01\x00no decoder reads this";
+
+/// the help a warning about a rar left packed gives on this system: a command that unpacks the
+/// rar at `path` into sample-unpacked, then what stops the warning.
+fn next_step(path: &str, stop: &str) -> String {
+    if cfg!(windows) {
+        format!(
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -osample-unpacked`. {stop} stops this warning"#,
+            path.replace('/', "\\")
+        )
+    } else if cfg!(target_os = "macos") {
+        format!(
+            "unpack it with unar: `brew install unar`, then `unar -D -o sample-unpacked {path}`. {stop} stops this warning"
+        )
+    } else {
+        format!(
+            "unpack it with unar from your package manager: `unar -D -o sample-unpacked {path}`. {stop} stops this warning"
+        )
+    }
+}
+
+/// a rar stays packed, and its warning names a command for this system that unpacks it into a
+/// folder outside the data folder, which status leaves alone.
+#[test]
+fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/sample.rar", vec![file(RAR, "\"r1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    ok(&added)?;
+    let stderr = text(&added.stderr)?;
+    let warned = format!(
+        "warning: sample/sample.rar stays packed, since fetchloom does not unpack rar\n  help: {}\n",
+        next_step("data/sample/sample.rar", "extract = false")
+    );
+    assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(
+        fs::read(sandbox.work().join("data/sample/sample.rar"))?,
+        RAR
+    );
+    // what the command leaves behind
+    let unpacked = sandbox.folder("work/sample-unpacked")?;
+    fs::write(unpacked.join("clip.avi"), b"frames")?;
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&status.stderr)?,
+        "         Ok everything matches data.lock by size and time\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/sample.rar", vec![file(RAR, "\"r1\"")])?;
+    let got = sandbox.run(&["--json", "get", &server.url])?;
+    ok(&got)?;
+    let warning = format!(
+        "sample.rar stays packed, since fetchloom does not unpack rar; {}",
+        next_step("sample/sample.rar", "--no-extract")
+    );
+    assert_eq!(json(&got)?["warnings"], serde_json::json!([warning]));
+    assert_eq!(fs::read(sandbox.work().join("sample/sample.rar"))?, RAR);
+    Ok(())
+}

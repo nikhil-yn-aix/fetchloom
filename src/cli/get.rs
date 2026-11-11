@@ -23,7 +23,7 @@ use super::sync as engine;
 use super::sync::place::doubtful;
 use super::sync::unpack::{self as unpacking, Unpack};
 use super::{Context, links, open_cache};
-use crate::archive::{self, Packed};
+use crate::archive::{self, Packed, System};
 use crate::cache::{Cache, UrlRecord};
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
@@ -684,7 +684,7 @@ async fn finish(
             unpacks_to: None,
         })
         .collect();
-    let unpacked = unpack(context, cache, &mut locked, extract).await?;
+    let unpacked = unpack(context, cache, &mut locked, &folder, extract).await?;
     let planned = planned(cache, &locked, unpacked.trees)?;
     let placed: Vec<String> = planned
         .targets
@@ -1016,11 +1016,13 @@ struct UnpackedFiles {
 }
 
 /// unpacks each archive among the fetched files that this machine has not unpacked before, and
-/// returns every archive whose files are now in the cache, so its own bytes can go.
+/// returns every archive whose files are now in the cache, so its own bytes can go. an archive
+/// fetchloom leaves packed is told with how to unpack it from `folder`, where it lands.
 async fn unpack(
     context: &Context,
     cache: &Cache,
     files: &mut [LockedFile],
+    folder: &Path,
     extract: bool,
 ) -> Result<UnpackedFiles, Error> {
     let mut done = UnpackedFiles::default();
@@ -1030,10 +1032,14 @@ async fn unpack(
         match archive::by_name(&file.path) {
             Some(Packed::Archive) if extract => {}
             Some(Packed::Unsupported(format)) if extract => {
-                context.output.warn(&format!(
-                    "{} stays packed, since fetchloom does not unpack {format}",
-                    file.path
-                ));
+                let placed = format!("{}/{}", folder.display(), file.path);
+                context.output.warn_with(
+                    &format!(
+                        "{} stays packed, since fetchloom does not unpack {format}",
+                        file.path
+                    ),
+                    &archive::unpack_elsewhere(System::RUNNING, &placed, "", "--no-extract"),
+                );
                 continue;
             }
             _ => continue,
@@ -1465,8 +1471,14 @@ mod tests {
             false,
             false,
         ));
-        let known =
-            crate::source::recorded::block_on(unpack(&context, &cache, &mut files, true)).unwrap();
+        let known = crate::source::recorded::block_on(unpack(
+            &context,
+            &cache,
+            &mut files,
+            Path::new("files"),
+            true,
+        ))
+        .unwrap();
         assert_eq!(files[0].unpacks_to, Some(tree));
         std::fs::remove_file(cache.root().join("unpacked").join(archive.digest.hex())).unwrap();
         let plan = planned(&cache, &files, known.trees).unwrap();

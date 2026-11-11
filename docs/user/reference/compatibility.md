@@ -26,6 +26,18 @@ some speedups depend on the system and fall back without failing:
 | reflinks, which share bytes until a file changes | btrfs, xfs, apfs, refs and dev drive | hardlinks |
 | hardlinks | ntfs, ext4, hfs+ and other filesystems that support them | copies when links are unavailable or disabled, including fat, exfat and recognized synced folders |
 
+## archives
+
+fetchloom unpacks zip, 7z and tar archives itself on every system. it leaves a `.rar` packed, and the warning's help names a program for the system it runs on and a command that unpacks the archive outside the data folder. for `data/sample/sample.rar`, run from the project's folder:
+
+| system | program | the help |
+|---|---|---|
+| linux | unar, from the distribution's packages | `unar -D -o sample-unpacked data/sample/sample.rar` |
+| macos | unar, from homebrew | `brew install unar`, then `unar -D -o sample-unpacked data/sample/sample.rar` |
+| windows | 7-Zip, from winget | `winget install 7zip.7zip`, then, in powershell, `& "C:\Program Files\7-Zip\7z.exe" x data\sample\sample.rar -osample-unpacked` |
+
+macos's own `tar` and windows' own `tar.exe` are libarchive builds, but neither libarchive's documentation nor microsoft's page for `tar.exe` says they read solid rar5 archives, so the help names programs that do. `-D` puts the files straight into `sample-unpacked`, as 7-Zip's `-o` does. [decisions](../../dev/decisions.md#storage-and-requests) links the sources.
+
 ## terminals
 
 any terminal works. colors, symbols and clickable links adapt to what the terminal says about itself:

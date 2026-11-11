@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::num::NonZero;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
@@ -14,7 +15,7 @@ use super::super::Context;
 use super::super::cache::needed_by_all;
 use super::draft::Draft;
 use super::{Loop, job};
-use crate::archive::{self, Packed, Unpacked};
+use crate::archive::{self, Packed, System, Unpacked};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
@@ -178,15 +179,26 @@ pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current:
 }
 
 impl Loop<'_> {
-    /// learns what every new archive in `drafts` unpacks to, and says which archives stay packed.
-    pub(super) async fn unpack_drafts(&self, drafts: &mut [Draft]) -> Result<(), Error> {
+    /// learns what every new archive in `drafts` unpacks to, and says which archives stay packed
+    /// and how a person can unpack them, outside the data folder `manifest` sets.
+    pub(super) async fn unpack_drafts(
+        &self,
+        manifest: &Manifest,
+        drafts: &mut [Draft],
+    ) -> Result<(), Error> {
         let mut slots = Vec::new();
         let mut unpacks = Vec::new();
+        let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
+        let up = up_to(&self.project.root, &here);
         for (index, draft) in drafts.iter_mut().enumerate() {
-            for (label, format) in draft.left_packed() {
-                self.context.output.warn(&format!(
-                    "{label} stays packed, since fetchloom does not unpack {format}"
-                ));
+            for (dataset, path, format) in draft.left_packed() {
+                let placed = format!("{up}{}/{path}", plan::folder(manifest, dataset));
+                self.context.output.warn_with(
+                    &format!(
+                        "{dataset}/{path} stays packed, since fetchloom does not unpack {format}"
+                    ),
+                    &archive::unpack_elsewhere(System::RUNNING, &placed, &up, "extract = false"),
+                );
             }
             for todo in draft.unknown_archives(&self.cache) {
                 slots.push((index, todo.file));
@@ -414,6 +426,15 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
     ))
 }
 
+/// the project's folder `root` as a path from `here`, a folder inside it: `../` for each folder
+/// between them, so a command a help line names works where the person ran fetchloom.
+fn up_to(root: &Path, here: &Path) -> String {
+    let depth = here
+        .strip_prefix(root)
+        .map_or(0, |inside| inside.components().count());
+    "../".repeat(depth)
+}
+
 fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Duration) {
     let bytes: u64 = unpacked.members.iter().map(|member| member.size).sum();
     output.step(
@@ -485,6 +506,18 @@ mod tests {
             }],
             ..Lock::default()
         }
+    }
+
+    #[test]
+    fn a_help_reaches_the_project_from_the_folder_fetchloom_ran_in() {
+        let root = Path::new("/work/project");
+        assert_eq!(up_to(root, root), "");
+        assert_eq!(up_to(root, &root.join("data").join("sample")), "../../");
+        assert_eq!(
+            up_to(root, Path::new("/elsewhere")),
+            "",
+            "from a folder not inside it, paths start at the project"
+        );
     }
 
     #[test]
