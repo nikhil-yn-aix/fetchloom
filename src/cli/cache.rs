@@ -643,9 +643,13 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
     }
     let Ok(cache) = open_cache() else { return };
     // gc would forget a project out of reach, so the number would mislead
-    let Ok(Some(needed)) = needed_by_all(&cache, None, stop) else {
+    let Ok(found) = needed_with(&cache, None, stop, false, Uses::Untold) else {
         return;
     };
+    if !found.complete {
+        return;
+    }
+    let needed = found.needed;
     let Ok(scan) = cache.scan_objects(stop) else {
         return;
     };
@@ -668,16 +672,19 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
 fn stamp(marker: &std::path::Path, now: SystemTime) -> io::Result<()> {
     crate::cache::open_unfollowed(marker, true)?.set_modified(now)
 }
-/// as [`needed_with`], or none when a registered project is out of reach, as on a drive not
-/// plugged in: its lock cannot be read, so nothing it may need can be told apart. only
-/// `cache gc`, run on purpose, forgets such a project.
+/// every object a registered project, or `current`, needs, as gc keeps them: a project whose
+/// data.toml is gone needs nothing, since gc forgets it and frees what it alone needed.
+///
+/// # Errors
+///
+/// a registration, data.toml or lock that is there but cannot be read, as gc stops for, so the
+/// caller keeps what it would drop.
 pub(super) fn needed_by_all(
     cache: &Cache,
     current: Option<&Lock>,
     stop: &Stop,
-) -> Result<Option<Needed>, Error> {
-    let found = needed_with(cache, current, stop, false, Uses::Untold)?;
-    Ok(found.complete.then_some(found.needed))
+) -> Result<Needed, Error> {
+    Ok(needed_with(cache, current, stop, false, Uses::Untold)?.needed)
 }
 
 /// whether [`needed_with`] tells how each project uses each object it needs, which reads the

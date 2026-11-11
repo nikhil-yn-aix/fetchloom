@@ -216,18 +216,14 @@ fn recorded(cache: &Cache, unpack: &Unpack) -> Option<Unpacked> {
 }
 
 /// drops each archive's own bytes from the cache, now that its files are in, unless a project on
-/// this machine, or `current`, still needs them. when a project is out of reach or a lock cannot
-/// be read, nothing is dropped.
+/// this machine, or `current`, still needs them. a registered project whose data.toml is gone
+/// needs none, as gc forgets it; when a data.toml or lock cannot be read, nothing is dropped.
 pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current: Option<&Lock>) {
     if archives.is_empty() {
         return;
     }
     let needed = match needed_by_all(cache, current, &crate::stop::Stop::default()) {
-        Ok(Some(needed)) => needed,
-        Ok(None) => {
-            tracing::debug!("kept unpacked archives, since a registered project is out of reach");
-            return;
-        }
+        Ok(needed) => needed,
         Err(err) => {
             tracing::debug!(err = %err.message, "kept unpacked archives, since a lock could not be read");
             return;
@@ -807,19 +803,26 @@ mod tests {
             std::fs::read(cache.object_path(&archive.digest)).unwrap(),
             b"keep me until the lock can be read"
         );
-    }
-
-    #[test]
-    fn a_project_out_of_reach_keeps_all_unpacked_archives_and_its_registration() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = Cache::open(dir.path().join("cache")).unwrap();
-        // registered, but its data.toml is gone, as on a drive not plugged in
-        let root = dir.path().join("unplugged");
-        std::fs::create_dir(&root).unwrap();
-        cache.register(&root).unwrap();
-        let archive = store(&cache, b"the unplugged project may need me");
+        // a data.toml that is there but cannot be read is no missing one
+        std::fs::remove_file(root.join("data.lock")).unwrap();
+        std::fs::remove_file(root.join("data.toml")).unwrap();
+        std::fs::create_dir(root.join("data.toml")).unwrap();
         drop_archives(&cache, &[archive.digest], None);
         assert!(cache.find(&archive.digest, None).is_some());
+    }
+
+    /// gc forgets a registered project whose data.toml is gone and frees what it alone needed,
+    /// so an unpack keeps nothing for it either. only gc forgets the project itself.
+    #[test]
+    fn a_project_whose_data_toml_is_gone_keeps_no_unpacked_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let root = dir.path().join("deleted");
+        std::fs::create_dir(&root).unwrap();
+        cache.register(&root).unwrap();
+        let archive = store(&cache, b"nobody needs me packed");
+        drop_archives(&cache, &[archive.digest], None);
+        assert!(cache.find(&archive.digest, None).is_none());
         let registered = cache.registered_projects(&crate::stop::Stop::default());
         assert_eq!(registered.unwrap().len(), 1);
     }

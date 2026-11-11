@@ -375,6 +375,25 @@ fn an_archive_another_project_places_as_a_file_stays_in_the_cache() -> Result {
     Ok(())
 }
 
+/// gc forgets a registered project whose data.toml is gone, as when its folder was deleted, so
+/// an unpack elsewhere keeps no packed bytes for it either.
+#[test]
+fn an_unpack_drops_the_archive_though_a_registered_project_is_gone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let notes = Server::start("/files/notes.csv", vec![file(b"a,b\n", "\"n1\"")])?;
+    let gone = sandbox.folder("gone")?;
+    ok(&sandbox.command_in(&gone, &["add", &notes.url]).output()?)?;
+    fs::remove_file(gone.join("data.toml"))?;
+    let zip = Server::start(PATH, vec![file(&fixture("python.zip")?, "\"z1\"")])?;
+    ok(&sandbox.run(&["add", &zip.url])?)?;
+    holds_the_archive(&sandbox.work().join("data").join("dataset"))?;
+    assert!(
+        !zip_object(&sandbox.cache()).exists(),
+        "the zip's own bytes leave the cache once its files are in"
+    );
+    Ok(())
+}
+
 #[test]
 fn get_drops_an_archive_it_unpacked_on_an_earlier_run() -> Result {
     let sandbox = Sandbox::new()?;

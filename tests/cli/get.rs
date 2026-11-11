@@ -285,6 +285,28 @@ fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
     Ok(())
 }
 
+/// a registered project whose data.toml is gone needs nothing, as gc forgets it, so a one-off
+/// still moves out of the cache rather than being copied beside it.
+#[test]
+fn output_moves_a_one_off_though_a_registered_project_is_gone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let pinned = Server::start(PATH, vec![file(b"a,b\n", "\"p1\"")])?;
+    let gone = sandbox.folder("gone")?;
+    let added = sandbox.command_in(&gone, &["add", &pinned.url]).output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    fs::remove_file(gone.join("data.toml"))?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    if cfg!(unix) {
+        assert_eq!(document["result"]["files"][0]["method"], "move");
+        assert_eq!(document["work"]["copies"], 0);
+    }
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn output_keeps_an_archive_packed() -> Result {
     let sandbox = Sandbox::new()?;

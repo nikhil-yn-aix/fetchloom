@@ -750,11 +750,7 @@ fn one_off(context: &Context, cache: &Cache, digest: &Sha256) -> bool {
         return false;
     }
     match super::super::cache::needed_by_all(cache, None, &context.stop) {
-        Ok(Some(needed)) if !needed.objects.contains(digest) => true,
-        Ok(_) => {
-            tracing::debug!("kept the download, since a project may need it");
-            false
-        }
+        Ok(needed) => !needed.objects.contains(digest),
         Err(err) => {
             tracing::debug!(err = %err.message, "kept the download, since a lock could not be read");
             false
