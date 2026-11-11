@@ -316,7 +316,7 @@ fn configured_keys_stay_out_of_outputs_locks_state_and_url_records() -> Result {
         )?;
         for (name, args, download) in [
             ("sync", vec!["sync"], true),
-            ("get", vec!["get", url.as_str(), "-o", "fetched"], true),
+            ("get", vec!["get", url.as_str(), "--dir", "fetched"], true),
             ("auth", vec!["auth", "--offline"], false),
         ] {
             let trace = sandbox.folder("traces")?.join(format!("{name}.json"));
@@ -555,7 +555,7 @@ fn generated_output_roots_refuse_links_outside_the_working_directory() -> Result
                     "get",
                     server.url.as_str(),
                     other.url.as_str(),
-                    "-o",
+                    "--dir",
                     "chosen",
                 ]
             } else {

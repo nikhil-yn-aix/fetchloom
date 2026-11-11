@@ -102,7 +102,7 @@ fn get_offers_to_pin_a_download_in_the_project_it_ran_in() -> Result {
     assert!(sandbox.run(&["add", &server.url])?.status.success());
 
     let inside = sandbox
-        .on_a_terminal(&["get", &server.url, "-o", "again"])?
+        .on_a_terminal(&["get", &server.url, "--dir", "again"])?
         .unwrap_or_default();
 
     assert!(

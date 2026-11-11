@@ -136,7 +136,7 @@ fn files_placed_from_bytes_the_cache_held_are_counted() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), unchanged])?;
     let first = json(&sandbox.run(&["--json", "get", &server.url])?)?;
     assert_eq!(first["work"]["placed_from_cache"], 0, "{first}");
-    let again = json(&sandbox.run(&["--json", "get", &server.url, "-o", "again"])?)?;
+    let again = json(&sandbox.run(&["--json", "get", &server.url, "--dir", "again"])?)?;
     assert_eq!(again["work"]["bytes_down"], 0, "{again}");
     assert_eq!(again["work"]["placed_from_cache"], 1, "{again}");
     Ok(())
@@ -432,7 +432,7 @@ fn offline_uses_only_what_the_cache_holds() -> Result {
 
     sandbox.run(&["get", &server.url])?;
     let after = sandbox
-        .command(&["--json", "get", &server.url, "-o", "again"])
+        .command(&["--json", "get", &server.url, "--dir", "again"])
         .env("FETCHLOOM_OFFLINE", "1")
         .output()?;
     assert_eq!(after.status.code(), Some(0), "{}", text(&after.stdout)?);
@@ -629,13 +629,17 @@ fn two_runs_of_one_link_download_it_once() -> Result {
     slow.push(Part::Bytes(IRIS.to_vec()));
     let unchanged = reply("304 Not Modified", &[("ETag", "\"v1\"")], b"");
     let server = Server::start(PATH, vec![slow, unchanged])?;
-    let first =
-        crate::support::Running::start(&mut sandbox.command(&["get", &server.url, "-o", "first"]))?;
+    let first = crate::support::Running::start(&mut sandbox.command(&[
+        "get",
+        &server.url,
+        "--dir",
+        "first",
+    ]))?;
     server.wait_for_requests(1)?;
     let second = crate::support::Running::start(&mut sandbox.command(&[
         "get",
         &server.url,
-        "-o",
+        "--dir",
         "second",
     ]))?;
     // redirected stderr says the second run waits for the first, and never that it downloads
@@ -679,7 +683,7 @@ fn a_folder_named_through_a_link_gets_the_files_and_their_updates() -> Result {
         return Ok(());
     }
     for (bytes, run) in [(IRIS, "first"), (newer, "second")] {
-        let output = sandbox.run(&["get", &server.url, "-o", "linked"])?;
+        let output = sandbox.run(&["get", &server.url, "--dir", "linked"])?;
         let stderr = text(&output.stderr)?;
         assert_eq!(output.status.code(), Some(0), "{run} run: {stderr}");
         assert_eq!(fs::read(real.join("iris.csv"))?, bytes, "{run} run");
@@ -844,7 +848,7 @@ fn extensionless_links_use_redirect_names_and_prefer_final_names() -> Result {
             ("dir", "dir.mat")
         };
         assert_eq!(fs::read(sandbox.work().join(folder).join(name))?, IRIS);
-        let offline = sandbox.run(&["get", &server.url, "--offline", "-o", "cached"])?;
+        let offline = sandbox.run(&["get", &server.url, "--offline", "--dir", "cached"])?;
         assert!(offline.status.success(), "{}", text(&offline.stderr)?);
         assert_eq!(fs::read(sandbox.work().join("cached").join(name))?, IRIS);
         assert_eq!(server.requests().len(), 2);
@@ -911,7 +915,7 @@ fn two_files() -> Result<(Server, Server)> {
 fn several_links_land_in_folders_of_their_own_inside_the_output() -> Result {
     let sandbox = Sandbox::new()?;
     let (iris, wine) = two_files()?;
-    let output = sandbox.run(&["get", &iris.url, &wine.url, "-o", "downloads"])?;
+    let output = sandbox.run(&["get", &iris.url, &wine.url, "--dir", "downloads"])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     let downloads = sandbox.work().join("downloads");
@@ -1227,14 +1231,14 @@ fn duplicate_stems_reuse_their_folders_on_a_rerun() -> Result {
             format!("{}\n{}\n", first.url, second.url),
         )?;
         let args = if listed {
-            vec!["--json", "get", "-i", "links.txt", "-o", "downloads"]
+            vec!["--json", "get", "-i", "links.txt", "--dir", "downloads"]
         } else {
             vec![
                 "--json",
                 "get",
                 first.url.as_str(),
                 second.url.as_str(),
-                "-o",
+                "--dir",
                 "downloads",
             ]
         };

@@ -397,7 +397,7 @@ fn get_drops_an_archive_it_unpacked_on_an_earlier_run() -> Result {
         zip_object(&sandbox.cache()).exists(),
         "refused before placing"
     );
-    ok(&sandbox.run(&["get", &server.url, "-o", "fresh"])?)?;
+    ok(&sandbox.run(&["get", &server.url, "--dir", "fresh"])?)?;
     holds_the_archive(&sandbox.work().join("fresh"))?;
     assert!(
         !zip_object(&sandbox.cache()).exists(),
@@ -417,7 +417,7 @@ fn a_file_the_server_never_named_an_archive_needs_its_own_bytes() -> Result {
     assert_eq!(fs::read(sandbox.work().join("12345").join("12345"))?, zip);
     // as cache gc would, once the object is a day old
     delete(&zip_object(&sandbox.cache()))?;
-    let offline = sandbox.run(&["--offline", "get", &bare.url, "-o", "fresh"])?;
+    let offline = sandbox.run(&["--offline", "get", &bare.url, "--dir", "fresh"])?;
     let stderr = text(&offline.stderr)?;
     assert_eq!(offline.status.code(), Some(20), "{stderr}");
     assert!(stderr.contains("is not in the cache"), "{stderr}");

@@ -4,9 +4,9 @@
 
 ```sh
 fetchloom get iris
-fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
+fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
 fetchloom get https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz --no-extract
-fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
+fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
 fetchloom get -i links.txt
 fetchloom get https://example.org/iris.csv --sha256 d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
 ```
@@ -19,14 +19,12 @@ fetchloom get [options] <link>...
 
 | option | effect |
 |---|---|
-| `-o <dir>`, `--output <dir>` | choose the output folder; with several links, the folder that holds one folder for each |
+| `-d <folder>`, `--dir <folder>` | choose the output folder; with several links, the folder that holds one folder for each |
 | `-i <file>`, `--input-file <file>` | read links from a file, one per line, or from stdin for `-` |
 | `--sha256 <hex>` | check the one downloaded file against this SHA-256 before putting it in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed |
-
-`-o -` is refused: get writes files to a folder, not their contents to stdout.
 
 [global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
@@ -64,7 +62,7 @@ an unchanged direct URL can return a 304 response, avoiding its file-body downlo
 
 ## several links
 
-links given together, on the command line or with `-i`, share one run. fetchloom resolves them at once, asks once about the total size when it is large, and downloads all their files together, at most `FETCHLOOM_JOBS` at a time as in a [project sync](../reference/environment.md). each link then gets its own folder, named as it would be alone, in the working folder or inside the `-o` folder. stdout lists each placed folder on its own line, in the order given.
+links given together, on the command line or with `-i`, share one run. fetchloom resolves them at once, asks once about the total size when it is large, and downloads all their files together, at most `FETCHLOOM_JOBS` at a time as in a [project sync](../reference/environment.md). each link then gets its own folder, named as it would be alone, in the working folder or inside the `--dir` folder. stdout lists each placed folder on its own line, in the order given.
 
 with several links, each must be a link, a DOI or an id; a bare word among them is a usage error. `--select`, `--exclude` and `--no-extract` apply to every link. two links named alike each get a folder: `iris`, then `iris-2`, so no link's files replace another's.
 
@@ -91,7 +89,7 @@ an interruption, a refused question about the total size or a cache that cannot 
 fetchloom get -i - < links.txt
 ```
 
-a list always runs as several links, even when it holds one, so `-o` names the folder that holds each link's folder. a line of search words, or a list with no links, is a usage error before anything downloads. ctrl-c while reading the list exits 130 without waiting for its producer to close the pipe.
+a list always runs as several links, even when it holds one, so `--dir` names the folder that holds each link's folder. a line of search words, or a list with no links, is a usage error before anything downloads. ctrl-c while reading the list exits 130 without waiting for its producer to close the pipe.
 
 ## checking a hash
 
@@ -103,7 +101,7 @@ unrelated top-level entries are refused. fetchloom ignores its own leftover copy
 
 before removing any earlier version, get checks every target in that output folder and the cached bytes it needs. a later conflict or a missing cached object leaves earlier files in place. other contents can be replaced only if those bytes already exist in the cache. that does not prove fetchloom created them. there is no `get --force`. choose a different folder to protect your files.
 
-the output folder explicitly chosen with `-o` for a single link may itself link elsewhere. automatically named folders, including each link's folder inside a multi-link `-o` parent, must be real folders. links below an output folder are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
+the output folder explicitly chosen with `--dir` for a single link may itself link elsewhere. automatically named folders, including each link's folder inside a multi-link `--dir` parent, must be real folders. links below an output folder are refused. read-only placement, extraction paths and offline requirements follow the [concepts](../concepts.md).
 
 ## exit codes
 
@@ -114,7 +112,7 @@ the output folder explicitly chosen with `-o` for a single link may itself link 
 | symptom | cause | fix |
 |---|---|---|
 | a rerun fetches changed data | `get` has no project lock | use `add` and commit the pins, or check the bytes with `--sha256` |
-| an output folder has unrelated contents | `get` protects existing files | choose another folder with `-o` |
+| an output folder has unrelated contents | `get` protects existing files | choose another folder with `--dir` |
 | offline get cannot resolve a repository | the reference needs network resolution | follow [offline preparation](../concepts.md#offline) |
 | a drive folder includes google docs | selected exports cannot be pinned reliably | [exclude the docs](../sources/google-drive.md) or request fixed files |
 | the downloaded archive stayed packed | its name or bytes are unsupported | check [archive rules](../concepts.md#archives) |

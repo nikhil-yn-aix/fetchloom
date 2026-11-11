@@ -152,7 +152,7 @@ def fingerprint(root, client=None):
 def command(name, dataset, work, fetchloom):
     dest = work / "output"
     if name == "fetchloom":
-        argv = [str(fetchloom), "-q", "--yes", "get", dataset["ref"], "--no-extract", "-o", str(dest)]
+        argv = [str(fetchloom), "-q", "--yes", "get", dataset["ref"], "--no-extract", "--dir", str(dest)]
         for pattern in dataset["select"]:
             argv += ["--select", pattern]
         return argv

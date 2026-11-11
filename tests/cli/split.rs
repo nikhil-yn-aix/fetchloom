@@ -208,7 +208,7 @@ fn check_a_replacement_is_whole(validators: String) -> Result {
         Ok(asked)
     });
     let sandbox = Sandbox::new()?;
-    let output = sandbox.run(&["--json", "get", &url, "--no-extract", "-o", "out"])?;
+    let output = sandbox.run(&["--json", "get", &url, "--no-extract", "--dir", "out"])?;
     let asked = serving
         .join()
         .map_err(|_| "the replacement server failed")??;

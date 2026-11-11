@@ -91,7 +91,7 @@ jobs:
             }
 
             got_files() {
-              "$fetchloom" --json get zenodo:3608990 -o "$work/got" | read_json '
+              "$fetchloom" --json get zenodo:3608990 --dir "$work/got" | read_json '
           files = document["result"]["files"]
           for file in files:
               print(file["path"], file["origin"], file["method"])
@@ -138,7 +138,7 @@ jobs:
             check "sync placed files in data/ again" placed data
             check "status after sync finds nothing to do" nothing_differs
 
-            check "fetchloom get zenodo:3608990 -o" got_files
+            check "fetchloom get zenodo:3608990 --dir" got_files
             check "get filled its output folder" placed "$work/got"
             check "fetchloom search iris --json" found
 

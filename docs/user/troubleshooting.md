@@ -39,7 +39,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: SSL_CERT_FILE names /etc/ssl/corp.pem, which holds no certificates fetchloom can read` | the variable names a missing file, or one without PEM certificates | unset it to use the system's certificates, or set it to a file of PEM certificates |
 | `error: this sync needs at least 170.0 GiB on the disk holding the cache at /home/ada/.cache/fetchloom, which has 150.0 GiB free` | the downloads, and the archives they unpack, need more than the cache's disk has free | free space there, or set `FETCHLOOM_CACHE` to a folder on a bigger disk. downloads already in the cache are kept. `--yes` goes on anyway, as on a disk that compresses |
 | `error: the cache at /media/usb/fetchloom is on a FAT32 disk, which holds no file of 4 GiB or more, and scans.zip is 5.2 GiB` | FAT32 keeps a file's size in 32 bits, so the file cannot be stored there; fetchloom refuses before downloading, copying or unpacking it | set `FETCHLOOM_CACHE` to a folder on a disk formatted as exFAT, NTFS, APFS or ext4. a project on a FAT32 disk gets the same refusal for its data folder: move the project |
-| `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `-o` |
+| `error: iris/iris.csv already exists with other contents` | `get` found conflicting local bytes | move the file somewhere safe or choose another folder with `--dir` |
 | `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
 
 for a size mismatch, the full stderr answer can be:

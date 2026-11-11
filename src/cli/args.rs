@@ -96,8 +96,8 @@ on disk: notes changed cached files, which are downloaded again when next needed
 
     pub(super) const GET: &str = "examples:
   fetchloom get iris
-  fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
-  fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
+  fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
+  fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
   fetchloom get -i links.txt
 
 on disk: writes one folder for each link, through the cache. does not create data.toml or data.lock";
@@ -764,10 +764,10 @@ pub(crate) struct Get {
     )]
     pub(crate) links: Vec<String>,
 
-    /// put the download in <dir> instead of a new folder named after it. with several links,
-    /// each gets its own folder inside <dir>
-    #[arg(short, long, value_name = "dir", help_heading = "options")]
-    pub(crate) output: Option<PathBuf>,
+    /// put the download in <folder> instead of a new folder named after it. with several
+    /// links, each gets its own folder inside <folder>
+    #[arg(short, long, value_name = "folder", help_heading = "options")]
+    pub(crate) dir: Option<PathBuf>,
 
     /// read links from <file>, one per line, or from stdin for -. blank lines and lines
     /// starting with # are skipped
@@ -866,8 +866,8 @@ mod tests {
             ("-qC", (false, true)),
             ("-qCcache", (false, false)),
             ("-qCh", (false, false)),
-            ("-oh", (false, false)),
-            ("--output=--help", (false, false)),
+            ("-dh", (false, false)),
+            ("--dir=--help", (false, false)),
         ] {
             assert_eq!(super::help_option(&root, get, word), expected, "{word}");
         }

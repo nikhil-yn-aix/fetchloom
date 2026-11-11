@@ -12,9 +12,9 @@ arguments:
              alone, in quotes
 
 options:
-  -o, --output <dir>       put the download in <dir> instead of a new folder
+  -d, --dir <folder>       put the download in <folder> instead of a new folder
                            named after it. with several links, each gets its own
-                           folder inside <dir>
+                           folder inside <folder>
   -i, --input-file <file>  read links from <file>, one per line, or from stdin
                            for -. blank lines and lines starting with # are
                            skipped
@@ -40,8 +40,8 @@ options:
 
 examples:
   fetchloom get iris
-  fetchloom get https://huggingface.co/datasets/scikit-learn/iris -o iris
-  fetchloom get zenodo:3608990 figshare:34744689@1 -o downloads
+  fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
+  fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
   fetchloom get -i links.txt
 
 on disk: writes one folder for each link, through the cache. does not create

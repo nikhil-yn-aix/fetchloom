@@ -344,9 +344,9 @@ mod tests {
         let command = args::Args::command();
         let get = command.find_subcommand("get").unwrap();
         let own = arguments(get, false);
-        let output = own.iter().find(|option| option.name == "--output").unwrap();
-        assert_eq!(output.short.as_deref(), Some("-o"));
-        assert_eq!(output.value.as_deref(), Some("dir"));
+        let folder = own.iter().find(|option| option.name == "--dir").unwrap();
+        assert_eq!(folder.short.as_deref(), Some("-d"));
+        assert_eq!(folder.value.as_deref(), Some("folder"));
         let links = own
             .iter()
             .find(|argument| argument.name == "<link>")

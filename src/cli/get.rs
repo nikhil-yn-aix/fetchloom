@@ -123,9 +123,9 @@ struct Wanted {
     listing: Listing,
     files: Vec<Remote>,
     jobs: Vec<Job>,
-    /// the folder `-o` names for the one link.
+    /// the folder `--dir` names for the one link.
     chosen: Option<PathBuf>,
-    /// the folder `-o` names for several links, each in a folder of its own inside it.
+    /// the folder `--dir` names for several links, each in a folder of its own inside it.
     parent: Option<PathBuf>,
     extract: bool,
     /// the hash `--sha256` asks the one file to have.
@@ -133,14 +133,6 @@ struct Wanted {
 }
 
 pub(super) async fn run(context: &Context, args: Get) -> Result<Report, Error> {
-    // `-` reads a list for -i, but a download is a folder of files, never one stream
-    if args.output.as_deref() == Some(std::path::Path::new("-")) {
-        return Err(Error::new(
-            Kind::Usage,
-            "get writes into a folder, so -o cannot be - for stdout",
-        )
-        .help("give -o a folder name, then read the files there; `fetchloom get` prints the folder's path"));
-    }
     let links = links(context, &args).await?;
     if args.sha256.is_some() && links.len() != 1 {
         return Err(Error::new(
@@ -253,7 +245,7 @@ fn read_list_text(path: &Path) -> Result<(String, String), Error> {
     Ok((name, text))
 }
 
-/// a link or search words alone: into the folder `-o` names, or one named after the download.
+/// a link or search words alone: into the folder `--dir` names, or one named after the download.
 async fn one(
     context: &Context,
     net: &Arc<Net>,
@@ -272,7 +264,7 @@ async fn one(
     let listing =
         engine::resolve(&context.output, &parsed.reference, net, folders.as_deref()).await?;
     engine::tell_resolved(&context.output, &listing);
-    let mut wanted = prepare(&cache, args, args.output.as_deref(), None, parsed, listing)?;
+    let mut wanted = prepare(&cache, args, args.dir.as_deref(), None, parsed, listing)?;
     approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
@@ -313,7 +305,7 @@ async fn many(
     let mut wanted = Vec::with_capacity(links.len());
     for (link, resolved) in links.iter().zip(resolved) {
         let prepared = resolved.and_then(|(parsed, listing)| {
-            prepare(&cache, args, None, args.output.as_deref(), parsed, listing)
+            prepare(&cache, args, None, args.dir.as_deref(), parsed, listing)
         });
         if let Err(error) = &prepared {
             tell_failed(context, link, error);
@@ -695,7 +687,7 @@ fn vouch(
                 folder.display()
             ),
         )
-        .help("fetch these links in separate runs, each with its own -o folder"));
+        .help("fetch these links in separate runs, each with its own --dir folder"));
     }
     Ok(())
 }
@@ -1340,7 +1332,7 @@ mod tests {
     fn the_pin_hint_keeps_filters_and_extraction_settings() {
         let args = Get {
             links: vec!["https://example.org/data.zip".to_owned()],
-            output: Some(PathBuf::from("chosen")),
+            dir: Some(PathBuf::from("chosen")),
             input_file: None,
             sha256: None,
             filter: Filter {

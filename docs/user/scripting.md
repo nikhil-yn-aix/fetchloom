@@ -59,7 +59,7 @@ kept conflicts do not include unrelated extras. run `fetchloom --json status` an
 
 ```sh
 fetchloom --json add https://huggingface.co/datasets/scikit-learn/iris
-fetchloom --json get https://zenodo.org/records/3608990 -o flowers
+fetchloom --json get https://zenodo.org/records/3608990 --dir flowers
 ```
 
 `add` returns `result.project` and added names in `result.datasets`. repeating an identical addition can return an empty name array because the entry already exists.

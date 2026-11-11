@@ -492,7 +492,7 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
     let primed = command(
         &sandbox,
         &small,
-        &["get", "s3://audit-bucket/data/", "-o", "primed"],
+        &["get", "s3://audit-bucket/data/", "--dir", "primed"],
     )
     .output()?;
     assert_eq!(primed.status.code(), Some(0), "{}", text(&primed.stderr)?);
@@ -528,7 +528,7 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     let got = command(
         &sandbox,
         &routes,
-        &["--json", "get", "s3://audit-bucket/data/", "-o", "out"],
+        &["--json", "get", "s3://audit-bucket/data/", "--dir", "out"],
     )
     .output()?;
     assert_eq!(got.status.code(), Some(1), "{}", text(&got.stderr)?);
@@ -547,7 +547,13 @@ fn listed_sizes_too_large_to_add_up_are_asked_about() -> Result {
     let approved = command(
         &sandbox,
         &routes,
-        &["get", "s3://audit-bucket/data/", "-o", "approved", "--yes"],
+        &[
+            "get",
+            "s3://audit-bucket/data/",
+            "--dir",
+            "approved",
+            "--yes",
+        ],
     )
     .output()?;
     let stderr = text(&approved.stderr)?;

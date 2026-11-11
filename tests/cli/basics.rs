@@ -752,7 +752,11 @@ fn linked_files_are_said_to_be_linked_to_the_cache() -> Result {
         ],
     )?;
     sandbox.allow(&server.url);
-    let fetched = text(&sandbox.run(&["get", &server.url, "-o", "fetched"])?.stderr)?;
+    let fetched = text(
+        &sandbox
+            .run(&["get", &server.url, "--dir", "fetched"])?
+            .stderr,
+    )?;
     assert!(
         fetched.contains("Fetched iris.csv into fetched · linked to the cache\n"),
         "{fetched}"

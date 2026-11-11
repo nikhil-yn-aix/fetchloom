@@ -1872,7 +1872,7 @@ fn get_never_takes_a_marked_object() -> Result {
     mark(&sandbox, &iris_object(&sandbox, &other)?)?;
     let folder = sandbox.folder("got")?;
 
-    let got = sandbox.run(&["get", &server.url, "-o", &folder.display().to_string()])?;
+    let got = sandbox.run(&["get", &server.url, "--dir", &folder.display().to_string()])?;
 
     let stderr = text(&got.stderr)?;
     assert_eq!(got.status.code(), Some(0), "{stderr}");
@@ -1928,7 +1928,7 @@ fn a_later_get_conflict_preserves_earlier_files() -> Result {
     use std::io::Write as _;
     let sandbox = Sandbox::new()?;
     let original = Server::start("/a.csv", vec![crate::support::file(b"old-a", "\"old\"")])?;
-    let fetched = sandbox.run(&["get", &original.url, "-o", "out"])?;
+    let fetched = sandbox.run(&["get", &original.url, "--dir", "out"])?;
     assert!(fetched.status.success(), "{}", text(&fetched.stderr)?);
     fs::write(sandbox.work().join("out/b.csv"), b"foreign")?;
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -1938,7 +1938,7 @@ fn a_later_get_conflict_preserves_earlier_files() -> Result {
     }
     let bytes = zip.finish()?.into_inner();
     let archive = Server::start("/files.zip", vec![crate::support::file(&bytes, "\"new\"")])?;
-    let output = sandbox.run(&["get", &archive.url, "-o", "out", "--json"])?;
+    let output = sandbox.run(&["get", &archive.url, "--dir", "out", "--json"])?;
     assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
     let document = crate::support::json(&output)?;
     assert_eq!(document["errors"][0]["kind"], "local.not_empty");

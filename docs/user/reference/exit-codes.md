@@ -33,7 +33,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `integrity.mismatch` | investigate changed bytes; upgrade pins only if intended |
 | `auth.required` | obtain access and set supported credentials |
 | `local.io` | check free space, permissions and files held open |
-| `local.not_empty` | preserve existing files and choose another `get -o` folder |
+| `local.not_empty` | preserve existing files and choose another `get --dir` folder |
 | `project.invalid` | correct or restore the manifest, lock or project folders |
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
 | `interrupted` | retry when ready; resumable downloads may be reused |

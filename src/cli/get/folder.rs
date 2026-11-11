@@ -35,7 +35,7 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
                 Kind::LocalNotEmpty,
                 format!("{} already exists and is not a folder", folder.display()),
             )
-            .help("choose another folder with -o"));
+            .help("choose another folder with --dir"));
         }
         Ok(_) => {}
     }
@@ -65,7 +65,7 @@ pub(super) fn check(folder: &Path, paths: Option<&[String]>) -> Result<(), Error
         format!("{} already holds other files", folder.display()),
     )
     .detail(format!("such as {}", others[0]))
-    .help("choose another folder with -o, or empty this one"))
+    .help("choose another folder with --dir, or empty this one"))
 }
 
 /// a generated name cannot grant the root-link exception an explicit output folder gets.
@@ -233,7 +233,7 @@ fn occupied(destination: &Path) -> Error {
             destination.display()
         ),
     )
-    .help("move it away to fetch this file, or choose another folder with -o")
+    .help("move it away to fetch this file, or choose another folder with --dir")
 }
 
 /// whether the file at `path` already holds the target's bytes. a hardlink is the cached
