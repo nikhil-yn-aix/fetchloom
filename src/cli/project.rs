@@ -997,7 +997,10 @@ pub(crate) mod tests {
             lock::spec(&manifest.datasets["a"]),
             vec![pinned_file("a", "https://example.org/a", b"a")],
         );
-        let old = Lock { datasets: vec![a] };
+        let old = Lock {
+            datasets: vec![a],
+            ..Lock::default()
+        };
         std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
         let work = Loop::new(&context, &project, Arc::new(context.net()), cache);
         let given = (
@@ -1052,6 +1055,7 @@ pub(crate) mod tests {
                 "sha256:an older entry".to_owned(),
                 vec![pinned_file("train.csv.zip", &wrapped, b"wrapped")],
             )],
+            ..Lock::default()
         };
         std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
         let work = Loop::new(&context, &project, Arc::new(context.net()), cache);

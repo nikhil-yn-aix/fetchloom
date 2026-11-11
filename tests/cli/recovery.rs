@@ -244,3 +244,89 @@ fn batch_errors_list_every_failure_in_json_but_only_ten_for_people() -> Result {
     assert!(servers.iter().all(|server| server.requests().len() == 2));
     Ok(())
 }
+
+/// the table and the one list part data.lock keeps for `name`, a recipe's result holding `files`
+/// made from iris, written as fetchloom writes them: the table's text, the part's path below the
+/// project and the part's text.
+fn result(name: &str, files: &[(&str, &[u8])]) -> (String, String, String) {
+    use sha2::{Digest as _, Sha256};
+    let hex = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            })
+    };
+    let mut tree = String::new();
+    for (path, bytes) in files {
+        let _ = writeln!(tree, "{path}\t{}\t{}", bytes.len(), hex(bytes));
+    }
+    let part_text = format!("path\tsize\tsha256\n{tree}");
+    let listed = hex(part_text.as_bytes());
+    let part = format!("data.lock.d/{name}.{}.tsv.zst", &listed[..12]);
+    let bytes: usize = files.iter().map(|(_, bytes)| bytes.len()).sum();
+    let table = format!(
+        "\n[[dataset]]\nname = \"{name}\"\nfrom = [\n  {{ name = \"iris\", content = \"sha256:{}\" }},\n]\nrun = [\"python3\", \"clean.py\", \"{{iris}}\", \"{{out}}\"]\ncode = []\nkey = \"sha256:{}\"\nlocked = \"2026-11-10T00:00:00Z\"\ntree = \"sha256:{}\"\nfiles_in = [\"{part}\"]\nfile_count = {}\nfile_bytes = {bytes}\nfiles_sha256 = \"sha256:{listed}\"\n",
+        hex(b"iris"),
+        hex(b"key"),
+        hex(tree.as_bytes()),
+        files.len(),
+    );
+    (table, part, part_text)
+}
+
+/// a recipe's result pinned in data.lock, which only `fetchloom build` makes, stays as it is when
+/// another command writes data.lock, and a list that does not hold it is refused with advice that
+/// works.
+#[test]
+fn a_pinned_recipe_result_stays_and_a_damaged_list_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/iris.csv",
+        vec![file(b"iris", "\"v1\""), file(b"iris, again", "\"v2\"")],
+    )?;
+    sandbox.allow(&server.url);
+    assert_eq!(sandbox.run(&["add", &server.url])?.status.code(), Some(0));
+    let (table, part, part_text) = result("clean", &[("iris.csv", b"abc")]);
+    let lock = sandbox.work().join("data.lock");
+    fs::create_dir(sandbox.work().join("data.lock.d"))?;
+    fs::write(
+        sandbox.work().join(&part),
+        zstd::encode_all(part_text.as_bytes(), 9)?,
+    )?;
+    fs::write(&lock, format!("{}{table}", fs::read_to_string(&lock)?))?;
+
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    assert_eq!(
+        upgraded.status.code(),
+        Some(0),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let rewritten = fs::read_to_string(&lock)?;
+    assert!(
+        rewritten.contains("size = 11"),
+        "the upgrade wrote data.lock: {rewritten}"
+    );
+    assert!(
+        rewritten.starts_with(&format!("version = 1\n{table}")),
+        "{rewritten}"
+    );
+    assert!(sandbox.work().join(&part).exists());
+    let status = sandbox.run(&["--json", "status"])?;
+    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+
+    let (_, _, other) = result("clean", &[("iris.csv", b"abd")]);
+    fs::write(
+        sandbox.work().join(&part),
+        zstd::encode_all(other.as_bytes(), 9)?,
+    )?;
+    let damaged = sandbox.run(&["--json", "status"])?;
+    assert_eq!(damaged.status.code(), Some(50));
+    assert_eq!(
+        help(&damaged)?,
+        "restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data"
+    );
+    Ok(())
+}

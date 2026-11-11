@@ -684,6 +684,7 @@ mod tests {
                     unpacks_to: Some(tree),
                 }],
             }],
+            ..Lock::default()
         };
         let mut whole = Needed::default();
         add_with_stop(&mut whole, &cache, &lock, &Stop::default()).unwrap();

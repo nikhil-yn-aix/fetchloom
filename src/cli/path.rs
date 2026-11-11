@@ -305,6 +305,7 @@ mod tests {
                     unpacks_to: None,
                 }],
             )],
+            ..Lock::default()
         };
         project.write(lock::FILE, lock.render().as_bytes()).unwrap();
         let mut state = State::default();

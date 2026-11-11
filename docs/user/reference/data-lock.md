@@ -21,7 +21,7 @@ files = [
 | field | value |
 |---|---|
 | `version` | integer `1`, the one format; a dataset may keep its files in [`data.lock.d`](#big-datasets) |
-| `dataset` | array of dataset tables; omitted for an empty lock |
+| `dataset` | array of dataset tables; omitted for an empty lock. a dataset a recipe made has the keys under [recipe results](#recipe-results) instead of those below |
 | `dataset[].name` | name in `data.toml` |
 | `dataset[].ref` | the manifest reference |
 | `dataset[].spec` | `sha256:` followed by 64 hex digits, computed below |
@@ -76,9 +76,46 @@ files_sha256 = "sha256:0123456789ab..."
 | `file_bytes` | the sum of their sizes |
 | `files_sha256` | `sha256:` and the SHA-256 of the parts' text, one part after another |
 
-a part is a zstandard frame of UTF-8 text: a header line `path\tsize\tsha256\tmd5\turl\tunpacks_to`, then one line per file with the fields of an inline file table, sorted by path, at most 250,000 files a part. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.1.tsv.zst | head` shows one.
+a part is a zstandard frame of UTF-8 text: a header line naming its columns, then one line per file, sorted by path, at most 250,000 files a part. a source's list has the header `path\tsize\tsha256\tmd5\turl\tunpacks_to` and the fields of an inline file table; a [recipe result](#recipe-results)'s list has the header `path\tsize\tsha256`. reading expects the header of the dataset's kind, so one kind of list never stands for the other. `md5` and `unpacks_to` are empty when absent, and `unpacks_to` is the tree hash without its `sha256:`. a backslash, tab or line break inside a path or URL is written `\\`, `\t`, `\n` or `\r`. a part's name holds the dataset's name and the first 12 digits of `files_sha256`, so a new list never overwrites one the lock on disk still names; parts no lock names are removed once data.lock no longer needs them. `zstdcat data.lock.d/photos.*.1.tsv.zst | head` shows one.
 
 reading checks every part's name, line, order and count against `data.lock`, and the SHA-256 of the whole. a missing, changed or foreign part fails with `project.invalid`, and `cache gc` then keeps the whole cache rather than guess what the project needs. a list of more files than [`FETCHLOOM_MOST_FILES`](environment.md) allows is refused before it is read. a million files take about 46 bytes each, 47 MB in four parts; listed inline they would take about 300 MB.
+
+## recipe results
+
+a table with `from` and `run` in place of `ref` pins a dataset a recipe made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, and it is still on the [roadmap](../../dev/roadmap.md); every other command reads and checks them and keeps them as they are. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
+
+```toml
+[[dataset]]
+name = "clean"
+from = [
+  { name = "iris", content = "sha256:..." },
+]
+run = ["python3", "clean.py", "{iris}", "{out}"]
+code = [
+  { path = "clean.py", sha256 = "..." },
+]
+env = { SOURCE_DATE_EPOCH = "315532800" }
+key = "sha256:..."
+locked = "2026-11-10T00:00:00Z"
+tree = "sha256:..."
+files_in = ["data.lock.d/clean.0123456789ab.tsv.zst"]
+file_count = 2
+file_bytes = 4
+files_sha256 = "sha256:0123456789ab..."
+```
+
+| field | value |
+|---|---|
+| `from` | the datasets it is made from, in `data.toml` order, each with its `name` and the `content` hash the key took, `sha256:` and 64 hex digits |
+| `run` | the command as `data.toml` writes it, with `{name}` and `{out}` not filled in |
+| `code` | the project files whose bytes entered the key, sorted by path, each with its SHA-256 as 64 hex digits without a prefix; `[]` when there are none |
+| `env` | the variables set for the command, by name; omitted when there are none |
+| `key` | `sha256:` and the hash of everything the result was made from |
+| `locked` | when the key or the tree last changed, in UTC |
+| `tree` | `sha256:` and the [tree hash](#the-tree-hash) of the files the result holds |
+| `files_in`, `file_count`, `file_bytes`, `files_sha256` | the result's list in `data.lock.d`, as for a [big dataset](#big-datasets) |
+
+a file's own hash has no prefix; a hash of something else, such as an input's content, a key, a tree or a list, starts with `sha256:`. a table that mixes these keys with those of a fetched dataset (`ref`, `spec`, `extract`, `resolved`, `title`, `license`, `doi`, `access` or `files`) is refused with `project.invalid`, as is one with no input, an input named twice or after the dataset itself, an empty program, a code path that leaves the project or comes twice, a variable whose name holds `=`, a NUL character in the command or a variable, or a list whose files do not hash to `tree`.
 
 ## the spec hash
 
@@ -139,6 +176,8 @@ masking recognizes key names such as `token`, `signature` and `sig`; it cannot i
 ```
 
 `\t` and `\n` above mean a literal tab and LF. paths are NFC, with `/` separators and leading `./` removed. SHA-256 of these exact bytes is `unpacks_to`. there is no header or byte order mark. an empty tree hashes zero bytes.
+
+a [recipe result](#recipe-results)'s `tree` hashes its files the same way, so the cache can keep both kinds of tree alike.
 
 paths in this record retain their archive folders; placement may strip a shared top folder. directory entries, times and permissions are absent. empty directories are not placed.
 

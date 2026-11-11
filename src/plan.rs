@@ -356,6 +356,7 @@ mod tests {
                         .collect(),
                 })
                 .collect(),
+            ..Lock::default()
         }
     }
 

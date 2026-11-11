@@ -1261,6 +1261,7 @@ mod tests {
                 lock::spec(&manifest.datasets["a"]),
                 vec![pinned_file("a", "https://example.org/a", b"a")],
             )],
+            ..Lock::default()
         };
         project.write(manifest::FILE, text.as_bytes()).unwrap();
         project.write(lock::FILE, old.render().as_bytes()).unwrap();

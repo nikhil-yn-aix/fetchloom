@@ -2,7 +2,9 @@
 //! other TOML returns none, so the general reader retains its validation and exact errors.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
+use super::derived::{self, Code, Derived, Input};
 use super::lists::Listed;
 use super::{Locked, LockedFile, Parsed, VERSION, prefixed};
 use crate::digest::{Md5, Sha256};
@@ -139,6 +141,9 @@ fn uncommented(line: &str) -> Option<&str> {
 
 fn dataset(lines: &mut Lines) -> Option<Parsed> {
     let name = lines.value("name")?;
+    if lines.sets("from") {
+        return recipe(name, lines);
+    }
     let reference = lines.value("ref")?;
     let spec = lines.value("spec")?;
     // the writer records extract only when it is false
@@ -200,22 +205,119 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
 /// a list kept beside data.lock: the line `files_in = ["…", "…"]`, then the lines of
 /// `file_count`, `file_bytes` and `files_sha256`.
 fn list(line: &str, lines: &mut Lines) -> Option<Listed> {
-    let mut rest = line.strip_prefix("files_in = [")?.strip_suffix(']')?;
-    let mut parts = Vec::new();
-    loop {
-        let (part, after) = string(rest)?;
-        parts.push(part.into_owned());
-        if after.is_empty() {
-            break;
-        }
-        rest = after.strip_prefix(", ")?;
-    }
     Some(Listed {
-        parts,
+        parts: strings(line.strip_prefix("files_in = ")?)?,
         count: lines.number("file_count")?,
         bytes: lines.number("file_bytes")?,
         sha256: prefixed(&lines.value("files_sha256")?)?,
     })
+}
+
+/// a dataset a recipe made, after its name: `from` and `code` a line an entry, `run` on one line,
+/// `env` when it has variables, then `key`, `locked`, `tree` and the list of its files.
+fn recipe(name: String, lines: &mut Lines) -> Option<Parsed> {
+    if lines.next()? != "from = [" {
+        return None;
+    }
+    let mut from = Vec::new();
+    loop {
+        let line = lines.next()?;
+        if line == "]" {
+            break;
+        }
+        let (input, rest) = string(line.strip_prefix("  { name = ")?)?;
+        let (content, rest) = string(rest.strip_prefix(", content = ")?)?;
+        if rest != " }," {
+            return None;
+        }
+        from.push(Input {
+            name: input.into_owned(),
+            content: prefixed(&content)?,
+        });
+    }
+    let run = strings(lines.next()?.strip_prefix("run = ")?)?;
+    let mut code = Vec::new();
+    match lines.next()? {
+        "code = []" => {}
+        "code = [" => loop {
+            let line = lines.next()?;
+            if line == "]" {
+                break;
+            }
+            let (path, rest) = string(line.strip_prefix("  { path = ")?)?;
+            let (sha256, rest) = string(rest.strip_prefix(", sha256 = ")?)?;
+            if rest != " }," {
+                return None;
+            }
+            code.push(Code {
+                path: path.into_owned(),
+                sha256: Sha256::from_hex(&sha256)?,
+            });
+        },
+        _ => return None,
+    }
+    let mut env = BTreeMap::new();
+    if lines.sets("env") {
+        let mut rest = lines.next()?.strip_prefix("env = { ")?.strip_suffix(" }")?;
+        loop {
+            let (variable, after) = key(rest)?;
+            let (value, after) = string(after.strip_prefix(" = ")?)?;
+            if env
+                .last_key_value()
+                .is_some_and(|(last, _): (&String, _)| *last >= variable)
+            {
+                return None;
+            }
+            env.insert(variable, value.into_owned());
+            if after.is_empty() {
+                break;
+            }
+            rest = after.strip_prefix(", ")?;
+        }
+    }
+    let key = prefixed(&lines.value("key")?)?;
+    let timestamp = lines.value("locked")?;
+    let tree = prefixed(&lines.value("tree")?)?;
+    let listed = list(lines.next()?, lines)?;
+    let derived = Derived {
+        name,
+        from,
+        run,
+        code,
+        env,
+        key,
+        timestamp,
+        tree,
+        files: Vec::new(),
+    };
+    derived::check(&derived).ok()?;
+    Some(Parsed::Derived(derived, listed))
+}
+
+/// a one-line array of basic strings, `["…", "…"]`, holding at least one.
+fn strings(text: &str) -> Option<Vec<String>> {
+    let mut rest = text.strip_prefix('[')?.strip_suffix(']')?;
+    let mut values = Vec::new();
+    loop {
+        let (value, after) = string(rest)?;
+        values.push(value.into_owned());
+        if after.is_empty() {
+            return Some(values);
+        }
+        rest = after.strip_prefix(", ")?;
+    }
+}
+
+/// the key at the start of `text`, bare or a basic string, and the text after it.
+fn key(text: &str) -> Option<(String, &str)> {
+    if text.starts_with('"') {
+        let (key, rest) = string(text)?;
+        return Some((key.into_owned(), rest));
+    }
+    let end = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+        .unwrap_or(text.len());
+    (end > 0).then(|| (text[..end].to_owned(), &text[end..]))
 }
 
 /// one line of a `files` array: `  { path = "…", size = 1, sha256 = "…", url = "…" },`, with
@@ -308,6 +410,7 @@ fn refused(c: char) -> bool {
 mod tests {
     use super::super::Lock;
     use super::*;
+    use crate::cache::Member;
     use crate::digest;
 
     fn file(path: &str, index: usize) -> LockedFile {
@@ -358,6 +461,7 @@ mod tests {
             Lock::default(),
             Lock {
                 datasets: vec![dataset("only", &files, true)],
+                ..Lock::default()
             },
             Lock {
                 datasets: vec![
@@ -365,8 +469,62 @@ mod tests {
                     dataset("b", &files[..3], true),
                     dataset("c", &files[3..], false),
                 ],
+                derived: vec![recipe("b-small", 2), recipe("d", 0)],
             },
         ]
+    }
+
+    /// a recipe's result of `count` files, with escapes and unicode in its command, code and
+    /// variables.
+    fn recipe(name: &str, count: usize) -> Derived {
+        let files: Vec<Member> = (0..count)
+            .map(|index| Member {
+                path: format!("out/\u{e9}t\u{e9} {index}.csv"),
+                size: index as u64,
+                sha256: digest::sha256(&[u8::try_from(index).unwrap()]),
+            })
+            .collect();
+        Derived {
+            name: name.to_owned(),
+            from: vec![
+                Input {
+                    name: "b".to_owned(),
+                    content: digest::sha256(b"b"),
+                },
+                Input {
+                    name: "a".to_owned(),
+                    content: digest::sha256(b"a"),
+                },
+            ],
+            run: vec![
+                "python3".to_owned(),
+                "say \"hi\"\t{b}".to_owned(),
+                "{out}".to_owned(),
+            ],
+            code: if count == 0 {
+                Vec::new()
+            } else {
+                vec![
+                    Code {
+                        path: "clean.py".to_owned(),
+                        sha256: digest::sha256(b"clean"),
+                    },
+                    Code {
+                        path: "lib/\u{540d}.py".to_owned(),
+                        sha256: digest::sha256(b"lib"),
+                    },
+                ]
+            },
+            env: [("SEED", "1"), ("two words", "a \"b\""), ("\u{e9}", "")]
+                .into_iter()
+                .take(count + 1)
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
+            key: digest::sha256(name.as_bytes()),
+            timestamp: "2026-11-10T00:00:00Z".to_owned(),
+            tree: crate::cache::tree_hash(&files),
+            files,
+        }
     }
 
     fn full(text: &str) -> Vec<Parsed> {
@@ -448,8 +606,15 @@ mod tests {
             assert_eq!(read(&commented, false), None);
             assert_eq!(read(&commented, true), Some(lock.parsed()));
             assert_eq!(full(&commented), lock.parsed());
-            assert_eq!(Lock::parse(&commented).unwrap(), lock);
-            assert_eq!(Lock::parse(&commented.replace('\n', "\r\n")).unwrap(), lock);
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join(super::super::lists::FOLDER)).unwrap();
+            for (part, text) in lock.lists() {
+                let bytes = super::super::lists::compress(&text).unwrap();
+                std::fs::write(root.path().join(part), bytes).unwrap();
+            }
+            let project = |text: &str| Lock::read(text, root.path()).unwrap();
+            assert_eq!(project(&commented), lock);
+            assert_eq!(project(&commented.replace('\n', "\r\n")), lock);
             for invalid in [
                 format!("{commented}\0"),
                 format!("{commented}\n#bad\u{7f}"),
@@ -499,7 +664,9 @@ mod tests {
             entry.size = 4096;
             sample.datasets[0].files = vec![entry];
             let read = read(&sample.render(), false).unwrap();
-            let Parsed::Source(dataset, _) = &read[0];
+            let Parsed::Source(dataset, _) = &read[0] else {
+                panic!("a source comes first");
+            };
             let got = &dataset.files[0].path;
             assert_eq!(got, &path);
             capacities.push((url_length, got.len(), got.capacity()));

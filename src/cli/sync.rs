@@ -171,7 +171,7 @@ impl<'a> Loop<'a> {
         let Drafted {
             kept,
             mut drafts,
-            others,
+            mut others,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -195,7 +195,7 @@ impl<'a> Loop<'a> {
             .into_iter()
             .map(|draft| draft.finish(&now))
             .collect::<Result<Vec<_>, _>>()?;
-        let (lock, kept) = settled(&others, kept, drafted);
+        let (lock, kept) = settled(&mut others, kept, drafted);
         Ok((
             lock,
             Before {
@@ -220,7 +220,7 @@ impl<'a> Loop<'a> {
         let Drafted {
             kept,
             mut drafts,
-            others,
+            mut others,
         } = self
             .draft(manifest, old.unwrap_or_default(), upgrade, given)
             .await?;
@@ -244,7 +244,7 @@ impl<'a> Loop<'a> {
             guessed.extend(stood_in);
             drafted.push(locked);
         }
-        let (lock, kept) = settled(&others, kept, drafted);
+        let (lock, kept) = settled(&mut others, kept, drafted);
         let before = Before {
             existed,
             others,
@@ -285,7 +285,10 @@ impl<'a> Loop<'a> {
                 _ => others.push(locked),
             }
         }
-        let others = Lock { datasets: others };
+        let others = Lock {
+            datasets: others,
+            derived: old.derived,
+        };
         let mut asks = Vec::new();
         for (name, entry) in &manifest.datasets {
             let is_kept = kept
@@ -760,14 +763,15 @@ struct Drafted {
     /// entries whose data.toml entry did not change, moved from data.lock.
     kept: Vec<Locked>,
     drafts: Vec<Draft>,
-    /// the entries of data.lock not kept: those to replace or drop.
+    /// the entries of data.lock not kept: those to replace or drop, and the results of recipes,
+    /// which [`settled`] moves into the new lock.
     others: Lock,
 }
 
 /// the lock of `kept` and `drafted` entries, by name, and for each of its datasets whether it
-/// was kept. a pin dates from when its data last changed, so resolving the same data again
-/// leaves data.lock as it was.
-fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
+/// was kept, with the results of recipes moved from `others`. a pin dates from when its data
+/// last changed, so resolving the same data again leaves data.lock as it was.
+fn settled(others: &mut Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec<bool>) {
     let mut datasets: Vec<(Locked, bool)> = kept.into_iter().map(|locked| (locked, true)).collect();
     datasets.extend(drafted.into_iter().map(|mut locked| {
         if let Some(before) = others.get(&locked.name)
@@ -779,8 +783,15 @@ fn settled(others: &Lock, kept: Vec<Locked>, drafted: Vec<Locked>) -> (Lock, Vec
         (locked, false)
     }));
     datasets.sort_by(|a, b| a.0.name.cmp(&b.0.name));
-    let (datasets, kept) = datasets.into_iter().unzip();
-    (Lock { datasets }, kept)
+    let (datasets, kept): (Vec<Locked>, _) = datasets.into_iter().unzip();
+    // only `fetchloom build` changes a recipe's result, so it stays unless a source took its name
+    let mut derived = std::mem::take(&mut others.derived);
+    derived.retain(|result| {
+        datasets
+            .binary_search_by(|dataset| dataset.name.cmp(&result.name))
+            .is_err()
+    });
+    (Lock { datasets, derived }, kept)
 }
 
 /// data.lock as it was before relocking, beside the new lock. entries relocking kept as they
@@ -1324,6 +1335,7 @@ mod tests {
     fn jobs_pin_hashes_and_refresh_dead_links_at_the_locked_revision() {
         let lock = Lock {
             datasets: vec![locked("set")],
+            ..Lock::default()
         };
         let file = &lock.datasets[0].files[0];
         let download = job(&lock, "set", file).unwrap();
@@ -1416,6 +1428,7 @@ mod tests {
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
         let lock = Lock {
             datasets: vec![locked("set")],
+            ..Lock::default()
         };
         let jobs = (0..7)
             .map(|index| {
@@ -1493,6 +1506,7 @@ mod tests {
         let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
         let lock = Lock {
             datasets: vec![locked("set")],
+            ..Lock::default()
         };
         assert!(
             runner
@@ -1533,6 +1547,7 @@ mod tests {
         let context = context();
         let old = Lock {
             datasets: vec![locked("changed"), locked("metadata"), locked("revision")],
+            ..Lock::default()
         };
         let mut new = old.clone();
         new.datasets[0].files[0].sha256 = digest::sha256(b"changed");
@@ -1571,9 +1586,11 @@ mod tests {
         );
         let lock = Lock {
             datasets: vec![typo, locked("kept")],
+            ..Lock::default()
         };
         let before = Before::whole(Some(Lock {
             datasets: vec![locked("gone"), locked("kept")],
+            ..Lock::default()
         }));
         let sized = HashSet::new();
         assert_eq!(
@@ -1600,6 +1617,7 @@ mod tests {
         );
         let many = Lock {
             datasets: (0..25).map(|n| locked(&format!("set-{n:02}"))).collect(),
+            ..Lock::default()
         };
         let sizeless = HashSet::from(["set-00/data.csv".to_owned()]);
         let lines = lock_lines(
@@ -1627,6 +1645,7 @@ mod tests {
         let context = context();
         let old = Lock {
             datasets: vec![locked("guessed"), locked("moved")],
+            ..Lock::default()
         };
         let mut new = old.clone();
         new.datasets[0].files[0].sha256 = digest::sha256(b"a stand-in");
@@ -1671,12 +1690,14 @@ mod tests {
         changed.resolved = "zenodo:3".to_owned();
         let old = Lock {
             datasets: vec![locked("a"), locked("b"), locked("c")],
+            ..Lock::default()
         };
-        let others = Lock {
+        let mut others = Lock {
             datasets: vec![locked("b"), locked("c")],
+            ..Lock::default()
         };
         let (lock, kept) = settled(
-            &others,
+            &mut others,
             vec![locked("a")],
             vec![changed.clone(), locked("d")],
         );
@@ -1705,8 +1726,9 @@ mod tests {
         );
         assert!(!before.holds(&lock));
         let (same, kept) = settled(
-            &Lock {
+            &mut Lock {
                 datasets: vec![locked("b")],
+                ..Lock::default()
             },
             vec![locked("a")],
             vec![locked("b")],
@@ -1715,6 +1737,7 @@ mod tests {
             existed: true,
             others: Lock {
                 datasets: vec![locked("b")],
+                ..Lock::default()
             },
             kept,
         };
