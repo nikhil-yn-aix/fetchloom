@@ -206,19 +206,8 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         })
     {
         meant.to_owned()
-    } else if let Some(command) = named(ContextKind::SuggestedSubcommand) {
-        match parent {
-            Some(parent) => format!("did you mean `fetchloom {parent} {command}`?"),
-            None => format!("did you mean `fetchloom {command}`?"),
-        }
-    } else if let Some(nested) = (err.kind() == ErrorKind::InvalidSubcommand && parent.is_none())
-        .then(|| named(ContextKind::InvalidSubcommand))
-        .flatten()
-        .and_then(|command| nested(&command))
-    {
-        format!("did you mean `fetchloom {nested}`?")
-    } else if let Some(arg) = named(ContextKind::SuggestedArg) {
-        format!("did you mean `{arg}`?")
+    } else if let Some(meant) = guess(err, parent) {
+        format!("did you mean `{meant}`?")
     } else if let Some(ContextValue::Strings(values)) = err
         .get(ContextKind::ValidValue)
         .filter(|values| !matches!(values, ContextValue::Strings(values) if values.is_empty()))
@@ -245,6 +234,34 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         None => error,
     }
     .help(help)
+}
+
+/// the command the person likely meant, with a command or option that does not exist changed
+/// to the one meant.
+fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
+    let raw = |kind| typed(err, kind).into_iter().next();
+    let named = |kind| context_value(err, kind);
+    if let Some(command) = named(ContextKind::SuggestedSubcommand) {
+        let instead = match parent {
+            Some(parent) => format!("fetchloom {parent} {command}"),
+            None => format!("fetchloom {command}"),
+        };
+        let typed = raw(ContextKind::InvalidSubcommand)?;
+        return Some(super::meant(&[&typed], &[&command], instead));
+    }
+    if err.kind() == ErrorKind::InvalidSubcommand && parent.is_none() {
+        let typed = raw(ContextKind::InvalidSubcommand)?;
+        let nested = nested(&typed)?;
+        let meant: Vec<&str> = nested.split(' ').collect();
+        return Some(super::meant(
+            &[&typed],
+            &meant,
+            format!("fetchloom {nested}"),
+        ));
+    }
+    let option = named(ContextKind::SuggestedArg)?;
+    let typed = raw(ContextKind::InvalidArg)?;
+    Some(super::meant(&[&typed], &[&option], option.clone()))
 }
 
 /// an argument as a person types it: `--as <name>` is `--as`, and `--verbose...` is `--verbose`.

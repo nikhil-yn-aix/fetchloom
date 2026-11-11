@@ -202,7 +202,7 @@ fn json_errors_carry_the_command_that_fixes_them() -> Result {
     // a guess is said in help, never handed to a script to run
     assert_eq!(
         document["errors"][0]["help"],
-        "did you mean `fetchloom sync`?"
+        "did you mean `fetchloom --json sync`?"
     );
     assert_eq!(document["errors"][0]["fix"], Value::Null);
     // an agent reads stdout as JSON whatever the terminal says, so no escape code may reach it
@@ -424,7 +424,7 @@ fn help_shows_a_command_and_suggests_a_topic() -> Result {
     assert_eq!(document["errors"][0]["kind"], "usage");
     assert_eq!(
         document["errors"][0]["help"],
-        "did you mean `fetchloom help concepts`?"
+        "did you mean `fetchloom --json help concepts`?"
     );
     Ok(())
 }
@@ -491,7 +491,7 @@ fn color_marks_meaning_with_labels_and_stays_off_when_asked() -> Result {
         "an error has a red label: {colored}"
     );
     assert!(
-        colored.contains("\u{1b}[1m\u{1b}[36m`fetchloom sync`\u{1b}[0m"),
+        colored.contains("\u{1b}[1m\u{1b}[36m`fetchloom --color always sync`\u{1b}[0m"),
         "a command takes the accent: {colored}"
     );
     for (flag, variables) in [
@@ -552,12 +552,12 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "did you mean `fetchloom sync`?"
+        "did you mean `fetchloom --json sync`?"
     );
     let nested: Value = serde_json::from_slice(&sandbox.run(&["--json", "verify"])?.stdout)?;
     assert_eq!(
         nested["errors"][0]["help"],
-        "did you mean `fetchloom cache verify`?"
+        "did you mean `fetchloom --json cache verify`?"
     );
     for (args, commands) in [
         (&["--json", "--help"][..], None),
@@ -589,7 +589,7 @@ fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
     let document: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(
         document["errors"][0]["help"],
-        "did you mean `fetchloom cache verify`?"
+        "did you mean `fetchloom cache verify --json`?"
     );
     let corrected = sandbox.run(&["cache", "verify"])?;
     assert_eq!(

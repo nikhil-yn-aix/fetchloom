@@ -1218,6 +1218,17 @@ fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
 /// that names it, such as `path` in `fetchloom path iris`. a link given where a name belongs is
 /// shown with its secrets masked.
 pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
+    known_with_rest(manifest, name, "", command)
+}
+
+/// [`known`] for a name typed with `rest` after it, such as `/iris.csv` in `irs/iris.csv`,
+/// which a guess at the name keeps.
+pub(super) fn known_with_rest(
+    manifest: &Manifest,
+    name: &str,
+    rest: &str,
+    command: &str,
+) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Ok(());
     }
@@ -1228,22 +1239,29 @@ pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<()
             crate::net::mask_query(name)
         ),
     );
+    let typed = format!("{name}{rest}");
     Err(
         match name::closest(name, manifest.datasets.keys().map(String::as_str)) {
-            Some(best) => error.help(format!("did you mean `fetchloom {command} {best}`?")),
+            Some(best) => {
+                let shown = super::meant(
+                    &[&typed],
+                    &[&format!("{best}{rest}")],
+                    format!("fetchloom {command} {best}{}", crate::net::mask_query(rest)),
+                );
+                error.help(format!("did you mean `{shown}`?"))
+            }
             None if manifest.datasets.is_empty() => {
                 error.help("data.toml has no datasets yet. add one with `fetchloom add <link>`")
             }
-            None => error.help(format!(
-                "name one of {}, as in `fetchloom {command} {}`",
-                manifest
-                    .datasets
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                manifest.datasets.keys().next().map_or("", String::as_str)
-            )),
+            None => {
+                let names: Vec<&str> = manifest.datasets.keys().map(String::as_str).collect();
+                let shown = super::meant(
+                    &[&typed],
+                    &names[..1],
+                    format!("fetchloom {command} {}", names[0]),
+                );
+                error.help(format!("name one of {}, as in `{shown}`", names.join(", ")))
+            }
         },
     )
 }

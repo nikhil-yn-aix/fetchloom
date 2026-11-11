@@ -38,6 +38,19 @@ fn path_prints_where_a_dataset_or_file_is() -> Result {
         "{}",
         text(&swapped.stderr)?
     );
+    for (typed, meant) in [
+        (
+            &["path", "-q", "irs/iris.csv"][..],
+            "did you mean `fetchloom path -q iris/iris.csv`?",
+        ),
+        (
+            &["path", "iris/iris.cvs", "--locked"],
+            "did you mean `fetchloom path iris/iris.csv --locked`?",
+        ),
+    ] {
+        let said = text(&sandbox.run(typed)?.stderr)?;
+        assert!(said.contains(meant), "{typed:?}: {said}");
+    }
     Ok(())
 }
 

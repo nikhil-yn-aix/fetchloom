@@ -35,6 +35,43 @@ fn remove_drops_the_dataset_and_only_its_files() -> Result {
     Ok(())
 }
 
+/// a mistyped name is answered with the command as typed, only the name changed: pasting the
+/// suggestion for a dry run previews the removal rather than doing it.
+#[test]
+fn a_mistyped_name_keeps_the_rest_of_the_command_in_the_suggestion() -> Result {
+    let sandbox = Sandbox::new()?;
+    let manifest = "[datasets.iris]\nref = \"https://example.org/iris.csv\"\n\n[datasets.penguins]\nref = \"https://example.org/penguins.csv\"\n";
+    fs::write(sandbox.work().join("data.toml"), manifest)?;
+    for (typed, meant) in [
+        (
+            &["remove", "--dry-run", "irs"][..],
+            "fetchloom remove --dry-run iris",
+        ),
+        (
+            &["remove", "irs", "--dry-run"],
+            "fetchloom remove iris --dry-run",
+        ),
+        (
+            &["-q", "remove", "-n", "irs"],
+            "fetchloom -q remove -n iris",
+        ),
+        (
+            &["remove", "--dry-run", "imdb"],
+            "fetchloom remove --dry-run iris",
+        ),
+    ] {
+        let output = sandbox.run(typed)?;
+        assert_eq!(output.status.code(), Some(2), "{typed:?}");
+        let said = text(&output.stderr)?;
+        assert!(said.contains(&format!("`{meant}`")), "{typed:?}: {said}");
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.toml"))?,
+        manifest
+    );
+    Ok(())
+}
+
 /// a dataset's folder can hold more than fetchloom placed: work of yours, and the changed copies
 /// sync kept beside files it put back. remove leaves them and the folder, and says so, as its dry
 /// run does first.

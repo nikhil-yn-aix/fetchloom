@@ -441,8 +441,13 @@ fn unusable(folder: &std::path::Path, err: &std::io::Error) -> Error {
     })
 }
 
+/// the words of this run's command line after the program's name, as typed, kept for help that
+/// suggests a corrected command line. tests that never `run` leave it unset.
+static TYPED: std::sync::OnceLock<Vec<std::ffi::OsString>> = std::sync::OnceLock::new();
+
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
+    let _ = TYPED.set(std::env::args_os().skip(1).collect());
     let args = match args::read() {
         Ok(args) => args,
         Err(err) => return usage::answer(&err, started),
@@ -1087,6 +1092,52 @@ fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Option<String
     Some(line)
 }
 
+/// the command a person likely meant: the command line they typed with the words `typed`
+/// changed to `meant`, every other word kept, so a flag such as `--dry-run` stays in what they
+/// paste. `instead` names the command when that line is not known, lacks the words or holds a
+/// secret no message may repeat.
+pub(in crate::cli) fn meant(typed: &[&str], meant: &[&str], instead: String) -> String {
+    TYPED
+        .get()
+        .and_then(|line| retyped(line, typed, meant))
+        .unwrap_or(instead)
+}
+
+/// the command line `line` with the words `typed` changed to `meant`, ready to copy. the words
+/// are found where they stand last, alone or beside an `=`, as in `--limt=5` or `--upgrade=irs`.
+/// none when they stand nowhere, or the line cannot be repeated.
+fn retyped(line: &[std::ffi::OsString], typed: &[&str], meant: &[&str]) -> Option<String> {
+    let mut line = line.to_vec();
+    let count = typed.len();
+    let alone = (0..=line.len().checked_sub(count)?).rev().find(|&at| {
+        line[at..at + count]
+            .iter()
+            .zip(typed)
+            .all(|(arg, word)| arg == *word)
+    });
+    if let Some(at) = alone {
+        line.splice(at..at + count, meant.iter().map(Into::into));
+    } else {
+        let ([word], [replacement]) = (typed, meant) else {
+            return None;
+        };
+        let (at, changed) = line.iter().enumerate().rev().find_map(|(at, arg)| {
+            let changed = match arg.to_str()?.split_once('=') {
+                Some((option, value)) if option == *word && word.starts_with('-') => {
+                    format!("{replacement}={value}")
+                }
+                Some((option, value)) if value == *word && option.starts_with('-') => {
+                    format!("{option}={replacement}")
+                }
+                _ => return None,
+            };
+            Some((at, changed))
+        })?;
+        line[at] = changed.into();
+    }
+    command_line(line.into_iter())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1268,6 +1319,78 @@ mod tests {
                 "https://example.org/data.csv?token=secret"
             ]),
             None
+        );
+    }
+
+    #[test]
+    fn a_guess_keeps_every_other_word_of_the_command_line() {
+        let line = |args: &[&str], typed: &[&str], meant: &[&str]| {
+            let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+            retyped(&args, typed, meant)
+        };
+        for (args, typed, meant, expected) in [
+            (
+                &["remove", "--dry-run", "irs"][..],
+                &["irs"][..],
+                &["iris"][..],
+                "fetchloom remove --dry-run iris",
+            ),
+            (
+                &["-C", "irs", "remove", "irs", "-n"],
+                &["irs"],
+                &["iris"],
+                "fetchloom -C irs remove iris -n",
+            ),
+            (
+                &["lock", "--upgrade=irs"],
+                &["irs"],
+                &["iris"],
+                "fetchloom lock --upgrade=iris",
+            ),
+            (
+                &["search", "iris", "--limt=5"],
+                &["--limt"],
+                &["--limit"],
+                "fetchloom search iris --limit=5",
+            ),
+            (
+                &["help", "cache", "gx", "--json"],
+                &["cache", "gx"],
+                &["cache", "gc"],
+                "fetchloom help cache gc --json",
+            ),
+            (
+                &["verify", "-q"],
+                &["verify"],
+                &["cache", "verify"],
+                "fetchloom cache verify -q",
+            ),
+            (
+                &["add", "fasion mnist", "--select", "*.csv"],
+                &["fasion mnist"],
+                &["fashion mnist"],
+                "fetchloom add \"fashion mnist\" --select \"*.csv\"",
+            ),
+        ] {
+            assert_eq!(
+                line(args, typed, meant).as_deref(),
+                Some(expected),
+                "{args:?}"
+            );
+        }
+        assert_eq!(line(&["remove", "iris"], &["irs"], &["iris"]), None);
+        assert_eq!(
+            line(
+                &["serch", "https://example.org/a.csv?token=abc"],
+                &["serch"],
+                &["search"]
+            ),
+            None
+        );
+        assert_eq!(
+            meant(&["irs"], &["iris"], "fetchloom sync iris".to_owned()),
+            "fetchloom sync iris",
+            "without the line typed, the command alone"
         );
     }
 

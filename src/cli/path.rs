@@ -9,7 +9,9 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Run, Waited, find, hold_until, ignore_data, known, locked, sync_all};
+use super::project::{
+    Run, Waited, find, hold_until, ignore_data, known_with_rest, locked, sync_all,
+};
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
 use super::sync::{self, Loop, Scope};
@@ -39,7 +41,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
     };
-    answerable(&manifest, name)?;
+    let rest = &args.target[name.len()..];
+    answerable(&manifest, name, rest)?;
     let lock = project.lock()?;
     unbuilt(&manifest, lock.as_ref(), name)?;
     let mut cache = None;
@@ -63,14 +66,14 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     } else {
         drop(lock);
         drop(manifest);
-        match hold_path(context, &project, &mut cache, name, file, before).await? {
+        match hold_path(context, &project, &mut cache, (name, rest), file, before).await? {
             Waited::Ready(path) => {
                 tell_stale_again(context, &project, name, &scope)?;
                 path
             }
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
-                answerable(&manifest, name)?;
+                answerable(&manifest, name, rest)?;
                 let read = project.lock_and_text()?;
                 unbuilt(&manifest, read.as_ref().map(|(lock, _)| lock), name)?;
                 if let Some(path) = ready_path(
@@ -130,10 +133,11 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
     Ok(Report { path })
 }
 
-/// refuses a dataset data.toml does not have, as [`known`] does, and one it keeps out of the
-/// data folder with `place = false`, which has no folder there.
-fn answerable(manifest: &Manifest, name: &str) -> Result<(), Error> {
-    known(manifest, name, "path")?;
+/// refuses a dataset data.toml does not have, as [`known_with_rest`] does, and one it keeps out
+/// of the data folder with `place = false`, which has no folder there. `rest` is what was typed
+/// after the name, such as `/iris.csv`.
+fn answerable(manifest: &Manifest, name: &str, rest: &str) -> Result<(), Error> {
+    known_with_rest(manifest, name, rest, "path")?;
     let entry = &manifest.datasets[name];
     if entry.place {
         return Ok(());
@@ -243,24 +247,29 @@ fn not_in(name: &str, file: &str, inside: &[&str]) -> Error {
         Kind::Usage,
         format!("{name} has no file or folder called {file}"),
     );
+    let typed = format!("{name}/{file}");
+    let shown = |near: &str| {
+        let meant = format!("{name}/{near}");
+        super::meant(&[&typed], &[&meant], format!("fetchloom path {meant}"))
+    };
     if let Some(best) = name::closest(file, inside.iter().copied()) {
-        return error.help(format!("did you mean `fetchloom path {name}/{best}`?"));
+        return error.help(format!("did you mean `{}`?", shown(best)));
     }
     let near = name::nearest(file, inside.iter().copied(), 3);
-    let shown = match near.as_slice() {
+    let listed = match near.as_slice() {
         [] => return error.help(format!("{name} holds no files")),
         [only] => (*only).to_owned(),
         [first @ .., last] => format!("{} and {last}", first.join(", ")),
     };
     let holds = if inside.len() > near.len() {
         let files = crate::units::count(inside.len() as u64, "file", "files");
-        format!("{name} holds {files}, such as {shown}")
+        format!("{name} holds {files}, such as {listed}")
     } else {
-        format!("{name} holds {shown}")
+        format!("{name} holds {listed}")
     };
     error.detail(holds).help(format!(
-        "name a path it holds, such as `fetchloom path {name}/{}`",
-        near[0]
+        "name a path it holds, such as `{}`",
+        shown(near[0])
     ))
 }
 
@@ -335,7 +344,7 @@ async fn hold_path(
     context: &Context,
     project: &Project,
     cache: &mut Option<Cache>,
-    name: &str,
+    (name, rest): (&str, &str),
     file: Option<&str>,
     mut before: Option<Look>,
 ) -> Result<Waited<PathBuf>, Error> {
@@ -346,7 +355,7 @@ async fn hold_path(
         }
         before = current;
         let (_, manifest) = project.manifest()?;
-        answerable(&manifest, name)?;
+        answerable(&manifest, name, rest)?;
         let lock = project.lock()?;
         ready_path(
             context,
@@ -432,7 +441,7 @@ mod tests {
             &context,
             &project,
             &mut cache,
-            "a",
+            ("a", "/x"),
             Some("x"),
             None,
         ));

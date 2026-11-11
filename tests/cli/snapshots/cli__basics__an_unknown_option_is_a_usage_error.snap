@@ -4,4 +4,4 @@ assertion_line: 103
 expression: text(&output.stderr)?
 ---
 error: unexpected argument "--verison"
-  help: did you mean `--version`?
+  help: did you mean `fetchloom --version`?

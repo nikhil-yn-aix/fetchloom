@@ -392,7 +392,12 @@ fn unknown(topic: &[String]) -> Error {
         format!("there is no help topic called \"{shown}\""),
     );
     match name::closest(&asked, topics.iter().map(String::as_str)) {
-        Some(best) => error.help(format!("did you mean `fetchloom help {best}`?")),
+        Some(best) => {
+            let typed: Vec<&str> = topic.iter().map(String::as_str).collect();
+            let meant: Vec<&str> = best.split(' ').collect();
+            let shown = super::meant(&typed, &meant, format!("fetchloom help {best}"));
+            error.help(format!("did you mean `{shown}`?"))
+        }
         None => error.help("`fetchloom help concepts` explains the ideas and `fetchloom help recipes` how to write a recipe, `fetchloom help environment` and `fetchloom help exit-codes` list settings and codes, and `fetchloom --help` lists the commands"),
     }
 }

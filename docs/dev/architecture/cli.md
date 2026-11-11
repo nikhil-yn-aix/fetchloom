@@ -11,7 +11,7 @@ command handlers order effects across modules. `Context` reads settings once and
 | file | what it holds | types and functions |
 |---|---|---|
 | [main.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/main.rs), [lib.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/lib.rs) | executable and public library entry | `main` |
-| [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs) | startup, settings, runtime and dispatch | `Context`, `run`, `jobs`, `splits`, `open_cache` |
+| [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs) | startup, settings, runtime and dispatch | `Context`, `run`, `jobs`, `splits`, `open_cache`, `meant` |
 | [args.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/args.rs) | clap declarations | `Args`, `Global`, `Command`, `Filter`, `read` |
 | [add.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/add.rs) | adding a dataset: its name, its own sync and putting the project back when it fails | `add`, `AddProject`, `BeforeAdd`, `sync_add`, `restore`, `again`, `choose_name` |
 | [remove.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/remove.rs) | removing a dataset from data.toml, data.lock and the data folder | `remove` |
@@ -78,6 +78,8 @@ plain-word `add` and `get` call `search::pick` before source resolution. an inte
 7. run the owning tests, [review snapshots](../engineering/building-and-testing.md#update-snapshots), then run the full gate.
 
 every command has one name. a name people bring from other tools, such as `install` or `auth status`, is a usage error whose help names the command meant; `habit` in [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) holds them.
+
+a guess at a mistyped command, option, dataset name, path or help topic goes through `meant` in [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs), which repeats the person's own command line with only the mistyped words changed, so a flag such as `--dry-run` stays in what they paste. a line holding a secret is never repeated, and the help then names the command alone.
 
 ### adding an option
 

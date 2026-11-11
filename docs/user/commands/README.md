@@ -64,6 +64,10 @@ fetchloom help --json
 
 project commands find the nearest `data.toml` at or above the working directory, inside the git repository the working directory is in. `-C` chooses where that search starts, and is how you use a project above the repository. `add` creates a manifest in the current folder when none is found. bare `fetchloom` shows status inside a project and a welcome outside one. [finding the project](../reference/project-folder.md#finding-the-project) has the exact rule.
 
+## typos
+
+a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close to what you typed, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. a line holding a secret, such as a link with a token, is never repeated, so then the suggestion names the command and the corrected word alone.
+
 ## output
 
 stdout carries paths from `get` and `path`, the `list` table, version, welcome, help or JSON. `cache` and `search` print their bare path or canonical references on stdout when stdout is redirected or quiet mode hides the story; a terminal story already shows them. stderr carries progress, warnings, summaries and errors.
