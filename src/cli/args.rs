@@ -851,12 +851,12 @@ pub(crate) struct Lock {
     #[arg(long, conflicts_with = "upgrade", help_heading = "options")]
     pub(crate) check: bool,
 
-    /// after a git merge, keep the checked-out branch's side of a dataset the two sides
+    /// after a git merge or rebase, keep our side, as git names it, of a dataset the two sides
     /// changed each their own way. repeat it for more
     #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
     pub(crate) ours: Vec<String>,
 
-    /// after a git merge, keep the merged branch's side of such a dataset. repeat it for more
+    /// the same, keeping their side. repeat it for more
     #[arg(long, value_name = "name", conflicts_with_all = ["check", "upgrade"], help_heading = "options")]
     pub(crate) theirs: Vec<String>,
 
