@@ -34,6 +34,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet.
 3. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
+   - `Fetched` when `data.lock` pins what building it now would make and a [mirror](../mirrors.md) holds the files the cache lacks, which it copies into the cache;
    - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
    - otherwise put in the cache the files of the datasets it reads, from a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache lacks it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`: a copy in the data folder is no input.
 4. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
@@ -93,7 +94,7 @@ error: clean failed: python3 exited with code 1 after 31 ms
 
 the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
 
-a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, runs again. a step that makes the same files leaves the pin as it is; one that makes other files fails with `build.differs`, exit 60, and `data.lock` keeps the files it pins, since the step is not reproducible.
+a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files fails with `build.differs`, exit 60, and `data.lock` keeps the files it pins, since the step is not reproducible.
 
 ## dry run
 
@@ -134,7 +135,7 @@ when every step is up to date, the last line says so:
 | field | value |
 |---|---|
 | `name` | the recipe |
-| `action` | `ran`, `reused` or `up_to_date` |
+| `action` | `ran`, `reused`, `fetched` or `up_to_date` |
 | `key` | the key of its result, `sha256:` and 64 hex digits |
 | `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits |
 | `files`, `bytes` | how many files its result holds, and their size |

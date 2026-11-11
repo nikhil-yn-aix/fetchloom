@@ -671,6 +671,54 @@ fn a_second_build_runs_nothing() -> Result {
     Ok(())
 }
 
+/// a folder mirror at `root` holding the objects of `bytes`, as pushing fills one.
+fn mirror_holding(root: &Path, bytes: &[&[u8]]) -> Result {
+    fs::create_dir_all(root)?;
+    fs::write(root.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    for bytes in bytes {
+        let hex = sha256(bytes);
+        let fan = root.join("objects").join(&hex[..2]);
+        fs::create_dir_all(&fan)?;
+        fs::write(fan.join(&hex[2..]), bytes)?;
+    }
+    Ok(())
+}
+
+/// the object of `bytes` in the sandbox's cache.
+fn object(sandbox: &Sandbox, bytes: &[u8]) -> PathBuf {
+    let hex = sha256(bytes);
+    sandbox
+        .cache()
+        .join("objects")
+        .join(&hex[..2])
+        .join(&hex[2..])
+}
+
+/// a result data.lock pins for the key building it now would make, whose files the cache lost,
+/// comes from a mirror rather than from running its step again.
+#[test]
+fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let mirror = sandbox.folder("mirror")?;
+    mirror_holding(&mirror, &[b"made"])?;
+    crate::support::delete(&object(&sandbox, b"made"))?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
+        .env("FETCHLOOM_MIRRORS", &mirror)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["result"]["steps"][0]["action"], "fetched");
+    assert_eq!(document["work"]["mirror_objects"], 1);
+    assert_eq!(runs(&sandbox.work())?, 1, "the step did not run again");
+    assert!(object(&sandbox, b"made").is_file());
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    Ok(())
+}
+
 /// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
 /// its list and the data folder byte for byte as they were.
 #[test]

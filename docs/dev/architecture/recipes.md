@@ -58,8 +58,9 @@ a build takes the project's hold for its whole run, relocks the sources of the c
 | data.lock pins | the cache holds | action |
 |---|---|---|
 | this key | every file of its pin | `Up to date` |
+| this key | not every file, but a mirror holds the rest | `Fetched`: `fetch::mirrors::fill` copies them in, and nothing runs |
 | another key or none | a whole record of this key, on unix written by this user and writable by no one else | `Reused`: the newest record is pinned |
-| this key | not every file | run; the same tree keeps the pin, another is `build.differs` and nothing enters the cache |
+| this key | not every file, and no mirror holds the rest | run; the same tree keeps the pin, another is `build.differs` and nothing enters the cache |
 | another key or none | no whole record | run, and pin what it made |
 
 before a run or a reuse the build takes `Cache::hold_key`, an OS lock on `builds/<key>/lock`, and looks for a record again under it, so a second build of one key, in another clone sharing the cache, waits with `Waiting for another fetchloom building <name>` and reuses what the first made. a disk without locks lets them overlap, which costs only the second run.

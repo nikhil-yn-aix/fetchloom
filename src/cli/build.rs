@@ -21,7 +21,7 @@ use super::args;
 use super::project::{Run, committed, find, hold, ignore_data, known, sync_all};
 use super::sync::place::{Placement, Seen};
 use super::sync::{Before, Loop, Scope, Upgrade, repinned};
-use super::{Context, open_cache};
+use super::{Context, fetch, open_cache};
 use crate::build::capture::{self, Fault, Refused};
 use crate::build::step::{self, Ended, Ran};
 use crate::build::{Staging, inputs};
@@ -92,6 +92,9 @@ enum Did {
     Reused,
     /// data.lock pins its result as building it now would make, and the cache holds it.
     UpToDate,
+    /// data.lock pins its result as building it now would make, and a mirror gave the cache
+    /// what it lacked of it, so it did not run.
+    Fetched,
 }
 
 /// what `build --dry-run` found.
@@ -475,9 +478,10 @@ impl<'a> Building<'a> {
     }
 
     /// builds the recipe `name`: up to date when data.lock pins what building it now would make
-    /// and the cache holds it, reused when an earlier build of its key made a result the cache
-    /// holds whole, and otherwise run. a pin whose key is still the recipe's keeps its files: a
-    /// step that makes others for it is not reproducible, and data.lock stays as it is.
+    /// and the cache holds it, fetched when a mirror holds what the cache lacks of it, reused
+    /// when an earlier build of its key made a result the cache holds whole, and otherwise run. a
+    /// pin whose key is still the recipe's keeps its files: a step that makes others for it is
+    /// not reproducible, and data.lock stays as it is.
     async fn step(&mut self, name: &str) -> Result<Done, Error> {
         let project = self.work.project;
         let output = &self.context.output;
@@ -488,12 +492,19 @@ impl<'a> Building<'a> {
             .lock
             .result(name)
             .filter(|pinned| pinned.key == key)
-            .map(|pinned| (pinned.tree, whole(&self.work.cache, &pinned.files)));
-        if let Some((_, true)) = pinned
-            && let Some(pinned) = self.lock.result(name)
-        {
-            output.step("Up to date", name);
-            return Ok(done(Did::UpToDate, name, key, pinned.tree, &pinned.files));
+            .map(|pinned| (pinned.tree, pinned.files.clone()));
+        if let Some((tree, files)) = &pinned {
+            if whole(&self.work.cache, files) {
+                output.step("Up to date", name);
+                return Ok(done(Did::UpToDate, name, key, *tree, files));
+            }
+            if self.fetched(name, files).await? {
+                output.step(
+                    "Fetched",
+                    &format!("{name} · {} as data.lock pins it", sized(files)),
+                );
+                return Ok(done(Did::Fetched, name, key, *tree, files));
+            }
         }
         let expected = pinned.map(|(tree, _)| tree);
         let _hold = tokio::task::block_in_place(|| {
@@ -544,6 +555,25 @@ impl<'a> Building<'a> {
         done.seconds = Some(made.ran.took.as_secs_f64());
         self.pin(&step, key, made.tree, made.members);
         Ok(done)
+    }
+
+    /// asks the mirrors for the files of `files`, the result data.lock pins for `name`, that the
+    /// cache lacks, and says whether the cache holds all of them now.
+    async fn fetched(&self, name: &str, files: &[Member]) -> Result<bool, Error> {
+        let cache = &self.work.cache;
+        fetch::mirrors::fill(self.context, &self.work.net, cache, || {
+            files
+                .iter()
+                .filter(|file| cache.find(&file.sha256, Some(file.size)).is_none())
+                .map(|file| crate::mirror::Wanted {
+                    digest: file.sha256,
+                    size: file.size,
+                    label: format!("{name}/{}", file.path),
+                })
+                .collect()
+        })
+        .await?;
+        Ok(whole(cache, files))
     }
 
     /// runs `step` in a folder of its own and takes in what it wrote, as the result of `key`.
@@ -769,7 +799,7 @@ impl<'a> Building<'a> {
             .report
             .steps
             .iter()
-            .filter(|step| step.action != Did::UpToDate)
+            .filter(|step| !matches!(step.action, Did::UpToDate | Did::Fetched))
             .map(|step| step.name.as_str())
             .collect();
         match built.as_slice() {
