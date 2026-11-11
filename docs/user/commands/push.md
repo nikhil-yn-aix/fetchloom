@@ -27,7 +27,7 @@ fetchloom push [options] [name]...
 
 ## what it writes
 
-push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out; an archive with `extract = false` is a file of its own and is pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code, and it never changes the project or the cache.
+push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out, as `fetchloom drop` writes one, is not placed, so it is not pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code, and it never changes the project or the cache.
 
 from a real run, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened, on stderr:
 
