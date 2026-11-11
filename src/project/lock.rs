@@ -167,11 +167,13 @@ struct StoredInput {
     content: String,
 }
 
+/// a file of code with its hash, or a folder with its tree.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredCode {
     path: String,
-    sha256: Sha256,
+    sha256: Option<Sha256>,
+    tree: Option<String>,
 }
 
 impl StoredDataset {
@@ -302,11 +304,34 @@ impl StoredDataset {
             .code
             .unwrap_or_default()
             .into_iter()
-            .map(|code| derived::Code {
-                path: code.path,
-                sha256: code.sha256,
+            .map(|code| {
+                let path = quoted(&code.path);
+                let (sha256, folder) = match (code.sha256, code.tree) {
+                    (Some(sha256), None) => (sha256, false),
+                    (None, Some(tree)) => (
+                        prefixed(&tree).ok_or_else(|| {
+                            broken(format!("data.lock gives {name} a tree for the code {path} that is not sha256: and 64 hex digits"))
+                        })?,
+                        true,
+                    ),
+                    (sha256, _) => {
+                        let what = if sha256.is_some() {
+                            "both a sha256 and a tree"
+                        } else {
+                            "neither a sha256 nor a tree"
+                        };
+                        return Err(broken(format!(
+                            "data.lock gives the code {path} of {name} with {what}"
+                        )));
+                    }
+                };
+                Ok(derived::Code {
+                    path: code.path,
+                    sha256,
+                    folder,
+                })
             })
-            .collect();
+            .collect::<Result<_, Error>>()?;
         let derived = Derived {
             name,
             from,
@@ -940,6 +965,7 @@ mod tests {
             code: vec![derived::Code {
                 path: "clean.py".to_owned(),
                 sha256: digest::sha256(b"print()"),
+                folder: false,
             }],
             env: BTreeMap::from([("SOURCE_DATE_EPOCH".to_owned(), "315532800".to_owned())]),
             key: digest::sha256(b"key"),
@@ -994,6 +1020,56 @@ mod tests {
         assert_eq!(parse_toml(&text).unwrap(), sorted.parsed());
         let error = Lock::parse(&text).unwrap_err();
         assert!(error.message.contains("which only a project can read"));
+    }
+
+    /// a folder of code enters the key by the tree of its files, which data.lock keeps prefixed,
+    /// as every tree hash, beside the plain hash of a file.
+    #[test]
+    fn a_code_folder_is_pinned_by_its_tree() {
+        let mut result = clean();
+        result.code.push(derived::Code {
+            path: "lib".to_owned(),
+            sha256: digest::sha256(b"tree of lib"),
+            folder: true,
+        });
+        let lock = Lock {
+            derived: vec![result.clone()],
+            ..Lock::default()
+        };
+        let (root, text) = written(&lock);
+        let lines = format!(
+            "code = [\n  {{ path = \"clean.py\", sha256 = \"{}\" }},\n  {{ path = \"lib\", tree = \"sha256:{}\" }},\n]\n",
+            digest::sha256(b"print()"),
+            digest::sha256(b"tree of lib")
+        );
+        assert!(text.contains(&lines), "{text}");
+        assert_eq!(Lock::read(&text, root.path()).unwrap(), lock);
+        assert_eq!(canonical::read(&text, false), Some(lock.parsed()));
+        assert_eq!(parse_toml(&text).unwrap(), lock.parsed());
+        let tree = format!("tree = \"sha256:{}\"", digest::sha256(b"tree of lib"));
+        for (changed, says) in [
+            (
+                text.replacen(
+                    &tree,
+                    &format!("{tree}, sha256 = \"{}\"", digest::sha256(b"x")),
+                    1,
+                ),
+                "the code \"lib\" of clean with both a sha256 and a tree",
+            ),
+            (
+                text.replacen(&format!(", {tree}"), "", 1),
+                "the code \"lib\" of clean with neither a sha256 nor a tree",
+            ),
+            (
+                text.replacen("tree = \"sha256:", "tree = \"", 1),
+                "a tree for the code \"lib\" that is not sha256: and 64 hex digits",
+            ),
+        ] {
+            let error = Lock::read(&changed, root.path()).unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{changed}");
+            assert!(error.message.contains(says), "{says}: {}", error.message);
+            assert_eq!(canonical::read(&changed, false), None, "{changed}");
+        }
     }
 
     #[test]

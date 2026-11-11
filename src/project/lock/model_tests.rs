@@ -125,6 +125,7 @@ fn recipe(input: &mut Tape, index: u8) -> Derived {
                 ["a", "名", "quote\"", "é"][usize::from(input.byte()) % 4]
             ),
             sha256: digest::sha256(input.text().as_bytes()),
+            folder: input.byte() & 1 != 0,
         })
         .collect();
     let env = (0..input.byte() % 3)

@@ -42,11 +42,14 @@ pub(crate) struct Input {
     pub(crate) content: Sha256,
 }
 
-/// a project file whose bytes entered the key.
+/// a project file or folder whose bytes entered the key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Code {
     pub(crate) path: String,
+    /// the hash of a file's bytes, or for a folder the tree hash of its files.
     pub(crate) sha256: Sha256,
+    /// whether `path` is a folder, which data.lock writes with its `tree`.
+    pub(crate) folder: bool,
 }
 
 /// refuses what fetchloom never writes for a recipe: no input, the dataset as its own input or
@@ -159,13 +162,17 @@ pub(super) fn write(out: &mut String, derived: &Derived) {
         out.push_str("code = []\n");
     } else {
         out.push_str("code = [\n");
-        for file in code {
-            let _ = writeln!(
-                out,
-                "  {{ path = {}, sha256 = \"{}\" }},",
-                quoted(&file.path),
-                file.sha256
-            );
+        for code in code {
+            let path = quoted(&code.path);
+            if code.folder {
+                let _ = writeln!(
+                    out,
+                    "  {{ path = {path}, tree = \"sha256:{}\" }},",
+                    code.sha256
+                );
+            } else {
+                let _ = writeln!(out, "  {{ path = {path}, sha256 = \"{}\" }},", code.sha256);
+            }
         }
         out.push_str("]\n");
     }

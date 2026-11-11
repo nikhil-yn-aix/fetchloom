@@ -245,13 +245,20 @@ fn recipe(name: String, lines: &mut Lines) -> Option<Parsed> {
                 break;
             }
             let (path, rest) = string(line.strip_prefix("  { path = ")?)?;
-            let (sha256, rest) = string(rest.strip_prefix(", sha256 = ")?)?;
+            let (sha256, folder, rest) = if let Some(rest) = rest.strip_prefix(", tree = ") {
+                let (tree, rest) = string(rest)?;
+                (prefixed(&tree)?, true, rest)
+            } else {
+                let (sha256, rest) = string(rest.strip_prefix(", sha256 = ")?)?;
+                (Sha256::from_hex(&sha256)?, false, rest)
+            };
             if rest != " }," {
                 return None;
             }
             code.push(Code {
                 path: path.into_owned(),
-                sha256: Sha256::from_hex(&sha256)?,
+                sha256,
+                folder,
             });
         },
         _ => return None,
@@ -508,10 +515,12 @@ mod tests {
                     Code {
                         path: "clean.py".to_owned(),
                         sha256: digest::sha256(b"clean"),
+                        folder: false,
                     },
                     Code {
-                        path: "lib/\u{540d}.py".to_owned(),
+                        path: "lib/\u{540d}".to_owned(),
                         sha256: digest::sha256(b"lib"),
+                        folder: true,
                     },
                 ]
             },
