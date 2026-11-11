@@ -321,6 +321,17 @@ impl<'a> Loop<'a> {
             .filter_map(|target| Some((target.dataset.to_owned(), target.file()?)))
             .filter(|(_, file)| seen.insert(file.sha256))
             .partition(|(_, file)| file.unpacks_to.is_some());
+        // no link fetches an import, and its copy in data/ is no input
+        if let Some((dataset, _)) = files
+            .iter()
+            .chain(&archives)
+            .find(|(_, file)| file.url.is_empty())
+        {
+            let folder = plan::folder(manifest, dataset);
+            return Err(local::imported_elsewhere(dataset, &folder).help(format!(
+                "run `fetchloom add <folder> --as {dataset}` where they are: a build takes its inputs from the cache, never from {folder}"
+            )));
+        }
         self.download_prepared(manifest, &sources, &files).await?;
         self.unpack_locked(manifest, &sources, &archives).await
     }

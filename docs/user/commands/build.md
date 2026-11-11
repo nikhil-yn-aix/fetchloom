@@ -35,7 +35,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 3. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
    - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
-   - otherwise put in the cache the files of the datasets it reads, from a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote.
+   - otherwise put in the cache the files of the datasets it reads, from a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote. a dataset imported from a folder has no source to fetch from, so on a machine whose cache lacks it the build stops with `reference.unresolved`, exit 10, naming `fetchloom add <folder> --as <name>`: a copy in the data folder is no input.
 4. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
 5. place the datasets the build took in the data folder, as `fetchloom sync` with their names would.
 

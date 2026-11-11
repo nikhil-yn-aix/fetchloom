@@ -827,6 +827,43 @@ fn a_members_table_keeps_a_file_from_the_step() -> Result {
     Ok(())
 }
 
+/// a build on a machine whose cache lacks an imported input says how to import it there, since
+/// no link fetches it and the copy in the data folder is no input.
+#[test]
+fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let set = sandbox.folder("set")?;
+    fs::write(set.join("labels.csv"), "file,label\n")?;
+    let added = sandbox.run(&["add", "../set"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{plain}\n[datasets.clean]\nfrom = [\"set\"]\nrun = [\"recipe-step\", \"copy\", \"{{set}}\", \"{{out}}\"]\n"
+        ),
+    )?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "reference.unresolved");
+    assert_eq!(
+        message,
+        "set was imported from files, and this machine's cache does not hold them"
+    );
+    assert_eq!(
+        help,
+        "run `fetchloom add <folder> --as set` where they are: a build takes its inputs from the cache, never from data/set"
+    );
+    assert_eq!(runs(&sandbox.work())?, 0);
+    Ok(())
+}
+
 /// the code of a recipe is in its key, so a build after an edit runs the step again and pins
 /// the new key.
 #[test]
