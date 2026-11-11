@@ -1785,7 +1785,7 @@ fn several_links_take_no_search_words_and_one_sha256_takes_one_link() -> Result 
         ),
         (
             &["get", "https://example.org/iris.csv", "--sha256", "abc"],
-            "a SHA-256 is 64 hex digits",
+            "error: --sha256 cannot be \"abc\"\n  help: a SHA-256 is 64 hex digits",
         ),
     ] {
         let output = sandbox.run(arguments)?;

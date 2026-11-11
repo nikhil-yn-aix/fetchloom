@@ -711,7 +711,7 @@ pub(crate) struct Search {
     pub(crate) source: Vec<crate::source::search::Catalog>,
 
     /// keep up to this many matches from each site, 1 to 20
-    #[arg(long, value_name = "n", default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=20), help_heading = "options")]
+    #[arg(long, value_name = "n", default_value_t = 3, value_parser = limit, help_heading = "options")]
     pub(crate) limit: u8,
 }
 
@@ -1033,6 +1033,14 @@ pub(crate) struct Get {
     /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+}
+
+/// reads `search --limit`: how many matches to keep from each site.
+fn limit(text: &str) -> Result<u8, String> {
+    text.parse()
+        .ok()
+        .filter(|limit| (1..=20).contains(limit))
+        .ok_or_else(|| "use a whole number from 1 to 20".to_owned())
 }
 
 /// the shell a completion script is for.

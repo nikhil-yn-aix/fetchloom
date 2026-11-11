@@ -124,10 +124,12 @@ fn message(err: &clap::Error) -> String {
             format!("unexpected argument \"{arg}\"")
         }
         (ErrorKind::MissingRequiredArgument, _, Some(arg)) => format!("{arg} is missing"),
-        (ErrorKind::InvalidValue, _, Some(arg)) => match named(ContextKind::InvalidValue) {
-            Some(value) if !value.is_empty() => format!("{} cannot be \"{value}\"", bare(&arg)),
-            _ => format!("{} needs a value", bare(&arg)),
-        },
+        (ErrorKind::InvalidValue | ErrorKind::ValueValidation, _, Some(arg)) => {
+            match named(ContextKind::InvalidValue) {
+                Some(value) if !value.is_empty() => format!("{} cannot be \"{value}\"", bare(&arg)),
+                _ => format!("{} needs a value", bare(&arg)),
+            }
+        }
         (ErrorKind::ArgumentConflict, _, Some(arg)) => match named(ContextKind::PriorArg) {
             Some(prior) => format!(
                 "{} and {} cannot be used together",
@@ -212,6 +214,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         meant.to_owned()
     } else if let Some(meant) = guess(err, parent) {
         format!("did you mean `{meant}`?")
+    } else if let Some(reason) = (err.kind() == ErrorKind::ValueValidation)
+        .then(|| std::error::Error::source(err))
+        .flatten()
+    {
+        // the readers in args.rs word a refusal as what to give instead
+        reason.to_string()
     } else if let Some(ContextValue::Strings(values)) = err
         .get(ContextKind::ValidValue)
         .filter(|values| !matches!(values, ContextValue::Strings(values) if values.is_empty()))
@@ -244,12 +252,38 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
 /// to the one meant.
 fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
     let raw = |kind| typed(err, kind).into_iter().next();
-    if err.kind() == ErrorKind::InvalidSubcommand {
-        return command_meant(&raw(ContextKind::InvalidSubcommand)?, parent);
+    match err.kind() {
+        ErrorKind::InvalidSubcommand => {
+            command_meant(&raw(ContextKind::InvalidSubcommand)?, parent)
+        }
+        ErrorKind::UnknownArgument => option_meant(&raw(ContextKind::InvalidArg)?, parent),
+        _ => None,
     }
-    let option = context_value(err, ContextKind::SuggestedArg)?;
-    let typed = raw(ContextKind::InvalidArg)?;
-    Some(super::meant(&[&typed], &[&option], option.clone()))
+}
+
+/// the long option whose name is nearest to `typed` in spelling, ignoring case, among those of
+/// the command `parent` and those every command takes.
+fn option_meant(typed: &str, parent: Option<&str>) -> Option<String> {
+    let long = typed.strip_prefix("--")?.to_lowercase();
+    let root = args::Args::command();
+    let command = parent.map_or(Some(&root), |parent| {
+        parent
+            .split(' ')
+            .try_fold(&root, |command, name| command.find_subcommand(name))
+    })?;
+    let own = parent
+        .map(|_| command.get_arguments())
+        .into_iter()
+        .flatten();
+    let every = root
+        .get_arguments()
+        .filter(|arg| parent.is_none() || arg.is_global_set());
+    let names = own
+        .chain(every)
+        .filter(|arg| !arg.is_hide_set())
+        .filter_map(clap::Arg::get_long);
+    let option = format!("--{}", name::closest(&long, names)?);
+    Some(super::meant(&[typed], &[&option], option.clone()))
 }
 
 /// the command whose name is nearest to `typed` in spelling, ignoring case, among those of
@@ -488,6 +522,66 @@ mod tests {
             problem(&["fetchloom", "banana"])?.help.as_deref(),
             Some("`fetchloom --help` lists commands and options")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn option_typos_and_wrong_values_are_answered_alike() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for (arguments, meant) in [
+            (
+                &["fetchloom", "add", "--yse", "zenodo:3608990"][..],
+                "--yes",
+            ),
+            (&["fetchloom", "search", "iris", "--limt", "5"], "--limit"),
+            (&["fetchloom", "search", "iris", "--limt=5"], "--limit"),
+            (
+                &["fetchloom", "search", "iris", "--sorce", "kaggle"],
+                "--source",
+            ),
+            (&["fetchloom", "--ofline", "sync"], "--offline"),
+            (&["fetchloom", "sync", "--Dry-Run"], "--dry-run"),
+            (&["fetchloom", "--verison"], "--version"),
+        ] {
+            let error = problem(arguments)?;
+            assert_eq!(
+                error.help.as_deref(),
+                Some(format!("did you mean `{meant}`?").as_str()),
+                "{arguments:?}"
+            );
+        }
+        for (arguments, message, help) in [
+            (
+                &["fetchloom", "search", "iris", "--limit", "50"][..],
+                "--limit cannot be \"50\"",
+                "use a whole number from 1 to 20",
+            ),
+            (
+                &["fetchloom", "search", "iris", "--limit=0"],
+                "--limit cannot be \"0\"",
+                "use a whole number from 1 to 20",
+            ),
+            (
+                &["fetchloom", "search", "iris", "--limit", "many"],
+                "--limit cannot be \"many\"",
+                "use a whole number from 1 to 20",
+            ),
+            (
+                &[
+                    "fetchloom",
+                    "get",
+                    "https://example.org/x",
+                    "--sha256",
+                    "abc",
+                ],
+                "--sha256 cannot be \"abc\"",
+                "a SHA-256 is 64 hex digits",
+            ),
+        ] {
+            let error = problem(arguments)?;
+            assert_eq!(error.message, message, "{arguments:?}");
+            assert_eq!(error.help.as_deref(), Some(help), "{arguments:?}");
+        }
         Ok(())
     }
 

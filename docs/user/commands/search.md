@@ -20,7 +20,7 @@ words may be quoted or separate arguments. empty or whitespace-only words are a 
 | option | meaning |
 |---|---|
 | `--source <source>` | search only this site: `hf`, `kaggle` or `zenodo`. repeat it or separate names with commas. any other name is a usage error |
-| `--limit <n>` | keep up to n matches from each site, 1 to 20. the default is 3 |
+| `--limit <n>` | keep up to n matches from each site, 1 to 20. the default is 3; any other value is a usage error, exit 2, whose help says so |
 
 [global options](README.md#global-options) apply.
 
