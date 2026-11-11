@@ -851,23 +851,33 @@ fn a_link_refused_for_one_file_only_is_tried_for_the_next() {
     assert_eq!(placer.unlinked(), None);
 }
 
+/// ext4 lets one file have 65,000 names. a hardlink past that fails with EMLINK, and windows
+/// answers `ERROR_TOO_MANY_LINKS` past 1,023, so that file is copied, and the next file is linked
+/// again.
 #[test]
-fn too_many_links_falls_back_for_that_file_alone() {
+fn too_many_links_copies_that_file_alone() {
     let (folder, object) = cache(true);
     // FAT32 and exFAT make no hardlinks to fall back from
     if !makes_hardlinks(folder.path()) {
         return;
     }
     let mut placer = Placer::starting_at(folder.path().to_path_buf(), Method::Hardlink, None);
+    placer.link_refusal = Some(|| io::ErrorKind::TooManyLinks.into());
 
-    placer
-        .learn(Method::Hardlink, io::ErrorKind::TooManyLinks.into())
-        .unwrap();
-    let method = placer
-        .place(&object, &folder.path().join("placed.csv"), false)
-        .unwrap();
+    let copied = folder.path().join("copied.csv");
+    let method = placer.place(&object, &copied, false).unwrap();
 
-    assert_eq!(method, Method::Hardlink);
+    assert_eq!(method, Method::Copy);
+    assert_eq!(fs::read_to_string(&copied).unwrap(), CONTENTS);
+    assert!(!same_file::is_same_file(&copied, &object).unwrap());
+    assert!(is_read_only(&copied));
+    placer.link_refusal = None;
+    let linked = folder.path().join("linked.csv");
+    assert_eq!(
+        placer.place(&object, &linked, false).unwrap(),
+        Method::Hardlink
+    );
+    assert_eq!(placer.unlinked(), None);
 }
 
 #[test]

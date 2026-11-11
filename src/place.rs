@@ -72,6 +72,9 @@ pub(crate) struct Placer {
     serial: OnceLock<bool>,
     #[cfg(test)]
     observed: Option<Box<Observation>>,
+    /// what every hardlink fails with instead, as a disk would refuse it.
+    #[cfg(test)]
+    link_refusal: Option<fn() -> io::Error>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -198,6 +201,8 @@ impl Placer {
             serial: OnceLock::new(),
             #[cfg(test)]
             observed: None,
+            #[cfg(test)]
+            link_refusal: None,
             threads: Threads::default(),
             stop: Arc::default(),
             root,
@@ -387,7 +392,7 @@ impl Placer {
             && self.can_hardlink.load(Ordering::Relaxed);
         if early_hardlink {
             let checked = check_object(object)?;
-            match link_object(&location, object, checked) {
+            match self.link(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
@@ -406,7 +411,7 @@ impl Placer {
             && self.synced.is_none()
         {
             let checked = check_object(object)?;
-            match link_object(&location, object, checked) {
+            match self.link(&location, object, checked) {
                 Ok(metadata) => return Ok(Put::Placed(Method::Hardlink, metadata)),
                 Err(error) => self.learn(Method::Hardlink, error)?,
             }
@@ -702,6 +707,19 @@ impl Placer {
     pub(crate) fn delete_folder(&self, path: &Path) -> io::Result<()> {
         check_stop(&self.stop)?;
         self.location(path, false)?.remove_dir()
+    }
+
+    /// links `object` at `location` as [`link_object`] does.
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "tests refuse links through the placer")
+    )]
+    fn link(&self, location: &Location, object: &Path, checked: Metadata) -> io::Result<Metadata> {
+        #[cfg(test)]
+        if let Some(refusal) = self.link_refusal {
+            return Err(refusal());
+        }
+        link_object(location, object, checked)
     }
 
     fn location(&self, destination: &Path, make: bool) -> io::Result<Location> {
