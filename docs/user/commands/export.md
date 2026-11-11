@@ -69,6 +69,8 @@ aria2c put the files in `downloads/iris/iris.csv` and `downloads/uci/iris.zip`.
 
 `out=` puts each file in the folder its dataset is placed in, the one `path` in data.toml names, or the data folder itself for `path = "."`. so `aria2c -i sources.aria2 -d data`, run in the project's folder with `data` the folder `data_dir` names, puts each plain file where `fetchloom sync` places it. an archive arrives packed, beside where sync would unpack it.
 
+a dataset with `place = false` has no files in the data folder, so `sha256` leaves it out. `links` and `aria2` still list its files, since a recipe's rebuild reads them, and aria2c puts them in the folder `path` would give the dataset, where sync places nothing.
+
 `-o` writes the whole file under a hidden name beside it, flushes it, then gives it its name without replacing anything; a filesystem that cannot do that refuses. the file is UTF-8 with LF line ends on every system; windows powershell 5.1's `>` would write UTF-16 instead.
 
 ## what it leaves out
