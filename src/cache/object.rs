@@ -78,27 +78,11 @@ impl Drop for Temporary {
 }
 
 impl Cache {
-    /// starts a batch of new objects that [`Batch::flush`] flushes with one call, as git's batch
-    /// mode does: on linux one flush per small file costs far more than writing it. `None` means
-    /// each object must be flushed on its own. the batch holds the cache's filesystem open from
-    /// before its first write, because linux reports a failed write-back only to descriptors
-    /// opened before the failure, and to syncfs only from 5.8.
-    #[cfg(target_os = "linux")]
+    /// starts a batch of new objects that [`Batch::flush`] flushes with one call, as
+    /// [`batch_in`] says.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn batch(&self) -> io::Result<Option<Batch>> {
-        let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
-        if !syncfs_reports_errors(&release) {
-            return Ok(None);
-        }
-        Ok(Some(Batch::open(&self.root.join("tmp"))?))
-    }
-
-    /// on macos fsync only hands a file to the drive, and only `F_FULLFSYNC` empties the drive's
-    /// cache, for every file at once. each object gets the cheap fsync as it is sealed, and the
-    /// batch one `F_FULLFSYNC`, as git's batch mode does, instead of a full flush per object.
-    #[cfg(target_os = "macos")]
-    #[expect(clippy::unnecessary_wraps, reason = "linux may fail to open the batch")]
-    pub(crate) fn batch(&self) -> io::Result<Option<Batch>> {
-        Ok(Some(Batch(self.root.join("tmp"))))
+        batch_in(&self.root.join("tmp"))
     }
 
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
@@ -205,6 +189,30 @@ impl Cache {
 /// 15 s, where 64 small files flushed one by one took 0.2 s. on an idle disk 64 small files cost
 /// 3 to 9 ms more one by one, and one large file the same either way.
 pub(crate) const MOST_FLUSHED_ALONE: usize = 64;
+
+/// starts a batch of new files in `folder` that [`Batch::flush`] flushes with one call, as git's
+/// batch mode does: on linux one flush per small file costs far more than writing it. `None`
+/// means each file must be flushed on its own. the batch holds the folder's filesystem open from
+/// before its first write, because linux reports a failed write-back only to descriptors opened
+/// before the failure, and to syncfs only from 5.8. the cache's new objects take it, and so do
+/// the files a push writes into a mirror.
+#[cfg(target_os = "linux")]
+pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    if !syncfs_reports_errors(&release) {
+        return Ok(None);
+    }
+    Ok(Some(Batch::open(folder)?))
+}
+
+/// on macos fsync only hands a file to the drive, and only `F_FULLFSYNC` empties the drive's
+/// cache, for every file at once. each file gets the cheap fsync as it is sealed, and the batch
+/// one `F_FULLFSYNC` in `folder`, as git's batch mode does, instead of a full flush per file.
+#[cfg(target_os = "macos")]
+#[expect(clippy::unnecessary_wraps, reason = "linux may fail to open the batch")]
+pub(crate) fn batch_in(folder: &Path) -> io::Result<Option<Batch>> {
+    Ok(Some(Batch(folder.to_path_buf())))
+}
 
 /// new objects written since the batch began, flushed together.
 #[cfg(target_os = "linux")]
