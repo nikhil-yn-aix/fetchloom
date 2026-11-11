@@ -55,7 +55,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     if dry_run {
         let preview = placing.preview_removal();
         context.output.step(
-            "Would drop",
+            "Would remove",
             &format!("{} from data.toml and data.lock", args.name),
         );
         place::tell_preview(&context.output, &new_manifest, &Scope::All, &preview);

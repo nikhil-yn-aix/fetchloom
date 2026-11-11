@@ -2,6 +2,6 @@
 source: tests/cli/dry_run.rs
 expression: stderr
 ---
- Would drop a from data.toml and data.lock
- Would drop 1 file no dataset needs
+Would remove a from data.toml and data.lock
+Would remove 1 file no dataset needs
          Ok dry run, nothing was changed

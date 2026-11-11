@@ -1385,7 +1385,7 @@ impl Verbs {
     pub(super) const WOULD: Verbs = Verbs {
         locked: "Would lock",
         pinned: "Would pin",
-        dropped: "Would drop",
+        dropped: "Would remove",
     };
 }
 
@@ -2322,6 +2322,34 @@ mod tests {
         assert_eq!(
             lines[20],
             ("Would lock", "5 datasets · 5 files in data.lock".to_owned())
+        );
+    }
+
+    /// a dry run tells a dataset leaving data.lock with the verb the real run prints.
+    #[test]
+    fn a_dry_run_tells_a_removal_as_the_real_run_does() {
+        let context = context();
+        let before = Before::whole(Some(Lock {
+            datasets: vec![locked("gone")],
+            ..Lock::default()
+        }));
+        let told = |verbs| {
+            lock_lines(
+                &context.output,
+                &before,
+                &Lock::default(),
+                verbs,
+                None,
+                &HashSet::new(),
+            )
+        };
+        assert_eq!(
+            told(Verbs::DONE),
+            [("Removed", "gone from data.lock".to_owned())]
+        );
+        assert_eq!(
+            told(Verbs::WOULD),
+            [("Would remove", "gone from data.lock".to_owned())]
         );
     }
 

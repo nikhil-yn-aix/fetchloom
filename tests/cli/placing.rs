@@ -2469,7 +2469,7 @@ fn place_false_retires_unchanged_files_and_keeps_edits() -> Result {
     assert_eq!(preview.status.code(), Some(0), "{}", text(&preview.stderr)?);
     let stderr = text(&preview.stderr)?;
     assert!(
-        stderr.contains(" Would drop data/flowers · 1 file, since flowers has place = false\n"),
+        stderr.contains("Would retire data/flowers · 1 file, since flowers has place = false\n"),
         "{stderr}"
     );
     let output = sandbox.run(&["sync"])?;

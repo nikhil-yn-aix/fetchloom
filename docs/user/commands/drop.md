@@ -79,7 +79,7 @@ each refusal changes nothing.
 
 ```text
 Would exclude 1 file of pets.zip in data.toml
- Would drop 1 file no dataset needs
+Would remove 1 file no dataset needs
          Ok dry run, nothing was changed
 ```
 

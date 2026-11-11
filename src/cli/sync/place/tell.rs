@@ -294,7 +294,12 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         ));
     }
     let placement = &preview.placement;
-    tell_removed(output, manifest, ["Would drop", "Would drop"], placement);
+    tell_removed(
+        output,
+        manifest,
+        ["Would retire", "Would remove"],
+        placement,
+    );
     for path in &preview.changes.remove {
         output.detail(path);
     }

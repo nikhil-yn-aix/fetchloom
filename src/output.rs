@@ -1569,7 +1569,7 @@ mod tests {
                     "Searching",
                     "Would place",
                     "Would fetch",
-                    "Would drop",
+                    "Would remove",
                 ][..],
                 Work,
             ),
