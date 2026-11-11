@@ -334,21 +334,15 @@ impl Net {
         self.typed
             .check(&fetch.from)
             .map_err(|reason| failure::refused(&fetch.from, &reason))?;
-        let refused = match self.claim_and_download(fetch, cache, known, on).await {
-            Err(error)
-                if fetch.expect.sha256.is_some()
-                    && matches!(error.kind, Kind::AuthRequired | Kind::ReferenceUnresolved) =>
-            {
-                error
-            }
-            done => return done,
+        // a pinned S3 version may be gone, or kept from a reader without a key, while the object
+        // there now is still the pinned file, and the pinned hash decides whether it is
+        let versioned = fetch
+            .expect
+            .sha256
+            .and_then(|_| crate::source::unversioned(&fetch.from));
+        let Some((current, version)) = versioned else {
+            return self.claim_and_download(fetch, cache, known, on).await;
         };
-        // a pinned S3 version that is gone, or that the key may not read, may still be the
-        // object there now, and the pinned hash decides whether it is
-        let Some((current, version)) = crate::source::unversioned(&fetch.from) else {
-            return Err(refused);
-        };
-        tracing::debug!(%refused, "the pinned version cannot be read, so the object there now is asked for");
         let now = Fetch {
             url: fetch.url.clone(),
             from: current,
@@ -358,18 +352,50 @@ impl Net {
             revalidate: false,
             unpack: fetch.unpack,
         };
-        self.claim_and_download(&now, cache, None, on)
-            .await
-            .map_err(|error| {
-                if error.kind == Kind::IntegrityMismatch {
-                    error.detail(format!(
-                        "its pinned version {version} could not be read: {}",
-                        refused.message
-                    ))
-                } else {
-                    refused
+        let bucket = crate::source::Bucket::holding(&fetch.from);
+        if bucket
+            .as_ref()
+            .is_some_and(|bucket| self.refuses_versions(bucket))
+        {
+            let differs = match self.claim_and_download(&now, cache, None, on).await {
+                Err(error) if error.kind != Kind::Interrupted => error,
+                done => return done,
+            };
+            tracing::debug!(%differs, "the object there now is not the pinned file, so its pinned version is asked for");
+            return match self.claim_and_download(fetch, cache, known, on).await {
+                Err(refused) if unreadable(&refused) => Err(unread(differs, refused, &version)),
+                done => done,
+            };
+        }
+        let refused = match self.claim_and_download(fetch, cache, known, on).await {
+            Err(error) if unreadable(&error) => error,
+            done => return done,
+        };
+        tracing::debug!(%refused, "the pinned version cannot be read, so the object there now is asked for");
+        match self.claim_and_download(&now, cache, None, on).await {
+            Ok(fetched) => {
+                // a 404 says one version is gone, while 401 and 403 say the bucket keeps its old
+                // versions from this reader
+                if refused.kind == Kind::AuthRequired
+                    && let Some(bucket) = bucket
+                {
+                    self.refuse_versions
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(bucket);
                 }
-            })
+                Ok(fetched)
+            }
+            Err(error) => Err(unread(error, refused, &version)),
+        }
+    }
+
+    /// whether `bucket` refused this run an old version whose object as it is now matched.
+    fn refuses_versions(&self, bucket: &crate::source::Bucket) -> bool {
+        self.refuse_versions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(bucket)
     }
 
     async fn claim_and_download(
@@ -1188,6 +1214,25 @@ fn wrong_size(url: &Url, expected: u64, got: Option<u64>) -> Error {
         ),
     )
     .detail(detail)
+}
+
+/// whether a pinned version could not be read: refused, 401 or 403, or gone, 404 or 410.
+fn unreadable(error: &Error) -> bool {
+    matches!(error.kind, Kind::AuthRequired | Kind::ReferenceUnresolved)
+}
+
+/// the error for a pinned `version` its bucket `refused`, when the object there now failed with
+/// `error`: other bytes say so, with the refusal beside them, and any other failure leaves the
+/// refusal.
+fn unread(error: Error, refused: Error, version: &str) -> Error {
+    if error.kind == Kind::IntegrityMismatch {
+        error.detail(format!(
+            "its pinned version {version} could not be read: {}",
+            refused.message
+        ))
+    } else {
+        refused
+    }
 }
 
 /// what the cache holds for the fetch's URL from an earlier download, when the bytes are still

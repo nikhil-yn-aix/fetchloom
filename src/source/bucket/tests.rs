@@ -182,6 +182,36 @@ fn an_endpoint_reference_is_a_plain_origin_and_a_bucket() {
     }
 }
 
+/// an object's link names its bucket: on AWS by the host or the first segment of the service's
+/// own host, and at another service by the origin and the first segment.
+#[test]
+fn an_object_link_names_the_bucket_holding_it() {
+    for (link, bucket) in [
+        (
+            "https://lab-raw.s3.amazonaws.com/a/b.csv?versionId=1",
+            Some("s3://lab-raw"),
+        ),
+        (
+            "https://s3.us-west-2.amazonaws.com/openneuro.org/ds1/a.tsv",
+            Some("s3://openneuro.org"),
+        ),
+        (
+            "https://minio.lab.example:9000/scans/raw/a.nii",
+            Some("s3:https://minio.lab.example:9000/scans"),
+        ),
+        ("https://minio.lab.example:9000/a.nii", None),
+        ("https://example.org/", None),
+    ] {
+        assert_eq!(
+            Bucket::holding(&Url::parse(link).unwrap())
+                .map(|found| found.to_string())
+                .as_deref(),
+            bucket,
+            "{link}"
+        );
+    }
+}
+
 #[test]
 fn single_objects_and_other_storage_links_stay_plain_links() {
     for text in [

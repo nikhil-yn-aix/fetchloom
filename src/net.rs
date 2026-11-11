@@ -184,6 +184,10 @@ pub(crate) struct Net {
     credentials: Vec<Key>,
     /// which requests to S3 buckets go signed, and with which keys.
     signing: crate::source::Signing,
+    /// buckets that refused this run an old version of an object whose version as it is now
+    /// matched its pin: they likely refuse every old version, so their objects are asked for as
+    /// they are now first.
+    refuse_versions: Mutex<std::collections::HashSet<crate::source::Bucket>>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
     paces: pace::Paces,
@@ -344,6 +348,7 @@ impl Net {
             typed: address::Typed::default(),
             credentials,
             signing: crate::source::Signing::default(),
+            refuse_versions: Mutex::default(),
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),

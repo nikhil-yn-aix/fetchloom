@@ -120,6 +120,27 @@ impl Bucket {
         })
     }
 
+    /// the bucket a link to one of its objects names: on AWS by its host, or by its first
+    /// segment on the service's own host, and elsewhere by its origin and first segment, as a
+    /// service that speaks S3's API serves every bucket. none when no bucket name is there.
+    pub(crate) fn holding(url: &Url) -> Option<Bucket> {
+        let host = url.host_str()?.to_ascii_lowercase();
+        let mut segments = url.path_segments()?;
+        let first = segments.next().unwrap_or_default();
+        // a bucket named in the path still needs an object key after it
+        let keyed = segments.next().is_some_and(|key| !key.is_empty());
+        let (endpoint, name) = match s3_host(&host) {
+            Some((Some(named), _)) => (None, named),
+            Some((None, _)) if keyed => (None, first),
+            None if keyed => (Some(url.origin()), first),
+            _ => return None,
+        };
+        is_bucket(Store::S3, name).then(|| Bucket {
+            endpoint,
+            name: name.to_owned(),
+        })
+    }
+
     /// the service that holds the bucket, as messages name it: S3, or the host of another.
     fn service(&self) -> String {
         let Some(origin) = &self.endpoint else {

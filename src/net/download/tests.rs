@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::net::Options;
-use crate::net::scripted::{lines, reply, serve};
+use crate::net::scripted::{lines, reply, route, serve};
 use crate::source::recorded::block_on;
 
 impl Chunks for tokio::sync::mpsc::Receiver<Bytes> {
@@ -1054,4 +1054,89 @@ fn an_unreadable_pinned_version_comes_from_the_object_there_now() {
     let error = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
+/// pins `bytes` at `raw/<name>?versionId=v1` on `url`.
+fn versioned(url: &Url, name: &str, bytes: &[u8]) -> Fetch {
+    Fetch {
+        expect: Expect {
+            sha256: Some(crate::digest::sha256(bytes)),
+            md5: None,
+            size: Some(bytes.len() as u64),
+        },
+        ..Fetch::new(url.join(&format!("raw/{name}?versionId=v1")).unwrap())
+    }
+}
+
+/// a public bucket that lets nobody read old versions refuses every pinned version. once one
+/// refusal with 401 or 403 was followed by the object there now matching its pin, the bucket's
+/// later files ask for the object there now first: three files cost four requests, not six. a
+/// version that is gone, 404, is about one object and changes nothing for the others.
+#[test]
+fn a_bucket_that_refused_a_version_is_asked_for_its_objects_as_they_are_now() {
+    for (refusal, expected) in [
+        (
+            "403 Forbidden",
+            vec![
+                "GET /raw/a.csv?versionId=v1 HTTP/1.1",
+                "GET /raw/a.csv HTTP/1.1",
+                "GET /raw/b.csv HTTP/1.1",
+                "GET /raw/c.csv HTTP/1.1",
+            ],
+        ),
+        (
+            "404 Not Found",
+            vec![
+                "GET /raw/a.csv?versionId=v1 HTTP/1.1",
+                "GET /raw/a.csv HTTP/1.1",
+                "GET /raw/b.csv?versionId=v1 HTTP/1.1",
+                "GET /raw/b.csv HTTP/1.1",
+                "GET /raw/c.csv?versionId=v1 HTTP/1.1",
+                "GET /raw/c.csv HTTP/1.1",
+            ],
+        ),
+    ] {
+        let (url, asked) = route(move |target| match target.split_once('?') {
+            Some(_) => reply(refusal, &[], b""),
+            None => reply("200 OK", &[], target.trim_start_matches("/raw/").as_bytes()),
+        });
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let net = net(&url);
+        for name in ["a.csv", "b.csv", "c.csv"] {
+            let fetch = versioned(&url, name, name.as_bytes());
+            let fetched = block_on(net.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+            assert_eq!(fetched.digest, crate::digest::sha256(name.as_bytes()));
+        }
+        assert_eq!(lines(&asked), expected, "{refusal}");
+    }
+}
+
+/// a file whose object changed since it was pinned still comes from its pinned version when the
+/// bucket lets that version be read, though the bucket refused another file's version before.
+#[test]
+fn a_changed_object_still_reaches_its_pinned_version() {
+    let (url, asked) = route(|target| match target {
+        "/raw/a.csv" => reply("200 OK", &[], b"a.csv"),
+        "/raw/b.csv" => reply("200 OK", &[], b"new b"),
+        "/raw/b.csv?versionId=v1" => reply("200 OK", &[], b"old b"),
+        _ => reply("403 Forbidden", &[], b""),
+    });
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let net = net(&url);
+    let first = versioned(&url, "a.csv", b"a.csv");
+    block_on(net.download(&first, &cache, &|_| Ok(()))).unwrap();
+    let changed = versioned(&url, "b.csv", b"old b");
+    let fetched = block_on(net.download(&changed, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(fetched.digest, crate::digest::sha256(b"old b"));
+    assert_eq!(
+        lines(&asked),
+        [
+            "GET /raw/a.csv?versionId=v1 HTTP/1.1",
+            "GET /raw/a.csv HTTP/1.1",
+            "GET /raw/b.csv HTTP/1.1",
+            "GET /raw/b.csv?versionId=v1 HTTP/1.1",
+        ]
+    );
 }

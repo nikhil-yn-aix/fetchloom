@@ -56,6 +56,46 @@ pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
     (url, asked)
 }
 
+/// serves every connection with what `answer` makes of its request target, the path and query,
+/// until none comes for 10 s, and keeps the head of every request it took, as [`serve`] does.
+pub(super) fn route(
+    answer: impl Fn(&str) -> Vec<u8> + Send + 'static,
+) -> (Url, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = asked.clone();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _entered = runtime.enter();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        while let Ok(Ok((stream, _))) = runtime.block_on(tokio::time::timeout(
+            Duration::from_secs(10),
+            listener.accept(),
+        )) {
+            let mut stream = stream.into_std().unwrap();
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+                head.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&head).into_owned();
+            let target = head.split(' ').nth(1).unwrap_or_default().to_owned();
+            seen.lock().unwrap().push(head);
+            let _ = stream.write_all(&answer(&target));
+        }
+    });
+    (url, asked)
+}
+
 /// the first line of each head [`serve`] kept, such as `GET /start HTTP/1.1`.
 pub(super) fn lines(asked: &Mutex<Vec<String>>) -> Vec<String> {
     asked
