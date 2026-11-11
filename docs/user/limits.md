@@ -7,7 +7,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | preprocessing and workflow execution | call fetchloom from make, snakemake, nextflow or your script |
 | publishing and uploads | use the data repository's upload interface |
 | data branches and merges | manage produced data separately from fetched inputs |
-| cloud copying and mirroring | use a transfer application such as rclone |
+| cloud copying, and writing mirrors | use a transfer application such as rclone; fetchloom reads [mirrors](mirrors.md) but does not fill them |
 | requester-pays buckets, private google cloud storage buckets and AWS keys from roles or IAM identity center | use the provider's own tools, or export the keys; fetchloom reads [private S3 buckets](sources/buckets.md#private-s3-buckets) with keys from the environment or `~/.aws` |
 | search beyond hugging face, kaggle and zenodo | choose a reference from the source's own catalog |
 | plugins | source adapters live in the fetchloom crate |

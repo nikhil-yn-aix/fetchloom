@@ -12,7 +12,7 @@ each line goes when its feature lands, in the same change that documents it in t
 5. `fetchloom lock` resolves a conflicted `data.toml` and `data.lock` offline, with `--ours` or `--theirs` for two changes to one dataset.
 6. `fetchloom add ./folder` pins local bytes, and a list of links with their SHA-256 imports in one step.
 7. recipes: datasets a command makes from other datasets, with `fetchloom build` and its `--check`, `--accept`, `--prepare` and `--locked`, and a peak-space preview.
-8. mirrors: reading from mirrors in settings or `--mirror`, a mirror-only mode and `fetchloom push` to a folder mirror.
+8. `fetchloom push` to a folder mirror, with a `push_to` setting; reading mirrors and mirror-only mode are in place.
 9. `cache gc --inputs` frees inputs that a verified mirror holds, and `fetchloom cache` estimates needed, unneeded, linked and copied bytes.
 10. member filters for archives and `fetchloom drop <path>`.
 11. private S3 buckets, with keys from the environment or shared profiles, and S3-compatible hosts.

@@ -93,11 +93,11 @@ offline mode prevents fetchloom from making HTTP or DNS requests. a locked proje
 
 search and entries needing resolution fail offline, even when you already know a source id or plain URL. repository listings are not cached for offline resolution. offline `get` of a direct URL needs its URL record and cached bytes, or with `-o`, a file at the path that still holds what the link served last time. an unpinned new link reports "offline, and a new link must be downloaded once to learn its SHA-256". the help names the flag or environment setting to change, followed by "to pin it. `fetchloom get <link> --offline` reuses a file fetched before".
 
-prepare the project online before disconnecting and keep its manifest and lock unchanged. `FETCHLOOM_OFFLINE=1` also enables offline mode. to reconnect, remove `--offline` and unset that variable if it is `1`.
+prepare the project online before disconnecting and keep its manifest and lock unchanged. `FETCHLOOM_OFFLINE=1` also enables offline mode. to reconnect, remove `--offline` and unset that variable if it is `1`. offline, a folder [mirror](mirrors.md), such as a usb drive, still gives the pinned files the cache lacks.
 
 ## recovery
 
-if a locked download returns 404 or 410, fetchloom asks its recorded source for a new URL and checks the new download against the original size and hashes. it does not rewrite the lock. an unchanged URL or another kind of failure cannot recover this way.
+a [mirror](mirrors.md) you name is asked for a pinned file before its source, so a file whose source is gone can still come from a lab's copy. if a locked download returns 404 or 410, fetchloom asks its recorded source for a new URL and checks the new download against the original size and hashes. it does not rewrite the lock. an unchanged URL or another kind of failure cannot recover this way.
 
 successful downloads stay cached when another file fails. retries can reuse saved partial bytes when hashes or server validators allow it. unsupported ranges, changed validators or damaged saved bytes can require a restart.
 
