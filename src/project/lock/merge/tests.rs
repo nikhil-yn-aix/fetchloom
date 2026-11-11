@@ -428,6 +428,54 @@ fn recipe_results_merge_by_name() {
     assert_eq!(merged.lock.unwrap().derived, []);
 }
 
+/// each side's recipes read, yet the merge of them does not: a person merges data.toml, told
+/// why.
+#[test]
+fn a_merge_whose_recipes_would_not_read_says_why() {
+    let recipe = |name: &str, from: &str| {
+        format!(
+            "\n[datasets.{name}]\nfrom = [\"{from}\"]\nrun = [\"t\", \"{{{from}}}\", \"{{out}}\"]\n"
+        )
+    };
+    let raw = toml(&[("raw", "zenodo:1")]);
+    let base = format!("{raw}{}{}", recipe("a", "raw"), recipe("b", "raw"));
+    let ours = format!("{raw}{}{}", recipe("a", "b"), recipe("b", "raw"));
+    let theirs = format!("{raw}{}{}", recipe("a", "raw"), recipe("b", "a"));
+    let error = merged(
+        &sides(ours, theirs, Some(base)),
+        &sides(lock(Vec::new()), lock(Vec::new()), None),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(error.kind, Kind::ProjectInvalid);
+    assert_eq!(
+        error.message,
+        "the merged data.toml would not read: datasets a and b are made from each other: a \u{2192} b \u{2192} a"
+    );
+    assert_eq!(
+        error.help.as_deref(),
+        Some("merge data.toml by hand, then run `fetchloom lock`")
+    );
+}
+
+/// a recipe is pinned only by a build, so a merge leaving one unbuilt does not name it as a
+/// dataset the next sync or lock pins.
+#[test]
+fn an_unbuilt_recipe_is_not_left_for_sync_to_pin() {
+    let text = format!(
+        "{}\n[datasets.clean]\nfrom = [\"core\"]\nrun = [\"t\", \"{{core}}\", \"{{out}}\"]\n",
+        toml(&[("core", "zenodo:3"), ("new", "zenodo:4")])
+    );
+    let core = lock(vec![pin("core", "zenodo:3", b"core")]);
+    let result = merged(
+        &sides(text.clone(), text, None),
+        &sides(core.clone(), core, None),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(result.summary.unpinned, ["new"]);
+}
+
 #[test]
 fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
     let datasets = toml(&[("a", "zenodo:1")]);

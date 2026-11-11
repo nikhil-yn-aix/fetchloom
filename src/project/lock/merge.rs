@@ -84,8 +84,8 @@ pub(crate) struct Summary {
     pub(crate) same: Vec<String>,
     /// removed on one side while the other left it as it was, or by a choice.
     pub(crate) removed: Vec<String>,
-    /// in the merged data.toml, but pinned by no data.lock entry of either side that answers
-    /// it, so `fetchloom lock` pins it.
+    /// fetched datasets in the merged data.toml that no data.lock entry of either side answers,
+    /// so `fetchloom lock` pins them.
     pub(crate) unpinned: Vec<String>,
     /// those that need a choice, in an error's result only.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -249,7 +249,13 @@ pub(crate) fn merge(
     let mut decided = Decided::default();
     decide_entries(&manifests, frame, choices, &mut decided);
     let text = merged_text(&manifests, frame, &decided.entries)?;
-    let merged = Manifest::parse(&text).map_err(|_| unmergeable())?;
+    let merged = Manifest::parse(&text).map_err(|error| {
+        Error::new(
+            Kind::ProjectInvalid,
+            format!("the merged data.toml would not read: {}", error.message),
+        )
+        .help("merge data.toml by hand, then run `fetchloom lock`")
+    })?;
     check_merged(&manifests, &merged, &decided.entries)?;
     let locks = lock.map(read_locks).transpose()?;
     let records = locks
@@ -361,11 +367,14 @@ fn summarize(decided: &Decided, merged: &Manifest, records: Option<&[Parsed]>) -
         };
         list.push(name.clone());
     }
+    // only `fetchloom build` pins a recipe, so the next sync or lock pins fetched datasets alone
     summary.unpinned = merged
         .datasets
-        .keys()
-        .filter(|name| !pinned(name) && !decided.conflicts.contains_key(*name))
-        .cloned()
+        .iter()
+        .filter(|(name, entry)| {
+            entry.source().is_some() && !pinned(name) && !decided.conflicts.contains_key(*name)
+        })
+        .map(|(name, _)| name.clone())
         .collect();
     summary.conflicts = decided.conflicts.keys().cloned().collect();
     summary
