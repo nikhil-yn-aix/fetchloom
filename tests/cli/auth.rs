@@ -497,3 +497,59 @@ fn a_model_link_whose_name_a_dataset_has_gives_the_datasets_link() -> Result {
     );
     Ok(())
 }
+
+/// a key that went with the request and was refused, as an old or wrong `HF_TOKEN` is, is named
+/// by where it comes from, never by its value, with how to replace it. signing in is not offered
+/// for a key from a variable, which would still win over the key a sign-in saves.
+#[test]
+fn a_refused_key_is_named_by_where_it_comes_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hub = hub()?;
+    let key = "hf_FAKEfakeFAKEfakeFAKEfake1234";
+    let output = sandbox
+        .command(&["--json", "add", "hf:datasets/bigcode/the-stack"])
+        .env("FETCHLOOM_TEST_HF_API", &hub.url)
+        .env("HF_TOKEN", key)
+        .output()?;
+    let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(
+        !stdout.contains(key) && !stderr.contains(key),
+        "{stdout}{stderr}"
+    );
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "auth.required", "{error}");
+    assert_eq!(
+        error["message"],
+        "huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-stack"
+    );
+    assert_eq!(
+        error["help"],
+        "the key may be old or wrong: set HF_TOKEN to a current key from https://huggingface.co/settings/tokens, or unset HF_TOKEN to use the key `fetchloom auth login hf` saves"
+    );
+    // a name the hub does not show may be a typo too, so the key is named beside it
+    let output = sandbox
+        .command(&["--json", "add", "hf:datasets/scikit-learn/irs"])
+        .env("FETCHLOOM_TEST_HF_API", &hub.url)
+        .env("HF_TOKEN", key)
+        .output()?;
+    let (stdout, stderr) = (text(&output.stdout)?, text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert!(
+        !stdout.contains(key) && !stderr.contains(key),
+        "{stdout}{stderr}"
+    );
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["details"][0],
+        "the key in HF_TOKEN went with the request"
+    );
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("set HF_TOKEN to a current one")
+                && !help.contains("fetchloom auth login")),
+        "{error}"
+    );
+    Ok(())
+}

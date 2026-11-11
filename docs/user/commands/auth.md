@@ -74,6 +74,16 @@ sign in to hugging face now? [y/N]
 
 a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page. without a key on this machine, the offer says that first, as `First accept the terms at https://huggingface.co/datasets/bigcode/the-stack while signed in there`, then asks whether to sign in; with a key, it shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.
 
+a key that went with the request and was refused, as an old or wrong `HF_TOKEN` is, is named by where it comes from, never by its value, with how to replace it:
+
+```text
+error: huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-stack
+  huggingface.co says: Access to dataset bigcode/the-stack is restricted. You must have access to it and be authenticated to access it. Please log in.
+  help: the key may be old or wrong: set HF_TOKEN to a current key from https://huggingface.co/settings/tokens, or unset HF_TOKEN to use the key `fetchloom auth login hf` saves
+```
+
+a key saved by signing in is named by its file, and the help says to sign in again. no sign-in is offered for a key from a variable, which would still win over the key a sign-in saves.
+
 ## status
 
 ```sh

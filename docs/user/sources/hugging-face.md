@@ -24,7 +24,7 @@ when every select pattern starts with a folder, as `sample/10BT/**` or `data/tra
 
 ## credentials
 
-use the [credential precedence](../reference/environment.md#credentials) for `HF_TOKEN` and existing token files.
+use the [credential precedence](../reference/environment.md#credentials) for `HF_TOKEN` and existing token files. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
 
 ## limits
 
