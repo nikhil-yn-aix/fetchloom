@@ -305,3 +305,49 @@ fn a_build_places_only_the_result_of_an_unplaced_input() -> Result {
     );
     Ok(())
 }
+
+/// the cache report counts what only builds read, and gc keeps it with the results projects
+/// pin, while it frees the record of a result no project pins any more.
+#[test]
+fn gc_keeps_what_builds_read_and_frees_records_no_project_pins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE_CODE)?;
+    unplace(&sandbox.work(), "iris")?;
+    let code = sandbox.work().join("clean.py");
+    fs::write(&code, "print('first')\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let report = json(&sandbox.run(&["--json", "cache"])?)?;
+    assert_eq!(report["result"]["inputs_only"], IRIS.len());
+    let told = text(&sandbox.run(&["cache"])?.stderr)?;
+    assert!(
+        told.contains(&format!(
+            "     Needed {} B by 1 project · {} B of it is read only by builds",
+            IRIS.len() + 4,
+            IRIS.len()
+        )),
+        "{told}"
+    );
+    let builds = sandbox.cache().join("builds");
+    let first: Vec<PathBuf> = fs::read_dir(&builds)?
+        .map(|entry| Ok(entry?.path()))
+        .collect::<Result<_>>()?;
+    fs::write(&code, "print('second')\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    assert_eq!(fs::read_dir(&builds)?.count(), 2);
+    let gc = sandbox.run(&["cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+    let left: Vec<PathBuf> = fs::read_dir(&builds)?
+        .map(|entry| Ok(entry?.path()))
+        .collect::<Result<_>>()?;
+    assert_eq!(left.len(), 1);
+    assert!(!first.contains(&left[0]), "the first build's key is gone");
+    assert_eq!(
+        fs::read_dir(&left[0])?.count(),
+        2,
+        "its record and its lock"
+    );
+    assert!(object(&sandbox.cache(), IRIS).is_file(), "the step's input");
+    assert!(object(&sandbox.cache(), b"done").is_file(), "the result");
+    Ok(())
+}

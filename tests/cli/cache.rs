@@ -225,7 +225,7 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     assert_eq!(result["copies"], copies, "{report}");
     assert_eq!(result["cloned"], cloned, "{report}");
     assert_eq!(result["unlinked_copies"], 0, "{report}");
-    assert_eq!(result["inputs_only"], serde_json::Value::Null, "{report}");
+    assert_eq!(result["inputs_only"], 0, "{report}");
     let story = text(&sandbox.run(&["cache"])?.stderr)?;
     if links.hardlinks_read_only() && !links.reflink {
         sandbox.filters().bind(|| insta::assert_snapshot!(story));

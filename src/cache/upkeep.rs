@@ -1,7 +1,7 @@
 //! keeping the cache tidy: which projects use it, how big it is, freeing what no project needs,
 //! and hashing every object again.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -47,6 +47,66 @@ pub(crate) struct Needed {
     pub(crate) objects: HashSet<Sha256>,
     /// archives whose record tells what a project places from them.
     pub(crate) unpacked: HashSet<Sha256>,
+    /// the results projects pin, by key and tree, whose records under `builds/` gc keeps.
+    pub(crate) results: HashSet<(Sha256, Sha256)>,
+    /// whether `uses` tells how the projects use each of `objects`.
+    pub(crate) told: bool,
+    /// how the projects use each of `objects`, as [`Needed::add`] merges it, when `told`.
+    pub(crate) uses: HashMap<Sha256, Use>,
+}
+
+impl Needed {
+    /// notes that a project needs the object `digest` as `used`. an object used in several ways
+    /// is an input only while every use is one.
+    pub(crate) fn add(&mut self, digest: Sha256, used: Use) {
+        self.objects.insert(digest);
+        if self.told {
+            self.uses
+                .entry(digest)
+                .and_modify(|was| *was = was.and(used))
+                .or_insert(used);
+        }
+    }
+}
+
+/// how a project uses an object it needs, which tells what only builds read. gc keeps every
+/// object a project needs; a later `cache gc --inputs` may free one whose every use is an input,
+/// where it can come back from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Use {
+    /// a file of a fetched dataset in the data folder, or of one with `place = false` no recipe
+    /// reads, which no build makes again.
+    Placed,
+    /// a file of a recipe's result, other than an input.
+    Output,
+    /// a file of a dataset with `place = false` that only recipes read, each of them built.
+    Input(Supply),
+    /// a file of a fetched dataset a recipe still to build reads: one data.lock pins no result
+    /// of, one that changed since, or one whose result the cache lacks files of.
+    Pending,
+}
+
+/// where the bytes of an input can come back from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Supply {
+    /// the link data.lock pins for the file.
+    Source,
+    /// a build of the recipe that made it.
+    Derived,
+    /// nowhere but a mirror: a file imported from a folder on some machine.
+    Imported,
+}
+
+impl Use {
+    /// the use of an object used both as `self` and as `other`: an input only when both are,
+    /// then from the supply that brings it back most readily.
+    fn and(self, other: Use) -> Use {
+        match (self, other) {
+            (Use::Input(mine), Use::Input(theirs)) => Use::Input(mine.min(theirs)),
+            (Use::Input(_), other) => other,
+            (kept, _) => kept,
+        }
+    }
 }
 
 /// the downloads a run stopped before they finished, whose bytes the cache keeps so a later run
@@ -256,10 +316,11 @@ impl Cache {
         Ok(scan)
     }
 
-    /// removes stale registrations, unneeded objects older than `grace` and the downloads no
-    /// run holds, recording each refused removal. an unfinished download keeps a day, so a run
-    /// tomorrow can continue it, unless `grace` is zero, as `--now` asks. a download in progress
-    /// keeps its bytes either way, since its run holds its lock.
+    /// removes stale registrations, unneeded objects older than `grace`, the records of results
+    /// no project pins once they are as old, and the downloads no run holds, recording each
+    /// refused removal. an unfinished download keeps a day, so a run tomorrow can continue it,
+    /// unless `grace` is zero, as `--now` asks. a download in progress keeps its bytes either way,
+    /// since its run holds its lock.
     pub(crate) fn sweep_with_stop(
         &self,
         needed: &Needed,
@@ -315,6 +376,14 @@ impl Cache {
                 removed(&path, self.remove_inside(&path), &mut freed.not_removed);
             }
         }
+        for folder in scan_entries(&self.root.join("builds"), &mut freed.not_removed, stop)? {
+            stop.check()?;
+            if let Some(key) = Sha256::from_hex(&folder.file_name().to_string_lossy())
+                && folder.file_type().is_ok_and(|kind| kind.is_dir())
+            {
+                self.sweep_results(&folder.path(), key, needed, &unused, stop, &mut freed)?;
+            }
+        }
         let abandoned = |modified: SystemTime| grace.is_zero() || old(modified);
         self.sweep_partials(&abandoned, stop, &mut freed)?;
         freed.removed_leftovers += self.sweep_staging(now, stop, &mut freed.not_removed);
@@ -341,6 +410,53 @@ impl Cache {
         stop.check()?;
         super::failure::sort(&mut freed.not_removed);
         Ok(freed)
+    }
+
+    /// removes the records in `folder` of `key`'s results that no project pins and that `unused`
+    /// finds old enough, then the key's lock and its folder once no record is left. a build holds
+    /// the cache while it runs, so a sweep, which holds it alone, never takes a lock one waits on.
+    fn sweep_results(
+        &self,
+        folder: &Path,
+        key: Sha256,
+        needed: &Needed,
+        unused: &dyn Fn(SystemTime) -> bool,
+        stop: &Stop,
+        freed: &mut Freed,
+    ) -> Result<(), Error> {
+        let mut left = false;
+        let mut lock = None;
+        for entry in scan_entries(folder, &mut freed.not_removed, stop)? {
+            stop.check()?;
+            let path = entry.path();
+            let Some(tree) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
+                if entry.file_name() == "lock" {
+                    lock = Some(path);
+                } else {
+                    left = true;
+                }
+                continue;
+            };
+            let stale = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(unused);
+            left |= needed.results.contains(&(key, tree))
+                || !stale
+                || !removed(&path, self.remove_inside(&path), &mut freed.not_removed);
+        }
+        if left
+            || lock.is_some_and(|lock| {
+                !removed(&lock, self.remove_inside(&lock), &mut freed.not_removed)
+            })
+        {
+            return Ok(());
+        }
+        let emptied = self
+            .check_inside(folder)
+            .and_then(|()| self.volume.remove_folder(folder));
+        removed(folder, emptied, &mut freed.not_removed);
+        Ok(())
     }
 
     /// drops what the cache remembers about a link whose bytes it no longer holds, which would
@@ -1217,6 +1333,39 @@ mod tests {
         assert_eq!(cache.unpacked_archives(), [used]);
     }
 
+    /// a result's record stays while a project pins it, or for a day, as one a build left when it
+    /// failed before writing data.lock does; others go, and with a key's last record its lock
+    /// and its folder.
+    #[test]
+    fn a_sweep_removes_old_records_no_project_pins() {
+        let (_dir, cache) = cache();
+        let member = |path: &str| crate::cache::Member {
+            path: path.to_owned(),
+            size: 1,
+            sha256: digest::sha256(path.as_bytes()),
+        };
+        let (kept, other) = (digest::sha256(b"kept key"), digest::sha256(b"other key"));
+        let pinned = cache.record_result(&kept, &[member("a.csv")]).unwrap();
+        let unpinned = cache.record_result(&kept, &[member("b.csv")]).unwrap();
+        cache.record_result(&other, &[member("c.csv")]).unwrap();
+        for key in [kept, other] {
+            drop(cache.hold_key(&key, &Stop::default(), || {}).unwrap());
+        }
+        let keep = Needed {
+            results: HashSet::from([(kept, pinned)]),
+            ..Needed::default()
+        };
+        let builds = cache.root().join("builds");
+        cache.sweep(&keep, SystemTime::now());
+        assert!(builds.join(kept.hex()).join(unpinned.hex()).is_file());
+        assert!(builds.join(other.hex()).is_dir());
+        cache.sweep(&keep, SystemTime::now() + GRACE + Duration::from_secs(60));
+        assert!(builds.join(kept.hex()).join(pinned.hex()).is_file());
+        assert!(!builds.join(kept.hex()).join(unpinned.hex()).exists());
+        assert!(builds.join(kept.hex()).join("lock").is_file());
+        assert!(!builds.join(other.hex()).exists());
+    }
+
     #[test]
     fn a_sweep_forgets_links_whose_bytes_are_gone() {
         let (_dir, cache) = cache();
@@ -1270,6 +1419,7 @@ mod tests {
         let keep = Needed {
             objects: HashSet::from([member.digest]),
             unpacked: HashSet::from([archive]),
+            ..Needed::default()
         };
         cache.sweep(&keep, SystemTime::now() + GRACE + Duration::from_secs(60));
         assert!(

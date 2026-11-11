@@ -1,6 +1,7 @@
 //! `fetchloom cache`: where the cache is and what it holds. `cache gc` frees what no project needs,
 //! and `cache verify` hashes every object again.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -9,12 +10,13 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::{Context, open_cache};
-use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Usage};
+use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Supply, Usage, Use};
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{Entry, Manifest};
+use crate::recipe;
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -36,7 +38,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let cache = open_cache()?;
     let Found {
         needed, projects, ..
-    } = needed_with(&cache, None, &context.stop, false)?;
+    } = needed_with(&cache, None, &context.stop, false, Uses::Told)?;
     let scan = cache.scan_objects(&context.stop)?;
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
@@ -115,13 +117,20 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     }
 }
 
-/// what the projects need, and how much of it deleting would not free.
+/// what the projects need, how much of it only builds read, and how much deleting would not
+/// free.
 fn needed_line(usage: &Usage, projects: usize) -> String {
     let mut line = format!(
         "{} by {}",
         units::size(usage.needed),
         units::count(projects as u64, "project", "projects")
     );
+    if let Some(inputs) = usage.inputs_only.filter(|inputs| *inputs > 0) {
+        line = format!(
+            "{line} · {} is read only by builds",
+            of_it(inputs, usage.needed)
+        );
+    }
     if usage.linked > 0 {
         line.push_str(" · ");
         line.push_str(&linked_part(usage.linked, usage.needed));
@@ -248,7 +257,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
             },
         )?
     };
-    let found = needed_with(&cache, None, &context.stop, true)?;
+    let found = needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
     let grace = if now {
         std::time::Duration::ZERO
     } else {
@@ -607,8 +616,16 @@ pub(super) fn needed_by_all(
     current: Option<&Lock>,
     stop: &Stop,
 ) -> Result<Option<Needed>, Error> {
-    let found = needed_with(cache, current, stop, false)?;
+    let found = needed_with(cache, current, stop, false, Uses::Untold)?;
     Ok(found.complete.then_some(found.needed))
+}
+
+/// whether [`needed_with`] tells how each project uses each object it needs, which reads the
+/// code of the projects' recipes to find which are built.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Uses {
+    Told,
+    Untold,
 }
 
 /// what [`needed_with`] found. `complete` is false when a registered project's data.toml was
@@ -621,16 +638,21 @@ struct Found {
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
-/// the files it unpacked to, and the projects still on disk. unreadable registrations, manifests
-/// and locks stop gc rather than lose protection. `collect_stale` queues roots whose data.toml
-/// is gone for the sweep, so inspection does not discard removal errors or delete records early.
+/// the files it unpacked to, and the projects still on disk, with how each project uses each
+/// object when `uses` asks. unreadable registrations, manifests and locks stop gc rather than
+/// lose protection. `collect_stale` queues roots whose data.toml is gone for the sweep, so
+/// inspection does not discard removal errors or delete records early.
 fn needed_with(
     cache: &Cache,
     current: Option<&Lock>,
     stop: &Stop,
     collect_stale: bool,
+    uses: Uses,
 ) -> Result<Found, Error> {
-    let mut needed = Needed::default();
+    let mut needed = Needed {
+        told: uses == Uses::Told,
+        ..Needed::default()
+    };
     let mut projects = Vec::new();
     let mut stale_projects = Vec::new();
     let mut complete = true;
@@ -676,7 +698,11 @@ fn needed_with(
             .help(help)
         })?;
         if let Some(lock) = &lock {
-            add_with_stop(&mut needed, cache, lock, kept.as_ref(), stop)?;
+            let read = kept.as_ref().map(|manifest| Read {
+                manifest,
+                root: (uses == Uses::Told).then_some(project.root.as_path()),
+            });
+            add_with_stop(&mut needed, cache, lock, read, stop)?;
         }
         projects.push(project.root);
     }
@@ -691,33 +717,58 @@ fn needed_with(
     })
 }
 
-/// adds what one lock needs. an archive needs the files it unpacked to that `manifest`'s members
+/// a registered project's data.toml as [`add_with_stop`] reads it, with the project's folder
+/// when it tells how each object is used.
+#[derive(Clone, Copy)]
+struct Read<'a> {
+    manifest: &'a Manifest,
+    root: Option<&'a Path>,
+}
+
+/// adds what one lock needs. an archive needs the files it unpacked to that `read`'s members
 /// tables keep, and its own bytes too while this machine never unpacked it or lost such a file,
-/// since unpacking again is the only way back. without `manifest`, every file is kept. a
-/// recipe's pinned result needs its files, which only a build makes again.
+/// since unpacking again is the only way back. without data.toml, every file is kept. a recipe's
+/// pinned result needs its files, which only a build makes again, and its record. with the
+/// project's folder, each object is noted with how the project uses it, as [`Readers::use_of`]
+/// tells; otherwise as placed or, for a result, as its output.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
     lock: &Lock,
-    manifest: Option<&Manifest>,
+    read: Option<Read<'_>>,
     stop: &Stop,
 ) -> Result<(), Error> {
-    for file in lock.derived.iter().flat_map(|result| &result.files) {
-        stop.check()?;
-        needed.objects.insert(file.sha256);
+    let mut readers = read.and_then(|read| {
+        read.root
+            .map(|root| Readers::new(root, read.manifest, lock, cache))
+    });
+    for result in &lock.derived {
+        needed.results.insert((result.key, result.tree));
+        let used = match &mut readers {
+            Some(readers) => readers.use_of(&result.name, true, stop)?,
+            None => Use::Output,
+        };
+        for file in &result.files {
+            stop.check()?;
+            needed.add(file.sha256, used);
+        }
     }
     for dataset in &lock.datasets {
-        let filters = manifest
-            .and_then(|manifest| manifest.datasets.get(&dataset.name))
+        let filters = read
+            .and_then(|read| read.manifest.datasets.get(&dataset.name))
             .and_then(Entry::source)
             .map(|source| &source.members);
+        let used = match &mut readers {
+            Some(readers) => readers.use_of(&dataset.name, false, stop)?,
+            None => Use::Placed,
+        };
         for file in &dataset.files {
             stop.check()?;
             let members = file
                 .unpacks_to
                 .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
             let Some(members) = members else {
-                needed.objects.insert(file.sha256);
+                needed.add(file.sha256, used);
                 continue;
             };
             needed.unpacked.insert(file.sha256);
@@ -728,15 +779,101 @@ fn add_with_stop(
                 .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
             {
                 stop.check()?;
-                needed.objects.insert(member.sha256);
+                needed.add(member.sha256, used);
                 whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
             }
             if !whole {
-                needed.objects.insert(file.sha256);
+                needed.add(file.sha256, used);
             }
         }
     }
     stop.check()
+}
+
+/// the recipes that read each dataset of one project, from its data.toml and data.lock, which
+/// tell how the project uses the dataset's files: one `place = false` keeps out of the data
+/// folder is an input while recipes read it and every one of them is built. what is built is
+/// found once per recipe.
+struct Readers<'a> {
+    root: &'a Path,
+    manifest: &'a Manifest,
+    lock: &'a Lock,
+    cache: &'a Cache,
+    /// the recipes that read each dataset, by the dataset's name.
+    by_input: BTreeMap<&'a str, Vec<&'a str>>,
+    /// whether each recipe asked about so far is built.
+    built: HashMap<&'a str, bool>,
+}
+
+impl<'a> Readers<'a> {
+    fn new(root: &'a Path, manifest: &'a Manifest, lock: &'a Lock, cache: &'a Cache) -> Self {
+        let mut by_input: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for (name, entry) in &manifest.datasets {
+            for input in entry.recipe().map_or(&[][..], |recipe| &recipe.from) {
+                by_input.entry(input).or_default().push(name);
+            }
+        }
+        Readers {
+            root,
+            manifest,
+            lock,
+            cache,
+            by_input,
+            built: HashMap::new(),
+        }
+    }
+
+    /// how the project uses the files of the dataset `name`, a recipe's result when `made`: an
+    /// input when it has `place = false` and only built recipes read it; else the output of a
+    /// recipe; else pending while a recipe still to build reads it; else placed.
+    fn use_of(&mut self, name: &str, made: bool, stop: &Stop) -> Result<Use, Error> {
+        let readers = self.by_input.get(name).cloned().unwrap_or_default();
+        let mut pending = false;
+        for reader in &readers {
+            pending |= !self.built(reader, stop)?;
+        }
+        let entry = self.manifest.datasets.get(name);
+        if !readers.is_empty() && !pending && entry.is_some_and(|entry| !entry.place) {
+            return Ok(Use::Input(if made {
+                Supply::Derived
+            } else if entry.is_some_and(Entry::is_import) {
+                Supply::Imported
+            } else {
+                Supply::Source
+            }));
+        }
+        Ok(if made {
+            Use::Output
+        } else if pending {
+            Use::Pending
+        } else {
+            Use::Placed
+        })
+    }
+
+    /// whether data.lock pins a result of the recipe `name` as building it now would make, and
+    /// the cache holds all of it. a recipe whose code cannot be read counts as changed, which
+    /// keeps more.
+    fn built(&mut self, name: &'a str, stop: &Stop) -> Result<bool, Error> {
+        if let Some(built) = self.built.get(name) {
+            return Ok(*built);
+        }
+        let mut built = self.lock.result(name).is_some()
+            && recipe::drift(self.root, self.manifest, self.lock, name)
+                .is_ok_and(|changes| changes.is_empty());
+        for file in self
+            .lock
+            .result(name)
+            .map_or(&[][..], |result| &result.files)
+        {
+            if !built {
+                break;
+            }
+            built = self.cache.contains_for_gc(&file.sha256, file.size, stop)?;
+        }
+        self.built.insert(name, built);
+        Ok(built)
+    }
 }
 
 #[cfg(test)]
@@ -745,6 +882,7 @@ mod tests {
     use crate::cache::Member;
     use crate::cache::tests::store;
     use crate::output::{Level, Style};
+    use crate::project::lock::derived::Derived;
     use crate::project::lock::{Locked, LockedFile};
 
     #[test]
@@ -841,7 +979,11 @@ mod tests {
         )
         .unwrap();
         let mut kept = Needed::default();
-        add_with_stop(&mut kept, &cache, &lock, Some(&manifest), &Stop::default()).unwrap();
+        let read = Some(Read {
+            manifest: &manifest,
+            root: None,
+        });
+        add_with_stop(&mut kept, &cache, &lock, read, &Stop::default()).unwrap();
         assert!(kept.objects.contains(&first.digest));
         assert!(
             !kept.objects.contains(&second.digest),
@@ -850,7 +992,7 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut freed = Needed::default();
-        add_with_stop(&mut freed, &cache, &lock, Some(&manifest), &Stop::default()).unwrap();
+        add_with_stop(&mut freed, &cache, &lock, read, &Stop::default()).unwrap();
         assert!(
             !freed.objects.contains(&archive.digest),
             "a.txt, the only file the project places, is cached"
@@ -862,6 +1004,171 @@ mod tests {
 
     /// what gc frees of what no project needs: now, once a day old, or nothing, for what a folder
     /// outside the cache links too.
+    /// raw, a csv file, and clean, a recipe made from it.
+    const RAW_AND_CLEAN: &str = "[datasets.raw]\nref = \"https://example.org/raw.csv\"\nplace = false\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n";
+
+    /// data.toml `text`, with each of `sources` pinned to one file in `cache`, and each of
+    /// `results`, in the order they are made, pinned as building it now would make one file in
+    /// `cache`. it gives each dataset's file by name.
+    fn pinned(
+        root: &Path,
+        cache: &Cache,
+        text: &str,
+        sources: &[&str],
+        results: &[&str],
+    ) -> (Manifest, Lock, BTreeMap<String, crate::cache::Stored>) {
+        let manifest = Manifest::parse(text).unwrap();
+        let mut lock = Lock::default();
+        let mut stored = BTreeMap::new();
+        for name in sources {
+            let file = store(cache, format!("{name}\n").as_bytes());
+            let reference = format!("https://example.org/{name}.csv");
+            lock.datasets.push(Locked {
+                name: (*name).to_owned(),
+                reference: reference.clone(),
+                spec: lock::spec(manifest.datasets[*name].source().unwrap()),
+                extract: true,
+                resolved: reference.clone(),
+                title: None,
+                license: None,
+                doi: None,
+                access: crate::source::Access::Unknown,
+                timestamp: String::new(),
+                files: vec![LockedFile {
+                    path: format!("{name}.csv"),
+                    size: file.size,
+                    sha256: file.digest,
+                    md5: None,
+                    url: reference,
+                    unpacks_to: None,
+                }],
+            });
+            stored.insert((*name).to_owned(), file);
+        }
+        for name in results {
+            let file = store(cache, format!("made {name}\n").as_bytes());
+            let step = recipe::Step::read(root, &manifest, &lock, name)
+                .unwrap()
+                .unwrap();
+            let files = vec![Member {
+                path: format!("{name}.csv"),
+                size: file.size,
+                sha256: file.digest,
+            }];
+            lock.derived.push(Derived {
+                name: (*name).to_owned(),
+                from: step.from().unwrap(),
+                run: step.run.clone(),
+                code: step.hashed().unwrap(),
+                env: step.env.clone(),
+                key: step.key().unwrap(),
+                timestamp: String::new(),
+                tree: crate::cache::tree_hash(&files),
+                files,
+            });
+            stored.insert((*name).to_owned(), file);
+        }
+        (manifest, lock, stored)
+    }
+
+    /// what the project at `root` with `manifest` and `lock` needs of `cache`, with how it uses
+    /// each object.
+    fn uses(root: &Path, cache: &Cache, manifest: &Manifest, lock: &Lock) -> Needed {
+        let mut needed = Needed {
+            told: true,
+            ..Needed::default()
+        };
+        let read = Some(Read {
+            manifest,
+            root: Some(root),
+        });
+        add_with_stop(&mut needed, cache, lock, read, &Stop::default()).unwrap();
+        needed
+    }
+
+    /// a dataset with `place = false` that only built recipes read is an input, whose bytes its
+    /// source gives again; placed, or read by no recipe, it is placed data.
+    #[test]
+    fn an_unplaced_source_read_only_by_built_recipes_is_input() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let text = format!(
+            "{RAW_AND_CLEAN}\n[datasets.notes]\nref = \"https://example.org/notes.csv\"\nplace = false\n"
+        );
+        let (manifest, lock, stored) =
+            pinned(folder.path(), &cache, &text, &["notes", "raw"], &["clean"]);
+        let needed = uses(folder.path(), &cache, &manifest, &lock);
+        assert_eq!(
+            needed.uses[&stored["raw"].digest],
+            Use::Input(Supply::Source)
+        );
+        assert_eq!(needed.uses[&stored["notes"].digest], Use::Placed);
+        assert_eq!(needed.uses[&stored["clean"].digest], Use::Output);
+        let placed = Manifest::parse(&text.replacen("place = false\n", "", 1)).unwrap();
+        let needed = uses(folder.path(), &cache, &placed, &lock);
+        assert_eq!(needed.uses[&stored["raw"].digest], Use::Placed);
+    }
+
+    /// a recipe still to build, as one not pinned, one changed since it was built or one whose
+    /// result the cache lacks, keeps what it reads pending, never an input.
+    #[test]
+    fn an_input_of_an_unbuilt_recipe_is_pending() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let root = folder.path();
+        let (manifest, unpinned, stored) = pinned(root, &cache, RAW_AND_CLEAN, &["raw"], &[]);
+        let raw = stored["raw"].digest;
+        assert_eq!(
+            uses(root, &cache, &manifest, &unpinned).uses[&raw],
+            Use::Pending
+        );
+        let (_, lock, stored) = pinned(root, &cache, RAW_AND_CLEAN, &["raw"], &["clean"]);
+        assert_eq!(
+            uses(root, &cache, &manifest, &lock).uses[&raw],
+            Use::Input(Supply::Source)
+        );
+        let changed = Manifest::parse(&RAW_AND_CLEAN.replace("[\"t\", ", "[\"t2\", ")).unwrap();
+        assert_eq!(uses(root, &cache, &changed, &lock).uses[&raw], Use::Pending);
+        cache.drop_object(&stored["clean"].digest).unwrap();
+        assert_eq!(
+            uses(root, &cache, &manifest, &lock).uses[&raw],
+            Use::Pending
+        );
+    }
+
+    /// a pinned result's files are needed, as its output, and so is its record; one with
+    /// `place = false` that only built recipes read is an input a build makes again.
+    #[test]
+    fn results_are_needed() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let text = format!(
+            "{RAW_AND_CLEAN}\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"t\", \"{{clean}}\", \"{{out}}\"]\n"
+        );
+        let (manifest, lock, stored) =
+            pinned(folder.path(), &cache, &text, &["raw"], &["clean", "tidy"]);
+        let needed = uses(folder.path(), &cache, &manifest, &lock);
+        for name in ["clean", "tidy"] {
+            let result = lock.result(name).unwrap();
+            assert!(
+                needed.results.contains(&(result.key, result.tree)),
+                "{name}"
+            );
+            assert!(needed.objects.contains(&stored[name].digest), "{name}");
+            assert_eq!(needed.uses[&stored[name].digest], Use::Output, "{name}");
+        }
+        let unplaced = Manifest::parse(
+            &text.replace("[datasets.clean]\n", "[datasets.clean]\nplace = false\n"),
+        )
+        .unwrap();
+        let needed = uses(folder.path(), &cache, &unplaced, &lock);
+        assert_eq!(
+            needed.uses[&stored["clean"].digest],
+            Use::Input(Supply::Derived)
+        );
+        assert_eq!(needed.uses[&stored["tidy"].digest], Use::Output);
+    }
+
     #[test]
     fn the_unneeded_line_says_what_gc_frees_now_later_and_never() {
         for ((freeable, young, linked), said) in [
@@ -900,6 +1207,27 @@ mod tests {
     }
 
     /// copies say how much of them was linked when placed, and how much is clones.
+    /// the part of what projects need that only builds read is told beside it, once there is
+    /// some.
+    #[test]
+    fn the_needed_line_says_what_only_builds_read() {
+        let usage = |inputs_only| Usage {
+            needed: 3 * 1024,
+            inputs_only,
+            ..Usage::default()
+        };
+        assert_eq!(needed_line(&usage(None), 1), "3.0 KiB by 1 project");
+        assert_eq!(needed_line(&usage(Some(0)), 1), "3.0 KiB by 1 project");
+        assert_eq!(
+            needed_line(&usage(Some(1024)), 2),
+            "3.0 KiB by 2 projects · 1.0 KiB of it is read only by builds"
+        );
+        assert_eq!(
+            needed_line(&usage(Some(3 * 1024)), 1),
+            "3.0 KiB by 1 project · all of it is read only by builds"
+        );
+    }
+
     #[test]
     fn the_copies_line_names_what_was_linked_and_what_is_cloned() {
         for ((copies, unlinked_copies, cloned), said) in [

@@ -40,7 +40,7 @@ pub(crate) use results::Seen;
 pub(crate) use results::seal_captured;
 pub(crate) use staging::{Staging, clear_tree, enterable};
 pub(crate) use unpacked::{Member, tree, tree_hash};
-pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
+pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Supply, Use};
 pub(crate) use usage::Usage;
 
 use crate::digest::{self, Md5, Sha256};
