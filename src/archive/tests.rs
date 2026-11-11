@@ -397,7 +397,7 @@ fn a_rar_left_packed_has_a_next_step_for_each_system() {
         |system| super::unpack_elsewhere(system, "data/sample/sample.rar", "", "extract = false");
     assert_eq!(
         step(System::Linux),
-        "unpack it with unar from your package manager: `unar -D -o sample-unpacked data/sample/sample.rar`. extract = false stops this warning"
+        "unpack it with unrar from your package manager: `unrar x data/sample/sample.rar sample-unpacked/`. extract = false stops this warning"
     );
     assert_eq!(
         step(System::Macos),
@@ -417,7 +417,7 @@ fn a_next_step_runs_as_typed_where_fetchloom_ran() {
         |system| super::unpack_elsewhere(system, "../data/my data/it's.RAR", "../", "--no-extract");
     assert_eq!(
         step(System::Linux),
-        r"unpack it with unar from your package manager: `unar -D -o '../it'\''s-unpacked' '../data/my data/it'\''s.RAR'`. --no-extract stops this warning"
+        r"unpack it with unrar from your package manager: `unrar x '../data/my data/it'\''s.RAR' '../it'\''s-unpacked/'`. --no-extract stops this warning"
     );
     assert_eq!(
         step(System::Windows),

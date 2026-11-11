@@ -148,9 +148,10 @@ pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &
     let folder = format!("{parent}{named}-unpacked");
     let archive = system.word(path);
     match system {
+        // rarlab's own reader: bsdtar and some distributions' unar fail solid rar4 or rar5
         System::Linux => format!(
-            "unpack it with unar from your package manager: `unar -D -o {} {archive}`. {stop} stops this warning",
-            system.word(&folder)
+            "unpack it with unrar from your package manager: `unrar x {archive} {}`. {stop} stops this warning",
+            system.word(&format!("{folder}/"))
         ),
         System::Macos => format!(
             "unpack it with unar: `brew install unar`, then `unar -D -o {} {archive}`. {stop} stops this warning",

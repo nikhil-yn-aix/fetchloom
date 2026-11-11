@@ -13,7 +13,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | plugins | source adapters live in the fetchloom crate |
 | fetchloom accounts, hosting and telemetry | fetchloom is a local command |
 | controlled-data access approval | request access from the institution or owner |
-| rar extraction | the `.rar` stays packed, and its warning names a command that unpacks it outside the data folder: unar on linux and macos, 7-Zip on windows |
+| rar extraction | the `.rar` stays packed, and its warning names a command that unpacks it outside the data folder: unrar on linux, unar on macos, 7-Zip on windows |
 | recursive archive extraction | nested archives remain files |
 | cross-user cache administration | cache writers are trusted; no group-permission management is provided. [one cache for a whole lab](hpc.md#one-cache-for-a-whole-lab) shows how to share one by hand |
 | verified erasure of deleted data | fetchloom deletes files without overwriting them; [deleting a dataset from a machine](concepts.md#deleting-a-dataset-from-a-machine) lists the copies to remove |

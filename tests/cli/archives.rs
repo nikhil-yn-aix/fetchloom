@@ -713,7 +713,7 @@ fn next_step(path: &str, stop: &str) -> String {
         )
     } else {
         format!(
-            "unpack it with unar from your package manager: `unar -D -o sample-unpacked {path}`. {stop} stops this warning"
+            "unpack it with unrar from your package manager: `unrar x {path} sample-unpacked/`. {stop} stops this warning"
         )
     }
 }

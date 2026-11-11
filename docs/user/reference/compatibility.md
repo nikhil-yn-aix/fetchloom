@@ -32,11 +32,11 @@ fetchloom unpacks zip, 7z and tar archives itself on every system. it leaves a `
 
 | system | program | the help |
 |---|---|---|
-| linux | unar, from the distribution's packages | `unar -D -o sample-unpacked data/sample/sample.rar` |
+| linux | unrar, rarlab's free reader, from the distribution's packages: `unrar` in ubuntu's multiverse, debian's non-free, rpm fusion and arch | `unrar x data/sample/sample.rar sample-unpacked/` |
 | macos | unar, from homebrew | `brew install unar`, then `unar -D -o sample-unpacked data/sample/sample.rar` |
 | windows | 7-Zip, from winget | `winget install 7zip.7zip`, then, in powershell, `& "C:\Program Files\7-Zip\7z.exe" x data\sample\sample.rar -osample-unpacked` |
 
-macos's own `tar` and windows' own `tar.exe` are libarchive builds, but neither libarchive's documentation nor microsoft's page for `tar.exe` says they read solid rar5 archives, so the help names programs that do. `-D` puts the files straight into `sample-unpacked`, as 7-Zip's `-o` does. [decisions](../../dev/decisions.md#storage-and-requests) links the sources.
+macos's own `tar` and windows' own `tar.exe` are libarchive builds, and libarchive 3.7.2 refused solid rar4 and rar2 archives, rar5 files with filters and rar5 volumes that unrar read, so the help names programs that read them. unrar makes `sample-unpacked/` when the trailing `/` names a folder; unar's `-D` puts the files straight into it, as 7-Zip's `-o` does. [decisions](../../dev/decisions.md#storage-and-requests) links the sources.
 
 ## terminals
 
