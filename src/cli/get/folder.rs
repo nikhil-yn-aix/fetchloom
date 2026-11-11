@@ -281,9 +281,13 @@ fn tell_placed(
             output.done("Ok", &format!("{shown} is already up to date"));
             return;
         }
+        // get replaces only a file whose bytes the cache holds, an earlier download's
         ([only], [Outcome::Replaced(_)]) => output.step(
             "Replaced",
-            &within(folder, &only.path).display().to_string(),
+            &format!(
+                "{} · the source changed it since this folder got it",
+                within(folder, &only.path).display()
+            ),
         ),
         _ => {}
     }

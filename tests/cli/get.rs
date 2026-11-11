@@ -542,6 +542,31 @@ fn offline_output_keeps_a_file_holding_what_the_link_served_last() -> Result {
     Ok(())
 }
 
+/// a rerun whose file still holds what the link served last time, while the link serves other
+/// bytes now, says that the source changed, not that the file holds something else.
+#[test]
+fn output_refusing_a_file_the_source_changed_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let newer = b"sepal_length,species\n5.1,setosa\n";
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(newer, "\"v2\"")])?;
+    let first = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "data.csv already exists and holds what the link served last time, and its source changed it since"
+    );
+    assert_eq!(
+        error["help"],
+        "add --force to replace it with what the link serves now, or choose another name with -o to keep both"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     let sandbox = Sandbox::new()?;

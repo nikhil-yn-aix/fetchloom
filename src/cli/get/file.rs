@@ -82,7 +82,7 @@ pub(super) fn usage(path: &Path, links: usize, listed: bool) -> Result<(), Error
 }
 
 /// what is at the path `-o` names.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Existing {
     Missing,
     /// a file, or a link to one, by the hash of its bytes.
@@ -270,7 +270,7 @@ async fn put(
                 &fetched,
                 args.force,
                 &destination,
-                known,
+                &known,
             )?
         }
     };
@@ -427,10 +427,10 @@ fn settle(
     fetched: &Fetched,
     force: bool,
     destination: &Destination,
-    known: Known,
+    known: &Known,
 ) -> Result<(PathBuf, Done), Error> {
-    let found = match known.found {
-        Some(found) if fetched.origin != Origin::Network => found,
+    let found = match &known.found {
+        Some(found) if fetched.origin != Origin::Network => found.clone(),
         _ => existing(&destination.path)?,
     };
     let step = decide(&found, &fetched.digest, force);
@@ -445,6 +445,16 @@ fn settle(
         )
     };
     if step == Step::Refuse {
+        if matches!(found, Existing::Holds(digest) if Some(digest) == known.held) {
+            return Err(Error::new(
+                Kind::LocalNotEmpty,
+                format!(
+                    "{} already exists and holds what the link served last time, and its source changed it since",
+                    destination.shown
+                ),
+            )
+            .help("add --force to replace it with what the link serves now, or choose another name with -o to keep both"));
+        }
         return Err(refused(
             &destination.shown,
             &found,

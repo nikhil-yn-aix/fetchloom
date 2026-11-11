@@ -3,5 +3,5 @@ source: tests/cli/get.rs
 expression: stderr
 ---
  Downloaded iris.csv · 32 B in [time]
-   Replaced iris/iris.csv
+   Replaced iris/iris.csv · the source changed it since this folder got it
     Fetched iris.csv into iris · linked to the cache
