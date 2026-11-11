@@ -670,9 +670,11 @@ fn a_rate_capped_resume_fetches_only_the_ranges_not_kept() {
         drop(writer);
         drop(partial);
         let fetch = Fetch::new(server.url.clone());
+        // a hang guard only: a round takes about a second, and a busy disk has held the cache's
+        // writes for 15 s
         let fetched = block_on(async {
             tokio::time::timeout(
-                Duration::from_secs(10),
+                Duration::from_secs(120),
                 net.download(&fetch, &cache, &|_| Ok(())),
             )
             .await

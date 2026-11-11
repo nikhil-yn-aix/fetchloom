@@ -256,9 +256,11 @@ fn a_redirect_to_a_metadata_address_is_refused() {
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let net = net(&url);
         let fetch = Fetch::new(url.join("file").unwrap());
+        // ends a followed redirect, whose connection may hang, with room for a busy disk that
+        // has held the cache's files for 15 s
         let result = block_on(async {
             tokio::time::timeout(
-                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(120),
                 net.download(&fetch, &cache, &|_| Ok(())),
             )
             .await
