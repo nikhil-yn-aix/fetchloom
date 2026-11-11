@@ -10,7 +10,7 @@ no release has been published yet. use [source installation](../../user/getting-
 
 | job | permissions | work |
 |---|---|---|
-| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` installed and run once, build a wheel and add `fl` to it, install it, exercise its executable, `fl` and python module |
+| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` checked to hold `/usr/bin/fl` as a link, installed, run as `fetchloom` and `fl` and removed, build a wheel and add `fl` to it, install it, exercise its executable, `fl` and python module |
 | `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
@@ -60,7 +60,7 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `fetchloom-0.1.0-aarch64-unknown-linux-musl.tar.gz` | same layout for arm64 linux |
 | `fetchloom-0.1.0-x86_64-apple-darwin.tar.gz` | same layout for x86_64 macos |
 | `fetchloom-0.1.0-aarch64-apple-darwin.tar.gz` | same layout for arm64 macos |
-| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, license and notice in `/usr/share/doc/fetchloom` |
+| `fetchloom_0.1.0_amd64.deb`, `fetchloom_0.1.0_arm64.deb` | the static linux executable in `/usr/bin`, with `/usr/bin/fl` a link to it, license and notice in `/usr/share/doc/fetchloom` |
 | `fetchloom-0.1.0-py3-none-win_amd64.whl` | windows executable and typed python module |
 | `fetchloom-0.1.0-py3-none-win_arm64.whl` | same for arm64 windows |
 | `fetchloom-0.1.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl` | static linux executable and python module, tagged for glibc and musl |

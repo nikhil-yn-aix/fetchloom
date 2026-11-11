@@ -238,6 +238,8 @@ jobs:
           esac
           root=.release/deb
           install -Dm755 "target/${{ matrix.target }}/release/fetchloom" "$root/usr/bin/fetchloom"
+          # fl is a short name for fetchloom, a link so that it follows every upgrade
+          ln -s fetchloom "$root/usr/bin/fl"
           install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
           install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
           mkdir -p "$root/DEBIAN"
@@ -256,11 +258,26 @@ jobs:
           EOF
           deb="dist/fetchloom_${VERSION}_$arch.deb"
           dpkg-deb --build --root-owner-group "$root" "$deb"
+          contents=$(dpkg-deb --contents "$deb")
+          echo "$contents"
+          case "$contents" in
+            *' ./usr/bin/fl -> fetchloom'*) ;;
+            *) echo "::error::the debian package lacks /usr/bin/fl as a link to fetchloom"; exit 1 ;;
+          esac
           sudo dpkg -i "$deb"
           said=$(/usr/bin/fetchloom --version)
+          short=$(/usr/bin/fl --version)
           sudo dpkg -r fetchloom
           if [ "$said" != "fetchloom $VERSION" ]; then
             echo "::error::the debian package's fetchloom --version printed $said"
+            exit 1
+          fi
+          if [ "$short" != "fetchloom $VERSION" ]; then
+            echo "::error::the debian package's fl --version printed $short"
+            exit 1
+          fi
+          if [ -e /usr/bin/fl ] || [ -L /usr/bin/fl ]; then
+            echo "::error::removing the debian package left /usr/bin/fl behind"
             exit 1
           fi
       - name: build the wheel
