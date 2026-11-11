@@ -300,10 +300,11 @@ fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
     Ok(())
 }
 
-/// fetchloom never pins a link with a login or a secret, so one in data.lock was written by hand
-/// or by someone else. export writes no such link, and never shows its secret.
+/// fetchloom never pins a link one line cannot hold, so one in data.lock was written by hand or by
+/// someone else, and its line break could add an option to aria2's input. export writes no such
+/// link, and never shows it. a link with a login or a secret stops sooner, as data.lock is read.
 #[test]
-fn a_link_with_a_secret_is_never_written() -> Result {
+fn a_link_one_line_cannot_hold_is_never_written() -> Result {
     let sandbox = Sandbox::new()?;
     let (routes, _) = server()?;
     added(&sandbox, &routes, &["iris.csv"])?;
@@ -314,7 +315,7 @@ fn a_link_with_a_secret_is_never_written() -> Result {
         &lock,
         pinned.replace(
             &format!("url = \"{link}\""),
-            &format!("url = \"{link}?token=export-canary\""),
+            &format!("url = \"{link}\\n  dir=export-canary\""),
         ),
     )?;
     let refused = sandbox.run(&["export", "--format", "aria2"])?;
@@ -327,7 +328,9 @@ fn a_link_with_a_secret_is_never_written() -> Result {
     assert_eq!(text(&refused.stdout)?, "");
     let stderr = text(&refused.stderr)?;
     assert!(
-        stderr.contains("the link data.lock gives iris/iris.csv holds a secret"),
+        stderr.contains(
+            "the link data.lock gives iris/iris.csv holds a space or a control character"
+        ),
         "{stderr}"
     );
     let listed = sandbox.run(&["--json", "export"])?;

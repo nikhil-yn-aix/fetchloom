@@ -173,7 +173,7 @@ dropbox folders arrive as one zip, named by `Content-Disposition`. the lock pins
 
 source metadata keeps its casing. zenodo's iris fixture, for example, supplies `license = "cc-by-4.0"`. supported stated checksums are MD5 and SHA-256; dataverse ignores other checksum algorithms and learns SHA-256 from the download.
 
-when adding or resolving a plain URL, project commands reject login details and recognized secret query keys. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask logins and recognized query secrets, including errors for malformed links. [local URL and partial records](cache-folder.md#url-and-partial-records) store a fingerprint of the original URL, not its raw text. cache payloads and other metadata can still contain private data.
+when adding or resolving a plain URL, project commands reject login details and recognized secret query keys, and reading `data.lock` refuses a link that holds them, as [encoding and validation](#encoding-and-validation) says. `get` permits secret query values for one-off downloads. its JSON file URLs and errors mask logins and recognized query secrets, including errors for malformed links. [local URL and partial records](cache-folder.md#url-and-partial-records) store a fingerprint of the original URL, not its raw text. cache payloads and other metadata can still contain private data.
 
 masking recognizes key names such as `token`, `signature` and `sig`; it cannot identify an arbitrary secret.
 
@@ -211,3 +211,12 @@ paths in this record retain their archive folders; placement may strip a shared 
 ## encoding and validation
 
 locks are UTF-8 TOML. a byte order mark is accepted on read and omitted on write. unknown keys fail, and the parser lists the allowed fields. duplicate dataset names are refused with `project.invalid` and lock-recovery help. restore the intended lock rather than relying on one duplicate to win. a dataset name data.toml would refuse, such as `../outside`, is refused the same way, since a name also names its list's parts in `data.lock.d`.
+
+each file's `url`, and `resolved` when it is an http or https link, are the links a request uses. neither may hold a login or a recognized secret such as `token=`: fetchloom never pins one, so a lock that holds one was edited, and every command that reads it stops with `project.invalid`, exit 50, before any request. the error names the key, never its value, and its JSON `fix` is null. on stderr:
+
+```text
+error: the link data.lock gives x/extra-a.txt carries token, a secret fetchloom never pins
+  help: remove token and its value from that link in data.lock, or restore data.lock from git
+```
+
+a list in `data.lock.d` that holds such a link comes back from git with `data.lock` instead. an import's empty `url`, and a query that grants nothing, such as `?download=1` or `?versionId=`, read as written.

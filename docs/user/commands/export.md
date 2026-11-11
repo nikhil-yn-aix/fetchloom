@@ -96,7 +96,7 @@ a text form is complete or not written: `export` stops before writing anything w
 | a dataset `data.lock` does not pin as `data.toml` asks | all forms stop with `lock.outdated`, exit 1: run `fetchloom lock` first | `unlocked` |
 | a [recipe](../recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
-| a link that holds a login, a secret such as `token=`, a space or a control character | `links` and `aria2` stop with `project.invalid`, exit 50; fetchloom never pins such a link, so `data.lock` was changed by hand or by someone else | `no_link` |
+| a link that holds a space or a control character | `links` and `aria2` stop with `project.invalid`, exit 50; fetchloom never pins such a link, so `data.lock` was changed by hand or by someone else. a link that holds a login or a secret such as `token=` stops every command sooner, as [`data.lock` is read](../reference/data-lock.md#encoding-and-validation) | `no_link` |
 | a link for a file imported from a folder on this machine, which has none | `links` and `aria2` leave the file out and say how many they left out | `no_link` |
 
 the refusal names the archive, from a clone whose cache never unpacked it:

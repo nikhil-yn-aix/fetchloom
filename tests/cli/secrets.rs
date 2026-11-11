@@ -291,6 +291,74 @@ fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
     Ok(())
 }
 
+/// a link data.lock gives that carries a secret, as a hand edit or a mistaken commit leaves one,
+/// stops each command that reads data.lock before it asks any server, and none shows the secret.
+#[test]
+fn a_secret_in_a_link_data_lock_gives_stops_every_command_before_any_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = pinned(&sandbox, b"a,b\n")?;
+    sandbox.allow(&source.url);
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let lock = clone.join("data.lock");
+    let link = format!("{}{PATH}", source.url);
+    let written = fs::read_to_string(&lock)?;
+    let edited = written.replace(
+        &format!("url = \"{link}\""),
+        &format!("url = \"{link}?token={LINK_SECRET}\""),
+    );
+    assert_ne!(edited, written);
+    fs::write(&lock, edited)?;
+    let asked = source.requests().len();
+    let refused =
+        "the link data.lock gives data/data.csv carries token, a secret fetchloom never pins";
+    let mut failures = Vec::new();
+    for args in [
+        &["status"][..],
+        &["lock", "--check"],
+        &["sync"],
+        &["-vv", "sync"],
+        &["--json", "sync"],
+        &["export", "--format", "links"],
+    ] {
+        let output = sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let shown = if args.contains(&"--json") {
+            let error = json(&output)?["errors"][0].clone();
+            if error["kind"] != "project.invalid" || !error["fix"].is_null() {
+                failures.push(format!("{args:?}: {error}"));
+            }
+            error["message"].as_str().unwrap_or_default().to_owned()
+        } else {
+            text(&output.stderr)?
+        };
+        if output.status.code() != Some(50) || !shown.contains(refused) {
+            failures.push(format!(
+                "{args:?} exited {:?}: {shown}",
+                output.status.code()
+            ));
+        }
+        for (stream, bytes) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+            scan_secrets(
+                &format!("{args:?}/{stream}"),
+                bytes,
+                &[LINK_SECRET],
+                &mut failures,
+            );
+        }
+    }
+    let sent = source.requests().len() - asked;
+    if sent != 0 {
+        failures.push(format!("{sent} requests went to the server"));
+    }
+    if clone.join("data").exists() {
+        failures.push("a sync placed files".to_owned());
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
 /// data.toml alone names a server on this machine that `allowed_origins` does not list. a link to
 /// another port of the same host, typed for `add`, leaves that server out of reach, and the add
 /// says why.

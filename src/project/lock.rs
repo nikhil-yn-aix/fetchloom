@@ -18,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
+use url::Url;
 
 use self::derived::Derived;
 use super::manifest::{Entry, Source};
@@ -611,17 +612,21 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
     Ok(parsed)
 }
 
-/// the lock `parsed` gives, with each list it keeps below `root` read and checked.
+/// the lock `parsed` gives, with each list it keeps below `root` read and checked. every reader's
+/// datasets pass through here, so the links they give are checked here once.
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
     let mut lock = Lock::default();
     for entry in parsed {
         match entry {
             Parsed::Source(mut dataset, listed) => {
+                check_resolved(&dataset)?;
+                let is_listed = listed.is_some();
                 if let Some(listed) = listed {
                     let root = project(root, &dataset.name)?;
                     dataset.files = lists::read(root, &dataset.name, &listed)?;
                     check_paths(&dataset)?;
                 }
+                check_links(&dataset, is_listed)?;
                 lock.datasets.push(dataset);
             }
             Parsed::Derived(mut derived, listed) => {
@@ -743,6 +748,140 @@ fn check_paths(dataset: &Locked) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// refuses a dataset's file link that carries a login or a secret, such as a token. fetchloom
+/// never pins one, so the lock was edited, and a download would send it on. an import's empty
+/// link carries nothing. a link from a list in [`lists::FOLDER`] is mended from git.
+fn check_links(dataset: &Locked, is_listed: bool) -> Result<(), Error> {
+    // parsing each of a million links doubled the time a lock took to read. links mostly differ
+    // in the values of the same keys, and only keys decide, so a cleared link's keys are reused
+    let mut cleared: Option<Vec<&str>> = None;
+    for file in &dataset.files {
+        let text = file.url.as_str();
+        let marks = Marks::of(text);
+        if !marks.at && !marks.split {
+            continue;
+        }
+        let is_plain = !marks.at && !marks.dropped;
+        if is_plain
+            && cleared
+                .as_ref()
+                .is_some_and(|keys| keys.iter().copied().eq(raw_keys(text)))
+        {
+            continue;
+        }
+        let Ok(url) = Url::parse(text) else {
+            continue;
+        };
+        if let Some(carried) = Carried::by(&url) {
+            let help = if is_listed {
+                lists::BROKEN.to_owned()
+            } else {
+                carried.mend()
+            };
+            let subject = format!("the link data.lock gives {}/{}", dataset.name, file.path);
+            return Err(carried.refused(&subject).help(help));
+        }
+        if is_plain {
+            cleared = Some(raw_keys(text).collect());
+        }
+    }
+    Ok(())
+}
+
+/// the keys of `link`'s query, then of its fragment, as written: where the URL parser and
+/// `form_urlencoded` split them, before any decoding.
+fn raw_keys(link: &str) -> impl Iterator<Item = &str> {
+    let (head, fragment) = match link.split_once('#') {
+        Some((head, fragment)) => (head, Some(fragment)),
+        None => (link, None),
+    };
+    let query = head.split_once('?').map(|(_, query)| query);
+    query
+        .into_iter()
+        .chain(fragment)
+        .flat_map(|part| part.split('&'))
+        .map(|pair| pair.split_once('=').map_or(pair, |(key, _)| key))
+}
+
+/// the marks a URL's parts need, as a text holds them. a URL has a login only after an `@`, and a
+/// query or a fragment only after a `?` or `#`, once the parser has dropped every tab and line
+/// break.
+struct Marks {
+    at: bool,
+    split: bool,
+    dropped: bool,
+}
+
+impl Marks {
+    fn of(text: &str) -> Marks {
+        let (mut at, mut split, mut dropped) = (false, false, false);
+        // every byte without an early stop, so the compiler compares many at once
+        for &byte in text.as_bytes() {
+            at |= byte == b'@';
+            split |= byte == b'?' || byte == b'#';
+            dropped |= matches!(byte, b'\t' | b'\n' | b'\r');
+        }
+        Marks { at, split, dropped }
+    }
+}
+
+/// refuses a resolved reference that is a web link carrying a login or a secret, as
+/// [`check_links`] refuses a file's: a sync asks it again for a dataset whose filters changed or
+/// whose file link died. another reference, such as `drive:<id>?resourcekey=<key>`, is no link a
+/// request carries as it is written.
+fn check_resolved(dataset: &Locked) -> Result<(), Error> {
+    let marks = Marks::of(&dataset.resolved);
+    let web = (marks.at || marks.split)
+        .then(|| Url::parse(&dataset.resolved).ok())
+        .flatten()
+        .filter(|url| matches!(url.scheme(), "http" | "https"));
+    match web.as_ref().and_then(Carried::by) {
+        Some(carried) => {
+            let subject = format!("the resolved link data.lock gives {}", dataset.name);
+            Err(carried.refused(&subject).help(carried.mend()))
+        }
+        None => Ok(()),
+    }
+}
+
+/// what a link carries that lets anyone holding it in.
+enum Carried {
+    Login,
+    /// the key of a query or fragment value, such as `token`, as [`crate::net::secret`] names
+    /// it.
+    Secret(String),
+}
+
+impl Carried {
+    fn by(url: &Url) -> Option<Carried> {
+        if !url.username().is_empty() || url.password().is_some() {
+            return Some(Carried::Login);
+        }
+        crate::net::secret(url).map(Carried::Secret)
+    }
+
+    /// the error for `subject`, a phrase such as "the link data.lock gives x/a.csv", carrying
+    /// this.
+    fn refused(&self, subject: &str) -> Error {
+        let message = match self {
+            Carried::Login => format!("{subject} carries a login, which fetchloom never pins"),
+            Carried::Secret(key) => {
+                format!("{subject} carries {key}, a secret fetchloom never pins")
+            }
+        };
+        Error::new(Kind::ProjectInvalid, message)
+    }
+
+    /// how to take it out of data.lock by hand.
+    fn mend(&self) -> String {
+        let what = match self {
+            Carried::Login => "the login".to_owned(),
+            Carried::Secret(key) => format!("{key} and its value"),
+        };
+        format!("remove {what} from that link in data.lock, or restore data.lock from git")
+    }
 }
 
 fn tree<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Sha256>, D::Error> {
@@ -1256,6 +1395,121 @@ mod tests {
             assert_eq!(err.kind, Kind::ProjectInvalid, "{path}");
             assert!(err.message.contains("data.lock"), "{}", err.message);
             assert_eq!(err.help.as_deref(), Some(BROKEN), "{path}");
+        }
+    }
+
+    /// `lock` read in each form a reader takes: as its writer leaves it, as other TOML of the same
+    /// contents, and with every source's files in a list beside it.
+    fn every_form(lock: &Lock) -> [Result<Lock, Error>; 3] {
+        let canonical = lock.render();
+        assert!(canonical::read(&canonical, false).is_some(), "{canonical}");
+        let general = canonical.replacen("version = 1\n", "version=1\n", 1);
+        assert!(canonical::read(&general, true).is_none(), "{general}");
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+        for (part, text) in lock.lists_with(0) {
+            std::fs::write(root.path().join(part), lists::compress(&text).unwrap()).unwrap();
+        }
+        let listed = lock.render_with(0);
+        assert!(listed.contains("\nfiles_in = "), "{listed}");
+        [
+            Lock::parse(&canonical),
+            Lock::parse(&general),
+            Lock::read(&listed, root.path()),
+        ]
+    }
+
+    /// fetchloom never pins a link that carries a login or a secret, so one in data.lock was
+    /// edited in, and a request would send it on. each reader refuses it, naming the key and
+    /// never its value.
+    #[test]
+    fn a_link_with_a_login_or_a_secret_is_refused_by_every_reader() {
+        const CANARY: &str = "canary-value";
+        let token =
+            "remove token and its value from that link in data.lock, or restore data.lock from git";
+        for (url, says, help) in [
+            (
+                format!("https://example.org/a.csv?token={CANARY}"),
+                "carries token, a secret fetchloom never pins",
+                token,
+            ),
+            (
+                format!("https://example.org/a.csv?download=1#Access-Token={CANARY}"),
+                "carries access-token, a secret fetchloom never pins",
+                "remove access-token and its value from that link in data.lock, or restore data.lock from git",
+            ),
+            (
+                format!("https://ada:{CANARY}@example.org/a.csv"),
+                "carries a login, which fetchloom never pins",
+                "remove the login from that link in data.lock, or restore data.lock from git",
+            ),
+        ] {
+            let mut lock = sample();
+            lock.datasets[1].files[1].url = url;
+            for (form, read) in every_form(&lock).into_iter().enumerate() {
+                let error = read.unwrap_err();
+                assert_eq!(error.kind, Kind::ProjectInvalid, "{says}");
+                assert_eq!(
+                    error.message,
+                    format!("the link data.lock gives iris/a.csv {says}")
+                );
+                let listed = form == 2;
+                assert_eq!(
+                    error.help.as_deref(),
+                    Some(if listed { lists::BROKEN } else { help })
+                );
+                assert!(!format!("{error:?}").contains(CANARY), "{error:?}");
+            }
+        }
+        let mut lock = sample();
+        lock.datasets[1].resolved = format!("https://example.org/iris.zip?token={CANARY}");
+        for read in every_form(&lock) {
+            let error = read.unwrap_err();
+            assert_eq!(error.kind, Kind::ProjectInvalid);
+            assert_eq!(
+                error.message,
+                "the resolved link data.lock gives iris carries token, a secret fetchloom never pins"
+            );
+            assert_eq!(error.help.as_deref(), Some(token));
+            assert!(!format!("{error:?}").contains(CANARY), "{error:?}");
+        }
+    }
+
+    /// the links fetchloom pins carry no secret, though many carry a query, and an import pins
+    /// an empty one. a reference that is no web link, such as a hugging face commit, is no link
+    /// a request would carry as it is written.
+    #[test]
+    fn a_link_without_a_secret_is_read_as_written() {
+        for (resolved, url) in [
+            ("zenodo:3608990", "https://example.org/a.csv?download=1"),
+            ("hf:datasets/org/x@3c1f0e2", "https://example.org/a@2x.csv"),
+            (
+                "drive:1?resourcekey=key",
+                "https://drive.google.com/uc?id=1&resourcekey=key",
+            ),
+            (
+                "s3:https://minio.lab.example:9000/scans/",
+                "https://minio.lab.example:9000/scans/a.csv?versionId=3",
+            ),
+            (
+                "https://www.dropbox.com/s/x/a.csv?rlkey=key&dl=1",
+                "https://www.dropbox.com/s/x/a.csv?rlkey=key&dl=1",
+            ),
+            (
+                "https://example.org/a.csv",
+                "https://example.org/a.csv#page=2",
+            ),
+            ("local", ""),
+        ] {
+            let mut lock = sample();
+            lock.datasets[1].resolved = resolved.to_owned();
+            lock.datasets[1].files[1].url = url.to_owned();
+            for read in every_form(&lock) {
+                let read = read.unwrap();
+                let iris = read.get("iris").unwrap();
+                assert_eq!(iris.resolved, resolved);
+                assert_eq!(iris.files[0].url, url);
+            }
         }
     }
 
