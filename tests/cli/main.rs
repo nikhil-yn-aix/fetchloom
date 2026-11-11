@@ -11,6 +11,7 @@ mod completions;
 mod concurrent;
 mod docs;
 mod dry_run;
+mod export;
 mod get;
 mod hints;
 mod moved;

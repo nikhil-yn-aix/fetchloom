@@ -5,6 +5,7 @@ mod args;
 mod auth;
 mod cache;
 mod completions;
+mod export;
 mod fetch;
 mod get;
 mod help;
@@ -617,6 +618,10 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             let outcome = blocking(context, move |context| {
                 list::run(context, args.name.as_deref())
             });
+            finish(context, name, outcome, started)
+        }
+        args::Command::Export(args) => {
+            let outcome = blocking(context, move |context| export::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

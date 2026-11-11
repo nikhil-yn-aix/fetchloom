@@ -15,7 +15,7 @@ a result is encoded before any document bytes are printed. a result that JSON ca
 | field | value |
 |---|---|
 | `schema` | integer `1` |
-| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
+| `command` | `add`, `remove`, `sync`, `lock`, `status`, `list`, `export`, `search`, `path`, `get`, `cache`, `cache gc`, `cache verify`, `settings`, `auth`, `auth login`, `auth logout`, `completions`, `help`, or null. `completions` with `--json` is always a usage error, since a script is not JSON |
 | `status` | `ok` or `error` |
 | `result` | command result on success; also retained for cache verification findings, gc removal failures, search candidates and `get` runs of several links; null for other failures |
 | `warnings` | array of strings, including in quiet mode |
@@ -42,6 +42,7 @@ bare `fetchloom` inside a project reports command `status`. outside a project, a
 | `get` | `file`: the absolute path of the file `-o` wrote or found, else null; `folder`: absolute path, the file's folder with `-o`, or null for several links; `files`: file records below, empty for several links; `items`: one record for each link, below |
 | `search` | `candidates`: records [below](#search-candidates) |
 | `list` | `datasets`: records with `name`, `ref`, nullable `resolved`, nullable `files`, nullable `bytes`, project-relative `folder`, nullable `title`, `license` and `doi`, nullable `access` (`public`, `login`, `terms` or `unknown`, as the source said), and nullable `locked_files`, an array of `path` and `size` records; counts and `locked_files` describe locked source files, not archive members. `list <name>` returns only that dataset |
+| `export` | `file`: the absolute path `-o` wrote, or null; `placed`: a record for each file in the data folder, archive members included, with `dataset`, project-relative `path`, `size`, `sha256` and `unpacked_from`, the archive's path in its dataset or null; `sources`: a record for each downloaded file with `dataset`, `path` in the dataset, `size`, `sha256` and `url`, null when the link is not written; `unlocked`: dataset names data.lock does not pin as data.toml asks; `not_unpacked`: project-relative paths of archives whose files this machine does not know; `no_link`: `<dataset>/<path>` of files whose link holds a login, a secret or a control character. without `-o` it lists what is known and exits 0; with `-o` it fails as the text forms do. [export](../commands/export.md#what-it-leaves-out) |
 | `path` | `path`: the absolute path of the dataset, file or subfolder |
 | `status` | `project`: absolute path; the arrays below |
 | `cache` | `path`: configured cache root; `objects`: count; `bytes`: payload bytes; `needed`: cached payload bytes needed by registered locks; `projects`: root-path array; `unfinished_downloads`: downloads kept under `partial/` to continue later; `unfinished_bytes`: the disk space they take |

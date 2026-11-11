@@ -58,6 +58,13 @@ on disk: nothing. it reads data.toml, data.lock and data/";
 
 on disk: nothing. it reads data.toml and data.lock";
 
+    pub(super) const EXPORT: &str = "examples:
+  fetchloom export > data.sha256
+  fetchloom export --format links iris
+  fetchloom export --format aria2 -o sources.aria2
+
+on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive";
+
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
   fetchloom path iris/Iris.csv
@@ -462,6 +469,10 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
     List(List),
 
+    /// write the SHA-256 or link of each file, for other tools
+    #[command(override_usage = "fetchloom export [options] [name]...", help_template = TEMPLATE, after_help = examples::EXPORT)]
+    Export(Export),
+
     /// print where a dataset or a file in it is, syncing first if needed
     #[command(override_usage = "fetchloom path [options] <name>[/file]", help_template = TEMPLATE, after_help = examples::PATH)]
     Path(Path),
@@ -504,6 +515,7 @@ impl Command {
             Command::Lock(_) => "lock",
             Command::Status(_) => "status",
             Command::List(_) => "list",
+            Command::Export(_) => "export",
             Command::Path(_) => "path",
             Command::Cache(Cache { action: None }) => "cache",
             Command::Cache(Cache {
@@ -738,6 +750,38 @@ pub(crate) struct List {
     /// a dataset's name, to list the files data.lock has for it
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) name: Option<String>,
+}
+
+/// write the SHA-256 or link of each file, for other tools
+#[derive(Clone, Debug, clap::Args)]
+pub(crate) struct Export {
+    /// the datasets to export, by their names in data.toml; all of them when none is named
+    #[arg(value_name = "name", help_heading = "arguments")]
+    pub(crate) names: Vec<String>,
+
+    /// sha256 for each file in the data folder, as `sha256sum -c` reads them; links for each
+    /// file downloaded, with its SHA-256; aria2 for an `aria2c -i` input file
+    #[arg(long, value_enum, value_name = "format", default_value_t = Format::Sha256, hide_default_value = true, hide_possible_values = true, help_heading = "options")]
+    pub(crate) format: Format,
+
+    /// write to <file> instead of stdout. a file already there is kept
+    #[arg(short, long, value_name = "file", help_heading = "options")]
+    pub(crate) output: Option<PathBuf>,
+
+    /// replace the file -o names when it exists
+    #[arg(long, requires = "output", help_heading = "options")]
+    pub(crate) force: bool,
+}
+
+/// what `export` writes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum Format {
+    /// `<sha256>  <path>` for each file in the data folder, archive members included.
+    Sha256,
+    /// `<link> <sha256>` for each file downloaded.
+    Links,
+    /// each file downloaded, as an aria2c input file with `out=` and `checksum=`.
+    Aria2,
 }
 
 /// print where a dataset or a file in it is

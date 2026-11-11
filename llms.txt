@@ -13,6 +13,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [sync](docs/user/commands/sync.md): restore pins, preserve local edits and preview required repairs
 - [lock](docs/user/commands/lock.md): check or upgrade pins without placement
 - [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
+- [export](docs/user/commands/export.md): SHA-256 lines for `sha256sum -c`, link lists and aria2c input files from the pins, complete or refused, with gaps named in JSON
 - [search](docs/user/commands/search.md): concurrent public catalog search and explicit selection
 - [status](docs/user/commands/status.md): local differences and success-with-differences behavior
 - [path](docs/user/commands/path.md): absolute paths, implicit sync, `--locked` and the `result.path` JSON answer

@@ -27,6 +27,7 @@ commands:
   lock         update data.lock from data.toml, without changing the data folder
   status       list files that are missing, changed locally or extra
   list         list the project's datasets: source, size and folder
+  export       write the SHA-256 or link of each file, for other tools
   path         print where a dataset or a file in it is, syncing first if needed
   cache        show the cache, free what no project needs, or verify it
   settings     show each setting, its value and where it came from

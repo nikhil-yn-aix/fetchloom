@@ -24,6 +24,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | inspect signed-in accounts | `fetchloom auth --json` |
 | check cached bytes | `fetchloom cache verify --json` |
 | what the project uses | `fetchloom list --json`; `fetchloom list <name> --json` for one dataset, with `locked_files` paths and sizes and `access`, what its source said about who may read it (`public`, `login`, `terms` or `unknown`) |
+| checksums for an audit, or links for another downloader | `fetchloom export --json`: `result.placed` (files in data/, archive members included, with `sha256`) and `result.sources` (downloaded files with `url` and `sha256`). `fetchloom export -o data.sha256` writes `sha256sum -c` lines, `--format links` or `--format aria2` the links. a text form is complete or refused; JSON names what is unknown in `unlocked`, `not_unpacked` and `no_link` |
 
 `<ref>` is a link, a DOI or an id: `hf:datasets/org/name`, `kaggle:owner/name`, `kaggle:competitions/slug`, `zenodo:3608990`, `figshare:34744689`, `osf:3eunr`, `dataverse:host/doi:10.7910/DVN/X`, `s3://bucket/prefix/`, `gs://bucket/prefix/`, `doi:10.5281/zenodo.3608990` or an https URL. `--select "**/*.csv"` and `--exclude` keep only some files.
 

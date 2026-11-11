@@ -12,6 +12,7 @@
     - [sync](user/commands/sync.md)
     - [lock](user/commands/lock.md)
     - [list](user/commands/list.md)
+    - [export](user/commands/export.md)
     - [search](user/commands/search.md)
     - [status](user/commands/status.md)
     - [path](user/commands/path.md)
