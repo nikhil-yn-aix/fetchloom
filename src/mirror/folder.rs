@@ -259,6 +259,13 @@ pub(crate) enum Failed {
     /// the file at this place among them, and why.
     File(usize, Fault),
     /// the flush that puts them all on the disk, or a stop asked before it, `Interrupted`.
+    #[cfg_attr(
+        all(not(test), not(any(target_os = "linux", target_os = "macos"))),
+        expect(
+            dead_code,
+            reason = "windows flushes each file as it writes it, so no batch flush fails there"
+        )
+    )]
     Flush(io::Error),
 }
 
