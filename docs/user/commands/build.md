@@ -24,6 +24,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 | option | effect |
 |---|---|
+| `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
 [global options](README.md#global-options) apply.
@@ -94,7 +95,30 @@ error: clean failed: python3 exited with code 1 after 31 ms
 
 the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
 
-a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files fails with `build.differs`, exit 60, and `data.lock` keeps the files it pins, since the step is not reproducible.
+a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files is not reproducible, as [a rebuild that differs](#a-rebuild-that-differs) describes.
+
+## a rebuild that differs
+
+a step that runs again for a key `data.lock` pins, and makes other files than the ones it pins, stops the build with `build.differs`, exit 60. `data.lock`, `data.lock.d` and the data folder stay as they were, and the error says which files differ. this output is from a project where `emb` writes random bytes with `python3 embed.py`, built again after its file left the cache:
+
+```text
+    Running emb · python3 embed.py <build>/in/raw <build>/out
+            embedded 3 rows
+    Differs emb · 0 of 1 files match data.lock
+error: emb differs from data.lock: 0 of 1 files match
+  changed vectors.bin
+  help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
+```
+
+the files it made stay in the cache as a kept rebuild, which `fetchloom status` lists and `cache gc` keeps, but no build reuses: only you choose them over the pinned files. once you have looked at them, `fetchloom build --accept emb` pins them in `data.lock` and places them in the data folder, without running anything:
+
+```text
+   Accepted emb · 1 file, 24 B in place of the files data.lock pinned
+     Placed data/emb · 1 file linked to the cache
+         Ok pinned emb's kept rebuild in data.lock
+```
+
+without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, as after accepting it once; when the recipe or `data.lock` changed since it was kept, so it no longer answers them; or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild. `--accept` cannot be combined with `--dry-run`.
 
 ## dry run
 
@@ -135,10 +159,12 @@ when every step is up to date, the last line says so:
 | field | value |
 |---|---|
 | `name` | the recipe |
-| `action` | `ran`, `reused`, `fetched` or `up_to_date` |
+| `action` | `ran`, `reused`, `fetched`, `up_to_date` or, with `--accept`, `accepted` |
 | `key` | the key of its result, `sha256:` and 64 hex digits |
-| `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits |
+| `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits; for a step that differs, the tree `data.lock` keeps |
 | `files`, `bytes` | how many files its result holds, and their size |
+| `check` | for a step that ran again for a key `data.lock` pins and made other files, `matching`, the count of files that match, and `changed`, `missing` and `extra`, every path of each; else null |
+| `candidate` | the tree of the files a step that differs made, kept for `--accept`; else null |
 | `log` | `.fetchloom/builds/<name>.log` when it ran, else null |
 | `seconds` | how long it ran, else null |
 
@@ -160,4 +186,4 @@ the JSON `fix` of a build's error is always null, since building runs the projec
 
 ## exit codes
 
-0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.
+0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2, and so is an `--accept` that finds nothing to pin. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.

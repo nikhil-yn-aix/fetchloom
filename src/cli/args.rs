@@ -53,10 +53,11 @@ on disk: writes data.lock and may add files to the cache. after a git merge, it 
 
     pub(super) const BUILD: &str = "examples:
   fetchloom build --dry-run
-  fetchloom build --dry-run clean
-  fetchloom build -n --json
+  fetchloom build
+  fetchloom build clean --json
+  fetchloom build --accept clean
 
-on disk: nothing. this fetchloom only shows what building would run: --dry-run reads data.toml, data.lock and each recipe's code";
+on disk: runs each step that needs it in a folder of its own in the cache, writes data.lock and data.lock.d and places the results in data/. --dry-run writes nothing";
 
     pub(super) const STATUS: &str = "examples:
   fetchloom status
@@ -492,7 +493,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom lock [options]", help_template = TEMPLATE, after_help = examples::LOCK)]
     Lock(Lock),
 
-    /// show what the recipes in data.toml would run
+    /// run the recipes and record their results in data.lock
     #[command(override_usage = "fetchloom build [options] [name]...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(BUILD_DRY_RUN)), after_help = examples::BUILD)]
     Build(Build),
 
@@ -829,13 +830,18 @@ pub(crate) struct Lock {
     pub(crate) dry: DryRun,
 }
 
-/// show what the recipes in data.toml would run
+/// run the recipes and record their results in data.lock
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Build {
     /// the recipes to build, by their names in data.toml, with the recipes they are made from;
     /// all of them when none is named
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
+
+    /// record in data.lock the files a build kept because they differ from the ones
+    /// data.lock has for the same inputs, command and code. it runs nothing
+    #[arg(long, conflicts_with = "dry_run", help_heading = "options")]
+    pub(crate) accept: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

@@ -62,6 +62,9 @@ pub(super) struct Status {
     /// project, and copies and reflinks that still look as placed, which only hashing finds.
     /// `sync` puts them back, or `sync --verify` for those only hashing finds.
     damaged: Vec<String>,
+    /// recipes with a rebuild that differs from data.lock kept, which `fetchloom build --accept`
+    /// pins.
+    candidates: Vec<String>,
     /// whether every placed file was hashed, so a match is a match of bytes.
     #[serde(skip)]
     verified: bool,
@@ -234,6 +237,18 @@ fn check(
     };
     let cache = super::peek_cache()?;
     let mut survey = Survey::read(project, &manifest.data_dir, threads);
+    status.candidates = survey
+        .state
+        .candidates
+        .keys()
+        .filter(|name| {
+            manifest
+                .datasets
+                .get(*name)
+                .is_some_and(|entry| entry.recipe().is_some())
+        })
+        .cloned()
+        .collect();
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
     survey.check_doubted(&project.root, &cache)?;
@@ -530,6 +545,12 @@ fn list(output: &Output, status: &Status) {
         output.mark(
             "Removed",
             &format!("{name} from data.toml; `fetchloom sync` updates data.lock"),
+        );
+    }
+    for name in &status.candidates {
+        output.mark(
+            "Kept",
+            &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
         );
     }
     for (verb, paths) in status.lists() {

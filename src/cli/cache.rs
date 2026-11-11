@@ -704,6 +704,12 @@ fn needed_with(
             });
             add_with_stop(&mut needed, cache, lock, read, stop)?;
         }
+        // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state
+        let (state, _) = project.state();
+        for file in state.candidates.values().flat_map(|kept| &kept.files) {
+            stop.check()?;
+            needed.objects.insert(file.sha256);
+        }
         projects.push(project.root);
     }
     if let Some(lock) = current {

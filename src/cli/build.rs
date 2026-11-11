@@ -8,6 +8,8 @@
 //! data.lock, data.lock.d and the data folder as they were, while the results of the steps
 //! before it stay in the cache, so a build run again reuses them.
 
+mod accept;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
@@ -18,11 +20,12 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Run, committed, find, hold, ignore_data, known, sync_all};
+use super::project::{Run, committed, find, hold, ignore_data, known, register, sync_all};
 use super::sync::place::{Placement, Seen};
 use super::sync::{Before, Loop, Scope, Upgrade, repinned};
 use super::{Context, fetch, open_cache};
 use crate::build::capture::{self, Fault, Refused};
+use crate::build::compare::{Compared, compare};
 use crate::build::step::{self, Ended, Ran};
 use crate::build::{Staging, inputs};
 use crate::cache::{Cache, Member};
@@ -34,6 +37,7 @@ use crate::project::Project;
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::Manifest;
+use crate::project::state::Candidate;
 use crate::recipe::{self, Change, Slot, Step};
 use crate::units;
 
@@ -75,6 +79,12 @@ struct Done {
     tree: String,
     files: u64,
     bytes: u64,
+    /// how the files it made when it ran again differ from the ones data.lock pins for its key,
+    /// when it ran for a pin.
+    check: Option<Compared>,
+    /// the tree of the files it made that differ from data.lock's, which the state keeps for
+    /// `--accept`.
+    candidate: Option<String>,
     /// the log of its output, below the project, when it ran.
     log: Option<String>,
     /// how long it ran, when it ran.
@@ -95,6 +105,9 @@ enum Did {
     /// data.lock pins its result as building it now would make, and a mirror gave the cache
     /// what it lacked of it, so it did not run.
     Fetched,
+    /// data.lock pins the files a rebuild of it made that differed from the ones pinned before,
+    /// as `--accept` asked.
+    Accepted,
 }
 
 /// what `build --dry-run` found.
@@ -157,6 +170,11 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         return preview(context, &project, &manifest, &args.names).map(Report::Previewed);
     }
     let _held = hold(context, &project, "build").await?;
+    if args.accept {
+        return accept::accept(context, &project, &args.names)
+            .await
+            .map(|built| Report::Built(Box::new(built)));
+    }
     let mut building = Building::start(context, &project, &args.names).await?;
     building.steps().await?;
     building
@@ -460,21 +478,27 @@ impl<'a> Building<'a> {
         })
     }
 
-    /// builds each recipe in turn, stopping at the first that fails, which keeps what the build
-    /// did so far for `--json`.
+    /// builds each recipe in turn, stopping at the first that fails or makes other files than
+    /// data.lock pins for its key, which keeps what the build did so far for `--json`.
     async fn steps(&mut self) -> Result<(), Error> {
         for name in self.recipes.clone() {
-            match self.step(&name).await {
-                Ok(done) => self.report.steps.push(done),
-                Err(error) => {
-                    return Err(match serde_json::to_value(&self.report) {
-                        Ok(value) => error.with_result(value),
-                        Err(_) => error,
-                    });
-                }
+            let done = self.step(&name).await.map_err(|error| self.kept(error))?;
+            let kept = done.candidate.is_some();
+            self.report.steps.push(done);
+            if kept {
+                let error = differs(&self.manifest, &self.report.steps);
+                return Err(self.kept(error));
             }
         }
         Ok(())
+    }
+
+    /// `error`, with what the build did so far beside it for `--json`.
+    fn kept(&self, error: Error) -> Error {
+        match serde_json::to_value(&self.report) {
+            Ok(value) => error.with_result(value),
+            Err(_) => error,
+        }
     }
 
     /// builds the recipe `name`: up to date when data.lock pins what building it now would make
@@ -542,6 +566,30 @@ impl<'a> Building<'a> {
             .await?;
         output.step("Running", &format!("{name} · {}", self.command(name)));
         let made = tokio::task::block_in_place(|| self.make(&step, key, expected))?;
+        if let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key)
+            && pinned.tree != made.tree
+        {
+            let mut done = done(Did::Ran, name, key, pinned.tree, &pinned.files);
+            let compared = compare(&pinned.files, &made.members);
+            output.mark(
+                "Differs",
+                &format!("{name} · {} data.lock", matched(&compared)),
+            );
+            self.keep(
+                name,
+                Candidate {
+                    key,
+                    tree: made.tree,
+                    pinned: pinned.tree,
+                    files: made.members,
+                },
+            )?;
+            done.check = Some(compared);
+            done.candidate = Some(format!("sha256:{}", made.tree));
+            done.log = Some(log_shown(name));
+            done.seconds = Some(made.ran.took.as_secs_f64());
+            return Ok(done);
+        }
         output.step(
             "Built",
             &format!(
@@ -555,6 +603,18 @@ impl<'a> Building<'a> {
         done.seconds = Some(made.ran.took.as_secs_f64());
         self.pin(&step, key, made.tree, made.members);
         Ok(done)
+    }
+
+    /// keeps `candidate`, a rebuild of `name` that differs from data.lock, in the state for
+    /// `--accept`, in place of any kept before. the project joins the cache's list, so `cache gc`
+    /// reads the state and keeps its files.
+    fn keep(&self, name: &str, candidate: Candidate) -> Result<(), Error> {
+        let project = self.work.project;
+        let (mut state, _) = project.state();
+        state.candidates.insert(name.to_owned(), candidate);
+        project.write_state(&state)?;
+        register(&self.work);
+        Ok(())
     }
 
     /// asks the mirrors for the files of `files`, the result data.lock pins for `name`, that the
@@ -577,8 +637,8 @@ impl<'a> Building<'a> {
     }
 
     /// runs `step` in a folder of its own and takes in what it wrote, as the result of `key`.
-    /// with `expected`, the tree data.lock pins for that key, a result of other files is refused
-    /// before anything enters the cache.
+    /// with `expected`, the tree data.lock pins for that key, a result of other files enters the
+    /// cache without a record, so no build reuses it.
     fn make(&self, step: &Step, key: Sha256, expected: Option<Sha256>) -> Result<Made, Error> {
         let name = &step.name;
         let cache = &self.work.cache;
@@ -609,16 +669,6 @@ impl<'a> Building<'a> {
         let most = crate::source::most_files();
         let found = capture::read(&staging.out(), most, threads, &self.context.stop)
             .map_err(|fault| taken(name, fault))?;
-        if let Some(expected) = expected
-            && found.tree != expected
-        {
-            return Err(differs(
-                name,
-                expected,
-                found.tree,
-                &plan::folder(&self.manifest, name),
-            ));
-        }
         capture::publish(
             cache,
             &found,
@@ -627,12 +677,14 @@ impl<'a> Building<'a> {
             &self.context.work,
         )
         .map_err(|fault| taken(name, fault))?;
-        cache.record_result(&key, &found.members).map_err(|err| {
-            Error::io(
-                format_args!("could not record what {name} made in the cache"),
-                &err,
-            )
-        })?;
+        if expected.is_none_or(|expected| expected == found.tree) {
+            cache.record_result(&key, &found.members).map_err(|err| {
+                Error::io(
+                    format_args!("could not record what {name} made in the cache"),
+                    &err,
+                )
+            })?;
+        }
         Ok(Made {
             tree: found.tree,
             members: found.members,
@@ -721,31 +773,8 @@ impl<'a> Building<'a> {
     }
 
     /// pins in the lock being built the result `tree` of `step`, keyed `key`, holding `members`.
-    /// a pin keeps when it was made while its key and tree stay.
     fn pin(&mut self, step: &Step, key: Sha256, tree: Sha256, members: Vec<Member>) {
-        let timestamp = match self.lock.result(&step.name) {
-            Some(old) if old.key == key && old.tree == tree => old.timestamp.clone(),
-            _ => lock::timestamp(SystemTime::now()),
-        };
-        let derived = Derived {
-            name: step.name.clone(),
-            from: step.from().unwrap_or_default(),
-            run: step.run.clone(),
-            code: step.hashed().unwrap_or_default(),
-            env: step.env.clone(),
-            key,
-            timestamp,
-            tree,
-            files: members,
-        };
-        match self
-            .lock
-            .derived
-            .binary_search_by(|result| result.name.as_str().cmp(&step.name))
-        {
-            Ok(at) => self.lock.derived[at] = derived,
-            Err(at) => self.lock.derived.insert(at, derived),
-        }
+        pin(&mut self.lock, step, key, tree, members);
     }
 
     /// writes data.lock when the build changed it, then places every dataset the build took,
@@ -762,22 +791,24 @@ impl<'a> Building<'a> {
         let old = self.old.as_ref().map(|(lock, _)| lock);
         let changed = old != Some(&self.lock);
         let mut datasets = repinned(&self.before, &self.lock);
-        datasets.extend(
-            self.lock
-                .derived
-                .iter()
-                .filter(|result| {
-                    old.and_then(|old| old.result(&result.name))
-                        .is_none_or(|was| was.key != result.key || was.tree != result.tree)
-                })
-                .map(|result| result.name.clone()),
-        );
+        let rebuilt: Vec<String> = self
+            .lock
+            .derived
+            .iter()
+            .filter(|result| {
+                old.and_then(|old| old.result(&result.name))
+                    .is_none_or(|was| was.key != result.key || was.tree != result.tree)
+            })
+            .map(|result| result.name.clone())
+            .collect();
+        datasets.extend(rebuilt.iter().cloned());
         datasets.sort();
         datasets.dedup();
         let lock_read = if changed {
             let text = self.lock.render();
             let text = self.work.write_rendered(&self.before, &self.lock, text)?;
             self.work.project.sweep_lists(&self.lock);
+            forget(self.work.project, &rebuilt)?;
             Some(digest::sha256(text.as_bytes()))
         } else {
             self.old.as_ref().map(|(_, read)| *read)
@@ -821,6 +852,45 @@ impl<'a> Building<'a> {
         self.report.placement = Some(outcome.placed);
         Ok(self.report)
     }
+}
+
+/// pins in `lock` the result `tree` of `step`, keyed `key`, holding `members`. a pin keeps when
+/// it was made while its key and tree stay.
+fn pin(lock: &mut Lock, step: &Step, key: Sha256, tree: Sha256, members: Vec<Member>) {
+    let timestamp = match lock.result(&step.name) {
+        Some(old) if old.key == key && old.tree == tree => old.timestamp.clone(),
+        _ => lock::timestamp(SystemTime::now()),
+    };
+    let derived = Derived {
+        name: step.name.clone(),
+        from: step.from().unwrap_or_default(),
+        run: step.run.clone(),
+        code: step.hashed().unwrap_or_default(),
+        env: step.env.clone(),
+        key,
+        timestamp,
+        tree,
+        files: members,
+    };
+    match lock
+        .derived
+        .binary_search_by(|result| result.name.as_str().cmp(&step.name))
+    {
+        Ok(at) => lock.derived[at] = derived,
+        Err(at) => lock.derived.insert(at, derived),
+    }
+}
+
+/// drops from the state the rebuilds kept of `names`, whose pins changed since, so none of them
+/// answers data.lock any more.
+fn forget(project: &Project, names: &[String]) -> Result<(), Error> {
+    let (mut state, _) = project.state();
+    let before = state.candidates.len();
+    state.candidates.retain(|name, _| !names.contains(name));
+    if state.candidates.len() == before {
+        return Ok(());
+    }
+    project.write_state(&state)
 }
 
 /// the key of `step`, once data.lock pins every dataset it reads and all its code is there.
@@ -867,6 +937,8 @@ fn done(action: Did, name: &str, key: Sha256, tree: Sha256, files: &[Member]) ->
         tree: format!("sha256:{tree}"),
         files: files.len() as u64,
         bytes: files.iter().map(|file| file.size).sum(),
+        check: None,
+        candidate: None,
         log: None,
         seconds: None,
     }
@@ -1066,18 +1138,65 @@ fn taken(name: &str, fault: Fault) -> Error {
     Error::new(Kind::BuildFailed, message).help(help)
 }
 
-/// the error for a step of `name` that made `tree` where data.lock pins `expected` for the same
-/// key.
-fn differs(name: &str, expected: Sha256, tree: Sha256, folder: &str) -> Error {
-    Error::new(
-        Kind::BuildDiffers,
-        format!("{name} made other files than data.lock pins for the same inputs, command and code"),
+/// how many of the files data.lock pins a rerun made as they are: `9,998 of 10,000 files match`.
+fn matched(compared: &Compared) -> String {
+    format!(
+        "{} of {} files match",
+        units::grouped(compared.matching as u64),
+        units::grouped(compared.pinned() as u64)
     )
-    .detail(format!(
-        "data.lock pins the tree sha256:{expected}, and this build made sha256:{tree}"
-    ))
-    .help(format!(
-        "the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and {folder} are as they were"
+}
+
+/// the most paths an error lists for each step that differs. `--json` has them all.
+const LISTED: usize = 20;
+
+/// the error for the steps among `steps` that made other files than data.lock pins for the same
+/// key, each kept for `--accept`: what differs, at most [`LISTED`] paths a step, and what to do.
+fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
+    let differing: Vec<(&Done, &Compared)> = steps
+        .iter()
+        .filter(|step| step.candidate.is_some())
+        .filter_map(|step| Some((step, step.check.as_ref()?)))
+        .collect();
+    let names: Vec<&str> = differing
+        .iter()
+        .map(|(step, _)| step.name.as_str())
+        .collect();
+    let message = match differing.as_slice() {
+        [(step, compared)] => format!(
+            "{} differs from data.lock: {}",
+            step.name,
+            matched(compared)
+        ),
+        _ => format!("{} differ from data.lock", listed(&names)),
+    };
+    let mut error = Error::new(Kind::BuildDiffers, message);
+    for (step, compared) in &differing {
+        if differing.len() > 1 {
+            error = error.detail(format!("{}: {} data.lock", step.name, matched(compared)));
+        }
+        let lines: Vec<String> = [
+            ("changed", &compared.changed),
+            ("missing", &compared.missing),
+            ("new", &compared.extra),
+        ]
+        .into_iter()
+        .flat_map(|(how, paths)| paths.iter().map(move |path| format!("{how} {path}")))
+        .collect();
+        for line in lines.iter().take(LISTED) {
+            error = error.detail(line.clone());
+        }
+        if lines.len() > LISTED {
+            error = error.detail(format!("and {} more", lines.len() - LISTED));
+        }
+    }
+    let (folders, them) = match names.as_slice() {
+        [name] => (plan::folder(manifest, name), "it"),
+        _ => ("the data folder".to_owned(), "them"),
+    };
+    error.help(format!(
+        "the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and {folders} are as they were. the rebuild is kept: `fetchloom build --accept {}` pins {them}",
+        names.join(" ")
     ))
 }
 

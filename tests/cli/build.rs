@@ -1138,33 +1138,142 @@ fn a_step_calling_fetchloom_on_its_project_fails_fast() -> Result {
     Ok(())
 }
 
+/// the objects a cache at `root` holds, by their SHA-256.
+fn objects(root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    Ok(files(&root.join("objects"))?
+        .into_keys()
+        .map(|path| path.replace('/', ""))
+        .collect())
+}
+
 /// a rebuild of an unchanged recipe that makes other files is refused: data.lock keeps the pin
-/// it has, since only a person may choose the new files.
+/// it has, since only a person may choose the new files. the rebuild is kept for them: status
+/// lists it and cache gc keeps its files.
 #[test]
-fn a_rebuild_with_other_files_keeps_the_pin() -> Result {
+fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     with(&sandbox, &server, &recipe(&["random"]))?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let data = files(&sandbox.work().join("data"))?;
     let elsewhere = sandbox.folder("another cache")?;
-    let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
-        .env("FETCHLOOM_CACHE", &elsewhere)
-        .output()?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &sandbox.work(), args)?
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .output()?)
+    };
+    let output = there(&["--json", "build"])?;
     assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
-    let document = json(&output)?;
-    let (kind, message, _, help, _) = error(&document);
-    assert_eq!(kind, "build.differs");
-    assert_eq!(
-        message,
-        "clean made other files than data.lock pins for the same inputs, command and code"
+    assert_eq!(runs(&sandbox.work())?, 2);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    let status = json(&there(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["candidates"], serde_json::json!(["clean"]));
+    let told = text(&there(&["status"])?.stderr)?;
+    assert!(
+        told.contains("       Kept clean · a rebuild that differs from data.lock; `fetchloom build --accept clean` pins it\n"),
+        "{told}"
     );
+    let document = json(&output)?;
+    let (kind, message, details, help, fix) = error(&document);
+    assert_eq!(kind, "build.differs");
+    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert_eq!(details, ["changed random.bin"]);
     assert!(
         help.contains("data.lock and data/clean are as they were"),
         "{help}"
     );
-    assert_eq!(runs(&sandbox.work())?, 2);
-    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert!(help.contains("`fetchloom build --accept clean`"), "{help}");
+    assert_eq!(fix, &Value::Null, "only a person accepts a rebuild");
+    let step = &document["result"]["steps"][0];
+    assert_eq!(step["action"], "ran");
+    assert_eq!(step["check"]["changed"], serde_json::json!(["random.bin"]));
+    assert_ne!(step["candidate"], step["tree"]);
+    let kept = objects(&elsewhere)?;
+    let gc = there(&["cache", "gc", "--now"])?;
+    assert_eq!(gc.status.code(), Some(0), "{}", text(&gc.stderr)?);
+    assert_eq!(objects(&elsewhere)?, kept, "gc keeps the rebuild's files");
+    Ok(())
+}
+
+/// a project whose `clean` writes random bytes, built once, then built again after its
+/// result left the cache, so the rerun keeps a rebuild that differs from data.lock.
+fn kept_rebuild(sandbox: &Sandbox, server: &Server, recipe: &str) -> Result {
+    with(sandbox, server, recipe)?;
+    assert_eq!(build(sandbox, &["build"])?.status.code(), Some(0));
+    let pinned = fs::read(sandbox.work().join("data/clean/random.bin"))?;
+    crate::support::delete(&object(sandbox, &pinned))?;
+    let output = build(sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
+/// `--accept` pins the files a rebuild kept, without running anything, places them, and has
+/// nothing left to accept after.
+#[test]
+fn accept_pins_a_kept_rebuild_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    kept_rebuild(&sandbox, &server, &recipe(&["random"]))?;
+    let placed = sandbox.work().join("data/clean/random.bin");
+    let before = fs::read(&placed)?;
+    let output = build(&sandbox, &["--json", "build", "--accept", "clean"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(runs(&sandbox.work())?, 2, "accepting runs nothing");
+    let document = json(&output)?;
+    let step = &document["result"]["steps"][0];
+    assert_eq!(step["action"], "accepted");
+    assert_eq!(document["result"]["lock_changed"], true);
+    let after = fs::read(&placed)?;
+    assert_ne!(after, before, "the data folder holds the accepted files");
+    let tree = format!("random.bin\t8\t{}\n", sha256(&after));
+    assert_eq!(step["tree"], format!("sha256:{}", sha256(tree.as_bytes())));
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&format!("tree = \"sha256:{}\"", sha256(tree.as_bytes()))));
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["candidates"], serde_json::json!([]));
+    let again = build(&sandbox, &["--json", "build", "--accept", "clean"])?;
+    assert_eq!(again.status.code(), Some(2), "{}", text(&again.stdout)?);
+    let refused = json(&again)?;
+    let (kind, message, _, _, fix) = error(&refused);
+    assert_eq!(kind, "usage");
+    assert_eq!(message, "there is no kept rebuild of clean to accept");
+    assert_eq!(fix, &Value::Null);
+    let rebuilt = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(
+        json(&rebuilt)?["result"]["steps"][0]["action"],
+        "up_to_date"
+    );
+    Ok(())
+}
+
+/// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
+/// `--accept` refuses it and changes nothing.
+#[test]
+fn accept_refuses_after_the_recipe_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let random = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"random\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    kept_rebuild(&sandbox, &server, random)?;
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    let pinned = pins(&sandbox.work())?;
+    let data = files(&sandbox.work().join("data"))?;
+    let output = build(&sandbox, &["--json", "build", "--accept"])?;
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+    let refused = json(&output)?;
+    let (kind, message, _, help, _) = error(&refused);
+    assert_eq!(kind, "usage");
+    assert_eq!(
+        message,
+        "the kept rebuild of clean came from another recipe or pin than data.lock has now"
+    );
+    assert!(help.contains("`fetchloom build --check clean`"), "{help}");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    let dry = build(&sandbox, &["build", "--accept", "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(2), "{}", text(&dry.stderr)?);
     Ok(())
 }
 

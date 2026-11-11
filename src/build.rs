@@ -3,6 +3,7 @@
 //! into `out`. only `fetchloom build` runs one, since a step is the project's code.
 
 pub(crate) mod capture;
+pub(crate) mod compare;
 pub(crate) mod inputs;
 pub(crate) mod step;
 

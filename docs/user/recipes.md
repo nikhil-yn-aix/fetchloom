@@ -96,7 +96,14 @@ read the command before you build: a recipe in a repository you cloned runs as y
 
 the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, and writes its result into `{out}`, plain files whose names every system can store. the copy comes from the cache, fetched first when it lacks a file, and never from the data folder, so a dataset imported from a folder needs `fetchloom add <folder> --as <name>` on a machine whose cache lacks it. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned. [build](commands/build.md) has the details, the errors and the JSON.
 
-a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, fails with `build.differs` when it runs again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins.
+a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, fails with `build.differs` when it runs again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins. the files the rerun made are kept, and `fetchloom status` lists them, here for a recipe `emb` whose step writes random bytes:
+
+```text
+       Kept emb · a rebuild that differs from data.lock; `fetchloom build --accept emb` pins it
+         Ok everything matches data.lock by size and time
+```
+
+look at them before you choose them: `fetchloom build --accept emb` pins and places them without running anything, and the commit of `data.lock` and `data.lock.d` records your choice. [a rebuild that differs](commands/build.md#a-rebuild-that-differs) has the details.
 
 ## keep only the result
 

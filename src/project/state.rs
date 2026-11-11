@@ -1,6 +1,7 @@
 //! `.fetchloom/state`: every file fetchloom placed and how it looked right after, so `status` and
 //! `sync` notice hand edits without hashing, except for a file as new as the state itself, whose
-//! size and time a coarse clock cannot vouch for.
+//! size and time a coarse clock cannot vouch for. it also keeps each rebuild of a recipe that
+//! differs from data.lock until a person accepts it.
 
 use std::collections::BTreeMap;
 use std::fs::Metadata;
@@ -8,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::cache::Member;
 use crate::digest::Sha256;
 use crate::place::Method;
 
@@ -21,6 +23,23 @@ pub(crate) struct State {
     /// data.toml and data.lock as the last sync left them.
     #[serde(default)]
     pub(crate) synced: Option<Synced>,
+    /// the rebuild of each recipe that made other files than data.lock pins for its key, kept
+    /// until `fetchloom build --accept` pins it or a build pins something else.
+    #[serde(default)]
+    pub(crate) candidates: BTreeMap<String, Candidate>,
+}
+
+/// a rebuild of a recipe that made other files than data.lock pins for the same key. its files
+/// are in the cache, but it is no result a build may reuse: only a person pins it, with
+/// `fetchloom build --accept`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Candidate {
+    pub(crate) key: Sha256,
+    pub(crate) tree: Sha256,
+    /// the tree data.lock pinned for `key` when the rebuild was kept.
+    pub(crate) pinned: Sha256,
+    /// sorted by path.
+    pub(crate) files: Vec<Member>,
 }
 
 /// the SHA-256 of data.toml and data.lock as a sync left them, and whether that sync left every
@@ -73,6 +92,7 @@ impl State {
             version: VERSION,
             files: &self.files,
             synced: self.synced,
+            candidates: &self.candidates,
         };
         serde_json::to_vec(&state).unwrap_or_default()
     }
@@ -84,6 +104,8 @@ struct Written<'a> {
     files: &'a BTreeMap<String, Placed>,
     #[serde(skip_serializing_if = "Option::is_none")]
     synced: Option<Synced>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    candidates: &'a BTreeMap<String, Candidate>,
 }
 
 impl Look {
@@ -135,6 +157,19 @@ mod tests {
             complete: true,
         });
         assert_eq!(State::parse(&state.render()).synced, state.synced);
+        let kept = Candidate {
+            key: digest::sha256(b"key"),
+            tree: digest::sha256(b"tree"),
+            pinned: digest::sha256(b"pinned"),
+            files: vec![Member {
+                path: "random.bin".to_owned(),
+                size: 8,
+                sha256: digest::sha256(b"8 bytes!"),
+            }],
+        };
+        state.candidates.insert("clean".to_owned(), kept);
+        assert_eq!(State::parse(&state.render()).candidates, state.candidates);
+        state.candidates.clear();
         state.synced = None;
         assert!(State::parse(b"not json").files.is_empty());
         assert!(

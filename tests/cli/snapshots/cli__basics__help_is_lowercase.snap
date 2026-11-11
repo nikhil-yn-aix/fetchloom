@@ -26,7 +26,7 @@ commands:
   drop         leave files out of their dataset for good, such as bad samples
   sync         put the files data.lock lists into the data folder
   lock         update data.lock from data.toml, without changing the data folder
-  build        show what the recipes in data.toml would run
+  build        run the recipes and record their results in data.lock
   status       list files that are missing, changed locally or extra
   list         list the project's datasets: source, size and folder
   export       write the SHA-256 or link of each file, for other tools

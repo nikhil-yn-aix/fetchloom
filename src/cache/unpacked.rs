@@ -8,11 +8,13 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use super::Cache;
 use crate::digest::{self, Sha256};
 
 /// a file an archive unpacked to, stored in the cache under its SHA-256.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Member {
     /// in NFC, with `/` between folders.
     pub(crate) path: String,

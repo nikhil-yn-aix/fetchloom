@@ -14,7 +14,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [commands](docs/user/commands/README.md): command table, global options and terminal output
 - [add](docs/user/commands/add.md): add and pin datasets, matching current references, a list of links with `-i`, or files on this machine pinned by their bytes with `ref = "local"`; recovery copies stay out of logs
 - [sync](docs/user/commands/sync.md): restore pins, preserve local edits, sync named datasets alone and preview required repairs
-- [build](docs/user/commands/build.md): runs each recipe's step on private copies of what it reads, pins what it wrote in data.lock and places it; `build --dry-run` shows each command first and runs nothing
+- [build](docs/user/commands/build.md): runs each recipe's step on private copies of what it reads, pins what it wrote in data.lock and places it; `build --dry-run` shows each command first and runs nothing; a rebuild that differs from its pin is kept, and `build --accept` pins it
 - [lock](docs/user/commands/lock.md): check or upgrade pins without placement, and merge data.toml and data.lock offline after a git merge, with `--ours` and `--theirs` for datasets both sides changed
 - [list](docs/user/commands/list.md): dataset references, locked sizes and folders, or one dataset's files; ctrl-c stops reading
 - [export](docs/user/commands/export.md): SHA-256 lines for `sha256sum -c`, link lists and aria2c input files from the pins, complete or refused, with gaps named in JSON

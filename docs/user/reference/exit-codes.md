@@ -39,7 +39,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
 | `build.needed` | a recipe changed, or was never built, since data.lock pinned it: read what moved in `errors[0].details`, then build it deliberately, since building runs the project's code; `errors[0].fix` is always null for it |
 | `build.failed` | a recipe's step could not start, failed or wrote what a result cannot hold: read the last lines of its output in `errors[0].details` and the whole of it in `.fetchloom/builds/<name>.log`; data.lock and the data folder are as they were |
-| `build.differs` | a step built again from the same inputs, command and code made other files than data.lock pins: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and the data folder are as they were |
+| `build.differs` | a step built again from the same inputs, command and code made other files than data.lock pins: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and the data folder are as they were. `errors[0].details` names the files that differ, and the rebuild is kept: once a person has looked at it, `fetchloom build --accept <name>` pins it. `errors[0].fix` is always null for it |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
 a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.

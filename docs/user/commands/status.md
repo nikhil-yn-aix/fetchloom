@@ -56,6 +56,7 @@ an `exclude` in a dataset that names a file inside an archive leaves the file wh
 |---|---|
 | `unlocked` | a manifest entry is missing from the lock or has a changed spec or `extract`, or a [recipe](../recipes.md)'s result is not pinned as building it now would make; the line says what moved, such as `clean · clean.py changed`, and a hint points at `fetchloom build --dry-run` instead of sync |
 | `removed` | a locked dataset is no longer in the manifest |
+| `candidates` | a recipe has a kept rebuild, files a build made that differ from what data.lock pins for the same key; the line names [`fetchloom build --accept`](build.md#a-rebuild-that-differs), which pins it. it is no difference from data.lock, so it leaves the count alone |
 | `missing` | a target path is absent. sync puts it back and says so; to leave a file out for good, run [`fetchloom drop`](drop.md) |
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |

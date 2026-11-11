@@ -15,6 +15,9 @@ a recipe makes a dataset from other datasets with a command a person writes in `
 | [build/step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/step.rs) | running a step: the process and its group, the log, the tail, a stop |
 | [build/inputs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/inputs.rs) | the private copy of each dataset a step reads |
 | [build/capture.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/capture.rs) | taking in what a step wrote: the walk, the names, the hashes, the publication |
+| [build/compare.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/build/compare.rs) | a rerun's files beside the ones data.lock pins: matching, changed, missing and extra |
+| [cli/build/accept.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/build/accept.rs) | `build --accept`: the checks a kept rebuild must pass, its pin and its placing |
+| [project/state.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/state.rs) | `State.candidates`, the rebuild of each recipe that differs from its pin |
 | [cache/results.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/results.rs) | `builds/<key>/<tree>` records, key locks, and moving a captured file into `objects/` |
 | [examples/recipe_step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/examples/recipe_step.rs) | the step program the cli tests put in recipes |
 | [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | `tell_stale`, the warning sync and path give for a recipe not built yet or changed since its build, and `Loop::ready`, which fetches what a step reads |
@@ -60,7 +63,7 @@ a build takes the project's hold for its whole run, relocks the sources of the c
 | this key | every file of its pin | `Up to date` |
 | this key | not every file, but a mirror holds the rest | `Fetched`: `fetch::mirrors::fill` copies them in, and nothing runs |
 | another key or none | a whole record of this key, on unix written by this user and writable by no one else | `Reused`: the newest record is pinned |
-| this key | not every file, and no mirror holds the rest | run; the same tree keeps the pin, another is `build.differs` and nothing enters the cache |
+| this key | not every file, and no mirror holds the rest | run; the same tree keeps the pin, another is `build.differs`, kept as [a rebuild that differs](#a-rebuild-that-differs) |
 | another key or none | no whole record | run, and pin what it made |
 
 before a run or a reuse the build takes `Cache::hold_key`, an OS lock on `builds/<key>/lock`, and looks for a record again under it, so a second build of one key, in another clone sharing the cache, waits with `Waiting for another fetchloom building <name>` and reuses what the first made. a disk without locks lets them overlap, which costs only the second run.
@@ -82,6 +85,14 @@ once the step exits with 0, the build hashes its code again and fails when a fil
 ## committing
 
 the build writes `data.lock` and its parts once, after its last step, with `Loop::write_rendered`, only when the lock it made differs from the one it read; a pin keeps its `locked` time while its key and tree stay. a step that fails, is stopped or writes what a result cannot hold returns before that, so `data.lock`, `data.lock.d` and the data folder stay byte for byte as they were, while the results of the steps before it stay in the cache by key and a build run again reuses them. the errors are `build.failed`, with the exit code or signal and the tail, and `build.differs`, both exit 60, and the JSON `result` of the steps that finished stays beside them.
+
+## a rebuild that differs
+
+a step run again for a key data.lock pins can make another tree. `compare::compare` merge-joins the pinned files and the rerun's by path into `matching`, `changed`, `missing` and `extra`, which the JSON step's `check` carries and the `build.differs` error lists, 20 paths a step at most. the rerun's files still enter the cache through `capture::publish`, but `Cache::record_result` is skipped: a record under `builds/<key>` is what a later build reuses, and a rebuild no person chose must never become a pin that way.
+
+instead `State.candidates` in `.fetchloom/state` keeps a `Candidate` for the recipe, its key, its tree, the tree data.lock pinned beside it and its files, replacing any kept before. keeping one registers the project with the cache, since a failed build never reaches the sync that would, and `cache gc` reads every registered project's state and counts a candidate's files as needed. `status` lists the recipes with one under `candidates`. a build that pins another key or tree for the recipe drops its candidate, as `forget` does once data.lock is written.
+
+`build --accept`, in `cli/build/accept.rs`, takes the project's hold and checks each candidate before it changes anything: its key must be the one `Step::read` gives against data.lock as it is, data.lock must still pin the key and the tree it was kept beside, its files must hash to its tree and the cache must hold every one. a refusal is `usage`, exit 2, and `output::fix` leaves its help alone, since `runs_code` counts every build. a candidate that passes is recorded with `record_result`, so the newest record of the key is the accepted tree, pinned with a new `locked` time, written with `Loop::write_rendered`, dropped from the state and placed by `sync_all` within the accepted recipes. nothing runs and nothing downloads.
 
 ## placing results
 

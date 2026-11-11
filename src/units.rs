@@ -97,6 +97,11 @@ pub(crate) fn seconds(elapsed: Duration) -> String {
 
 /// a count with its noun: `1 file`, `1,204 files`, `2 retries`.
 pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
+    format!("{} {}", grouped(n), if n == 1 { one } else { many })
+}
+
+/// a number with its thousands apart: `1,204`.
+pub(crate) fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
@@ -105,7 +110,7 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
         }
         grouped.push(digit);
     }
-    format!("{grouped} {}", if n == 1 { one } else { many })
+    grouped
 }
 
 /// free text on one line and at most `most` characters, cut after a whole word and ended with
