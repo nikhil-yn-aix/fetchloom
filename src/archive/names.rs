@@ -130,6 +130,33 @@ impl Names {
         })
     }
 
+    /// the path in NFC of the file an earlier entry named `raw`, a hardlink's target as the
+    /// archive spells it, when one did, spelled the same.
+    pub(super) fn earlier_file(&self, raw: &str) -> Option<String> {
+        let mut path = raw;
+        while let Some(rest) = path.strip_prefix("./") {
+            path = rest;
+        }
+        let nfc = ComposingNormalizerBorrowed::new_nfc()
+            .normalize(path)
+            .into_owned();
+        let mut folder = 0;
+        let mut parts = nfc.split('/').peekable();
+        while let Some(part) = parts.next() {
+            let (key, seen) = self
+                .seen
+                .get_key_value(&(folder, name::fold(part).into_boxed_str()))?;
+            if seen.name.as_deref().unwrap_or(&key.1) != part {
+                return None;
+            }
+            if parts.peek().is_none() {
+                return (!seen.is_folder).then_some(nfc);
+            }
+            folder = seen.id;
+        }
+        None
+    }
+
     /// adds the last name in `path`, which starts at byte `at`, to the folder `folder`, and
     /// returns its id.
     fn insert(

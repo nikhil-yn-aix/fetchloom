@@ -132,6 +132,13 @@ pub(super) fn unpack(
             // pax global headers carry defaults for the whole archive, such as the commit id
             // git archive writes, and name no file
             EntryType::XGlobalHeader => continue,
+            EntryType::Link => {
+                headers.in_member.set(true);
+                let linked = hardlink(guard, &raw, &mut entry);
+                headers.in_member.set(false);
+                linked?;
+                continue;
+            }
             other => return Err(refused_member(&raw, &special(other))),
         };
         if is_sparse(&mut entry) {
@@ -171,6 +178,38 @@ pub(super) fn unpack(
         guard.skip(trailing)?;
     }
     Ok(())
+}
+
+/// takes the hardlink `raw`, which holds the bytes of the file it points at, as tar writes a
+/// file's second name. its target must be a file earlier in the archive; any other could reach
+/// outside it.
+fn hardlink(
+    guard: &mut Guard<'_>,
+    raw: &str,
+    entry: &mut Entry<'_, impl Read>,
+) -> Result<(), Error> {
+    let target = entry
+        .link_name_bytes()
+        .map(|target| String::from_utf8_lossy(&target).into_owned())
+        .unwrap_or_default();
+    match guard.name(raw, false)? {
+        Named::System(path) => guard.leave_out(path),
+        Named::File(path) => {
+            let Some(earlier) = guard.earlier_file(&target) else {
+                return Err(refused_member(
+                    raw,
+                    &format!(
+                        "it is a hardlink to \"{}\", which is no file before it in the archive",
+                        target.escape_debug()
+                    ),
+                ));
+            };
+            guard.link(path, earlier);
+        }
+        Named::Folder => return Err(refused_member(raw, "it is a hardlink named as a folder")),
+    }
+    // a hardlink usually holds no bytes of its own; any it holds are its target's again
+    guard.pass(raw, entry)
 }
 
 fn special(kind: EntryType) -> String {
@@ -389,7 +428,6 @@ mod tests {
     fn links_devices_and_fifos_are_refused() {
         let kinds = [
             (EntryType::Symlink, "a symlink"),
-            (EntryType::Link, "a hardlink"),
             (EntryType::Char, "a device"),
             (EntryType::Block, "a device"),
             (EntryType::Fifo, "a fifo"),
@@ -406,6 +444,57 @@ mod tests {
                 err.message,
                 format!(
                     "the archive holds \"special\", which fetchloom refuses because it is {reason}"
+                )
+            );
+        }
+    }
+
+    /// a hardlink entry named `name` that points at `target`, as the archive spells both.
+    fn hardlink(tar: &mut Builder<Vec<u8>>, name: &[u8], target: &[u8]) {
+        let mut header = Header::new_ustar();
+        let fields = header.as_ustar_mut().unwrap();
+        fields.name[..name.len()].copy_from_slice(name);
+        fields.linkname[..target.len()].copy_from_slice(target);
+        header.set_entry_type(EntryType::Link);
+        header.set_size(0);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, &[][..]).unwrap();
+    }
+
+    /// tar writes a file's second name as a hardlink to its first, so a hardlink to a file before
+    /// it unpacks to that file's bytes again. any other target, a later file, a folder or a path
+    /// outside the archive, is refused, since a link could reach outside it.
+    #[test]
+    fn a_hardlink_to_an_earlier_file_unpacks_as_that_file() {
+        let tar = built(|tar| {
+            raw_entry(tar, b"h/a.wav", EntryType::Regular, b"RIFF");
+            hardlink(tar, b"h/b.wav", b"h/a.wav");
+            hardlink(tar, b"h/c.wav", b"./h/b.wav");
+        });
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(Format::Tar, &tar).unwrap();
+        let members: Vec<(&str, u64)> = unpacked
+            .members
+            .iter()
+            .map(|member| (member.path.as_str(), member.size))
+            .collect();
+        assert_eq!(members, [("h/a.wav", 4), ("h/b.wav", 4), ("h/c.wav", 4)]);
+        for member in &unpacked.members {
+            assert_eq!(member.sha256, digest::sha256(b"RIFF"), "{}", member.path);
+        }
+        assert_eq!(scratch.cache.objects().len(), 1);
+        for target in ["h/later.wav", "h", "/etc/passwd", "../a.wav", "h/A.wav"] {
+            let tar = built(|tar| {
+                raw_entry(tar, b"h/a.wav", EntryType::Regular, b"RIFF");
+                hardlink(tar, b"h/b.wav", target.as_bytes());
+                raw_entry(tar, b"h/later.wav", EntryType::Regular, b"x");
+            });
+            let err = Scratch::new().refuse(Format::Tar, &tar);
+            assert_eq!(
+                err.message,
+                format!(
+                    "the archive holds \"h/b.wav\", which fetchloom refuses because it is a hardlink to \"{target}\", which is no file before it in the archive"
                 )
             );
         }

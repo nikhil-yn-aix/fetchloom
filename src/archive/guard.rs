@@ -48,6 +48,8 @@ pub(super) struct Guard<'a> {
     skipped: u64,
     /// the files a system writes by itself that the archive holds, left out.
     system: Skipped,
+    /// hardlinks, each by its path and the path of the earlier file whose bytes it holds.
+    links: Vec<(String, String)>,
     /// the cache the members are written to, and the most bytes one file holds on its disk.
     disk: Option<(&'a Path, u64)>,
 }
@@ -67,6 +69,7 @@ impl<'a> Guard<'a> {
             written: 0,
             skipped: 0,
             system: Skipped::default(),
+            links: Vec::new(),
             disk: None,
         }
     }
@@ -135,6 +138,22 @@ impl<'a> Guard<'a> {
     /// checks an entry's name, as [`Names::add`] describes.
     pub(super) fn name(&mut self, raw: &str, is_folder: bool) -> Result<Named, Error> {
         self.names.add(raw, is_folder)
+    }
+
+    /// the file an earlier entry named `raw`, as [`Names::earlier_file`] finds it.
+    pub(super) fn earlier_file(&self, raw: &str) -> Option<String> {
+        self.names.earlier_file(raw)
+    }
+
+    /// notes the file at `path` as a hardlink to the earlier file at `target`, whose bytes it
+    /// holds.
+    pub(super) fn link(&mut self, path: String, target: String) {
+        self.links.push((path, target));
+    }
+
+    /// what [`Guard::link`] noted, in the archive's order.
+    pub(super) fn links(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.links)
     }
 
     /// copies one member into `to`, refusing the archive as soon as what was written passes a

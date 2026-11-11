@@ -12,6 +12,7 @@ mod store;
 mod tar;
 mod zip;
 
+use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -345,6 +346,26 @@ pub(crate) fn unpack(
         guard.check_stopped()
     })?;
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    let links = guard.links();
+    if !links.is_empty() {
+        let mut linked: HashMap<String, (Sha256, u64)> = HashMap::new();
+        for (path, target) in links {
+            // each target is a file stored before it, or a link to one
+            let held = members
+                .binary_search_by(|member| member.path.as_str().cmp(&target))
+                .ok()
+                .map(|at| (members[at].sha256, members[at].size))
+                .or_else(|| linked.get(&target).copied());
+            if let Some(held) = held {
+                linked.insert(path, held);
+            }
+        }
+        let linked = linked
+            .into_iter()
+            .map(|(path, (sha256, size))| Member { path, size, sha256 });
+        members.extend(linked);
+        members.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    }
     let tree = tree_hash(&members);
     Ok(Unpacked {
         members,
