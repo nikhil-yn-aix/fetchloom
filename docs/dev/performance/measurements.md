@@ -150,7 +150,7 @@ on hugging face, kaggle and figshare, fetchloom's slowest run was faster than th
 | 100 files of 10 MiB | 6 | 32.74 s, 26.69 to 61.59 | 20.02 s, 18.92 to 21.05 | 0.619 [0.378, 0.717] |
 | one file of 1 GiB | 12 | 20.62 s, 17.26 to 42.56 | 19.04 s, 17.81 to 37.05 | 0.988 [0.888, 1.065] |
 
-one file is under the batch rule's 64, so both ways flush it on its own; its row measures reading it back through a new handle after closing the one that wrote it, which cost nothing measurable. system cpu time was 2.91 s against 3.05 s for the small files, and the same for the large ones. on the final build, at a load average of 41, a first push of the 10,000 files took 3.09 to 3.35 s in three runs, and a second push, which finds each file with one look at its name and writes nothing, 0.02 s in nine.
+one file is under the batch rule's 64, so both ways flush it on its own; its row measures reading it back through a new handle after closing the one that wrote it, which cost nothing measurable. system cpu time was 2.91 s against 3.05 s for the small files, and the same for the large ones. built as committed, at a load average of 47, a first push of the 10,000 files took 2.58 to 2.93 s in three runs, and a second push, which finds each file with one look at its name and writes nothing, 0.02 s in nine.
 
 ## evidence limits
 
