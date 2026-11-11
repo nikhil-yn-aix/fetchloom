@@ -728,8 +728,9 @@ fn next_step(path: &str, stop: &str) -> String {
 fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
     if cfg!(windows) {
         format!(
-            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{folder}`. {stop} stops this warning"#,
-            path.replace('/', "\\")
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{}`. {stop} stops this warning"#,
+            path.replace('/', "\\"),
+            folder.replace('/', "\\")
         )
     } else if cfg!(target_os = "macos") {
         format!(
@@ -742,8 +743,8 @@ fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
     }
 }
 
-/// a rar stays packed, and its warning names a command for this system that unpacks it into a
-/// folder outside the data folder, which status leaves alone.
+/// a rar stays packed, and its warning names a command for this system that unpacks it beside
+/// the archive, inside the data folder git ignores, where sync keeps what it unpacked.
 #[test]
 fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
     let sandbox = Sandbox::new()?;
@@ -753,7 +754,11 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
     let stderr = text(&added.stderr)?;
     let warned = format!(
         "warning: sample/sample.rar stays packed, since fetchloom does not unpack rar\n  help: {}\n",
-        next_step("data/sample/sample.rar", "extract = false")
+        next_step_into(
+            "data/sample/sample.rar",
+            "data/sample/sample-unpacked",
+            "extract = false"
+        )
     );
     assert!(stderr.contains(&warned), "{stderr}");
     assert_eq!(
@@ -761,13 +766,10 @@ fn rar_stays_packed_with_a_next_step_for_this_system() -> Result {
         RAR
     );
     // what the command leaves behind
-    let unpacked = sandbox.folder("work/sample-unpacked")?;
+    let unpacked = sandbox.folder("work/data/sample/sample-unpacked")?;
     fs::write(unpacked.join("clip.avi"), b"frames")?;
-    let status = sandbox.run(&["status"])?;
-    assert_eq!(
-        text(&status.stderr)?,
-        "         Ok everything matches data.lock by size and time\n"
-    );
+    ok(&sandbox.run(&["sync"])?)?;
+    assert_eq!(fs::read(unpacked.join("clip.avi"))?, b"frames");
     Ok(())
 }
 
@@ -1180,12 +1182,14 @@ mod split {
         Ok(())
     }
 
-    /// the help for a zip spanned over `.z01` files, on this system.
+    /// the help for a zip spanned over `.z01` files, on this system, whose joined zip and
+    /// unpacked folder start with `name`.
     fn join_step(path: &str, name: &str) -> String {
         if cfg!(windows) {
             format!(
-                r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{name}-unpacked`. extract = false stops this warning"#,
-                path.replace('/', "\\")
+                r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{}-unpacked`. extract = false stops this warning"#,
+                path.replace('/', "\\"),
+                name.replace('/', "\\")
             )
         } else {
             let zip = if cfg!(target_os = "macos") {
@@ -1220,13 +1224,13 @@ mod split {
             "warning: shots/clips.part1.rar stays packed with 1 other volume of its rar, since fetchloom does not unpack rar\n  help: {}\n",
             next_step_into(
                 "data/shots/clips.part1.rar",
-                "clips.part1-unpacked",
+                "data/shots/clips.part1-unpacked",
                 "extract = false"
             )
         );
         let zip = format!(
             "warning: shots/maps.zip stays packed with 1 other file it spans, since fetchloom does not unpack a zip spanned over several files\n  help: {}\n",
-            join_step("data/shots/maps.zip", "maps")
+            join_step("data/shots/maps.zip", "data/shots/maps")
         );
         assert!(stderr.contains(&rar), "{stderr}");
         assert!(stderr.contains(&zip), "{stderr}");

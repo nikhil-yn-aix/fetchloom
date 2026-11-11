@@ -140,8 +140,9 @@ impl System {
 
 /// how a person on `system` unpacks the archive at `path`, which fetchloom leaves packed: a
 /// command that unpacks it into a folder named after it in `parent`, both as they read from
-/// where fetchloom runs, then `stop`, what keeps the archive packed without this warning.
-/// `parent` is outside the data folder, so status lists none of the unpacked files.
+/// where fetchloom runs, then `stop`, what keeps the archive packed without this warning. a
+/// project's `parent` is the archive's own folder, inside the data folder git ignores; `get`'s
+/// is outside the folder it fills, which a later `get` would otherwise refuse to fill again.
 pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     let named = name

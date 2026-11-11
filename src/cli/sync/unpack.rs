@@ -259,7 +259,7 @@ impl Loop<'_> {
     }
 
     /// learns what every new archive in `drafts` unpacks to, and says which archives stay packed
-    /// and how a person can unpack them, outside the data folder `manifest` sets.
+    /// and how a person can unpack them.
     pub(super) async fn unpack_drafts(
         &self,
         manifest: &Manifest,
@@ -284,16 +284,20 @@ impl Loop<'_> {
     }
 
     /// says that the archive at `path` in `dataset` stays packed and why, with how a person
-    /// unpacks it outside the data folder `manifest` sets, as typed where fetchloom runs.
+    /// unpacks it beside the archive, inside the data folder `manifest` sets, as typed where
+    /// fetchloom runs. git ignores the data folder, so what they unpack stays out of git.
     fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
         let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
         let up = crate::cli::up_to(&self.project.root, &here);
         let placed = format!("{up}{}/{path}", plan::folder(manifest, dataset));
+        let beside = placed
+            .rsplit_once('/')
+            .map_or_else(String::new, |(folder, _)| format!("{folder}/"));
         let stop = "extract = false";
         let (said, help) = match why {
             Why::Format(format) => (
                 format!("{dataset}/{path} stays packed, since fetchloom does not unpack {format}"),
-                archive::unpack_elsewhere(System::RUNNING, &placed, &up, stop),
+                archive::unpack_elsewhere(System::RUNNING, &placed, &beside, stop),
             ),
             Why::Volumes {
                 format: "rar",
@@ -303,14 +307,14 @@ impl Loop<'_> {
                     "{dataset}/{path} stays packed with {} of its rar, since fetchloom does not unpack rar",
                     units::count(*count as u64 - 1, "other volume", "other volumes")
                 ),
-                archive::unpack_elsewhere(System::RUNNING, &placed, &up, stop),
+                archive::unpack_elsewhere(System::RUNNING, &placed, &beside, stop),
             ),
             Why::Volumes { count, .. } => (
                 format!(
                     "{dataset}/{path} stays packed with {} it spans, since fetchloom does not unpack a zip spanned over several files",
                     units::count(*count as u64 - 1, "other file", "other files")
                 ),
-                archive::join_elsewhere(System::RUNNING, &placed, &up, stop),
+                archive::join_elsewhere(System::RUNNING, &placed, &beside, stop),
             ),
             Why::Missing(missing) => (
                 format!(
