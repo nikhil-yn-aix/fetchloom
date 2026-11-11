@@ -26,6 +26,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 |---|---|
 | `--check` | run every step again from the inputs `data.lock` pins and compare what each makes with `data.lock`, file by file; `data.lock` and the data folder stay as they are. [check](#check) has the details |
 | `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
+| `--locked` | fail with `lock.outdated`, exit 1, instead of changing `data.lock`, for CI: before anything is fetched or run when `data.lock` does not pin every dataset the steps need as `data.toml` asks, and when building would change a pin anyway |
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
 [global options](README.md#global-options) apply.
@@ -33,7 +34,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 ## what happens
 
 1. find the project and take its lock, which the build holds until it ends.
-2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet.
+2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet. with `--locked`, a fetched dataset whose entry changed, a recipe never built or changed since it was built, or a pin building would change, as one of a recipe `data.toml` no longer has, stops the build with `lock.outdated`, exit 1, before anything is fetched or run.
 3. take each recipe in order, each after the datasets it is made from, ties by name:
    - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
    - `Fetched` when `data.lock` pins what building it now would make and a [mirror](../mirrors.md) holds the files the cache lacks, which it copies into the cache;
@@ -124,7 +125,7 @@ error: data.lock is out of date: clean changed since it was built
   help: run `fetchloom build clean`, then commit data.lock and data.lock.d
 ```
 
-`--check` cannot be combined with `--accept` or `--dry-run`.
+`--check` cannot be combined with `--accept` or `--dry-run`. with `--locked` it is the check CI runs, [CI](../ci.md#recipes) shows.
 
 ## a rebuild that differs
 
@@ -147,7 +148,7 @@ the files it made stay in the cache as a kept rebuild, which `fetchloom status` 
          Ok pinned emb's kept rebuild in data.lock
 ```
 
-without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, as after accepting it once; when the recipe or `data.lock` changed since it was kept, so it no longer answers them; or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild. `--accept` cannot be combined with `--dry-run`.
+without names, `--accept` pins every kept rebuild. it refuses with exit 2, and changes nothing, when a recipe has no kept rebuild, as after accepting it once; when the recipe or `data.lock` changed since it was kept, so it no longer answers them; or when the cache no longer holds its files. a recipe made from an accepted one needs building again, which a hint names. a later build that pins other files for the recipe drops its kept rebuild. `--accept` cannot be combined with `--dry-run` or `--locked`.
 
 ## dry run
 
@@ -215,4 +216,4 @@ the JSON `fix` of a build's error is always null, since building runs the projec
 
 ## exit codes
 
-0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2, and so is an `--accept` that finds nothing to pin. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.
+0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2, and so is an `--accept` that finds nothing to pin. `--locked` and `--check` fail with `lock.outdated`, exit 1, when `data.lock` does not pin what the steps need as `data.toml` asks. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.

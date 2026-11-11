@@ -169,8 +169,14 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
     let project = find(&context.output)?;
     let (_, manifest) = project.manifest()?;
     recipes_only(&manifest, &args.names)?;
+    let current = match (args.locked, args.check) {
+        (true, true) => Some("build without --locked and --check"),
+        (false, true) => Some("build without --check"),
+        (true, false) => Some("build without --locked"),
+        (false, false) => None,
+    };
     if args.dry.dry_run {
-        return preview(context, &project, &manifest, &args.names).map(Report::Previewed);
+        return preview(context, &project, &manifest, &args.names, current).map(Report::Previewed);
     }
     let _held = hold(context, &project, "build").await?;
     if args.accept {
@@ -178,7 +184,6 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
             .await
             .map(|built| Report::Built(Box::new(built)));
     }
-    let current = args.check.then_some("build without --check");
     let mut building = Building::start(context, &project, &args.names, current).await?;
     if args.check {
         building.check().await?;
@@ -220,18 +225,26 @@ fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
     }
 }
 
-/// what building `names` would do, told as a dry run tells it, with nothing run or changed.
+/// what building `names` would do, told as a dry run tells it, with nothing run or changed. with
+/// `current`, as `--locked` asks, data.lock must pin what data.toml asks first.
 fn preview(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
     names: &[String],
+    current: Option<&str>,
 ) -> Result<Previewed, Error> {
-    let lock = project.lock()?.unwrap_or_default();
+    let read = project.lock_and_text()?;
     let selected = selected(manifest, names);
     let roots: Vec<&str> = selected.iter().map(String::as_str).collect();
+    let closure = recipe::closure(&manifest.datasets, &roots);
+    if let Some(instead) = current {
+        let scope = Scope::Only(closure.iter().map(|name| (*name).to_owned()).collect());
+        pinned_as_asked(project, manifest, read.as_ref(), instead, &scope)?;
+    }
+    let lock = read.map(|(lock, _)| lock).unwrap_or_default();
     let mut steps = Vec::new();
-    for name in recipe::closure(&manifest.datasets, &roots) {
+    for name in closure {
         if let Some(step) = Step::read(&project.root, manifest, &lock, name)? {
             let changes = step.changes(lock.result(name));
             steps.push((step, changes));
@@ -472,6 +485,22 @@ impl<'a> Building<'a> {
             )
             .await
             .map_err(|error| work.before_placing(error))?;
+        if let Some(instead) = current {
+            let changed = repinned(&before, &lock);
+            if !changed.is_empty() {
+                let names: Vec<&str> = changed.iter().map(String::as_str).collect();
+                return Err(Error::new(
+                    Kind::Outdated,
+                    format!(
+                        "data.lock is out of date: building would change what it pins of {}",
+                        listed(&names)
+                    ),
+                )
+                .help(format!(
+                    "run `fetchloom lock` and commit data.lock, or {instead}"
+                )));
+            }
+        }
         Ok(Building {
             context,
             work,

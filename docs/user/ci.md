@@ -72,13 +72,21 @@ it hashes every placed file, downloads again any whose bytes differ from `data.l
 
 ## recipes
 
-in a project with [recipes](recipes.md), `fetchloom sync --locked` places each pinned result from the cache or a mirror, and fails with `build.needed`, exit 60, when a recipe changed since it was built or neither holds its result, as on a fresh runner. a job that builds runs the repository's code, so give it only branches you trust:
+in a project with [recipes](recipes.md), `fetchloom sync --locked` places each pinned result from the cache or a mirror, and fails with `build.needed`, exit 60, when a recipe changed since it was built or neither holds its result, as on a fresh runner. a job that builds runs the repository's code, so give it only branches you trust. `--locked` makes the build fail with `lock.outdated`, exit 1, before anything is fetched or run, rather than build what `data.lock` does not pin as `data.toml` asks, and it never writes `data.lock`:
 
 ```sh
-fetchloom build --json
+fetchloom build --locked --json
 ```
 
 a job that builds commits nothing: commit `data.lock` and `data.lock.d` from the machine you built on, so a runner places the same results. a step that fails exits 60 with `build.failed`, and the last lines of its output are in `errors[0].details`.
+
+to show that the committed results are reproducible, as in a nightly job, run every step again from the pinned inputs on a runner with an empty cache and compare what each makes with `data.lock`:
+
+```sh
+fetchloom build --locked --check --json
+```
+
+it needs no result on the runner, since it compares with the files `data.lock.d` lists. it exits 0 when every step made the files `data.lock` pins, and 60 with `build.differs` when one did not, naming the files in `errors[0].details` and in `result.steps[].check`. it never changes `data.lock` or the data folder, and its `fix` is null.
 
 ## checking the result
 

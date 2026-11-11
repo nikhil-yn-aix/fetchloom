@@ -1373,6 +1373,72 @@ fn a_check_refuses_drift_before_running() -> Result {
     Ok(())
 }
 
+/// `--locked` never writes data.lock: a recipe never built or changed since, or a fetched
+/// dataset data.toml changed, is `lock.outdated` before anything is fetched or run, and so is a
+/// build that would change a pin anyway, as by dropping one of a recipe data.toml no longer has.
+#[test]
+fn locked_build_never_writes_data_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let extra = "\n[datasets.extra]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
+    with(&sandbox, &server, &format!("{COPY_CODE}{extra}"))?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    let refused = |args: &[&str], said: &str| -> Result {
+        let lock = fs::read(sandbox.work().join("data.lock"))?;
+        let runs_before = runs(&sandbox.work())?;
+        let output = build(&sandbox, args)?;
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+        let document = json(&output)?;
+        let (kind, message, _, _, _) = error(&document);
+        assert_eq!(kind, "lock.outdated");
+        assert_eq!(message, said);
+        assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+        assert_eq!(runs(&sandbox.work())?, runs_before, "{args:?} ran a step");
+        Ok(())
+    };
+    let locked = ["--json", "build", "--locked", "clean"];
+    refused(&locked, "data.lock is out of date: clean is not built yet")?;
+    refused(
+        &["--json", "build", "--locked", "--dry-run"],
+        "data.lock is out of date: clean and extra need building",
+    )?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    refused(
+        &locked,
+        "data.lock is out of date: clean changed since it was built",
+    )?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, text_now.replace(extra, ""))?;
+    refused(
+        &locked,
+        "data.lock is out of date: building would change what it pins of extra",
+    )?;
+    fs::write(&manifest, &text_now)?;
+    let requests = server.requests().len();
+    fs::write(
+        &manifest,
+        text_now.replacen(
+            "[datasets.iris]\n",
+            "[datasets.iris]\nselect = \"*.csv\"\n",
+            1,
+        ),
+    )?;
+    refused(&locked, "data.lock is out of date with data.toml")?;
+    assert_eq!(server.requests().len(), requests, "nothing was fetched");
+    fs::write(&manifest, &text_now)?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = build(&sandbox, &locked)?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["result"]["steps"][0]["action"], "up_to_date");
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    let accept = build(&sandbox, &["build", "--locked", "--accept"])?;
+    assert_eq!(accept.status.code(), Some(2), "{}", text(&accept.stderr)?);
+    Ok(())
+}
+
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
 /// `--accept` refuses it and changes nothing.
 #[test]

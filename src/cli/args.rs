@@ -849,6 +849,11 @@ pub(crate) struct Build {
     #[arg(long, conflicts_with = "dry_run", help_heading = "options")]
     pub(crate) accept: bool,
 
+    /// fail instead of changing data.lock when it is out of date with data.toml or a recipe,
+    /// for CI
+    #[arg(long, conflicts_with = "accept", help_heading = "options")]
+    pub(crate) locked: bool,
+
     #[command(flatten)]
     pub(crate) dry: DryRun,
 }
