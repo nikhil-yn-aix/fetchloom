@@ -77,15 +77,21 @@ fn object(root: &Path, bytes: &[u8]) -> PathBuf {
 /// the file at `path` is no other name of the object `cache` keeps, so an edit of one never
 /// reaches the other.
 fn unlinked(path: &Path, cache: &Path) -> Result {
+    let kept = object(cache, IRIS);
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        let (file, kept) = (fs::metadata(path)?, fs::metadata(object(cache, IRIS))?);
+        let (file, kept) = (fs::metadata(path)?, fs::metadata(&kept)?);
         assert_eq!(file.nlink(), 1, "{}", path.display());
         assert_ne!(file.ino(), kept.ino(), "{}", path.display());
     }
-    #[cfg(not(unix))]
-    let _ = (path, cache);
+    #[cfg(windows)]
+    {
+        let information = |path: &Path| winapi_util::file::information(fs::File::open(path)?);
+        let (file, kept) = (information(path)?, information(&kept)?);
+        assert_eq!(file.number_of_links(), 1, "{}", path.display());
+        assert_ne!(file.file_index(), kept.file_index(), "{}", path.display());
+    }
     Ok(())
 }
 
