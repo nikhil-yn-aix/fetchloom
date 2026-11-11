@@ -346,6 +346,55 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// a download that began at `resumed` of `total`: checks the disk has room for it, asks
+    /// first where its size calls for it, then shows its bar from there.
+    fn started(&self, total: Option<u64>, resumed: u64, resumable: Resumable) -> Result<(), Error> {
+        self.waited().take();
+        // a size only the server states is checked here, before any byte is written
+        if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
+            crate::space::cache_holds(cache, [(self.job.label.as_str(), total)])?;
+        }
+        self.overall.begin(self.output);
+        let left = total.map_or(0, |total| total.saturating_sub(resumed));
+        let unknown = self.job.fetch.expect.size.is_none();
+        let free = self.approval.cache.as_deref().map(crate::space::free);
+        // a download that may have found its bytes unchanged was not asked about before
+        if unknown || self.job.fetch.held.is_some() {
+            // a disk without room asks instead, and its question names the size too
+            if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
+                && !self.yes
+                && crate::space::short(left, free).is_some()
+            {
+                let doing = format!("downloading {}", self.job.label);
+                let free = free.unwrap_or_default();
+                self.approve(|| super::ask_room(self.output, &doing, left, free, cache))?;
+            } else if left > self.approval.above {
+                let size = units::size(left);
+                self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
+            }
+        }
+        if unknown {
+            if let Some(total) = total
+                && !self.sized.swap(true, Ordering::Relaxed)
+            {
+                self.overall.sized(total);
+            }
+            self.unbounded.store(total.is_none(), Ordering::Relaxed);
+            self.received.store(resumed, Ordering::Relaxed);
+            let watched = free.flatten().filter(|_| total.is_none() && !self.yes);
+            self.free
+                .store(watched.unwrap_or(u64::MAX), Ordering::Relaxed);
+            self.free_from.store(resumed, Ordering::Relaxed);
+        }
+        self.restarting(resumed);
+        let bar = self.bar();
+        bar.message("Downloading", self.job.label.clone());
+        bar.start(total, resumed);
+        self.held.keep(resumed, resumable);
+        self.count(resumed);
+        Ok(())
+    }
+
     fn on(&self, event: &Event) -> Result<(), Error> {
         let label = &self.job.label;
         match *event {
@@ -363,51 +412,7 @@ impl<'a> Watch<'a> {
                 total,
                 resumed,
                 resumable,
-            } => {
-                self.waited().take();
-                // a size only the server states is checked here, before any byte is written
-                if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
-                    crate::space::cache_holds(cache, [(self.job.label.as_str(), total)])?;
-                }
-                self.overall.begin(self.output);
-                let left = total.map_or(0, |total| total.saturating_sub(resumed));
-                let unknown = self.job.fetch.expect.size.is_none();
-                let free = self.approval.cache.as_deref().map(crate::space::free);
-                // a download that may have found its bytes unchanged was not asked about before
-                if unknown || self.job.fetch.held.is_some() {
-                    // a disk without room asks instead, and its question names the size too
-                    if let (Some(cache), Some(free)) = (self.approval.cache.as_deref(), free)
-                        && !self.yes
-                        && crate::space::short(left, free).is_some()
-                    {
-                        let doing = format!("downloading {}", self.job.label);
-                        let free = free.unwrap_or_default();
-                        self.approve(|| super::ask_room(self.output, &doing, left, free, cache))?;
-                    } else if left > self.approval.above {
-                        let size = units::size(left);
-                        self.approve(|| super::ask(self.output, self.yes, &self.job.label, &size))?;
-                    }
-                }
-                if unknown {
-                    if let Some(total) = total
-                        && !self.sized.swap(true, Ordering::Relaxed)
-                    {
-                        self.overall.sized(total);
-                    }
-                    self.unbounded.store(total.is_none(), Ordering::Relaxed);
-                    self.received.store(resumed, Ordering::Relaxed);
-                    let watched = free.flatten().filter(|_| total.is_none() && !self.yes);
-                    self.free
-                        .store(watched.unwrap_or(u64::MAX), Ordering::Relaxed);
-                    self.free_from.store(resumed, Ordering::Relaxed);
-                }
-                self.restarting(resumed);
-                let bar = self.bar();
-                bar.message("Downloading", label.clone());
-                bar.start(total, resumed);
-                self.held.keep(resumed, resumable);
-                self.count(resumed);
-            }
+            } => self.started(total, resumed, resumable)?,
             Event::WebPage { ref name } => {
                 let given = name.as_deref().and_then(crate::name::sanitize);
                 // a page that names no file, at a link whose own name has no extension, is a
