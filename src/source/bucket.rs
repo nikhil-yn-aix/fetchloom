@@ -10,7 +10,7 @@ use std::fmt;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use super::{Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::{self, Api, Response};
@@ -162,6 +162,7 @@ impl Prefix {
         }
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             resolved: Reference::Bucket(self.clone()),
             title: None,
             license: None,

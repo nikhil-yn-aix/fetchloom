@@ -6,7 +6,7 @@ use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -105,6 +105,7 @@ impl Record {
             .collect::<Result<_, _>>()?;
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Zenodo(resolved),

@@ -9,7 +9,7 @@ use super::Node;
 use crate::digest::{Md5, Sha256};
 use crate::error::Error;
 use crate::net::Api;
-use crate::source::{Listing, Reference, Remote};
+use crate::source::{Access, Listing, Reference, Remote};
 
 #[derive(Deserialize)]
 struct Page {
@@ -200,6 +200,7 @@ impl Entry {
         let file = self.remote(node, title.clone())?;
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Osf(node.clone()),

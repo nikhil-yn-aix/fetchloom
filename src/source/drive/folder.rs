@@ -8,7 +8,7 @@ use url::Url;
 use super::{Item, ItemKind, file_url, html};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Listing, Reference, Remote, Unavailable, most_files, too_many};
+use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many};
 
 /// a drive id, with the resource key drive asks for along with items shared before 2021.
 #[derive(Debug, PartialEq, Eq)]
@@ -64,6 +64,7 @@ pub(super) async fn list(item: &Item, api: &impl Api) -> Result<Listing, Error> 
     }
     Ok(Listing {
         within: Vec::new(),
+        access: Access::Unknown,
         unavailable: walk.unavailable,
         warnings: Vec::new(),
         resolved: Reference::Drive(item.clone()),

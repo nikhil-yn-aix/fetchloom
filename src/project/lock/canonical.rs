@@ -7,6 +7,7 @@ use super::lists::Listed;
 use super::{Locked, LockedFile, Parsed, VERSION, prefixed};
 use crate::digest::{Md5, Sha256};
 use crate::name;
+use crate::source::Access;
 
 /// the datasets `text` gives, when it is in the exact form [`super::Lock::render`] writes, with
 /// either line ending. `comments` additionally accepts blank lines and valid TOML comments around
@@ -153,6 +154,13 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
         }
     }
     let [title, license, doi] = optional;
+    let mut access = Access::Unknown;
+    if lines.sets("access") {
+        let word = lines.value("access")?;
+        access = [Access::Public, Access::Login, Access::Terms]
+            .into_iter()
+            .find(|access| access.word() == word)?;
+    }
     let timestamp = lines.value("locked")?;
     let mut files: Vec<LockedFile> = Vec::new();
     let mut listed = None;
@@ -182,6 +190,7 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
         title,
         license,
         doi,
+        access,
         timestamp,
         files,
     };
@@ -337,6 +346,11 @@ mod tests {
             title: extra.then(|| "Iris \"classic\"\tset\nline\r\u{1f}\u{7}".to_owned()),
             license: extra.then(|| "CC-BY-4.0".to_owned()),
             doi: extra.then(|| "10.5281/zenodo.3608990".to_owned()),
+            access: if extra {
+                Access::Terms
+            } else {
+                Access::Unknown
+            },
             timestamp: "2026-10-27T17:30:00Z".to_owned(),
             files: files.to_vec(),
         };

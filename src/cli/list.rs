@@ -10,6 +10,7 @@ use crate::error::Error;
 use crate::plan;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
+use crate::source::Access;
 use crate::units;
 
 #[derive(Serialize)]
@@ -30,6 +31,9 @@ struct Listed {
     title: Option<String>,
     license: Option<String>,
     doi: Option<String>,
+    /// who may read the data, as its source said: a hint for sharing it, `unknown` when the
+    /// source said nothing.
+    access: Option<Access>,
     /// each source file data.lock pins. `files` was already the count, so the list has its own
     /// name.
     locked_files: Option<Vec<ListedFile>>,
@@ -126,6 +130,7 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
                 title: locked.and_then(|locked| locked.title.clone()),
                 license: locked.and_then(|locked| locked.license.clone()),
                 doi: locked.and_then(|locked| locked.doi.clone()),
+                access: locked.map(|locked| locked.access),
                 locked_files: locked.map(|locked| {
                     locked
                         .files
@@ -272,6 +277,7 @@ mod tests {
             title: None,
             license: license.map(str::to_owned),
             doi: None,
+            access: Some(Access::Unknown),
             locked_files: Some(Vec::new()),
         };
         let datasets = [

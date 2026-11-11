@@ -9,7 +9,7 @@ use url::Url;
 use super::{Dataset, HOST, is_part};
 use crate::error::{Error, Kind};
 use crate::net::Api;
-use crate::source::{Listing, Reference, Remote};
+use crate::source::{Access, Listing, Reference, Remote};
 
 /// the most files kaggle sends in one page, whatever page size is asked for.
 const PAGE: usize = 200;
@@ -25,6 +25,9 @@ struct View {
     #[serde(default)]
     license_name: String,
     current_version_number: u32,
+    /// whether only accounts the owner allows may read the dataset.
+    #[serde(default)]
+    is_private: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -55,8 +58,14 @@ impl Dataset {
             ..self.named(&view.reference)?
         };
         let files = pinned.files(api, version, newest).await?;
+        let access = match view.is_private {
+            Some(true) => Access::Login,
+            Some(false) => Access::Public,
+            None => Access::Unknown,
+        };
         Ok(Listing {
             within: Vec::new(),
+            access,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Kaggle(pinned),
@@ -280,6 +289,7 @@ mod tests {
         assert_eq!(listing.title.as_deref(), Some("Iris Species"));
         assert_eq!(listing.license.as_deref(), Some("CC0: Public Domain"));
         assert_eq!(listing.doi, None);
+        assert_eq!(listing.access, Access::Public);
         let file = |path: &str, size| Remote {
             path: path.to_owned(),
             size: Some(size),
@@ -497,6 +507,18 @@ mod tests {
             "{:?}",
             err.details
         );
+    }
+
+    #[test]
+    fn a_private_dataset_needs_an_account() {
+        let body = changed("kaggle/iris-view.json", |value| {
+            value["isPrivate"] = true.into();
+        });
+        let recorded = Recorded::default()
+            .on(&view("uciml/iris"), 200, body)
+            .fixture(&files("uciml/iris", 2), "kaggle/iris-files.json");
+        let listing = block_on(dataset("uciml/iris").resolve(&recorded)).unwrap();
+        assert_eq!(listing.access, Access::Login);
     }
 
     #[test]

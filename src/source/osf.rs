@@ -8,7 +8,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{self, Api, Expired};
 
@@ -184,6 +184,7 @@ impl Metadata {
     fn listing(self, node: &Node, files: Vec<Remote>) -> Listing {
         Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Osf(node.clone()),

@@ -6,7 +6,7 @@ use std::fmt;
 use percent_encoding::percent_decode_str;
 use url::Url;
 
-use super::{Listing, Reference, Remote};
+use super::{Access, Listing, Reference, Remote};
 use crate::error::{Error, Kind};
 use crate::net::Divert;
 
@@ -65,6 +65,7 @@ impl Link {
         };
         Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Dropbox(self.clone()),

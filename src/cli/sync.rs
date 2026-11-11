@@ -1288,6 +1288,7 @@ mod tests {
             title: None,
             license: None,
             doi: None,
+            access: source::Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),
@@ -1651,6 +1652,7 @@ mod tests {
         let url = Url::parse("https://example.org/data.csv").unwrap();
         let listing = Listing {
             within: Vec::new(),
+            access: source::Access::Unknown,
             resolved: Reference::Url(url),
             title: None,
             license: None,

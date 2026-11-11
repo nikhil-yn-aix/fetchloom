@@ -341,6 +341,7 @@ mod tests {
                     title: None,
                     license: None,
                     doi: None,
+                    access: crate::source::Access::Unknown,
                     timestamp: String::new(),
                     files: paths
                         .iter()

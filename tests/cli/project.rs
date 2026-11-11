@@ -48,6 +48,19 @@ fn list_shows_each_dataset_with_its_source_and_size() -> Result {
     assert_eq!(dataset["locked_files"][0]["path"], "iris.csv");
     assert_eq!(dataset["locked_files"][0]["size"], IRIS.len());
     assert!(dataset.get("title").is_some(), "{dataset}");
+    assert_eq!(
+        dataset["access"], "unknown",
+        "a plain link says nothing of it"
+    );
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    fs::write(
+        &lock,
+        pinned.replace("\nlocked = ", "\naccess = \"terms\"\nlocked = "),
+    )?;
+    let document = json(&sandbox.run(&["--json", "list"])?)?;
+    assert_eq!(document["result"]["datasets"][0]["access"], "terms");
+    fs::write(&lock, pinned)?;
     let one = sandbox.run(&["list", "iris"])?;
     assert_eq!(one.status.code(), Some(0), "{}", text(&one.stderr)?);
     assert_eq!(text(&one.stdout)?, "iris.csv  32 B\n");

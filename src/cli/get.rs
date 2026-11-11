@@ -1218,6 +1218,7 @@ mod tests {
         let parsed = Reference::parse("s3://bucket/aux/").unwrap();
         let listing = Listing {
             within: Vec::new(),
+            access: crate::source::Access::Unknown,
             resolved: parsed.reference.clone(),
             title: Some("Aux".to_owned()),
             license: None,

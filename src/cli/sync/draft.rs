@@ -16,7 +16,7 @@ use crate::net::{Expect, Fetch, Fetched};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::Entry;
-use crate::source::{self, Listing, Remote};
+use crate::source::{self, Access, Listing, Remote};
 use crate::units;
 
 pub(super) struct Draft {
@@ -32,6 +32,7 @@ pub(super) struct Draft {
     title: Option<String>,
     license: Option<String>,
     doi: Option<String>,
+    access: Access,
     files: Vec<DraftFile>,
 }
 
@@ -125,6 +126,7 @@ impl Draft {
             title: listing.title,
             license: listing.license,
             doi: listing.doi,
+            access: listing.access,
             files,
         })
     }
@@ -164,6 +166,7 @@ impl Draft {
             title: locked.title.clone(),
             license: locked.license.clone(),
             doi: locked.doi.clone(),
+            access: locked.access,
             files,
         })
     }
@@ -358,6 +361,7 @@ impl Draft {
             title: self.title,
             license: self.license,
             doi: self.doi,
+            access: self.access,
             timestamp: now.to_owned(),
             files,
         })
@@ -626,6 +630,7 @@ mod tests {
             Manifest::parse("[datasets.set]\nref = \"https://example.org/set.zip\"\n").unwrap();
         let listing = || Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),
@@ -650,6 +655,7 @@ mod tests {
             title: None,
             license: None,
             doi: None,
+            access: Access::Unknown,
             timestamp: String::new(),
             files: vec![LockedFile {
                 path: "set.zip".to_owned(),
@@ -716,6 +722,7 @@ mod tests {
             title: Some("set".to_owned()),
             license: None,
             doi: None,
+            access: Access::Unknown,
             timestamp: "2026-01-01T00:00:00Z".to_owned(),
             files: vec![
                 file("notes.txt", digest::sha256(b"notes"), 5),
@@ -772,6 +779,7 @@ mod tests {
             Manifest::parse("[datasets.w]\nref = \"https://example.org/weights.npz\"\n").unwrap();
         let listing = || Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),
@@ -796,6 +804,7 @@ mod tests {
             title: None,
             license: None,
             doi: None,
+            access: Access::Unknown,
             timestamp: String::new(),
             files: vec![LockedFile {
                 path: "weights.npz".to_owned(),
@@ -841,6 +850,7 @@ mod tests {
             title: None,
             license: None,
             doi: None,
+            access: Access::Unknown,
             timestamp: String::new(),
             files: vec![file("900150983cd24fb0d6963f7d28e17f72")],
         };
@@ -876,6 +886,7 @@ mod tests {
             title: None,
             license: None,
             doi: None,
+            access: Access::Unknown,
             timestamp: String::new(),
             files: vec![LockedFile {
                 path: "data.csv".to_owned(),
@@ -890,6 +901,7 @@ mod tests {
         let stated = crate::digest::Md5::from_hex("e80b5017098950fc58aad83c8c14978e");
         let listing = || Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Url(url.clone()),

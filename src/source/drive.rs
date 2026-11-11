@@ -10,7 +10,7 @@ use std::fmt;
 
 use url::Url;
 
-use super::{Listing, Reference, Remote, malformed};
+use super::{Access, Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Divert};
 
@@ -115,6 +115,7 @@ impl Item {
         }
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Drive(item.clone()),

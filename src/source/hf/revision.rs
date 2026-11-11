@@ -5,6 +5,7 @@ use serde::Deserialize;
 use super::{Repo, RepoKind, is_id};
 use crate::error::{Error, Kind};
 use crate::net::Api;
+use crate::source::Access;
 
 /// what the revision endpoint says about a repository.
 #[derive(Deserialize)]
@@ -14,6 +15,9 @@ pub(super) struct Info {
     /// `false`, or `auto` or `manual` for a repository whose terms must be accepted.
     #[serde(default)]
     gated: serde_json::Value,
+    /// whether only accounts the owner allows may read the repository.
+    #[serde(default)]
+    private: Option<bool>,
     #[serde(default)]
     tags: Vec<String>,
     /// the front matter of the repository's card, asked for datasets only.
@@ -48,6 +52,7 @@ impl Repo {
             if self.kind != RepoKind::Space {
                 query.append_pair("expand", "gated");
             }
+            query.append_pair("expand", "private");
             query.append_pair("expand", "tags");
             // a model's card has no dataset name, and can be large
             if self.kind == RepoKind::Dataset {
@@ -132,6 +137,17 @@ impl Info {
             self.gated,
             serde_json::Value::Null | serde_json::Value::Bool(false)
         )
+    }
+
+    /// who may read the repository, as the hub says: accepted terms for a gated one, an account
+    /// for a private one, and anyone only when it says the repository is not private.
+    pub(super) fn access(&self) -> Access {
+        match self.private {
+            _ if self.is_gated() => Access::Terms,
+            Some(true) => Access::Login,
+            Some(false) => Access::Public,
+            None => Access::Unknown,
+        }
     }
 
     /// the licenses the repository's card declares, which the hub copies into its tags.

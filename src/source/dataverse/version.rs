@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::{Dataset, Item};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
-use crate::source::{Listing, Reference, Remote, Var};
+use crate::source::{Access, Listing, Reference, Remote, Var};
 
 /// a native API answer for one version of a dataset.
 #[derive(Deserialize)]
@@ -129,6 +129,7 @@ impl Version {
             .map(|(_, doi)| doi.to_owned());
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Dataverse(Dataset {

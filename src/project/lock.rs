@@ -19,6 +19,7 @@ use crate::digest::{self, Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::name;
+use crate::source::Access;
 
 pub(crate) const FILE: &str = "data.lock";
 /// the one format of data.lock. a dataset of more files than it lists in itself keeps them in
@@ -48,6 +49,8 @@ pub(crate) struct Locked {
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
+    /// who may read the data, as its source said when it was pinned: a hint for sharing it.
+    pub(crate) access: Access,
     /// when the pinned data last changed, in UTC.
     pub(crate) timestamp: String,
     /// sorted by path.
@@ -126,6 +129,7 @@ struct StoredDataset {
     title: Option<String>,
     license: Option<String>,
     doi: Option<String>,
+    access: Option<Access>,
     #[serde(rename = "locked")]
     timestamp: String,
     files: Option<Vec<LockedFile>>,
@@ -177,6 +181,7 @@ impl StoredDataset {
             title: self.title,
             license: self.license,
             doi: self.doi,
+            access: self.access.unwrap_or_default(),
             timestamp: self.timestamp,
             files,
         };
@@ -253,6 +258,9 @@ fn write_source(out: &mut String, dataset: &Locked, inline: usize) {
         if let Some(value) = value {
             let _ = writeln!(out, "{key} = {}", quoted(value));
         }
+    }
+    if dataset.access != Access::Unknown {
+        let _ = writeln!(out, "access = \"{}\"", dataset.access.word());
     }
     let _ = writeln!(out, "locked = {}", quoted(&dataset.timestamp));
     if dataset.files.len() > inline {
@@ -554,6 +562,7 @@ mod tests {
                     title: None,
                     license: None,
                     doi: None,
+                    access: Access::Unknown,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
                     files: vec![file("z.csv", b"z")],
                 },
@@ -566,6 +575,7 @@ mod tests {
                     title: Some("Iris \"classic\"\tset".to_owned()),
                     license: Some("CC-BY-4.0".to_owned()),
                     doi: Some("10.5281/zenodo.3608990".to_owned()),
+                    access: Access::Public,
                     timestamp: "2026-10-27T17:30:00Z".to_owned(),
                     files: vec![
                         LockedFile {
@@ -578,6 +588,16 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// [`sample`] as a lock keeps it, its datasets sorted by name and their files by path.
+    fn sample_sorted() -> Lock {
+        let mut sorted = sample();
+        sorted.datasets.sort_by(|a, b| a.name.cmp(&b.name));
+        for dataset in &mut sorted.datasets {
+            dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
+        }
+        sorted
     }
 
     #[test]
@@ -626,12 +646,7 @@ mod tests {
         );
         assert!(text.contains(", md5 = \"900150983cd24fb0d6963f7d28e17f72\", url = \"https://example.org/b/iris.zip\", unpacks_to = \"sha256:"), "{text}");
         let read = Lock::parse(&text).unwrap();
-        let mut sorted = sample();
-        sorted.datasets.sort_by(|a, b| a.name.cmp(&b.name));
-        for dataset in &mut sorted.datasets {
-            dataset.files.sort_by(|a, b| a.path.cmp(&b.path));
-        }
-        assert_eq!(read, sorted);
+        assert_eq!(read, sample_sorted());
         assert_eq!(
             read.render(),
             text,
@@ -754,6 +769,32 @@ mod tests {
             "extract is compared on its own, so a switch keeps the files"
         );
         assert!(plain.starts_with("sha256:") && plain.len() == 71);
+    }
+
+    #[test]
+    fn access_is_written_unless_unknown_and_refused_when_misspelled() {
+        let text = sample().render();
+        assert!(
+            text.contains("doi = \"10.5281/zenodo.3608990\"\naccess = \"public\"\nlocked = "),
+            "{text}"
+        );
+        assert_eq!(text.matches("access").count(), 1, "{text}");
+        assert_eq!(
+            canonical::read(&text, false),
+            Some(sample_sorted().parsed())
+        );
+        let unknown = text.replace("access = \"public\"", "access = \"unknown\"");
+        assert_eq!(canonical::read(&unknown, false), None);
+        let read = Lock::parse(&unknown).unwrap();
+        assert!(
+            read.datasets
+                .iter()
+                .all(|dataset| dataset.access == Access::Unknown)
+        );
+        assert!(!read.render().contains("access"));
+        let error = Lock::parse(&text.replace("\"public\"", "\"secret\"")).unwrap_err();
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(error.help.as_deref(), Some(BROKEN));
     }
 
     #[test]

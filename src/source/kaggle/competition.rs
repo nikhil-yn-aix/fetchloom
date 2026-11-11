@@ -12,7 +12,7 @@ use super::{HOST, is_part, malformed, parts, selected};
 use crate::auth::Account;
 use crate::error::{Error, Kind};
 use crate::net::{Api, Response};
-use crate::source::{Listing, Reference, Remote};
+use crate::source::{Access, Listing, Reference, Remote};
 
 /// files asked for in one page, as for datasets. a smaller page from kaggle only means more
 /// pages.
@@ -125,6 +125,9 @@ impl Competition {
         }
         Ok(Listing {
             within: Vec::new(),
+            // a competition's data comes under its rules, even where kaggle sends it before an
+            // account accepted them
+            access: Access::Terms,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::KaggleCompetition(named),
@@ -383,6 +386,7 @@ mod tests {
         let recorded = titanic();
         let listing = block_on(competition("titanic").resolve(&recorded)).unwrap();
         assert_eq!(listing.resolved.to_string(), "kaggle:competitions/titanic");
+        assert_eq!(listing.access, Access::Terms);
         assert_eq!(
             listing.title.as_deref(),
             Some("Titanic - Machine Learning from Disaster")

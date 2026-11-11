@@ -40,6 +40,7 @@ impl Repo {
         let (files, within) = pinned.tree(api, &info.sha, folders).await?;
         Ok(Listing {
             within,
+            access: info.access(),
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::HuggingFace(pinned),
@@ -97,15 +98,15 @@ mod tests {
     use crate::digest::Sha256;
     use crate::error::Kind;
     use crate::net::{Net, Options};
-    use crate::source::Remote;
     use crate::source::hf::revision::is_commit;
     use crate::source::recorded::{Recorded, block_on, fixture_bytes};
+    use crate::source::{Access, Remote};
     use crate::work::Work;
 
     const IMDB: &str = "e6281661ce1c48d982bc483cf8a173c1bbeb5d31";
     const FLEURS: &str = "70bb2e84b976b7e960aa89f1c648e09c59f894dd";
-    const EXPAND: &str = "expand=sha&expand=gated&expand=tags&expand=cardData";
-    const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=tags";
+    const EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags&expand=cardData";
+    const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags";
 
     fn repo(text: &str) -> Repo {
         Repo::parse(text).unwrap()
@@ -331,6 +332,40 @@ mod tests {
                 && help.contains("fetchloom auth login hf"),
             "{help}"
         );
+    }
+
+    /// a gated repository needs accepted terms and a private one an account; anyone may read a
+    /// repository only when the hub says it is not private.
+    #[test]
+    fn the_hub_says_who_may_read_a_repository() {
+        let revision = api(&format!("datasets/stanfordnlp/imdb/revision/main?{EXPAND}"));
+        let captured: serde_json::Value =
+            serde_json::from_slice(&fixture_bytes("hf/imdb-revision.json")).unwrap();
+        for (private, gated, access) in [
+            (Some(false), false, Access::Public),
+            (Some(true), false, Access::Login),
+            (Some(false), true, Access::Terms),
+            (Some(true), true, Access::Terms),
+            (None, false, Access::Unknown),
+        ] {
+            let mut answer = captured.clone();
+            if let Some(private) = private {
+                answer["private"] = private.into();
+            }
+            if gated {
+                answer["gated"] = "auto".into();
+            }
+            let recorded = imdb()
+                .on(&revision, 200, serde_json::to_vec(&answer).unwrap())
+                .on(
+                    &api("datasets/stanfordnlp/imdb/auth-check"),
+                    200,
+                    b"{}".to_vec(),
+                );
+            let listing =
+                block_on(repo("datasets/stanfordnlp/imdb").resolve(&recorded, None)).unwrap();
+            assert_eq!(listing.access, access, "{private:?} {gated}");
+        }
     }
 
     #[test]

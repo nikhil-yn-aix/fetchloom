@@ -6,7 +6,7 @@ use std::fmt;
 use serde::Deserialize;
 use url::Url;
 
-use super::{Listing, Reference, Remote, Unavailable, malformed};
+use super::{Access, Listing, Reference, Remote, Unavailable, malformed};
 use crate::digest::Md5;
 use crate::error::{Error, Kind};
 use crate::net::Api;
@@ -131,6 +131,7 @@ impl Article {
         }
         Ok(Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::Figshare(resolved),

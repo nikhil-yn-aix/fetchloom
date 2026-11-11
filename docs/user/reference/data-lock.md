@@ -28,6 +28,7 @@ files = [
 | `dataset[].extract` | `false` when `data.toml` keeps the dataset's archives packed; omitted when they unpack |
 | `dataset[].resolved` | the source reference used to list the files |
 | `dataset[].title`, `license`, `doi` | optional strings supplied by the source; omitted when absent |
+| `dataset[].access` | who may read the data, as the source said: `public`, `login` for an account, or `terms` for accepted terms; omitted when the source said nothing, which means unknown |
 | `dataset[].locked` | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ` |
 | `dataset[].files` | selected source files, including archives as single files |
 | `files[].path` | relative path inside the dataset, with `/` separators |
@@ -112,6 +113,8 @@ an unchanged spec and `extract` keep the existing lock entry unless an upgrade i
 | kaggle competition | `kaggle:competitions/<name>`, without a version | `https://api.kaggle.com/v1/competitions/data/download/<name>/<file>` |
 | S3 bucket | `s3://<bucket>/<prefix>` | the object's HTTPS URL on the endpoint that listed it |
 | cloud storage bucket | `gs://<bucket>/<prefix>` | `https://storage.googleapis.com/<bucket>/<key>?generation=<generation>` |
+
+`access` is a hint for sharing the files, never a licence check. hugging face records `terms` for a gated repository, `login` for a private one and `public` when the hub says it is neither. kaggle records `terms` for a competition, whose data comes under its rules, `login` for a private dataset and `public` for a public one. other sources leave it out.
 
 DOIs route to one of these sources. hugging face resolves a branch or tag to its full commit id before listing files. kaggle encodes each file path as one URL segment. a competition file kaggle sent as a zip of itself is recorded at its path plus `.zip`, with `unpacks_to`.
 

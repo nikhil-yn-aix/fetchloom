@@ -126,6 +126,7 @@ pub(crate) struct Listing {
     pub(crate) title: Option<String>,
     pub(crate) license: Option<String>,
     pub(crate) doi: Option<String>,
+    pub(crate) access: Access,
     pub(crate) files: Vec<Remote>,
     pub(crate) unavailable: Vec<Unavailable>,
     /// what a person should know about the listing, told as warnings once it resolves, such as
@@ -152,6 +153,33 @@ impl Listing {
             .iter()
             .map(|file| file.path.as_str())
             .chain(self.unavailable.iter().map(|entry| entry.path.as_str()))
+    }
+}
+
+/// what a source said about who may read a dataset: a hint for sharing it, never a check of a
+/// licence. a source that says nothing leaves it unknown.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Access {
+    /// anyone may read it without an account.
+    Public,
+    /// reading it takes an account, as a private repository does.
+    Login,
+    /// reading it takes accepted terms, as a gated repository or a competition's rules do.
+    Terms,
+    #[default]
+    Unknown,
+}
+
+impl Access {
+    /// the word data.lock and `--json` use for it.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Access::Public => "public",
+            Access::Login => "login",
+            Access::Terms => "terms",
+            Access::Unknown => "unknown",
+        }
     }
 }
 
@@ -583,6 +611,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
 fn single(url: &Url) -> Listing {
     Listing {
         within: Vec::new(),
+        access: Access::Unknown,
         unavailable: Vec::new(),
         warnings: Vec::new(),
         resolved: Reference::Url(url.clone()),
@@ -1088,6 +1117,7 @@ mod tests {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             files: paths
@@ -1123,6 +1153,7 @@ mod tests {
         let url = Url::parse("https://example.org/x").unwrap();
         let listing = |paths: &[&str]| Listing {
             within: Vec::new(),
+            access: Access::Unknown,
             files: paths
                 .iter()
                 .map(|path| Remote {

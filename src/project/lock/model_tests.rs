@@ -73,6 +73,12 @@ fn generated(bytes: &[u8]) -> Lock {
             });
         }
         let extract = input.byte() & 1 != 0;
+        let access = [
+            Access::Public,
+            Access::Login,
+            Access::Terms,
+            Access::Unknown,
+        ][usize::from(input.byte()) % 4];
         let mut optional = || (input.byte() & 1 != 0).then(|| input.text());
         let title = optional();
         let license = optional();
@@ -86,6 +92,7 @@ fn generated(bytes: &[u8]) -> Lock {
             title,
             license,
             doi,
+            access,
             timestamp: input.text(),
             files,
         });
