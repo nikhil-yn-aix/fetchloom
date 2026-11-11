@@ -96,9 +96,11 @@ struct Overall {
     what: String,
     /// the sizes the batch knows before it starts, added up, and how many files it does not.
     sizes: (u64, usize),
-    /// what the bar fills to so far. downloads run on several threads and learn sizes at once,
-    /// so each addition reads and writes it under one lock.
-    length: std::sync::Mutex<u64>,
+    /// the sizes known so far, added up, and how many files have yet to tell theirs: the bar
+    /// fills to that sum only once none is left, so it promises no time left before. downloads
+    /// run on several threads and learn sizes at once, so each addition reads and writes it under
+    /// one lock.
+    length: std::sync::Mutex<(u64, usize)>,
 }
 
 impl Overall {
@@ -132,18 +134,12 @@ impl Overall {
             let bar = context
                 .output
                 .bar("Downloading", units::count(count as u64, "file", "files"));
-            let known: Vec<u64> = sizes().flatten().collect();
-            bar.start(
-                (!known.is_empty()).then(|| known.iter().copied().fold(0, u64::saturating_add)),
-                0,
-            );
+            let (total, unknown) = sized(sizes());
+            bar.start((unknown == 0).then_some(total), 0);
             bar
         });
-        let length = std::sync::Mutex::new(sizes().flatten().fold(0, u64::saturating_add));
-        let sizes = sizes().fold((0, 0), |(total, unknown), size| match size {
-            Some(size) => (u64::saturating_add(total, size), unknown),
-            None => (total, unknown + 1),
-        });
+        let sizes = sized(sizes());
+        let length = std::sync::Mutex::new(sizes);
         Overall {
             bar,
             ticker: OnceLock::new(),
@@ -186,13 +182,34 @@ impl Overall {
                 .length
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *length = length.saturating_add(bytes);
-            bar.length(*length);
+            let (total, unknown) = &mut *length;
+            *total = total.saturating_add(bytes);
+            *unknown = unknown.saturating_sub(1);
+            if *unknown == 0 {
+                bar.length(*total);
+            }
         }
         if let Some(ticker) = self.ticker.get() {
             ticker.sized(bytes);
         }
     }
+}
+
+/// `sizes` added up, and how many of them are not known.
+fn sized(sizes: impl Iterator<Item = Option<u64>>) -> (u64, usize) {
+    sizes.fold((0, 0), |(total, unknown), size| match size {
+        Some(size) => (u64::saturating_add(total, size), unknown),
+        None => (total, unknown + 1),
+    })
+}
+
+/// what the bar for a batch of `count` files says once `done` of them finished, while others
+/// may still be under way.
+fn batch(done: usize, count: usize) -> String {
+    format!(
+        "{} · {done} done",
+        units::count(count as u64, "file", "files")
+    )
 }
 
 /// the one answer a run's downloads share once a large download asks, the size above which a
@@ -345,6 +362,14 @@ impl<'a> Watch<'a> {
         self.waiting
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// tells the batch the size of a download that ended without its size ever told, as one
+    /// sent in chunks does, from the bytes it received, so the batch can learn its total.
+    fn ended(&self) {
+        if self.job.fetch.expect.size.is_none() && !self.sized.swap(true, Ordering::Relaxed) {
+            self.overall.sized(self.received.load(Ordering::Relaxed));
+        }
     }
 
     /// moves the overall progress up to `position`, never back and never twice over a byte.
@@ -728,6 +753,7 @@ async fn run_each(
                     }
                     fetched => fetched,
                 };
+                watch.ended();
                 if let Ok(found) = &fetched
                     && found
                         .name
@@ -757,7 +783,7 @@ async fn run_each(
                 results[index] = Some(Ok(fetched));
                 done += 1;
                 if let Some(bar) = &overall.bar {
-                    bar.message("Downloading", format!("{done} of {count} files"));
+                    bar.message("Downloading", batch(done, count));
                 }
             }
             // a file that failed on its own leaves nothing the next run goes on from
@@ -1385,6 +1411,47 @@ mod tests {
             })
             .unwrap();
         assert!(overall.ticker.get().is_some());
+    }
+
+    /// a batch whose sizes are not all known has no total to fill to, so its bar promises no
+    /// time left, until the last size is told; each size counts once.
+    #[test]
+    fn a_batch_has_a_total_only_once_every_size_is_known() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = |size| {
+            let mut fetch = Fetch::new(Url::parse("https://example.org/a.bin").unwrap());
+            fetch.expect.size = size;
+            Job {
+                fetch,
+                label: "a/a.bin".to_owned(),
+                dataset: None,
+                again: None,
+            }
+        };
+        let jobs = [job(Some(100)), job(None), job(Some(50)), job(None)];
+        let overall = Overall::new(&context, &jobs);
+        let total = || overall.bar.as_ref().and_then(Bar::total);
+        assert_eq!(total(), None, "150 B is not what the batch fills to");
+        overall.sized(10);
+        assert_eq!(total(), None);
+        overall.sized(20);
+        assert_eq!(total(), Some(180));
+        assert_eq!(
+            batch(1, 12),
+            "12 files · 1 done",
+            "four more may be under way"
+        );
     }
 
     /// a lone download that finds bytes an earlier run kept says so on its bar while it gets

@@ -159,6 +159,13 @@ impl Bar {
         self.drawn.as_ref().map(ProgressBar::message)
     }
 
+    /// what the bar fills to as it draws it, none while it has no length, for tests.
+    #[cfg(test)]
+    pub(crate) fn total(&self) -> Option<u64> {
+        let drawn = self.drawn.as_ref()?;
+        self.moved.shown(drawn.position(), drawn.length()).1
+    }
+
     /// what the bar fills to, as a size learned during the downloads changes it.
     pub(crate) fn length(&self, total: u64) {
         if let Some(bar) = &self.drawn {
