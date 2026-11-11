@@ -27,6 +27,14 @@ const SOURCE_KEYS: [&str; 3] = ["select", "exclude", "extract"];
 const RECIPE_KEYS: [&str; 4] = ["from", "run", "code", "env"];
 /// how a person writes a recipe's command, for the help of a mistake in one.
 const RUN_EXAMPLE: &str = "run = [\"python3\", \"clean.py\", \"{raw}\", \"{out}\"]";
+/// what `code` is for, for the help of a path it refuses.
+const OWN_FILES: &str = "name the project's own files, such as scripts and their settings";
+/// the files fetchloom writes beside data.toml, which no recipe's key may read.
+const WRITTEN: [&str; 2] = ["data.lock", "data.lock.d"];
+/// words of a variable's name that mark a secret, which data.toml must not hold.
+const SECRETS: [&str; 4] = ["SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
+/// pairs of words that name a key, such as `API_KEY`.
+const KEYS: [&str; 3] = ["API", "ACCESS", "PRIVATE"];
 
 #[derive(Clone, Debug)]
 pub(crate) struct Manifest {
@@ -105,23 +113,10 @@ impl Manifest {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
         let root = document.as_table();
-        let mut references = Vec::new();
-        if let Some(datasets) = root.get("datasets").and_then(Item::as_table_like) {
-            for (_, entry) in datasets.iter() {
-                if let Some(span) = entry
-                    .as_table_like()
-                    .and_then(|entry| entry.get("ref"))
-                    .and_then(Item::span)
-                {
-                    references.push(span);
-                }
-            }
-        }
-        references.sort_unstable_by_key(|span| span.start);
         let reader = Reader {
             text,
             starts: std::cell::OnceCell::new(),
-            references: Some(references),
+            private: Some(private(root)),
         };
         reader.known(root, &TOP_KEYS, "")?;
         let data_dir = match root.get("project") {
@@ -154,8 +149,74 @@ impl Manifest {
             }
         }
         recipes_read_known_datasets(&datasets)?;
+        code_stays_out_of_the_data_folder(&data_dir, &datasets)?;
         Ok(Manifest { data_dir, datasets })
     }
+}
+
+/// where data.toml may hold a secret, sorted and merged: each dataset's ref, which can carry a
+/// key in its query, and its env, which should not but may. a message cites such a line by its
+/// number alone.
+fn private(root: &Table) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let datasets = root.get("datasets").and_then(Item::as_table_like);
+    for (_, entry) in datasets.into_iter().flat_map(TableLike::iter) {
+        let Some(entry) = entry.as_table_like() else {
+            continue;
+        };
+        spans.extend(entry.get("ref").and_then(Item::span));
+        let Some(env) = entry.get("env") else {
+            continue;
+        };
+        spans.extend(env.span());
+        for (_, value) in env.as_table_like().into_iter().flat_map(TableLike::iter) {
+            spans.extend(value.span());
+        }
+    }
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
+}
+
+/// refuses code inside the data folder, or holding it, since fetchloom fills it from data.lock,
+/// so its files would change the key they come from.
+fn code_stays_out_of_the_data_folder(
+    data_dir: &str,
+    datasets: &BTreeMap<String, Entry>,
+) -> Result<(), Error> {
+    let data = name::fold(data_dir);
+    for (name, entry) in datasets {
+        for path in entry
+            .recipe()
+            .map(|recipe| recipe.code.as_slice())
+            .unwrap_or_default()
+        {
+            let folded = name::fold(path);
+            let reason = if folded == data || folded.starts_with(&format!("{data}/")) {
+                "it is inside the data folder, which fetchloom fills"
+            } else if data.starts_with(&format!("{folded}/")) {
+                "it holds the data folder, which fetchloom fills"
+            } else {
+                continue;
+            };
+            let error = Error::new(
+                Kind::ProjectInvalid,
+                format!("code \"{path}\" in datasets.{name} is refused because {reason}"),
+            )
+            .help(OWN_FILES);
+            return Err(match entry.lines.get("code") {
+                Some(line) => error.detail(line.clone()),
+                None => error,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// refuses a recipe made from a dataset data.toml does not have, or recipes made from each
@@ -222,8 +283,8 @@ struct Reader<'a> {
     text: &'a str,
     /// where each line begins, found the first time a line is cited.
     starts: std::cell::OnceCell<Vec<usize>>,
-    /// sorted reference spans; invalid TOML has no trustworthy bounds for hiding credentials.
-    references: Option<Vec<Range<usize>>>,
+    /// the spans [`private`] gives; invalid TOML has no trustworthy bounds for hiding credentials.
+    private: Option<Vec<Range<usize>>>,
 }
 
 impl Reader<'_> {
@@ -389,13 +450,10 @@ impl Reader<'_> {
                 .help("write it as code = [\"clean.py\"]")
             })?,
         };
-        let code = code
-            .iter()
-            .map(|path| path.trim().trim_end_matches('/').to_owned())
-            .collect();
+        let code = self.code(table.get("code"), name, code)?;
         let env = match table.get("env") {
             None => BTreeMap::new(),
-            Some(item) => self.variables(item)?,
+            Some(item) => self.variables(item, name)?,
         };
         Ok(Recipe {
             from,
@@ -405,8 +463,60 @@ impl Reader<'_> {
         })
     }
 
-    /// a recipe's variables: a table of strings.
-    fn variables(&self, item: &Item) -> Result<BTreeMap<String, String>, Error> {
+    /// a recipe's code: paths inside the project, each once, out of what fetchloom writes and
+    /// of repository metadata. the data folder is checked once it is known.
+    fn code(
+        &self,
+        item: Option<&Item>,
+        name: &str,
+        paths: Vec<String>,
+    ) -> Result<Vec<String>, Error> {
+        let span = item.and_then(Item::span);
+        let mut code: Vec<String> = Vec::with_capacity(paths.len());
+        for path in paths {
+            let path = path.trim().trim_end_matches('/').to_owned();
+            let first = path.split('/').next().unwrap_or_default();
+            let refused = |reason: &str, help: &str| {
+                self.error(
+                    span.clone(),
+                    format!("code \"{path}\" in datasets.{name} is refused because {reason}"),
+                )
+                .help(help.to_owned())
+            };
+            if let Some(reason) = name::escapes(&path) {
+                return Err(refused(
+                    reason,
+                    "name a file or folder inside the project, with / between folders",
+                ));
+            }
+            if let Some(reason) = name::metadata(&path) {
+                return Err(refused(reason, OWN_FILES));
+            }
+            if WRITTEN
+                .iter()
+                .any(|written| first.eq_ignore_ascii_case(written))
+            {
+                return Err(refused("fetchloom writes it", OWN_FILES));
+            }
+            if code
+                .iter()
+                .any(|known| name::fold(known) == name::fold(&path))
+            {
+                return Err(self
+                    .error(
+                        span,
+                        format!("datasets.{name} names the code \"{path}\" twice"),
+                    )
+                    .help("name each file or folder once in code"));
+            }
+            code.push(path);
+        }
+        Ok(code)
+    }
+
+    /// a recipe's variables: a table of strings, named as every system takes them, none of them
+    /// fetchloom's own or a secret.
+    fn variables(&self, item: &Item, name: &str) -> Result<BTreeMap<String, String>, Error> {
         let table = item.as_table_like().ok_or_else(|| {
             self.error(
                 item.span(),
@@ -415,11 +525,13 @@ impl Reader<'_> {
             .help("write it as env = { SEED = \"1\" }")
         })?;
         let mut variables = BTreeMap::new();
-        for (variable, value) in table.iter() {
-            let Some(value) = value.as_str() else {
+        for (variable, written) in table.iter() {
+            let span = written.span().or_else(|| item.span());
+            let Some(value) = written.as_str() else {
+                let value = written;
                 return Err(self
                     .error(
-                        value.span().or_else(|| item.span()),
+                        span,
                         "every value in env must be a string in quotes".to_owned(),
                     )
                     .help(format!(
@@ -430,6 +542,40 @@ impl Reader<'_> {
                             .unwrap_or_default()
                     )));
             };
+            let refused =
+                |message: String, help: String| self.error(span.clone(), message).help(help);
+            let upper = variable.to_ascii_uppercase();
+            if !portable(variable) {
+                return Err(refused(
+                    format!(
+                        "env in datasets.{name} sets \"{variable}\", which is not a variable name every system takes"
+                    ),
+                    "name variables with letters, digits and _, not starting with a digit"
+                        .to_owned(),
+                ));
+            }
+            if upper.starts_with("FETCHLOOM_") {
+                return Err(refused(
+                    format!("env in datasets.{name} sets {variable}, one of fetchloom's own variables"),
+                    "set fetchloom's variables in your shell or its settings file, never in data.toml".to_owned(),
+                ));
+            }
+            if secret(&upper) {
+                return Err(refused(
+                    format!("env in datasets.{name} sets {variable}, which looks like a secret"),
+                    format!(
+                        "data.toml and data.lock are shared, and the step inherits your environment, so set {variable} there"
+                    ),
+                ));
+            }
+            if value.contains('\0') {
+                return Err(refused(
+                    format!(
+                        "env in datasets.{name} gives {variable} a value with a NUL character, which no program can be given"
+                    ),
+                    "remove the NUL character from the value".to_owned(),
+                ));
+            }
             variables.insert(variable.to_owned(), value.to_owned());
         }
         Ok(variables)
@@ -702,9 +848,9 @@ impl Reader<'_> {
         let end = self.text[start..]
             .find('\n')
             .map_or(self.text.len(), |at| start + at);
-        let private = self.references.as_ref().is_none_or(|references| {
-            let after = references.partition_point(|reference| reference.start < end);
-            after > 0 && references[after - 1].end > start
+        let private = self.private.as_ref().is_none_or(|spans| {
+            let after = spans.partition_point(|span| span.start < end);
+            after > 0 && spans[after - 1].end > start
         });
         if private {
             format!("{FILE}:{line}")
@@ -712,6 +858,32 @@ impl Reader<'_> {
             format!("{FILE}:{line}   {}", self.text[start..end].trim())
         }
     }
+}
+
+/// whether every system takes `variable` as a name: letters, digits and `_`, not starting with a
+/// digit, as POSIX names them.
+fn portable(variable: &str) -> bool {
+    variable
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        && variable
+            .bytes()
+            .next()
+            .is_some_and(|first| !first.is_ascii_digit())
+}
+
+/// whether an uppercase variable name looks like it holds a secret: a word of it ends in TOKEN,
+/// holds a word of [`SECRETS`], or two words name a key, as `API_KEY`. `MAX_TOKENS` and
+/// `TOKENIZERS_PARALLELISM` count tokens of text, so they stay usable.
+fn secret(upper: &str) -> bool {
+    let words: Vec<&str> = upper.split('_').collect();
+    words.iter().any(|word| {
+        word.ends_with("TOKEN")
+            || SECRETS.iter().any(|secret| word.contains(secret))
+            || KEYS.iter().any(|key| word.ends_with(&format!("{key}KEY")))
+    }) || words
+        .windows(2)
+        .any(|pair| pair[1] == "KEY" && KEYS.contains(&pair[0]))
 }
 
 /// whether a folder in data.toml is shell shorthand a person may expect to be expanded: it
@@ -1074,7 +1246,7 @@ fn not_toml(text: &str, err: &TomlError) -> Error {
     Reader {
         text,
         starts: std::cell::OnceCell::new(),
-        references: None,
+        private: None,
     }
     .error(
         err.span(),
@@ -1809,6 +1981,164 @@ mod tests {
                 ),
             );
             assert_eq!(error.details.len(), 1, "{text}");
+        }
+    }
+
+    /// code names files and folders the step reads, whose bytes enter the key, so each stays
+    /// inside the project and out of what fetchloom writes: the data folder, data.lock and
+    /// data.lock.d, and repository metadata.
+    #[test]
+    fn code_stays_in_the_project_and_out_of_the_data_folder() {
+        let recipe = |data_dir: &str, code: &str| {
+            format!("[project]\ndata_dir = \"{data_dir}\"\n\n{RAW}{CLEAN}code = [{code}]\n")
+        };
+        let manifest = parse(&recipe(
+            "data",
+            "\"clean.py\", \"lib/\", \"data.toml\", \"database\"",
+        ));
+        assert_eq!(
+            manifest.datasets["clean"].recipe().unwrap().code,
+            ["clean.py", "lib", "data.toml", "database"]
+        );
+        for (data_dir, code, message, help) in [
+            (
+                "data",
+                "\"../shared/clean.py\"",
+                "code \"../shared/clean.py\" in datasets.clean is refused because it climbs out of its folder",
+                "name a file or folder inside the project, with / between folders",
+            ),
+            (
+                "data",
+                "\"/etc/passwd\"",
+                "code \"/etc/passwd\" in datasets.clean is refused because it starts at the root of the disk",
+                "name a file or folder inside the project, with / between folders",
+            ),
+            (
+                "data",
+                "\"lib\\\\clean.py\"",
+                "code \"lib\\clean.py\" in datasets.clean is refused because it has a \\, which windows reads as a folder separator",
+                "name a file or folder inside the project, with / between folders",
+            ),
+            (
+                "data",
+                "\".\"",
+                "code \".\" in datasets.clean is refused because it has . as a folder name",
+                "name a file or folder inside the project, with / between folders",
+            ),
+            (
+                "data",
+                "\".git/hooks\"",
+                "code \".git/hooks\" in datasets.clean is refused because it names repository metadata",
+                "name the project's own files, such as scripts and their settings",
+            ),
+            (
+                "data",
+                "\"Data.Lock\"",
+                "code \"Data.Lock\" in datasets.clean is refused because fetchloom writes it",
+                "name the project's own files, such as scripts and their settings",
+            ),
+            (
+                "data",
+                "\"data.lock.d/clean.tsv.zst\"",
+                "code \"data.lock.d/clean.tsv.zst\" in datasets.clean is refused because fetchloom writes it",
+                "name the project's own files, such as scripts and their settings",
+            ),
+            (
+                "data",
+                "\"data/raw/x.csv\"",
+                "code \"data/raw/x.csv\" in datasets.clean is refused because it is inside the data folder, which fetchloom fills",
+                "name the project's own files, such as scripts and their settings",
+            ),
+            (
+                "work/data",
+                "\"WORK\"",
+                "code \"WORK\" in datasets.clean is refused because it holds the data folder, which fetchloom fills",
+                "name the project's own files, such as scripts and their settings",
+            ),
+            (
+                "data",
+                "\"clean.py\", \"clean.py/\"",
+                "datasets.clean names the code \"clean.py\" twice",
+                "name each file or folder once in code",
+            ),
+        ] {
+            let error = fails(&recipe(data_dir, code));
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{code}");
+            assert_eq!(error.message, message, "{code}");
+            assert_eq!(error.help.as_deref(), Some(help), "{code}");
+            assert_eq!(error.details.len(), 1, "{code}");
+            assert!(error.details[0].starts_with("data.toml:10"), "{code}");
+        }
+    }
+
+    /// data.toml and data.lock are shared, and the step inherits the environment of whoever
+    /// builds, so env sets plain settings: never fetchloom's own variables or a secret.
+    #[test]
+    fn env_refuses_fetchloom_and_secret_names() {
+        let recipe = |env: &str| format!("{RAW}{CLEAN}env = {{ {env} }}\n");
+        let manifest = parse(&recipe(
+            "SEED = \"1\", OMP_NUM_THREADS = \"4\", http_proxy = \"\", TOKENIZERS_PARALLELISM = \"false\", MAX_TOKENS = \"512\"",
+        ));
+        assert_eq!(manifest.datasets["clean"].recipe().unwrap().env.len(), 5);
+        for (env, message, help) in [
+            (
+                "FETCHLOOM_CACHE = \"/tmp/c\"",
+                "env in datasets.clean sets FETCHLOOM_CACHE, one of fetchloom's own variables",
+                "set fetchloom's variables in your shell or its settings file, never in data.toml",
+            ),
+            (
+                "fetchloom_jobs = \"1\"",
+                "env in datasets.clean sets fetchloom_jobs, one of fetchloom's own variables",
+                "set fetchloom's variables in your shell or its settings file, never in data.toml",
+            ),
+            (
+                "HF_TOKEN = \"hf_abc\"",
+                "env in datasets.clean sets HF_TOKEN, which looks like a secret",
+                "data.toml and data.lock are shared, and the step inherits your environment, so set HF_TOKEN there",
+            ),
+            (
+                "aws_secret_access_key = \"x\"",
+                "env in datasets.clean sets aws_secret_access_key, which looks like a secret",
+                "data.toml and data.lock are shared, and the step inherits your environment, so set aws_secret_access_key there",
+            ),
+            (
+                "DB_PASSWD = \"x\"",
+                "env in datasets.clean sets DB_PASSWD, which looks like a secret",
+                "data.toml and data.lock are shared, and the step inherits your environment, so set DB_PASSWD there",
+            ),
+            (
+                "OPENAI_API_KEY = \"x\"",
+                "env in datasets.clean sets OPENAI_API_KEY, which looks like a secret",
+                "data.toml and data.lock are shared, and the step inherits your environment, so set OPENAI_API_KEY there",
+            ),
+            (
+                "GITHUBTOKEN = \"x\"",
+                "env in datasets.clean sets GITHUBTOKEN, which looks like a secret",
+                "data.toml and data.lock are shared, and the step inherits your environment, so set GITHUBTOKEN there",
+            ),
+            (
+                "\"MY VAR\" = \"1\"",
+                "env in datasets.clean sets \"MY VAR\", which is not a variable name every system takes",
+                "name variables with letters, digits and _, not starting with a digit",
+            ),
+            (
+                "\"1SEED\" = \"1\"",
+                "env in datasets.clean sets \"1SEED\", which is not a variable name every system takes",
+                "name variables with letters, digits and _, not starting with a digit",
+            ),
+            (
+                "SEED = \"a\\u0000b\"",
+                "env in datasets.clean gives SEED a value with a NUL character, which no program can be given",
+                "remove the NUL character from the value",
+            ),
+        ] {
+            let error = fails(&recipe(env));
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{env}");
+            assert_eq!(error.message, message, "{env}");
+            assert_eq!(error.help.as_deref(), Some(help), "{env}");
+            assert_eq!(error.details.len(), 1, "{env}");
+            assert!(error.details[0].starts_with("data.toml:7"), "{env}");
+            assert!(!error.details[0].contains("hf_abc"), "{env}");
         }
     }
 
