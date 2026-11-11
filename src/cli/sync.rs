@@ -269,15 +269,15 @@ impl<'a> Loop<'a> {
     }
 
     /// warns about each recipe in the run's scope whose result `lock` does not pin as building it
-    /// now would make, as [`tell_stale`] says.
-    pub(super) fn tell_stale(&self, manifest: &Manifest, lock: &Lock) {
+    /// now would make, as [`tell_stale`] says, and returns their names.
+    pub(super) fn tell_stale(&self, manifest: &Manifest, lock: &Lock) -> Vec<String> {
         tell_stale(
             &self.context.output,
             &self.project.root,
             manifest,
             lock,
             &self.scope,
-        );
+        )
     }
 
     /// puts in the cache every file the fetched datasets `names` of `lock` hold, as a build's
@@ -1177,14 +1177,15 @@ impl<'a> Loop<'a> {
 /// it was built, whose pinned result a run places as it is. a run of named datasets relocks none
 /// of the others, so an input data.toml changed since data.lock pinned it is told as changed
 /// too. this reads the code in the project at `root`, data.toml and data.lock, and fetches
-/// nothing.
+/// nothing. returns the names of the recipes it warned about.
 pub(super) fn tell_stale(
     output: &Output,
     root: &std::path::Path,
     manifest: &Manifest,
     lock: &Lock,
     scope: &Scope,
-) {
+) -> Vec<String> {
+    let mut stale = Vec::new();
     for (name, entry) in &manifest.datasets {
         let Some(recipe) = entry.recipe().filter(|_| scope.includes(name)) else {
             continue;
@@ -1196,14 +1197,18 @@ pub(super) fn tell_stale(
                     Some(help) => output.warn_with(&error.message, help),
                     None => output.warn(&error.message),
                 }
+                stale.push(name.clone());
                 continue;
             }
         };
         if changes.first() == Some(&crate::recipe::Change::Unbuilt) {
             output.warn_with(
                 &format!("{name} is not built yet"),
-                &format!("run `fetchloom build {name}` to make it"),
+                &format!(
+                    "run `fetchloom build {name}` to make it, then commit data.lock and data.lock.d"
+                ),
             );
+            stale.push(name.clone());
             continue;
         }
         let mut said: Vec<String> = changes.iter().map(ToString::to_string).collect();
@@ -1224,10 +1229,12 @@ pub(super) fn tell_stale(
         output.warn_with(
             &format!("{name} changed since it was built: {}", said.join("; ")),
             &format!(
-                "data.lock still pins the result built before; `fetchloom build {name}` builds it again"
+                "data.lock still pins the result built before; run `fetchloom build {name}`, then commit data.lock and data.lock.d"
             ),
         );
+        stale.push(name.clone());
     }
+    stale
 }
 
 /// the error for recipes whose results data.lock pins but neither the cache nor a mirror holds,

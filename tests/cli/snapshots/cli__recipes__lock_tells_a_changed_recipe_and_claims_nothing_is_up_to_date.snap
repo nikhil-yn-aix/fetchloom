@@ -1,0 +1,7 @@
+---
+source: tests/cli/recipes.rs
+expression: stderr
+---
+warning: clean changed since it was built: clean.py changed
+  help: data.lock still pins the result built before; run `fetchloom build clean`, then commit data.lock and data.lock.d
+         Ok data.lock pins the fetched datasets as data.toml asks; clean needs a build

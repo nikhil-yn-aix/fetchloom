@@ -51,7 +51,7 @@ code is hashed by `code::hash`, which walks the path from the project root with 
 
 `Step::read` takes a recipe as it stands: each input's pinned content, `run` as written, each code path's hash on disk and `env`. `Step::changes` compares it with the `Derived` pin and names what moved: no pin (`Unbuilt`), an input pinned to other content or not pinned yet, `run`, a code file changed or missing, `env`, or a key that disagrees though everything it records agrees. nothing moved means data.lock pins what building the recipe now would make.
 
-`lock --check` and `sync --locked` turn changes into `build.needed`, exit 60, after any `lock.outdated` finding, since a build reads what `fetchloom lock` pins. `status` lists the recipe under `unlocked` with what moved, and `sync` and `path` place the pinned result and warn through `tell_stale`, as [placing results](#placing-results) says. the JSON `fix` of a build is always null: `output::fix` skips any command `cli::runs_code` says would run the project's code, so no script or agent runs a build unasked.
+`lock --check` and `sync --locked` turn changes into `build.needed`, exit 60, after any `lock.outdated` finding, since a build reads what `fetchloom lock` pins. `status` lists the recipe under `unlocked` with what moved, `sync` and `path` place the pinned result and warn through `tell_stale`, as [placing results](#placing-results) says, and `lock`, which keeps every recipe's pin, warns through it too and names the recipes it returns in its last line rather than calling data.lock up to date. the JSON `fix` of a build is always null: `output::fix` skips any command `cli::runs_code` says would run the project's code, so no script or agent runs a build unasked.
 
 ## trust
 

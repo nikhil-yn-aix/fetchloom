@@ -166,7 +166,7 @@ a recipe that changed since its build, as when its code, `run`, `env` or a datas
 
 ```text
 warning: clean changed since it was built: clean.py changed
-  help: data.lock still pins the result built before; `fetchloom build clean` builds it again
+  help: data.lock still pins the result built before; run `fetchloom build clean`, then commit data.lock and data.lock.d
          Ok all pinned files are in place by size and time, nothing to do
 ```
 

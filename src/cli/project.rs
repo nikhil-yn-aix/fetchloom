@@ -497,6 +497,8 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     // a stop asked while the datasets were resolved leaves data.lock as it was
     context.stop.check()?;
     context.stop.finish();
+    // lock keeps a recipe's pin, which only a build moves, so it says which ones moved
+    let stale = work.tell_stale(&manifest, &lock);
     let changed = work.write_lock(&before, &lock)?.is_some();
     work.drop_unpacked(&lock);
     engine::tell_upgrades(
@@ -514,10 +516,12 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             manifest.data_dir,
             committed(&project)
         ));
-    } else {
+    } else if stale.is_empty() {
         context
             .output
             .done("Ok", "data.lock is already up to date, nothing to do");
+    } else {
+        context.output.done("Ok", &unbuilt_pins(&stale));
     }
     Ok(Report {
         project: project.root,
@@ -526,6 +530,16 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         placement: None,
         ..Report::default()
     })
+}
+
+/// what a lock that changed nothing says of data.lock while the recipes `stale` need a build,
+/// so it never calls data.lock up to date.
+fn unbuilt_pins(stale: &[String]) -> String {
+    let names = match stale {
+        [first @ .., last] if !first.is_empty() => format!("{} and {last} need", first.join(", ")),
+        _ => format!("{} needs", stale.join("")),
+    };
+    format!("data.lock pins the fetched datasets as data.toml asks; {names} a build")
 }
 
 /// says which datasets an upgrade of all leaves as they are: imports, which no source has a newer
@@ -561,6 +575,7 @@ async fn preview_lock(
     let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
     let dry = work.relock_dry(manifest, old, upgrade, Vec::new()).await?;
     let output = &context.output;
+    let stale = work.tell_stale(manifest, &dry.lock);
     let changed = !dry.before.holds(&dry.lock);
     if changed {
         engine::tell_lock(
@@ -600,7 +615,12 @@ async fn preview_lock(
         output.hint("whether a file no checksum pins has changed shows only once it is downloaded");
     }
     let nothing = !changed && download.is_empty() && dry.unpack.is_empty();
-    dry_run_done(output, nothing.then_some("data.lock is already up to date"));
+    let found = if stale.is_empty() {
+        "data.lock is already up to date".to_owned()
+    } else {
+        unbuilt_pins(&stale)
+    };
+    dry_run_done(output, nothing.then_some(found.as_str()));
     Ok(Report {
         project: project.root.clone(),
         selected: None,

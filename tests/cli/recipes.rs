@@ -71,7 +71,9 @@ fn sync_warns_of_a_recipe_not_built_yet() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
     assert_eq!(
         json(&output)?["warnings"],
-        json!(["clean is not built yet; run `fetchloom build clean` to make it"])
+        json!([
+            "clean is not built yet; run `fetchloom build clean` to make it, then commit data.lock and data.lock.d"
+        ])
     );
     let named = sandbox.run(&["--json", "sync", "clean"])?;
     assert_eq!(named.status.code(), Some(60), "{}", text(&named.stdout)?);
@@ -97,7 +99,7 @@ fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
     let built = build(&sandbox, &["build"])?;
     assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
     fs::write(&code, "print('after')\n")?;
-    let warned_text = "clean changed since it was built: clean.py changed; data.lock still pins the result built before; `fetchloom build clean` builds it again";
+    let warned_text = "clean changed since it was built: clean.py changed; data.lock still pins the result built before; run `fetchloom build clean`, then commit data.lock and data.lock.d";
     let placed = sandbox.work().join("data").join("clean").join("clean.csv");
     for args in [
         &["--json", "sync"][..],
@@ -132,6 +134,35 @@ fn sync_and_path_place_the_pin_of_a_changed_recipe_and_warn() -> Result {
     Ok(())
 }
 
+/// `lock` keeps a changed recipe's pin, since only a build pins one, so it still succeeds: it
+/// says what moved as sync does, with the build and commit that bring data.lock up to date, and
+/// its last line never calls data.lock up to date, dry run or not.
+#[test]
+fn lock_tells_a_changed_recipe_and_claims_nothing_is_up_to_date() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE_CODE)?;
+    let code = sandbox.work().join("clean.py");
+    fs::write(&code, "print('before')\n")?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    fs::write(&code, "print('after')\n")?;
+    let pins = fs::read(sandbox.work().join("data.lock"))?;
+
+    let locked = sandbox.run(&["lock"])?;
+    assert_eq!(locked.status.code(), Some(0), "{}", text(&locked.stderr)?);
+    let stderr = text(&locked.stderr)?;
+    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, pins);
+    let dry = text(&sandbox.run(&["lock", "--dry-run"])?.stderr)?;
+    assert!(
+        dry.contains("warning: clean changed since it was built: clean.py changed\n")
+            && !dry.contains("up to date"),
+        "{dry}"
+    );
+    Ok(())
+}
+
 /// a sync or path of a recipe alone relocks and fetches nothing of what it is made from: it
 /// reads the inputs' pins and entries to tell that one changed in data.toml, and places the
 /// result from the cache.
@@ -153,7 +184,7 @@ fn a_named_sync_reads_its_inputs_and_fetches_none_of_them() -> Result {
     let lock = fs::read(sandbox.work().join("data.lock"))?;
     let placed = sandbox.work().join("data").join("clean").join("clean.csv");
     delete(&placed)?;
-    let warned_text = "clean changed since it was built: iris changed in data.toml; data.lock still pins the result built before; `fetchloom build clean` builds it again";
+    let warned_text = "clean changed since it was built: iris changed in data.toml; data.lock still pins the result built before; run `fetchloom build clean`, then commit data.lock and data.lock.d";
     for args in [
         &["--json", "sync", "clean"][..],
         &["--json", "path", "clean"],
