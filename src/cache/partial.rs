@@ -119,7 +119,7 @@ impl Cache {
         // the lock gets its own file because windows locks are mandatory: a locked download
         // could not be read through the object it turns into
         let path = partial.join(format!("{key}.lock"));
-        let opened = open_unfollowed(&path, true).map_err(|err| self.explained(&partial, err))?;
+        let opened = open_claim(&path).map_err(|err| self.explained(&partial, err))?;
         let (folder, stem, lock) = match take_lock(&path, opened) {
             Ok(lock) => (partial, key, Some(lock)),
             Err(TryLockError::WouldBlock) => return Ok(Claim::Busy),
@@ -159,7 +159,36 @@ pub(super) fn take_lock(path: &Path, mut opened: File) -> Result<File, TryLockEr
         if names(path, &opened).map_err(TryLockError::Error)? {
             return Ok(opened);
         }
-        opened = open_unfollowed(path, true).map_err(TryLockError::Error)?;
+        opened = open_claim(path).map_err(TryLockError::Error)?;
+    }
+}
+
+/// opens the claim file at `path`, creating it when missing. windows keeps the name of a file
+/// another run removed until that run closes it, as fat and exfat do, and refuses to open it
+/// meanwhile as if access were denied, so on windows a refusal is tried again for half a second.
+fn open_claim(path: &Path) -> io::Result<File> {
+    let retries = if cfg!(windows) { 50 } else { 0 };
+    retry_denied(retries, Duration::from_millis(10), || {
+        open_unfollowed(path, true)
+    })
+}
+
+/// `open`, tried up to `retries` more times, `pause` apart, while it is refused as denied. a
+/// refusal that outlasts them is a real one and comes back as it was.
+fn retry_denied(
+    retries: u32,
+    pause: Duration,
+    mut open: impl FnMut() -> io::Result<File>,
+) -> io::Result<File> {
+    let mut refusals = 0;
+    loop {
+        match open() {
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied && refusals < retries => {
+                refusals += 1;
+                std::thread::sleep(pause);
+            }
+            opened => return opened,
+        }
     }
 }
 

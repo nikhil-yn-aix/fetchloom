@@ -698,3 +698,37 @@ fn partial_records_require_length_and_ranges() {
         assert!(partial.recorded().is_none(), "missing {field}");
     }
 }
+
+/// a claim file another run removed but still holds keeps its name on windows, and opening it
+/// meanwhile is denied: the open is tried again until the name is gone.
+#[test]
+fn a_denied_claim_open_is_tried_again_until_it_works() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("claim.lock");
+    let mut calls = 0;
+    let opened = retry_denied(5, Duration::ZERO, || {
+        calls += 1;
+        if calls < 3 {
+            Err(io::ErrorKind::PermissionDenied.into())
+        } else {
+            open_unfollowed(&path, true)
+        }
+    });
+    assert!(opened.is_ok(), "{opened:?}");
+    assert_eq!(calls, 3);
+}
+
+/// a denial that outlasts the tries is a real one, and one never tried again is told at once.
+#[test]
+fn a_lasting_denial_comes_back_as_it_was() {
+    for (tries, expected) in [(4, 5), (0, 1)] {
+        let mut calls = 0;
+        let refused = retry_denied(tries, Duration::ZERO, || {
+            calls += 1;
+            Err(io::ErrorKind::PermissionDenied.into())
+        })
+        .unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(calls, expected, "tries {tries}");
+    }
+}
