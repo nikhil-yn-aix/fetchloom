@@ -13,7 +13,7 @@ use super::super::Context;
 use super::super::args::Get;
 use super::super::fetch;
 use super::{
-    Done, Got, approve, folder_for, matches_sha256, one_file, selected, tell_fetched, vet,
+    Done, Got, Written, approve, folder_for, matches_sha256, one_file, selected, tell_fetched, vet,
 };
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -296,7 +296,9 @@ fn settle(
         return Err(refused(&destination.shown, &found, Wanted::Served));
     }
     if step == Step::Keep {
-        forget(context, cache, &fetched.digest);
+        if one_off(context, cache, &fetched.digest) {
+            forget(cache, &fetched.digest);
+        }
         return Ok(kept(context, Wanted::Served, destination, record(None)));
     }
     let object = cache
@@ -309,29 +311,40 @@ fn settle(
             .help("run the same command again to download it")
         })?;
     let replace = step == Step::Replace;
-    let method = publish(
-        &object,
-        &destination.path,
-        replace,
-        context.threads,
-        &context.stop,
-    )
-    .map_err(|err| unwritten(&destination.shown, &err))?;
-    let counter = match method {
-        Method::Reflink => &context.work.reflinks,
-        Method::Hardlink => &context.work.hardlinks,
-        Method::Copy => &context.work.copies,
+    let one_off = one_off(context, cache, &fetched.digest);
+    let moved = one_off
+        && take(&object, &destination.path, replace)
+            .map_err(|err| unwritten(&destination.shown, &err))?;
+    let how = if moved {
+        Written::Move
+    } else {
+        let method = publish(
+            &object,
+            &destination.path,
+            replace,
+            context.threads,
+            &context.stop,
+        )
+        .map_err(|err| unwritten(&destination.shown, &err))?;
+        let counter = match method {
+            Method::Reflink => &context.work.reflinks,
+            Method::Hardlink => &context.work.hardlinks,
+            Method::Copy => &context.work.copies,
+        };
+        Work::add(counter, 1);
+        if context.work.cached_before(&fetched.digest) {
+            Work::add(&context.work.placed_from_cache, 1);
+        }
+        if one_off {
+            forget(cache, &fetched.digest);
+        }
+        Written::from(method)
     };
-    Work::add(counter, 1);
-    if context.work.cached_before(&fetched.digest) {
-        Work::add(&context.work.placed_from_cache, 1);
-    }
-    forget(context, cache, &fetched.digest);
     context.output.done(
         if replace { "Replaced" } else { "Saved" },
         &destination.shown,
     );
-    Ok(written(destination, record(Some(method))))
+    Ok(written(destination, record(Some(how))))
 }
 
 /// refuses a file its source sent inside a zip, as kaggle may send a competition's file: `-o`
@@ -382,7 +395,7 @@ fn got(
     sha256: Sha256,
     size: u64,
     origin: Origin,
-    method: Option<Method>,
+    method: Option<Written>,
 ) -> Got {
     Got {
         path: destination
@@ -499,23 +512,85 @@ fn publish(
     Ok(method)
 }
 
-/// drops the cache's copy of bytes this run downloaded, now that the file holds them, unless a
-/// project on this machine needs them. a later run downloads them again if it must.
-fn forget(context: &Context, cache: &Cache, digest: &Sha256) {
+/// whether the cache's copy of `digest` is this run's alone: downloaded by it and needed by no
+/// project on this machine, so the file may take it, or the cache drop it once the file holds
+/// its bytes. a later run downloads it again if it must.
+fn one_off(context: &Context, cache: &Cache, digest: &Sha256) -> bool {
     if context.work.cached_before(digest) {
-        return;
+        return false;
     }
     match super::super::cache::needed_by_all(cache, None, &context.stop) {
-        Ok(Some(needed)) if !needed.objects.contains(digest) => {
-            if let Err(err) = cache.drop_object(digest) {
-                tracing::debug!(%err, "could not drop the download from the cache");
-            }
+        Ok(Some(needed)) if !needed.objects.contains(digest) => true,
+        Ok(_) => {
+            tracing::debug!("kept the download, since a project may need it");
+            false
         }
-        Ok(_) => tracing::debug!("kept the download, since a project may need it"),
         Err(err) => {
             tracing::debug!(err = %err.message, "kept the download, since a lock could not be read");
+            false
         }
     }
+}
+
+/// drops the cache's copy of `digest`, which the file now holds.
+fn forget(cache: &Cache, digest: &Sha256) {
+    if let Err(err) = cache.drop_object(digest) {
+        tracing::debug!(%err, "could not drop the download from the cache");
+    }
+}
+
+/// moves `object`, a download nothing else needs, from the cache to `path`, so a file of any size
+/// costs no second copy of its bytes, and says whether it did. it does not across disks, for an
+/// object with another name, as a project's hardlink is, which the file made writable would let
+/// an edit reach, or on windows, where fetchloom cannot count a file's names; the caller copies
+/// then. a name the file cannot take gives the object back to the cache as it was.
+#[cfg(unix)]
+fn take(object: &Path, path: &Path, replace: bool) -> io::Result<bool> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let Some(folder) = path.parent() else {
+        return Ok(false);
+    };
+    let taken = folder.join(format!(".fetchloom-{:016x}.take", fastrand::u64(..)));
+    if fs::rename(object, &taken).is_err() {
+        return Ok(false);
+    }
+    let give_back = |sealed: Option<fs::Permissions>| {
+        if let Some(sealed) = sealed {
+            let _ = fs::set_permissions(&taken, sealed);
+        }
+        if fs::rename(&taken, object).is_err() {
+            let _ = fs::remove_file(&taken);
+        }
+    };
+    // a link made to the object before it moved shows here, and none can be made after
+    let sealed = match fs::symlink_metadata(&taken) {
+        Ok(metadata) if metadata.is_file() && metadata.nlink() == 1 => metadata.permissions(),
+        _ => {
+            give_back(None);
+            return Ok(false);
+        }
+    };
+    let writable = fs::Permissions::from_mode(sealed.mode() | 0o200);
+    if fs::set_permissions(&taken, writable).is_err() {
+        give_back(Some(sealed));
+        return Ok(false);
+    }
+    let volume = Volume::new(folder.to_path_buf());
+    let named = if replace {
+        volume.replace(&taken, path)
+    } else {
+        volume.rename_new(&taken, path)
+    };
+    if let Err(err) = named {
+        give_back(Some(sealed));
+        return Err(err);
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn take(_object: &Path, _path: &Path, _replace: bool) -> io::Result<bool> {
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -682,6 +757,91 @@ mod tests {
         assert!(fs::symlink_metadata(&path).unwrap().is_file());
         assert_eq!(fs::read(&path).unwrap(), b"served");
         assert_eq!(fs::read(&elsewhere).unwrap(), b"mine");
+    }
+
+    /// the names in `folder`, sorted.
+    fn names_in(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// an object as the cache keeps one, sealed read-only, in `objects/` below `dir`.
+    #[cfg(unix)]
+    fn sealed(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let objects = dir.join("objects");
+        fs::create_dir(&objects).unwrap();
+        let object = objects.join("object");
+        fs::write(&object, b"served").unwrap();
+        fs::set_permissions(&object, fs::Permissions::from_mode(0o444)).unwrap();
+        object
+    }
+
+    /// a download nothing else needs becomes the file itself, so its bytes are never written a
+    /// second time, and the file is the person's to edit.
+    #[cfg(unix)]
+    #[test]
+    fn a_one_off_moves_out_of_the_cache_rather_than_being_copied() {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let object = sealed(dir.path());
+        let inode = fs::metadata(&object).unwrap().ino();
+        let path = dir.path().join("data.csv");
+        assert!(take(&object, &path, false).unwrap());
+        let metadata = fs::metadata(&path).unwrap();
+        assert_eq!(metadata.ino(), inode, "the same bytes, never copied");
+        assert!(!metadata.permissions().readonly());
+        assert_eq!(fs::read(&path).unwrap(), b"served");
+        assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
+        assert_eq!(names_in(&dir.path().join("objects")), Vec::<String>::new());
+    }
+
+    /// with --force the download takes the name of the file there, in one rename.
+    #[cfg(unix)]
+    #[test]
+    fn force_moves_a_one_off_over_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let object = sealed(dir.path());
+        let path = dir.path().join("data.csv");
+        fs::write(&path, b"mine").unwrap();
+        assert!(take(&object, &path, true).unwrap());
+        assert_eq!(fs::read(&path).unwrap(), b"served");
+        assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
+    }
+
+    /// an object with another name, as a project's hardlink is, stays in the cache sealed: the
+    /// file made writable would let an edit reach that project.
+    #[cfg(unix)]
+    #[test]
+    fn an_object_with_another_name_stays_in_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let object = sealed(dir.path());
+        fs::hard_link(&object, dir.path().join("placed.csv")).unwrap();
+        let path = dir.path().join("data.csv");
+        assert!(!take(&object, &path, false).unwrap());
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        assert_eq!(names_in(dir.path()), ["objects", "placed.csv"]);
+    }
+
+    /// a file that appeared at the path keeps its bytes, and the object goes back sealed, so a
+    /// later run still finds the download.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_appeared_meanwhile_stays_and_the_object_goes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let object = sealed(dir.path());
+        let path = dir.path().join("data.csv");
+        fs::write(&path, b"mine").unwrap();
+        let error = take(&object, &path, false).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"mine");
+        assert_eq!(fs::read(&object).unwrap(), b"served");
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
+        assert_eq!(names_in(dir.path()), ["data.csv", "objects"]);
     }
 
     /// kaggle may send a competition's file inside a zip, which `-o` would write under the

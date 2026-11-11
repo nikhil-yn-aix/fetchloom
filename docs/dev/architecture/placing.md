@@ -17,7 +17,7 @@ placement protects existing files while turning locked data and cached archive t
 | [place.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place.rs) | filesystem operations and copy durability | `Placer`, `Method`, `Order`, `Unlinked`, `place_all`, `relink`, `copy_file`, `move_aside`, `move_back`, `batches_copies`, `flush_copies`, `run_all` |
 | [place/synced.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/place/synced.rs) | cloud-sync folder detection | `client` |
 | [cli/get/folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/folder.rs) | one-off destination policy | `Outcome`, `check`, `put_all` |
-| [cli/get/file.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/file.rs) | the one file `get -o` writes: what to do about a file there, and publication without replacing | `Existing`, `Step`, `decide`, `publish`, `forget` |
+| [cli/get/file.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/get/file.rs) | the one file `get -o` writes: what to do about a file there, a one-off moved out of the cache, and publication without replacing | `Existing`, `Step`, `decide`, `one_off`, `take`, `publish`, `forget` |
 | [volume.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/volume.rs) | hardlink capability and read-only removal | `Volume`, `replace`, `remove`, `remove_hardlink` |
 
 ## how it works

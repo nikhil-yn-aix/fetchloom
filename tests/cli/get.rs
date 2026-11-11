@@ -240,6 +240,44 @@ fn output_writes_exactly_that_file_writable_and_alone() -> Result {
     Ok(())
 }
 
+/// a download nothing else needs moves out of the cache into the file, so its bytes are written
+/// once, however large. windows copies, since fetchloom cannot count a file's names there.
+#[test]
+fn output_moves_a_one_off_out_of_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let method = &document["result"]["files"][0]["method"];
+    if cfg!(unix) {
+        assert_eq!(method, "move");
+        for key in ["reflinks", "hardlinks", "copies"] {
+            assert_eq!(document["work"][key], 0, "{key}");
+        }
+    } else {
+        assert_ne!(method, "move");
+    }
+    assert_eq!(objects(&sandbox), 0);
+    Ok(())
+}
+
+/// bytes a project here pins stay in the cache for it, and the file gets its own copy of them.
+#[test]
+fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    crate::project::added(&sandbox, &server)?;
+    // the project's pin stays while the cache loses the bytes, so get downloads them again
+    fs::remove_dir_all(sandbox.cache().join("objects"))?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_ne!(json(&output)?["result"]["files"][0]["method"], "move");
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    assert_eq!(objects(&sandbox), 1, "the project's bytes stay cached");
+    Ok(())
+}
+
 #[test]
 fn output_keeps_an_archive_packed() -> Result {
     let sandbox = Sandbox::new()?;

@@ -75,10 +75,11 @@ an unchanged direct URL can return a 304 response, avoiding its file-body downlo
 /home/me/work/data.csv
 ```
 
-- the file is yours: writable, and no other name shares its bytes. it is a clone of the downloaded bytes where the drive makes clones, else a copy. archives stay packed.
+- the file is yours: writable, and no other name shares its bytes. archives stay packed.
+- a download nothing else on this machine needs moves out of the cache into the file when both sit on one disk, so its bytes are written once: a 200 GB file needs 200 GB, not 400, and no time to copy. otherwise the file is a clone of the cached bytes where the drive makes clones, else a copy. windows always clones or copies, since fetchloom cannot tell there whether another name shares a cached file.
 - it takes its name only after its size, any MD5 its source states and any `--sha256` are checked, and only once its bytes are on disk. it is written under a hidden name in the same folder, then named in a step that fails rather than replace a file that appeared meanwhile.
 - missing folders on the path are made. the folder you name may be a link to a folder elsewhere.
-- bytes this run downloaded leave the cache once the file holds them, unless a project on this machine pins them, so the file is their only copy. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them.
+- bytes this run downloaded leave the cache once the file holds them, unless a project on this machine pins them, so the file is their only copy. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them, and so do the bytes of a run that stopped before the file took them, which a rerun then reuses.
 
 `-o` takes one link that resolves to one file. several links, `-i`, a dataset with several files left after `--select` and a path that names a folder are usage errors, exit 2, before any file downloads, and they say to use `--dir`. so is a file its source sends inside a zip, as kaggle may send a competition's file, once its bytes show it. `-o -` is refused too, since the file is checked before it appears and stdout cannot wait for that.
 

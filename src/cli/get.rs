@@ -59,9 +59,30 @@ struct Got {
     url: String,
     origin: Origin,
     /// how the file was put into the folder, or none when it was there already.
-    method: Option<Method>,
+    method: Option<Written>,
     /// the archive the file was unpacked from, by its path in the download.
     unpacked_from: Option<String>,
+}
+
+/// how get wrote a file: as a folder is filled, or, for the file `-o` writes from a download
+/// nothing else needs, by moving the cache's copy there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Written {
+    Reflink,
+    Hardlink,
+    Copy,
+    Move,
+}
+
+impl From<Method> for Written {
+    fn from(method: Method) -> Written {
+        match method {
+            Method::Reflink => Written::Reflink,
+            Method::Hardlink => Written::Hardlink,
+            Method::Copy => Written::Copy,
+        }
+    }
 }
 
 /// one link's outcome.
@@ -665,7 +686,7 @@ async fn finish(
                 .copied()
                 .unwrap_or(Origin::Cache),
             method: match outcome {
-                Outcome::Placed(method) | Outcome::Replaced(method) => Some(method),
+                Outcome::Placed(method) | Outcome::Replaced(method) => Some(method.into()),
                 Outcome::AlreadyThere => None,
             },
             unpacked_from: target.locked.unpacks_to.map(|_| target.locked.path.clone()),
