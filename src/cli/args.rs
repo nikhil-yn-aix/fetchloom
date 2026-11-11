@@ -858,8 +858,8 @@ pub(crate) struct Build {
     #[arg(long, conflicts_with = "accept", help_heading = "options")]
     pub(crate) locked: bool,
 
-    /// fetch everything the build, or with --check the check, would read, from a mirror
-    /// first, and run nothing, as on a login node before a job builds without the network
+    /// fetch everything the build, or with --check the check, needs, from a mirror first,
+    /// and run nothing, as on a login node before a job builds without the network
     #[arg(long, conflicts_with_all = ["dry_run", "accept"], help_heading = "options")]
     pub(crate) prepare: bool,
 

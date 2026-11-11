@@ -27,7 +27,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 |---|---|
 | `--check` | run every step again from the inputs `data.lock` pins and compare what each makes with `data.lock`, file by file; `data.lock` and the data folder stay as they are. [check](#check) has the details |
 | `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
-| `--prepare` | put in the cache everything the build, or with `--check` the check, would read, from a mirror first, and run nothing, as on a login node before a job builds without the network. [prepare](#prepare) has the details |
+| `--prepare` | put in the cache everything the build, or with `--check` the check, needs, from a mirror first, and run nothing, as on a login node before a job builds without the network. [prepare](#prepare) has the details |
 | `--locked` | fail with `lock.outdated`, exit 1, instead of changing `data.lock`, for CI: before anything is fetched or run when `data.lock` does not pin every dataset the steps need as `data.toml` asks, and when building would change a pin anyway |
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
@@ -143,12 +143,12 @@ error: data.lock is out of date: clean changed since it was built
 
 ## prepare
 
-`fetchloom build --prepare` fetches what a build of the named recipes would read and runs nothing, so a build on a machine without the network, such as a cluster's compute node, finds it all in the cache. for each step the build would run, it puts in the cache the files of the datasets the step reads, asking a [mirror](../mirrors.md) before their source as a build does, and the pinned result of each recipe the step reads. a step `data.lock` pins as building it now would make needs only its own result: it is `Up to date` when the cache holds it, and `Fetched` when a mirror gave the files the cache lacked. with `--check`, every step counts as one that runs. a fetched dataset whose entry changed in `data.toml` is pinned anew and written to `data.lock`, as `fetchloom lock` would, so the later build needs no network for it either; with `--locked`, it is `lock.outdated` instead. this output is from a project whose `clean` reads `iris`, with a cache that did not hold it yet:
+`fetchloom build --prepare` fetches what a build of the named recipes needs and runs nothing, so a build on a machine without the network, such as a cluster's compute node, finds it all in the cache. for each step the build would run, it puts in the cache the files of the datasets the step reads, asking a [mirror](../mirrors.md) before their source as a build does, and the pinned result of each recipe the step reads. a step `data.lock` pins as building it now would make needs only its own result: it is `Up to date` when the cache holds it, and `Fetched` when a mirror gave the files the cache lacked. a build places its datasets once its steps are done, so `--prepare` also fetches what placing them needs, such as a dataset read only by steps that will not run. with `--check`, every step counts as one that runs and nothing is placed. a fetched dataset whose entry changed in `data.toml` is pinned anew and written to `data.lock`, as `fetchloom lock` would, so the later build needs no network for it either; with `--locked`, it is `lock.outdated` instead. this output is from a project whose `clean` reads `iris`, with a cache that did not hold it yet:
 
 ```text
- Downloaded 1 file · 72 B in 30 ms
+ Downloaded 1 file · 72 B in 28 ms
    Prepared clean · what it reads is on this machine
-         Ok a build of these steps reads only what this machine holds now; nothing ran
+         Ok a build of these steps needs only what this machine holds now; nothing ran
 ```
 
 `fetchloom --offline build` then runs the step with no request. [HPC](../hpc.md#recipes-in-jobs) shows the two halves on a cluster. `--prepare` cannot be combined with `--accept` or `--dry-run`.

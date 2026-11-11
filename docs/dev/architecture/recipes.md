@@ -98,7 +98,7 @@ the build writes `data.lock` and its parts once, after its last step, with `Loop
 
 ## preparing
 
-`build --prepare` walks the closure as a build would decide it, without running anything: a step whose pin answers its key and reads no recipe that would run needs only its result, from the cache or `fetch::mirrors::fill`; every other step, and every step with `--check`, gets `Loop::ready` for the fetched datasets it reads and the mirrors for the pinned results of the recipes it reads that will not run. a step after one that would run counts as one that runs, since its key waits on that result. `Loop::write_lock` then writes the sources the relock pinned anew, so a later `--offline` build relocks nothing; the derived pins stay as they are, and nothing is placed.
+`build --prepare` walks the closure as a build would decide it, without running anything: a step whose pin answers its key and reads no recipe that would run needs only its result, from the cache or `fetch::mirrors::fill`; every other step, and every step with `--check`, gets `Loop::ready` for the fetched datasets it reads and the mirrors for the pinned results of the recipes it reads that will not run. a step after one that would run counts as one that runs, since its key waits on that result. a build, not a check, then gets `Loop::prepare` for the fetched datasets in scope through `Building::ready_to_place`, since it places them once its steps are done and a dataset only a skipped step reads must be on the machine too. `Loop::write_lock` then writes the sources the relock pinned anew, so a later `--offline` build relocks nothing; the derived pins stay as they are, and nothing is placed.
 
 ## a rebuild that differs
 

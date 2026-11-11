@@ -1701,6 +1701,42 @@ fn prepare_check_fetches_what_a_check_reads() -> Result {
     Ok(())
 }
 
+/// a build places the datasets it took once its steps are done, so `--prepare` fetches a placed
+/// dataset that no step reads, here since a mirror gives the result of the only step, and a
+/// build without the network then makes no request.
+#[test]
+fn prepare_fetches_what_the_build_places() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let mirror = sandbox.folder("mirror")?;
+    mirror_holding(&mirror, &[b"made"])?;
+    let clone = sandbox.folder("clone")?;
+    fs::create_dir(clone.join("data.lock.d"))?;
+    pin_again(&clone, &pins(&sandbox.work())?)?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &clone, args)?
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?)
+    };
+    let prepared = there(&["--json", "build", "--prepare"])?;
+    assert_eq!(
+        prepared.status.code(),
+        Some(0),
+        "{}",
+        text(&prepared.stdout)?
+    );
+    assert_eq!(json(&prepared)?["result"]["steps"][0]["action"], "fetched");
+    let built = there(&["--json", "--offline", "build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stdout)?);
+    assert_eq!(json(&built)?["work"]["requests"], 0);
+    assert_eq!(server.requests().len(), 2, "iris came once into each cache");
+    Ok(())
+}
+
 /// a kept rebuild answers the recipe and the pin it was kept beside: after an edit of its code,
 /// `--accept` refuses it and changes nothing.
 #[test]

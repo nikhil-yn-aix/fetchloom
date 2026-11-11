@@ -22,6 +22,7 @@ use serde::Serialize;
 
 use super::args;
 use super::project::{Run, committed, find, hold, ignore_data, known, locked, register, sync_all};
+use super::sync::disk::Survey;
 use super::sync::place::{Placement, Seen};
 use super::sync::{Before, Loop, Scope, Upgrade, repinned};
 use super::{Context, fetch, open_cache};
@@ -692,9 +693,10 @@ impl<'a> Building<'a> {
     }
 
     /// puts in the cache everything a build of the recipes, or with `check` a check of them,
-    /// reads, mirrors first, and runs nothing: the datasets each step that would run reads, and
-    /// the pinned results a build would take as they are. the sources the build pins anew are
-    /// written to data.lock, so a later build needs no network for them either.
+    /// needs, mirrors first, and runs nothing: the datasets each step that would run reads, the
+    /// pinned results a build would take as they are and, for a build, what placing its datasets
+    /// needs. the sources the build pins anew are written to data.lock, so a later build needs no
+    /// network for them either.
     async fn prepare(&mut self, check: bool) -> Result<(), Error> {
         let output = &self.context.output;
         let mut running: BTreeSet<String> = BTreeSet::new();
@@ -768,6 +770,9 @@ impl<'a> Building<'a> {
             });
             running.insert(name);
         }
+        if !check {
+            self.ready_to_place().await?;
+        }
         let written = self.work.write_lock(&self.before, &self.lock)?;
         self.report.lock_changed = written.is_some();
         self.report.datasets = repinned(&self.before, &self.lock);
@@ -779,10 +784,36 @@ impl<'a> Building<'a> {
         } else {
             output.done(
                 "Ok",
-                "a build of these steps reads only what this machine holds now; nothing ran",
+                "a build of these steps needs only what this machine holds now; nothing ran",
             );
             output.next("run `fetchloom --offline build` where the steps should run");
         }
+        Ok(())
+    }
+
+    /// puts in the cache what placing the fetched datasets of the build needs that the data
+    /// folder lacks, as the build places them once its steps are done, such as a dataset only
+    /// steps that do not run read. results stay out: a step that runs makes its own, and
+    /// [`Building::prepare`] fetched the others.
+    async fn ready_to_place(&self) -> Result<(), Error> {
+        let fetched = Lock {
+            datasets: self
+                .lock
+                .datasets
+                .iter()
+                .filter(|locked| self.work.scope.includes(&locked.name))
+                .cloned()
+                .collect(),
+            derived: Vec::new(),
+        };
+        let project = self.work.project;
+        let cache = &self.work.cache;
+        let mut survey = Survey::read(project, &self.manifest.data_dir, self.context.threads);
+        survey.check_doubted(&project.root, cache)?;
+        let plan = plan::from_cache(&self.manifest, &fetched, cache)?;
+        self.work
+            .prepare(&self.manifest, &fetched, plan, false, survey)
+            .await?;
         Ok(())
     }
 
