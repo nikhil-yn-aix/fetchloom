@@ -40,6 +40,9 @@ const WAITING_LINES: usize = 10_000;
 /// started that left its group can hold them open for ever.
 const DRAIN: Duration = Duration::from_secs(2);
 
+/// how often a running step's watch looks at the free space on the disk holding the cache.
+const FLOOR_EVERY: Duration = Duration::from_secs(2);
+
 /// what to run for a step.
 pub(crate) struct Command<'a> {
     /// the program and its arguments, each folder in place.
@@ -48,6 +51,27 @@ pub(crate) struct Command<'a> {
     pub(crate) folder: &'a Path,
     /// the variables data.toml sets for it, on top of fetchloom's own environment.
     pub(crate) env: &'a BTreeMap<String, String>,
+}
+
+/// the least free space a running step may leave on the disk holding the cache, and how to learn
+/// what that disk has free.
+pub(crate) struct Floor<'a> {
+    pub(crate) bytes: u64,
+    /// the bytes free now, none when the system does not say.
+    pub(crate) free: &'a dyn Fn() -> Option<u64>,
+}
+
+impl Floor<'_> {
+    /// what the disk has free, when that is less than the floor.
+    fn breached(&self) -> Option<u64> {
+        (self.free)().filter(|free| *free < self.bytes)
+    }
+}
+
+/// whether the watch looks at the free space again at `now`, after it last looked at `looked`:
+/// at once, then every [`FLOOR_EVERY`].
+fn due(looked: Option<Instant>, now: Instant) -> bool {
+    looked.is_none_or(|looked| now.saturating_duration_since(looked) >= FLOOR_EVERY)
 }
 
 /// how a step ended.
@@ -60,6 +84,9 @@ pub(crate) enum Ended {
     Signaled(i32),
     /// a stop was asked, so fetchloom ended it.
     Stopped,
+    /// the disk holding the cache had less free than the floor, `free` bytes, so fetchloom
+    /// ended it.
+    Low { free: u64 },
 }
 
 /// a step that ran.
@@ -77,10 +104,10 @@ pub(crate) fn words(run: &[Template], folder: &dyn Fn(Slot<'_>) -> OsString) -> 
     run.iter().map(|word| word.expand(folder)).collect()
 }
 
-/// runs `command` until it ends or `stop` asks, its outputs read into a new log at `log` and,
-/// with `forward`, each line handed to it. what the step started that is left in its group ends
-/// with it. `building` is the project the build works in, which the step gets as
-/// `FETCHLOOM_BUILDING`.
+/// runs `command` until it ends, `stop` asks or the disk holding the cache falls below `floor`,
+/// its outputs read into a new log at `log` and, with `forward`, each line handed to it. what the
+/// step started that is left in its group ends with it. `building` is the project the build works
+/// in, which the step gets as `FETCHLOOM_BUILDING`.
 ///
 /// # Errors
 ///
@@ -92,6 +119,7 @@ pub(crate) fn run(
     log: &Path,
     forward: Option<&dyn Fn(&str)>,
     stop: &Stop,
+    floor: &Floor<'_>,
 ) -> io::Result<Ran> {
     let _span = tracing::debug_span!("step").entered();
     let log = Log::create(log)?;
@@ -130,7 +158,7 @@ pub(crate) fn run(
             let _ = done.send(());
         });
     }
-    let ended = watch(&mut child, &lines, forward, stop);
+    let ended = watch(&mut child, &lines, forward, stop, floor);
     group::end(&mut child);
     let ended = ended?;
     let deadline = Instant::now() + DRAIN;
@@ -177,15 +205,18 @@ fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::C
     Ok(process)
 }
 
-/// waits for `child` to end, handing on its lines meanwhile, and ends it when `stop` asks. it
-/// looks often at first, so a short step costs little waiting, then every 200 ms.
+/// waits for `child` to end, handing on its lines meanwhile, and ends it when `stop` asks or the
+/// disk holding the cache falls below `floor`. it looks often at first, so a short step costs
+/// little waiting, then every 200 ms.
 fn watch(
     child: &mut Child,
     lines: &Mutex<Lines>,
     forward: Option<&dyn Fn(&str)>,
     stop: &Stop,
+    floor: &Floor<'_>,
 ) -> io::Result<Ended> {
     let mut pause = Duration::from_millis(1);
+    let mut looked = None;
     loop {
         hand_on(lines, forward);
         if let Some(status) = child.try_wait()? {
@@ -195,6 +226,15 @@ fn watch(
             group::end(child);
             child.wait()?;
             return Ok(Ended::Stopped);
+        }
+        let now = Instant::now();
+        if due(looked, now) {
+            looked = Some(now);
+            if let Some(free) = floor.breached() {
+                group::end(child);
+                child.wait()?;
+                return Ok(Ended::Low { free });
+            }
         }
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(200));
@@ -461,6 +501,27 @@ pub(crate) use group::end_running;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// the watch looks at the free space at once, then every two seconds, and stops a step only
+    /// once the disk has less free than the floor; a disk that does not say never stops one.
+    #[test]
+    fn the_floor_check_stops_below_its_bytes() {
+        let breached = |free: Option<u64>| {
+            let free = move || free;
+            Floor {
+                bytes: 100,
+                free: &free,
+            }
+            .breached()
+        };
+        assert_eq!(breached(Some(99)), Some(99));
+        assert_eq!(breached(Some(100)), None);
+        assert_eq!(breached(None), None);
+        let start = Instant::now();
+        assert!(due(None, start));
+        assert!(!due(Some(start), start + Duration::from_millis(1999)));
+        assert!(due(Some(start), start + FLOOR_EVERY));
+    }
 
     /// a folder with spaces stays inside its one argument, and the step gets its variables and
     /// the project it is built in.

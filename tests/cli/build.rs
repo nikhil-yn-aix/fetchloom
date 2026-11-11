@@ -1115,6 +1115,43 @@ fn the_log_is_private_and_bounded() -> Result {
     Ok(())
 }
 
+/// a step stops once the disk holding the cache has less free than `build_floor`, before it can
+/// fill the disk, and data.lock and the data folder stay as they were.
+#[test]
+fn the_floor_stops_the_step_and_keeps_pins() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let hold = sandbox.folder("hold")?;
+    let (marker, release) = (hold.join("started"), hold.join("release"));
+    with(
+        &sandbox,
+        &server,
+        &recipe(&[
+            "hold",
+            &marker.to_string_lossy().replace('\\', "\\\\"),
+            &release.to_string_lossy().replace('\\', "\\\\"),
+        ]),
+    )?;
+    let pinned = pins(&sandbox.work())?;
+    let data = files(&sandbox.work().join("data"))?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "--yes", "build"])?
+        .env("FETCHLOOM_TEST_FREE", "1000")
+        .env("FETCHLOOM_BUILD_FLOOR", "1M")
+        .output()?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "local.io");
+    assert_eq!(
+        message,
+        "stopped clean: the disk holding the cache has less than 1.0 MiB free; the step had written 0 B"
+    );
+    assert!(help.contains("lower build_floor"), "{help}");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    Ok(())
+}
+
 /// sends `signal`, such as `-TERM`, to the process `pid` with `kill`.
 #[cfg(unix)]
 fn signal(pid: u32, signal: &str) -> Result {

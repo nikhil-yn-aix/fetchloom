@@ -31,7 +31,7 @@ memory     4.0 GiB                       this machine   FETCHLOOM_MEMORY
 |---|---|
 | `environment` | a nonempty `FETCHLOOM_*` variable |
 | `settings file` | the [settings file](../reference/environment.md#settings-file) |
-| `this machine` | sized from this machine: its processors or the memory it has available |
+| `this machine` | sized from this machine: its processors, the memory it has available, or for `build_floor` the disk holding the cache |
 | `default` | fetchloom's own default |
 
 the [environment](../reference/environment.md) page explains each setting. `threads`, `rate` and `split` come from their variables only. stderr then says what fetchloom read about the machine, its processors, available memory and open-file limit, and where the settings file is, or that there is no file there yet.

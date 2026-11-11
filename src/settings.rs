@@ -40,7 +40,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 16] = [
+const KEYS: [(&str, &str); 17] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -57,6 +57,7 @@ const KEYS: [(&str, &str); 16] = [
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
+    ("build_floor", "FETCHLOOM_BUILD_FLOOR"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
@@ -290,6 +291,9 @@ pub(crate) struct Settings {
     pub(crate) mirrors_only: Set<bool>,
     /// the folder mirror `fetchloom push` writes to when `--to` names none.
     pub(crate) push_to: Set<Option<PathBuf>>,
+    /// the least free space a recipe's step may leave on the disk holding the cache, or none for
+    /// the larger of 1 GiB and 1% of that disk.
+    pub(crate) build_floor: Set<Option<u64>>,
 }
 
 impl Settings {
@@ -320,6 +324,7 @@ impl Settings {
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
+            build_floor: Set::default(None),
             memory,
         }
     }
@@ -366,6 +371,7 @@ impl Settings {
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_folder(&given, "push_to")?,
+            build_floor: floor(&given, "build_floor")?,
             memory,
             file,
         })
@@ -537,6 +543,29 @@ fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Err
                 "{} to use the default of {}, or set it to a size such as 512M or 4G",
                 undo(origin, key),
                 units::size(default.value)
+            ))
+        })
+}
+
+/// the byte size `key` holds, such as `20G`, or none when it is unset or empty, for the default the
+/// disk holding the cache sets.
+fn floor(given: &Given<'_>, key: &str) -> Result<Set<Option<u64>>, Error> {
+    let Some((text, origin, named)) = given.get(key) else {
+        return Ok(Set::default(None));
+    };
+    units::bytes(&text)
+        .map(|value| Set {
+            value: Some(value),
+            origin,
+        })
+        .ok_or_else(|| {
+            Error::new(
+                Kind::Usage,
+                format!("{named} is \"{text}\", which is not a size such as 512M or 4G"),
+            )
+            .help(format!(
+                "{} to use the default, the larger of 1.0 GiB and 1% of the disk holding the cache, or set it to a size such as 512M or 4G",
+                undo(origin, key)
             ))
         })
 }
@@ -777,6 +806,40 @@ mod tests {
             values,
             found: true,
         })
+    }
+
+    /// `build_floor` is a size from a variable or the file, and unset means the default the disk
+    /// holding the cache sets.
+    #[test]
+    fn the_build_floor_is_a_size_or_left_to_the_cache_disk() {
+        assert_eq!(read(&[], None).unwrap().build_floor, Set::default(None));
+        assert_eq!(
+            read(&[("FETCHLOOM_BUILD_FLOOR", "20G")], None)
+                .unwrap()
+                .build_floor,
+            Set {
+                value: Some(20 << 30),
+                origin: Origin::Environment
+            }
+        );
+        let set = Settings::read(
+            &env(&[]),
+            file("build_floor = \"500M\"\n").unwrap(),
+            machine(None),
+        )
+        .unwrap();
+        assert_eq!(
+            set.build_floor,
+            Set {
+                value: Some(500 << 20),
+                origin: Origin::File
+            }
+        );
+        let error = read(&[("FETCHLOOM_BUILD_FLOOR", "lots")], None).unwrap_err();
+        assert_eq!(
+            error.message,
+            "FETCHLOOM_BUILD_FLOOR is \"lots\", which is not a size such as 512M or 4G"
+        );
     }
 
     #[test]

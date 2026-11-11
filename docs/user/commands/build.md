@@ -70,6 +70,14 @@ a step runs its `run` words as the program and its arguments, without a shell, s
 
 the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. on linux and macos the step runs in a process group of its own: when it ends, anything it started and left running is ended too, and ctrl-c ends the whole group. SIGTERM, which a scheduler such as slurm sends a job it ends, stops the build as ctrl-c does and ends the step's group at once; a second one quits as a second ctrl-c does. windows ends the step's own process only.
 
+while the step runs, fetchloom looks at the free space on the disk holding the cache every two seconds, and stops the step, with all it started, once less is free than the `build_floor` [setting](settings.md), by default the larger of 1 GiB and 1% of that disk. the build then fails with `local.io`, exit 50, and `data.lock` and the data folder stay as they were. this output is from a run with `FETCHLOOM_BUILD_FLOOR=100T` on a disk with 339 GiB free, so the step stopped at its first look; the line under the error, left out here, says how much was free and where the cache is:
+
+```text
+    Running clean · python3 clean.py <build>/in/iris <build>/out
+error: stopped clean: the disk holding the cache has less than 100.0 TiB free; the step had written 0 B
+  help: free space on that disk, or lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR; data.lock and data/clean are as they were
+```
+
 the step's output goes to `.fetchloom/builds/<name>.log`, made anew for each run, which only you may read on linux and macos and which keeps the latest 16 MiB. it also shows under the step, except with `-q` or `--json`.
 
 ## what a result may hold

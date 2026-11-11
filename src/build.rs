@@ -48,6 +48,24 @@ impl Staging {
     pub(crate) fn folder(&self) -> &Path {
         &self.folder
     }
+
+    /// the bytes of the files the step wrote into `out` so far, found without following a link.
+    pub(crate) fn written(&self) -> u64 {
+        let mut bytes = 0;
+        let mut folders = vec![self.out()];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
+                match entry.file_type() {
+                    Ok(kind) if kind.is_dir() => folders.push(entry.path()),
+                    Ok(kind) if kind.is_file() => {
+                        bytes += entry.metadata().map_or(0, |metadata| metadata.len());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        bytes
+    }
 }
 
 impl Drop for Staging {

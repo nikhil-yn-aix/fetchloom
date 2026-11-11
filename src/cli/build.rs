@@ -482,6 +482,8 @@ struct Building<'a> {
     before: Before,
     /// the recipes the build takes, in the order their steps run.
     recipes: Vec<String>,
+    /// the least free space a step may leave on the disk holding the cache.
+    floor: u64,
     report: Built,
 }
 
@@ -547,6 +549,10 @@ impl<'a> Building<'a> {
                 )));
             }
         }
+        let floor = crate::space::floor(
+            context.settings.build_floor.value,
+            crate::space::total(work.cache.root()),
+        );
         Ok(Building {
             context,
             work,
@@ -556,6 +562,7 @@ impl<'a> Building<'a> {
             lock,
             before,
             recipes,
+            floor,
             report: Built {
                 project: project.root.clone(),
                 selected,
@@ -1000,12 +1007,41 @@ impl<'a> Building<'a> {
         let output = &self.context.output;
         let forward = |line: &str| output.item(line);
         let forward: Option<&dyn Fn(&str)> = (!output.json()).then_some(&forward);
-        let ran = step::run(&command, &project.root, &log, forward, &self.context.stop)
-            .map_err(|err| cannot_start(name, program, &err))?;
+        let cache = self.work.cache.root();
+        let free = || crate::space::free(cache);
+        let floor = step::Floor {
+            bytes: self.floor,
+            free: &free,
+        };
+        let ran = step::run(
+            &command,
+            &project.root,
+            &log,
+            forward,
+            &self.context.stop,
+            &floor,
+        )
+        .map_err(|err| cannot_start(name, program, &err))?;
         let folder = plan::folder(&self.manifest, name);
         match ran.ended {
             Ended::Exited(0) => Ok(ran),
             Ended::Stopped => Err(stopped()),
+            Ended::Low { free } => Err(Error::new(
+                Kind::LocalIo,
+                format!(
+                    "stopped {name}: the disk holding the cache has less than {} free; the step had written {}",
+                    units::size(self.floor),
+                    units::size(staging.written())
+                ),
+            )
+            .detail(format!(
+                "{} is free on the disk holding {}",
+                units::size(free),
+                cache.display()
+            ))
+            .help(format!(
+                "free space on that disk, or lower build_floor in the settings file or FETCHLOOM_BUILD_FLOOR; data.lock and {folder} are as they were"
+            ))),
             ended @ Ended::Exited(_) => Err(failed(name, program, ended, &ran, &folder)),
             #[cfg(unix)]
             ended @ Ended::Signaled(_) => Err(failed(name, program, ended, &ran, &folder)),
@@ -1392,7 +1428,7 @@ fn failed(name: &str, program: &str, ended: Ended, ran: &Ran, folder: &str) -> E
             format!("{name} failed: {program} exited with code {code} after {took}"),
             unchanged,
         ),
-        Ended::Stopped => return stopped(),
+        Ended::Stopped | Ended::Low { .. } => return stopped(),
     };
     ran.tail
         .iter()

@@ -204,6 +204,47 @@ fn measured(_: &Path) -> Option<u64> {
     None
 }
 
+/// the bytes the disk holding `path`, which must exist, holds in all, none when the system does
+/// not say.
+pub(crate) fn total(path: &Path) -> Option<u64> {
+    sized(path)
+}
+
+#[cfg(unix)]
+fn sized(path: &Path) -> Option<u64> {
+    let stat = rustix::fs::statvfs(path).ok()?;
+    stat.f_blocks.checked_mul(stat.f_frsize)
+}
+
+#[cfg(windows)]
+fn sized(path: &Path) -> Option<u64> {
+    let path = std::fs::canonicalize(path).ok()?;
+    let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
+        sysinfo::DiskRefreshKind::nothing().with_storage(),
+    );
+    disks
+        .list()
+        .iter()
+        .filter_map(|disk| {
+            let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
+            path.starts_with(&mount)
+                .then_some((mount.components().count(), disk.total_space()))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, total)| total)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sized(_: &Path) -> Option<u64> {
+    None
+}
+
+/// the least free space a step may leave on a disk of `total` bytes: `set`, as the `build_floor`
+/// setting gives it, else the larger of 1 GiB and 1% of the disk.
+pub(crate) fn floor(set: Option<u64>, total: Option<u64>) -> u64 {
+    set.unwrap_or_else(|| (1 << 30).max(total.unwrap_or(0) / 100))
+}
+
 /// how far `needed` bytes pass what a disk has `free`, none when they fit or the disk does not say.
 pub(crate) fn short(needed: u64, free: Option<u64>) -> Option<u64> {
     free.and_then(|free| needed.checked_sub(free))
@@ -248,6 +289,15 @@ mod tests {
         }
     }
 
+    /// a floor set is kept as it is; otherwise it is 1% of the disk, never under 1 GiB.
+    #[test]
+    fn the_floor_is_the_setting_or_a_share_of_the_disk() {
+        assert_eq!(floor(Some(5), Some(1 << 40)), 5);
+        assert_eq!(floor(None, Some(1 << 40)), (1 << 40) / 100);
+        assert_eq!(floor(None, Some(10 << 30)), 1 << 30);
+        assert_eq!(floor(None, None), 1 << 30);
+    }
+
     #[test]
     fn only_bytes_past_what_is_free_fall_short() {
         assert_eq!(short(10, Some(4)), Some(6));
@@ -264,5 +314,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         assert!(measured(folder.path()).is_some_and(|free| free > 0));
         assert_eq!(measured(&folder.path().join("missing")), None);
+        let free = measured(folder.path()).unwrap_or_default();
+        assert!(sized(folder.path()).is_some_and(|total| total >= free));
     }
 }
