@@ -676,7 +676,8 @@ impl<'a> Placing<'a> {
         let unwanted = unwanted(&self.survey, &wanted, &self.unknown, &self.scope, holds);
         let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
-        preview.placement.left_behind = self.survey.left_behind(&wanted, &going);
+        preview.placement.left_behind =
+            self.survey.left_behind(&self.project.root, &wanted, &going);
         for (path, fate) in unwanted {
             match fate {
                 Unwanted::Remove(_) => {
@@ -1527,7 +1528,7 @@ fn remove_unwanted(
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
-    placement.left_behind = survey.left_behind(wanted, &going);
+    placement.left_behind = survey.left_behind(&project.root, wanted, &going);
     for (path, fate) in unwanted {
         placer.stop().check()?;
         let Some(before) = survey.state.files.remove(&path) else {

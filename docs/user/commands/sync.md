@@ -106,7 +106,14 @@ warning: data still holds 2 files fetchloom placed before data_dir changed to in
   help: delete data when you no longer need what it holds
 ```
 
-a dry run warns the same way, and `-v` names each file. when the old folder holds the new one, as when `data_dir` goes from `inputs` to `inputs/raw`, the warning names the files rather than a folder to delete.
+when the old folder also holds files fetchloom did not place, such as notes of yours, the warning counts them and names up to three, and its help says to move them out before you delete the folder. stderr from a real run after `data_dir` changed to `inputs`, with four such files in data:
+
+```text
+warning: data still holds 2 files fetchloom placed before data_dir changed to inputs, such as data/iris/iris.csv, and 4 files it did not place: data/iris/my-notes.txt, data/readme.txt, data/scratch/plot.py and 1 more. fetchloom leaves them all there
+  help: move the 4 files fetchloom did not place out of data before you delete data
+```
+
+a dry run warns the same way, and `-v` names each file fetchloom placed. when the old folder holds the new one, as when `data_dir` goes from `inputs` to `inputs/raw`, the warning names the files rather than a folder to delete.
 
 ## local changes
 

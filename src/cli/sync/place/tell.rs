@@ -412,15 +412,49 @@ fn tell_adoptions(output: &Output, folder: &str, files: &[&String]) {
 }
 
 /// a warning for the files fetchloom placed before `data_dir` changed, which stay where they are:
-/// a sync deletes nothing outside the data folder.
+/// a sync deletes nothing outside the data folder. what else their folder holds is counted and
+/// named, so the help to delete the folder never costs a person files of their own.
 pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&LeftBehind>) {
-    let Some(LeftBehind { folder, files }) = left else {
+    let Some(LeftBehind {
+        folder,
+        files,
+        others,
+    }) = left
+    else {
         return;
     };
     let Some(first) = files.first() else {
         return;
     };
     let before = format!("before data_dir changed to {}", manifest.data_dir);
+    if let (Some(folder), [one, ..]) = (folder, others.as_slice()) {
+        let placed = match files.len() {
+            1 => format!("{first}, a file fetchloom placed {before}"),
+            count => format!("{count} files fetchloom placed {before}, such as {first}"),
+        };
+        let (theirs, help) = match others.len() {
+            1 => (
+                format!("1 file it did not place: {one}"),
+                format!("move {one} out of {folder} before you delete {folder}"),
+            ),
+            count => (
+                format!("{count} files it did not place: {}", some_of(others)),
+                format!(
+                    "move the {count} files fetchloom did not place out of {folder} before you delete {folder}"
+                ),
+            ),
+        };
+        output.warn_with(
+            &format!(
+                "{folder} still holds {placed}, and {theirs}. fetchloom leaves them all there"
+            ),
+            &help,
+        );
+        for path in files {
+            output.detail(path);
+        }
+        return;
+    }
     let (said, help) = match (folder, files.len()) {
         (Some(folder), 1) => (
             format!(
@@ -450,6 +484,19 @@ pub(super) fn left_behind(output: &Output, manifest: &Manifest, left: Option<&Le
     output.warn_with(&said, &help);
     for path in files {
         output.detail(path);
+    }
+}
+
+/// the first three of `paths`, and how many more there are: `a, b, c and 2 more`.
+fn some_of(paths: &[String]) -> String {
+    match paths {
+        [first @ .., last] if paths.len() <= 3 && !first.is_empty() => {
+            format!("{} and {last}", first.join(", "))
+        }
+        [a, b, c, rest @ ..] if !rest.is_empty() => {
+            format!("{a}, {b}, {c} and {} more", rest.len())
+        }
+        _ => paths.join(""),
     }
 }
 

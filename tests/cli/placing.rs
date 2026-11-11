@@ -2510,6 +2510,8 @@ fn verify_puts_back_a_link_whose_cached_copy_quietly_changed() -> Result {
 
 /// a sync never deletes outside the data folder, so a data folder `data_dir` moved away keeps the
 /// files fetchloom placed in it, and the sync that moves it, and its dry run, say where they are.
+/// files of the person's own there are counted and named, so deleting the folder loses none
+/// unseen.
 #[test]
 fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2517,7 +2519,17 @@ fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    let manifest = sandbox.work().join("data.toml");
+    let work = sandbox.work();
+    for notes in [
+        "data/iris/my-notes.txt",
+        "data/readme.txt",
+        "data/scratch/plot.py",
+        "data/scratch/todo.md",
+    ] {
+        fs::create_dir_all(work.join(notes).parent().ok_or("no folder")?)?;
+        fs::write(work.join(notes), b"mine\n")?;
+    }
+    let manifest = work.join("data.toml");
     fs::write(
         &manifest,
         format!(
@@ -2526,18 +2538,18 @@ fn a_changed_data_dir_leaves_the_old_folder_and_says_so() -> Result {
         ),
     )?;
 
-    let said = "data still holds data/iris/iris.csv, a file fetchloom placed before data_dir changed to inputs/raw. fetchloom leaves it there; delete data when you no longer need what it holds";
+    let said = "data still holds data/iris/iris.csv, a file fetchloom placed before data_dir changed to inputs/raw, and 4 files it did not place: data/iris/my-notes.txt, data/readme.txt, data/scratch/plot.py and 1 more. fetchloom leaves them all there; move the 4 files fetchloom did not place out of data before you delete data";
     for args in [&["--json", "sync", "--dry-run"][..], &["--json", "sync"]] {
         let output = sandbox.run(args)?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
         let warnings = json(&output)?["warnings"].to_string();
         assert!(warnings.contains(said), "{warnings}");
     }
-    let work = sandbox.work();
     assert_eq!(
         fs::read(work.join("data").join("iris").join("iris.csv"))?,
         V1
     );
+    assert_eq!(fs::read(work.join("data/iris/my-notes.txt"))?, b"mine\n");
     assert_eq!(fs::read(work.join("inputs/raw/iris/iris.csv"))?, V1);
     Ok(())
 }

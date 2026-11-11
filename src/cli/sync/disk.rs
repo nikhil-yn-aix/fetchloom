@@ -69,6 +69,10 @@ pub(crate) struct LeftBehind {
     pub(crate) folder: Option<String>,
     /// their paths in the project, in order.
     pub(crate) files: Vec<String>,
+    /// what else `folder` holds that fetchloom did not place, such as a person's notes, which go
+    /// with the folder when someone deletes it: files, links and special files, by path in the
+    /// project, sorted.
+    pub(crate) others: Vec<String>,
 }
 
 /// a folder that held files fetchloom placed which no dataset needs now, and that holds none a
@@ -151,9 +155,11 @@ impl Survey {
     /// the files among `going`, the records a run drops, that fetchloom placed before `data_dir`
     /// changed and that are still outside the data folder, with the folder they are in: the part
     /// of their paths before the path a file of `wanted` has below the data folder now, as when
-    /// only `data_dir` changed, else the folder they share. none when no file was left behind.
+    /// only `data_dir` changed, else the folder they share. that folder, in the project at
+    /// `root`, is read for what else it holds. none when no file was left behind.
     pub(crate) fn left_behind(
         &self,
+        root: &Path,
         wanted: &HashSet<&str>,
         going: &HashSet<&str>,
     ) -> Option<LeftBehind> {
@@ -186,10 +192,37 @@ impl Survey {
             let (data, folder) = (name::fold(&self.data_dir), name::fold(folder));
             data == folder || data.starts_with(&format!("{folder}/"))
         };
+        let folder = Some(folder).filter(|folder| !folder.is_empty() && !holds_data(folder));
+        let others = folder
+            .as_deref()
+            .map(|folder| self.not_placed(root, folder))
+            .unwrap_or_default();
         Some(LeftBehind {
-            folder: Some(folder).filter(|folder| !folder.is_empty() && !holds_data(folder)),
+            folder,
             files,
+            others,
         })
+    }
+
+    /// what `folder`, in the project at `root`, holds that no record says fetchloom placed,
+    /// leaving out what an interrupted placement staged there: files, links and special files,
+    /// by path in the project, sorted. links are neither followed nor read.
+    fn not_placed(&self, root: &Path, folder: &str) -> Vec<String> {
+        let mut entries = HashMap::new();
+        let mut others = Vec::new();
+        visit_files(root, folder, &mut entries, |_, path, temporary, _| {
+            if !temporary && !self.state.files.contains_key(&path) {
+                others.push(path);
+            }
+        });
+        others.extend(
+            entries
+                .into_iter()
+                .filter(|(_, entry)| *entry != Entry::Folder)
+                .map(|(path, _)| path),
+        );
+        others.sort();
+        others
     }
 
     /// the folders that held files fetchloom placed, `going`, which no file of `wanted` needs now,
@@ -1957,6 +1990,49 @@ mod tests {
         );
     }
 
+    /// what the old data folder holds besides the files fetchloom placed is named, links among it,
+    /// and neither its folders nor a copy an interrupted placement staged there are.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_left_behind_names_what_fetchloom_did_not_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let project = Project {
+            root: root.to_path_buf(),
+        };
+        for path in [
+            "data/iris/iris.csv",
+            "data/iris/notes.txt",
+            "data/iris/.fetchloom-0123456789abcdef.copy",
+            "data/scratch/plot.py",
+            "inputs/iris/iris.csv",
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, b"bytes").unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("inputs"), root.join("data/shortcut")).unwrap();
+        let mut survey = Survey::read(&project, "inputs", Threads::default());
+        survey.state.files.insert(
+            "data/iris/iris.csv".to_owned(),
+            record(root, "data/iris/iris.csv", b"bytes", Method::Copy),
+        );
+        survey.outside = vec!["data/iris/iris.csv".to_owned()];
+        let going = HashSet::from(["data/iris/iris.csv"]);
+        let wanted = HashSet::from(["inputs/iris/iris.csv"]);
+
+        let left = survey.left_behind(root, &wanted, &going).unwrap();
+        assert_eq!(left.folder.as_deref(), Some("data"));
+        assert_eq!(
+            left.others,
+            [
+                "data/iris/notes.txt",
+                "data/scratch/plot.py",
+                "data/shortcut"
+            ]
+        );
+    }
+
     /// the folder named for files left behind is the data folder they were placed in, found from
     /// where the same files sit now, else the folder they share, and never one that holds the
     /// data folder, which deleting it would delete too.
@@ -1971,7 +2047,9 @@ mod tests {
             survey.outside = outside.iter().map(|path| (*path).to_owned()).collect();
             let going: HashSet<&str> = outside.iter().copied().collect();
             let wanted: HashSet<&str> = wanted.iter().copied().collect();
-            survey.left_behind(&wanted, &going).map(|left| left.folder)
+            survey
+                .left_behind(&project.root, &wanted, &going)
+                .map(|left| left.folder)
         };
 
         let moved = ["data/iris/iris.csv", "data/pets/pets.csv"];
