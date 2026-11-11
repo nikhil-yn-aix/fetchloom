@@ -27,6 +27,7 @@ mod progress;
 mod project;
 mod proxy;
 mod push;
+mod recipes;
 mod recovery;
 mod remove;
 mod scope;

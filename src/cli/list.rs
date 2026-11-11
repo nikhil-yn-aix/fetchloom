@@ -32,6 +32,9 @@ struct Listed {
     files: Option<u64>,
     bytes: Option<u64>,
     folder: String,
+    /// whether its files are placed in `folder`: false for a dataset with `place = false`, which
+    /// is pinned and cached for the recipes that read it.
+    placed: bool,
     title: Option<String>,
     license: Option<String>,
     doi: Option<String>,
@@ -143,6 +146,7 @@ fn listed(manifest: &Manifest, lock: &Lock) -> Report {
                         .fold(0, |total: u64, size| total.saturating_add(size))
                 }),
                 folder: plan::folder(manifest, name),
+                placed: entry.place,
                 title: locked.and_then(|locked| locked.title.clone()),
                 license: locked.and_then(|locked| locked.license.clone()),
                 doi: locked.and_then(|locked| locked.doi.clone()),
@@ -226,7 +230,12 @@ fn columns(datasets: &[Listed], with_source: bool, with_license: bool) -> String
                     (None, None) => String::new(),
                 });
             }
-            row.extend([contents, dataset.folder.clone()]);
+            let folder = if dataset.placed {
+                dataset.folder.clone()
+            } else {
+                "not placed".to_owned()
+            };
+            row.extend([contents, folder]);
             if licensed {
                 let license = dataset.license.as_deref().unwrap_or_default();
                 row.push(units::clip(license, LICENSE, "\u{2026}"));
@@ -300,6 +309,26 @@ mod tests {
         );
     }
 
+    /// a dataset with `place = false` lists where its folder would be in JSON, beside `placed`,
+    /// and as not placed in the table.
+    #[test]
+    fn an_unplaced_dataset_lists_as_not_placed() {
+        let manifest = Manifest::parse(
+            "[datasets.iris]\nref = \"zenodo:3608990\"\nplace = false\n\n[datasets.wine]\nref = \"zenodo:1\"\n",
+        )
+        .unwrap();
+        let report = listed(&manifest, &Lock::default());
+        assert_eq!(
+            table(&report.datasets, None),
+            "iris  zenodo:3608990  not locked yet  not placed\n\
+             wine  zenodo:1        not locked yet  data/wine"
+        );
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["datasets"][0]["placed"], false);
+        assert_eq!(value["datasets"][0]["folder"], "data/iris");
+        assert_eq!(value["datasets"][1]["placed"], true);
+    }
+
     #[test]
     fn the_license_comes_last_and_gives_way_after_the_source() {
         let listed = |name: &str, license: Option<&str>| Listed {
@@ -310,6 +339,7 @@ mod tests {
             files: Some(1),
             bytes: Some(4551),
             folder: format!("data/{name}"),
+            placed: true,
             title: None,
             license: license.map(str::to_owned),
             doi: None,

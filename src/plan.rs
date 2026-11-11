@@ -95,6 +95,42 @@ pub(crate) fn from_cache<'a>(
     })
 }
 
+/// every file of `lock`'s fetched datasets as a build reads them: [`from_cache`]'s, then those of
+/// datasets `place = false` keeps out of the data folder, laid out where they would land. only
+/// the placed ones are checked for clashes, since only they reach the data folder.
+pub(crate) fn inputs<'a>(
+    manifest: &Manifest,
+    lock: &'a Lock,
+    cache: &Cache,
+) -> Result<Plan<'a>, Error> {
+    let members = |file: &LockedFile| cache.unpacked(&file.sha256, file.unpacks_to.as_ref());
+    let mut plan = plan(manifest, lock, &members)?;
+    for dataset in &lock.datasets {
+        let Some((entry, source)) = manifest
+            .datasets
+            .get(&dataset.name)
+            .filter(|entry| !entry.place)
+            .and_then(|entry| Some((entry, entry.source()?)))
+        else {
+            continue;
+        };
+        if dataset.drift(entry).is_none() {
+            archives_named(&dataset.name, source, dataset)?;
+        }
+        let folder = folder(manifest, &dataset.name);
+        expand(
+            &mut plan,
+            &dataset.name,
+            &folder,
+            entry.copy,
+            &dataset.files,
+            &source.members,
+            &members,
+        )?;
+    }
+    Ok(plan)
+}
+
 /// refuses, before anything is downloaded, a clash among the files of `datasets` whose place is
 /// already known, as the cache records what each archive unpacked to. an archive with no record
 /// is planned once it is unpacked, and checked then, before anything is placed.
@@ -114,8 +150,8 @@ pub(crate) fn foresee<'a>(
 
 /// every file the lock places for the datasets data.toml lists, or the first clash: the files of
 /// each source, an archive replaced by the files `members` says it unpacked to, and the result
-/// of each recipe as data.lock pins it. datasets may share a folder, but no two files may share
-/// a path.
+/// of each recipe as data.lock pins it. a dataset with `place = false` places nothing. datasets
+/// may share a folder, but no two files may share a path.
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
@@ -133,10 +169,12 @@ fn planned<'a>(
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
     for dataset in datasets {
-        // a recipe's files come only from a build, never from a source pin left under its name
+        // a recipe's files come only from a build, never from a source pin left under its name,
+        // and a dataset with `place = false` has no files in the data folder at all
         let Some((entry, source)) = manifest
             .datasets
             .get(&dataset.name)
+            .filter(|entry| entry.place)
             .and_then(|entry| Some((entry, entry.source()?)))
         else {
             continue;
@@ -182,7 +220,7 @@ fn planned<'a>(
         let Some(entry) = manifest
             .datasets
             .get(&result.name)
-            .filter(|entry| entry.recipe().is_some())
+            .filter(|entry| entry.recipe().is_some() && entry.place)
         else {
             continue;
         };
@@ -1130,6 +1168,37 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// a dataset with `place = false`, fetched or made, has no target: nothing of it is
+    /// downloaded, unpacked or placed, and its files clash with no other dataset's.
+    #[test]
+    fn an_unplaced_dataset_has_no_targets() {
+        let (unplaced, mut locked) = pinned(
+            "[datasets.raw]\nref = \"x\"\npath = \".\"\nplace = false\n\n[datasets.other]\nref = \"y\"\npath = \".\"\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\nplace = false\n",
+            &[("raw", &["a.csv", "x.zip"]), ("other", &["a.csv"])],
+        );
+        let files = vec![member("c.csv")];
+        locked.derived.push(Derived {
+            name: "clean".to_owned(),
+            from: Vec::new(),
+            run: Vec::new(),
+            code: Vec::new(),
+            env: std::collections::BTreeMap::new(),
+            key: digest::sha256(b"key"),
+            timestamp: String::new(),
+            tree: digest::sha256(b"tree"),
+            files,
+        });
+        let planned = plan(&unplaced, &locked, &|_| None).unwrap();
+        let paths: Vec<&str> = planned
+            .targets
+            .iter()
+            .map(|target| target.path.as_str())
+            .collect();
+        assert_eq!(paths, ["data/a.csv"]);
+        assert_eq!(planned.targets[0].dataset, "other");
+        assert!(planned.unknown.is_empty(), "{:?}", planned.unknown);
     }
 
     #[test]

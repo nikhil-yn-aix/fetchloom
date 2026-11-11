@@ -501,7 +501,7 @@ fn step_program() -> Result<PathBuf> {
 }
 
 /// `fetchloom` with `args` in `folder`, with the step program on PATH as `recipe-step`.
-fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Command> {
+pub(crate) fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Command> {
     let bin = sandbox.folder("bin")?;
     let program = bin.join(format!("recipe-step{}", std::env::consts::EXE_SUFFIX));
     if !program.is_file() {
@@ -515,12 +515,12 @@ fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Comman
 }
 
 /// [`building_in`] the work folder, run to its end.
-fn build(sandbox: &Sandbox, args: &[&str]) -> Result<std::process::Output> {
+pub(crate) fn build(sandbox: &Sandbox, args: &[&str]) -> Result<std::process::Output> {
     Ok(building_in(sandbox, &sandbox.work(), args)?.output()?)
 }
 
 /// a project with iris added from `server` and the recipes `recipes`, as data.toml tables.
-fn with(sandbox: &Sandbox, server: &Server, recipes: &str) -> Result {
+pub(crate) fn with(sandbox: &Sandbox, server: &Server, recipes: &str) -> Result {
     added(sandbox, server)?;
     let manifest = sandbox.work().join("data.toml");
     let text = fs::read_to_string(&manifest)?;
@@ -544,7 +544,7 @@ fn recipe(mode: &[&str]) -> String {
 }
 
 /// how many times a step ran in `folder`, the folder steps run in.
-fn runs(folder: &Path) -> Result<usize> {
+pub(crate) fn runs(folder: &Path) -> Result<usize> {
     match fs::read_to_string(folder.join("runs")) {
         Ok(runs) => Ok(runs.lines().count()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),

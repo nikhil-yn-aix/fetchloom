@@ -30,6 +30,7 @@ path = "measurements"
 | `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
+| `place` | `false` keeps the dataset pinned and cached but out of the data folder; see [datasets only recipes read](#datasets-only-recipes-read) | `true` |
 | `from`, `run`, `code`, `env` | a recipe's inputs, command, code and variables; see [recipes](#recipes) | none |
 
 ## imported files
@@ -93,6 +94,24 @@ file paths refuse control characters, including the bidi controls U+061C, U+200E
 
 `copy = true` applies when a file is placed. setting it on a dataset makes the next sync replace each unchanged read-only file of that dataset with a writable one; `status` lists those files as outdated until then, and an edited file stays. an untracked read-only file with exactly the pinned bytes is also replaced with a writable file, without changing permissions through any other hardlink to it. differing untracked bytes still stay unless force is requested. turning it off leaves writable files as they are.
 
+## datasets only recipes read
+
+`place = false` keeps a dataset out of the data folder, as for raw data only a [recipe](../recipes.md#keep-only-the-result) reads. it works on fetched datasets and on recipes alike:
+
+```toml
+[datasets.raw]
+ref = "hf:datasets/scikit-learn/iris"
+place = false
+```
+
+data.lock pins the dataset as before, since `place` changes where its files go, not what is pinned, and a recipe's key leaves it out too. no command places its files: once it is pinned, a sync downloads nothing for it, `build` reads it from the cache, fetching what the cache lacks, and `path` refuses it with `usage`, exit 2. setting it on a placed dataset makes the next sync remove what it placed there, unchanged files only, and say so once:
+
+```text
+    Retired data/raw · 1 file, since raw has place = false
+```
+
+an edited file stays, with the warning a removed dataset's edit gets. `status` and `list` say the dataset is not placed. `place` can only keep files out: data.toml comes with whatever repository you clone, so it never asks for more placement than the default.
+
 ## recipes
 
 a recipe makes a dataset from others with a command of yours. [recipes](../recipes.md) explains how fetchloom keys and checks them; this section lists the rules data.toml follows.
@@ -112,7 +131,7 @@ env = { SOURCE_DATE_EPOCH = "315532800" }
 | `code` | project files and folders whose bytes enter the key | optional list. each path uses `/`, may end in `/`, and stays inside the project: no absolute path, drive, backslash, `.` or `..`, no repository metadata such as `.git`, not `data.lock` or `data.lock.d`, and neither inside the data folder nor holding it. a link or a special file on the way is refused when the code is read |
 | `env` | variables set for the step alone | optional table of strings. names use letters, digits and `_` and do not start with a digit. names starting with `FETCHLOOM_` are refused, and so are names that look like a secret: a word ending in `TOKEN`, a word holding `SECRET`, `PASSWORD`, `PASSWD` or `CREDENTIAL`, or the words `API_KEY`, `ACCESS_KEY` or `PRIVATE_KEY`, ignoring case. `MAX_TOKENS` and `TOKENIZERS_PARALLELISM` stay usable. a value cannot hold a NUL character |
 
-a recipe takes `copy` and `path` as a fetched dataset does. `ref`, `select`, `exclude` and `extract` belong to fetched datasets: beside `from` they are refused, and choosing files belongs inside the step. every mistake is `project.invalid`, exit 50, pointing at its line:
+a recipe takes `copy`, `path` and `place` as a fetched dataset does. `ref`, `select`, `exclude` and `extract` belong to fetched datasets: beside `from` they are refused, and choosing files belongs inside the step. every mistake is `project.invalid`, exit 50, pointing at its line:
 
 for a `clean` whose `run`, on line 7 of data.toml, leaves out `{out}`:
 

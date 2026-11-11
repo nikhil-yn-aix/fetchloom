@@ -76,16 +76,7 @@ pub(super) fn tell(
         tell_adopted(output, manifest, dataset, &linked, true);
         tell_adopted(output, manifest, dataset, &kept, false);
     }
-    if placement.removed > 0 {
-        output.step(
-            "Removed",
-            &units::count(
-                placement.removed,
-                "file no dataset needs",
-                "files no dataset needs",
-            ),
-        );
-    }
+    tell_removed(output, manifest, ["Retired", "Removed"], placement);
     warn_adopted_removed(output, &placement.removed_adopted, "removed");
     if tallies.values().any(|tally| tally.unlinked > 0)
         && let Some(why) = placer.unlinked()
@@ -303,18 +294,9 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
         ));
     }
     let placement = &preview.placement;
-    if placement.removed > 0 {
-        output.step(
-            "Would drop",
-            &units::count(
-                placement.removed,
-                "file no dataset needs",
-                "files no dataset needs",
-            ),
-        );
-        for path in &preview.changes.remove {
-            output.detail(path);
-        }
+    tell_removed(output, manifest, ["Would drop", "Would drop"], placement);
+    for path in &preview.changes.remove {
+        output.detail(path);
     }
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     left_behind(output, manifest, placement.left_behind.as_ref());
@@ -343,6 +325,31 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
                 ),
             });
         }
+    }
+}
+
+/// the lines for the files a placement removed, or would remove: under the first of `verbs`, one
+/// for each dataset `place = false` keeps out of the data folder now, then under the second one
+/// for the files no dataset needs.
+fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placement: &Placement) {
+    for (dataset, files) in &placement.unplaced {
+        output.step(
+            verbs[0],
+            &format!(
+                "{} · {}, since {dataset} has place = false",
+                plan::folder(manifest, dataset),
+                units::count(*files, "file", "files")
+            ),
+        );
+    }
+    let unneeded = placement
+        .removed
+        .saturating_sub(placement.unplaced.values().sum());
+    if unneeded > 0 {
+        output.step(
+            verbs[1],
+            &units::count(unneeded, "file no dataset needs", "files no dataset needs"),
+        );
     }
 }
 

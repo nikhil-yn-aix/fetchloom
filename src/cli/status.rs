@@ -44,6 +44,8 @@ pub(super) struct Status {
     extra: Vec<String>,
     /// archives this machine has not unpacked yet, so the files they hold are missing.
     not_unpacked: Vec<String>,
+    /// datasets data.toml keeps out of the data folder with `place = false`.
+    unplaced: Vec<String>,
     /// entries in the way of files data.lock places, by path: a link or special file at a
     /// file's path, a folder there, or a file, link or special file where a folder on a file's
     /// way belongs. `sync --force` replaces them, except a folder that holds anything.
@@ -77,6 +79,10 @@ pub(super) struct Status {
     /// exclude patterns that name files inside an archive, which they leave where they are.
     #[serde(skip)]
     unreached: Vec<plan::Unreached>,
+    /// whether the data folder still holds files fetchloom placed of an `unplaced` dataset,
+    /// which `sync` removes.
+    #[serde(skip)]
+    retiring: bool,
 }
 
 /// `status`, hashing every placed file when `verify` asks, as `status --verify` does.
@@ -190,6 +196,12 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
         unlocked,
         removed,
         building,
+        unplaced: manifest
+            .datasets
+            .iter()
+            .filter(|(_, entry)| !entry.place)
+            .map(|(name, _)| name.clone())
+            .collect(),
         ..Status::default()
     };
     let cache = super::peek_cache()?;
@@ -213,6 +225,13 @@ fn check(project: &Project, threads: Threads, verify: bool) -> Result<Status, Er
         .collect();
     survey.retarget(&project.root, &planned.targets);
     compare(&mut status, project, &survey, &planned);
+    status.retiring = status.extra.iter().any(|path| {
+        survey
+            .state
+            .files
+            .get(path)
+            .is_some_and(|placed| status.unplaced.contains(&placed.dataset))
+    });
     status.unreached = plan::unreached(&manifest, &planned.targets);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -339,7 +358,8 @@ impl Status {
     }
 
     fn needs_sync(&self) -> bool {
-        !self.removed.is_empty()
+        self.retiring
+            || !self.removed.is_empty()
             || self
                 .unlocked
                 .iter()
@@ -355,8 +375,15 @@ impl Status {
     }
 }
 
-/// a line for each difference, at most `SHOWN` of each kind.
+/// a line for each difference, at most `SHOWN` of each kind, after a faint line for each
+/// dataset with `place = false`, which is no difference.
 fn list(output: &Output, status: &Status) {
+    for name in &status.unplaced {
+        output.faint_step(
+            "Not placed",
+            &format!("{name} · place = false in data.toml"),
+        );
+    }
     for name in &status.unlocked {
         let reason = status.building.get(name).map_or(
             "data.toml changed since data.lock was written",

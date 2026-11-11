@@ -18,8 +18,9 @@ pub(crate) const DATA_DIR: &str = "data";
 pub(crate) const DATA_FOLDER_ITSELF: &str = ".";
 const TOP_KEYS: [&str; 2] = ["project", "datasets"];
 const PROJECT_KEYS: [&str; 1] = ["data_dir"];
-const DATASET_KEYS: [&str; 11] = [
-    "ref", "select", "exclude", "extract", "members", "copy", "path", "from", "run", "code", "env",
+const DATASET_KEYS: [&str; 12] = [
+    "ref", "select", "exclude", "extract", "members", "copy", "path", "place", "from", "run",
+    "code", "env",
 ];
 /// the keys of a dataset fetched from a source, beside `ref`.
 const SOURCE_KEYS: [&str; 4] = ["select", "exclude", "extract", "members"];
@@ -53,6 +54,9 @@ pub(crate) struct Entry {
     /// where the dataset lands inside the data folder, when not under its name: a folder, or
     /// [`DATA_FOLDER_ITSELF`].
     pub(crate) path: Option<String>,
+    /// whether its files are placed in the data folder. a dataset with `place = false` is
+    /// pinned and cached for the recipes that read it, and has no folder.
+    pub(crate) place: bool,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
     pub(crate) lines: BTreeMap<&'static str, String>,
 }
@@ -349,6 +353,7 @@ impl Reader<'_> {
                 .get("path")
                 .map(|item| self.relative(item, "path"))
                 .transpose()?,
+            place: self.boolean(table.get("place"), "place", true)?,
             lines,
         })
     }
@@ -2277,6 +2282,29 @@ mod tests {
         }
     }
 
+    /// `place = false` keeps a dataset pinned and cached but out of the data folder, whether it
+    /// is fetched or made, and only true or false is read.
+    #[test]
+    fn place_reads_on_both_kinds() {
+        let manifest = parse(&format!(
+            "{RAW}place = false\n\n{CLEAN}place = false\n\n[datasets.kept]\nref = \"zenodo:2\"\n"
+        ));
+        assert!(!manifest.datasets["raw"].place);
+        assert!(!manifest.datasets["clean"].place);
+        assert!(
+            manifest.datasets["kept"].place,
+            "placed unless data.toml says not"
+        );
+        assert_eq!(
+            manifest.datasets["raw"].lines["place"],
+            "data.toml:4   place = false"
+        );
+        let error = fails(&format!("{RAW}place = \"no\"\n"));
+        assert_eq!(error.kind, Kind::ProjectInvalid);
+        assert_eq!(error.message, "place in data.toml must be true or false");
+        assert_eq!(error.details, ["data.toml:4   place = \"no\""]);
+    }
+
     /// each word of run is text with `{name}` for the folder of a dataset it reads and `{out}`
     /// for the result's, so a word naming anything else, or a step that cannot find an input
     /// or write its result, is refused before anything runs.
@@ -2590,7 +2618,7 @@ mod tests {
             (
                 "[datasets.x]\nref = 'zenodo:1'\nunknown_setting = true\n",
                 "data.toml:3   unknown_setting = true",
-                "the keys here are ref, select, exclude, extract, members, copy, path, from, run, code, env",
+                "the keys here are ref, select, exclude, extract, members, copy, path, place, from, run, code, env",
             ),
             (
                 "[datasets.x]\nref = 'zenodo:1'\n[datasets.x.members.'x.zip']\nexculde = ['a/b.csv']\n",

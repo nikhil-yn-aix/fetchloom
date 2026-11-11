@@ -39,7 +39,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         Some((name, file)) => (name, Some(file.trim_matches('/'))),
         None => (args.target.as_str(), None),
     };
-    known(&manifest, name, "path")?;
+    answerable(&manifest, name)?;
     let lock = project.lock()?;
     unbuilt(&manifest, lock.as_ref(), name)?;
     let mut cache = None;
@@ -60,7 +60,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
             Waited::Ready(path) => path,
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
-                known(&manifest, name, "path")?;
+                answerable(&manifest, name)?;
                 let read = project.lock_and_text()?;
                 unbuilt(&manifest, read.as_ref().map(|(lock, _)| lock), name)?;
                 if let Some(path) = ready_path(
@@ -118,6 +118,30 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
     );
     Ok(Report { path })
+}
+
+/// refuses a dataset data.toml does not have, as [`known`] does, and one it keeps out of the
+/// data folder with `place = false`, which has no folder there.
+fn answerable(manifest: &Manifest, name: &str) -> Result<(), Error> {
+    known(manifest, name, "path")?;
+    let entry = &manifest.datasets[name];
+    if entry.place {
+        return Ok(());
+    }
+    let error = Error::new(
+        Kind::Usage,
+        format!(
+            "{name} has place = false, so it has no folder in {}/",
+            manifest.data_dir
+        ),
+    );
+    let error = match entry.lines.get("place") {
+        Some(line) => error.detail(line.clone()),
+        None => error,
+    };
+    Err(error.help(format!(
+        "set place = true on datasets.{name} in data.toml, then run `fetchloom sync {name}`"
+    )))
 }
 
 /// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no
@@ -292,7 +316,7 @@ async fn hold_path(
         }
         before = current;
         let (_, manifest) = project.manifest()?;
-        known(&manifest, name, "path")?;
+        answerable(&manifest, name)?;
         let lock = project.lock()?;
         ready_path(
             context,

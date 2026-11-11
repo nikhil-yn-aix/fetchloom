@@ -18,7 +18,7 @@ $ fetchloom status
 
 tools that write their own index or cache files beside the files they read leave such extras as well.
 
-to record how a processed dataset is made from the raw one, so others can make it again, declare the step as a [recipe](recipes.md).
+to record how a processed dataset is made from the raw one, so others can make it again, declare the step as a [recipe](recipes.md). once a recipe makes what your code reads, the raw dataset can leave the data folder: `place = false` on it keeps it pinned and in the cache for builds, as [keep only the result](recipes.md#keep-only-the-result) shows.
 
 ## leaving out bad samples
 

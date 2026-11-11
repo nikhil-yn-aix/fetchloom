@@ -283,7 +283,7 @@ impl<'a> Loop<'a> {
                 .collect(),
             derived: Vec::new(),
         };
-        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
+        let planned = plan::inputs(manifest, &sources, &self.cache)?;
         let unknown: Vec<(String, &LockedFile)> = planned
             .unknown
             .iter()
@@ -295,7 +295,7 @@ impl<'a> Loop<'a> {
                 .map_err(|error| self.as_left(error))?;
             self.unpack_locked(manifest, &sources, &unknown).await?;
         }
-        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
+        let planned = plan::inputs(manifest, &sources, &self.cache)?;
         let lacking = || -> Vec<&plan::Target> {
             planned
                 .targets

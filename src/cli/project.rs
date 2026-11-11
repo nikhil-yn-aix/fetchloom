@@ -303,12 +303,15 @@ fn tell_synced(
             "Synced",
             &synced_into(manifest, scope, placement.kept.len(), &placement.unbuilt),
         );
+        // `path` answers only a dataset placed in the data folder
+        let placed = |name: &&String| manifest.datasets[*name].place;
         let first = match scope {
             Scope::All => manifest
                 .datasets
                 .keys()
+                .filter(placed)
                 .find(|name| !placement.unbuilt.contains(*name)),
-            Scope::Only(names) => names.iter().next(),
+            Scope::Only(names) => names.iter().find(placed),
         };
         if lock_changed {
             context.output.next(&format!(
@@ -327,12 +330,17 @@ fn tell_synced(
 
 /// what a sync of `scope` that changed something synced, with how many other datasets it left
 /// as they were, how many files, `kept`, it left unchanged and the recipes whose results it left
-/// out, `unbuilt`.
+/// out, `unbuilt`. a sync of every dataset counts those it placed, so neither those left out nor
+/// those with `place = false`.
 fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize, unbuilt: &[String]) -> String {
     let (datasets, others) = match scope {
         Scope::All => (
             units::count(
-                (manifest.datasets.len() - unbuilt.len()) as u64,
+                manifest
+                    .datasets
+                    .iter()
+                    .filter(|(name, entry)| entry.place && !unbuilt.contains(*name))
+                    .count() as u64,
                 "dataset",
                 "datasets",
             ),

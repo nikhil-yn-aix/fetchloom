@@ -53,8 +53,9 @@ an `exclude` in a dataset that names a file inside an archive leaves the file wh
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again |
 | `damaged` | a managed file holds other bytes, though no edit of this project's shows: a hardlink to the cache's copy, still shared with it or with other projects, after an edit through a link, here or in another project, changed that shared copy; or a file that shares its bytes with nothing, a copy, a reflink or a link left with a name of its own, whose size and modification time are unchanged, which hashing every placed file finds and a change mark puts in doubt too |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
-| `extra` | a scanned path is outside known targets |
+| `extra` | a scanned path is outside known targets, such as a file sync placed of a dataset that now has `place = false`, which the next sync removes |
 | `not_unpacked` | an archive's member record is unavailable here |
+| `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line names it |
 
 files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
 

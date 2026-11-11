@@ -97,3 +97,38 @@ read the command before you build: a recipe in a repository you cloned runs as y
 the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, and writes its result into `{out}`, plain files whose names every system can store. the copy comes from the cache, fetched first when it lacks a file, and never from the data folder, so a dataset imported from a folder needs `fetchloom add <folder> --as <name>` on a machine whose cache lacks it. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned. [build](commands/build.md) has the details, the errors and the JSON.
 
 a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, fails with `build.differs` when it runs again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins.
+
+## keep only the result
+
+raw data a recipe reads need not sit in the data folder too. `place = false` on it keeps it pinned in `data.lock` and its files in the cache for builds, and places nothing of it. it is the first-time researcher's setup: the raw table from a source, a cleaned one the project uses. data.toml after `fetchloom add <link> --as raw`:
+
+```toml
+[datasets.raw]
+place = false
+ref = "https://example.org/Iris.csv"
+
+[datasets.clean]
+from = ["raw"]
+run = ["python3", "clean.py", "{raw}", "{out}"]
+code = ["clean.py"]
+```
+
+the build places the result and retires what the add placed of raw, unchanged files only, an edited one staying with a warning:
+
+```text
+    Running clean · python3 clean.py <build>/in/raw <build>/out
+            kept 4 of 6 rows
+      Built clean · 1 file, 200 B in 32 ms
+     Placed data/clean · 1 file linked to the cache
+    Retired data/raw · 1 file, since raw has place = false
+         Ok pinned clean's result in data.lock
+```
+
+`status` and `list` say raw is not placed, `fetchloom path raw` refuses it with exit 2, and `cache gc` keeps its bytes, since the next build reads them:
+
+```text
+ Not placed raw · place = false in data.toml
+         Ok everything matches data.lock by size and time
+```
+
+a teammate's sync of the same commit places clean from their cache or a mirror and fetches nothing of raw. with neither holding clean, as in a fresh clone, the sync leaves it out with a warning naming the build, and their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. the examples are stderr from one run against a server on this machine.

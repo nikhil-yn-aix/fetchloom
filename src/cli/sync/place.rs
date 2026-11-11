@@ -81,6 +81,9 @@ pub(crate) struct Placement {
     /// folders no dataset uses now that still hold files fetchloom did not place, so they stay.
     #[serde(skip)]
     pub(crate) retired: Vec<Retired>,
+    /// of `removed`, the files of each dataset `place = false` keeps out of the data folder now.
+    #[serde(skip)]
+    pub(crate) unplaced: BTreeMap<String, u64>,
     /// files fetchloom placed before `data_dir` changed, which stay outside the data folder.
     #[serde(skip)]
     pub(crate) left_behind: Option<LeftBehind>,
@@ -638,13 +641,15 @@ impl<'a> Placing<'a> {
             match fate {
                 Unwanted::Remove(_) => {
                     preview.placement.removed += 1;
-                    if self
-                        .survey
-                        .state
-                        .files
-                        .get(&path)
-                        .is_some_and(|placed| placed.adopted)
-                    {
+                    let placed = self.survey.state.files.get(&path);
+                    if let Some(placed) = placed.filter(|placed| unplaced(self.manifest, placed)) {
+                        *preview
+                            .placement
+                            .unplaced
+                            .entry(placed.dataset.clone())
+                            .or_default() += 1;
+                    }
+                    if placed.is_some_and(|placed| placed.adopted) {
                         preview.placement.removed_adopted.push(path.clone());
                     }
                     preview.changes.remove.push(path);
@@ -696,6 +701,7 @@ impl<'a> Placing<'a> {
         // removing first means a file that moved never collides with its own old copy
         let removed = remove_unwanted(
             project,
+            manifest,
             &mut placer,
             &mut survey,
             &wanted,
@@ -796,6 +802,7 @@ impl<'a> Placing<'a> {
         let mut placer = Placer::new(&data_dir).with_threads(survey.threads);
         let removed = remove_unwanted(
             project,
+            manifest,
             &mut placer,
             &mut survey,
             &wanted,
@@ -1456,9 +1463,15 @@ fn decide(
 }
 
 /// deletes files fetchloom placed for a dataset in `scope` that no dataset needs now, unless
-/// someone changed them. says whether the state lost a file.
+/// someone changed them, counting those of datasets `manifest` keeps out of the data folder.
+/// says whether the state lost a file.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a part of the placing whose unwanted files go"
+)]
 fn remove_unwanted(
     project: &Project,
+    manifest: &Manifest,
     placer: &mut Placer,
     survey: &mut Survey,
     wanted: &HashSet<&str>,
@@ -1486,6 +1499,9 @@ fn remove_unwanted(
                             .remove(&file, true, Some(before.method))
                             .map_err(|err| local(&file, &err))?;
                         placement.removed += 1;
+                        if unplaced(manifest, &before) {
+                            *placement.unplaced.entry(before.dataset).or_default() += 1;
+                        }
                         if before.adopted {
                             placement.removed_adopted.push(path);
                         }
@@ -1498,6 +1514,15 @@ fn remove_unwanted(
         }
     }
     Ok(changed)
+}
+
+/// whether `placed` is a file of a dataset `manifest` keeps out of the data folder with
+/// `place = false`.
+fn unplaced(manifest: &Manifest, placed: &Placed) -> bool {
+    manifest
+        .datasets
+        .get(&placed.dataset)
+        .is_some_and(|entry| !entry.place)
 }
 
 /// deletes what an interrupted placement left under the hidden names it stages files in, in

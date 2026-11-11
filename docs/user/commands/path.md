@@ -38,13 +38,21 @@ stderr excerpt for a path absent from a dataset:
 error: dataset has no file or folder called not-a-file.csv
 ```
 
+a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has no folder in the data folder, so `path` refuses it:
+
+```text
+error: raw has place = false, so it has no folder in data/
+  data.toml:2   place = false
+  help: set place = true on datasets.raw in data.toml, then run `fetchloom sync raw`
+```
+
 `path` returns a location, not proof of intact bytes. sync may have kept an edited file there. use [status](status.md) and inspect sync's preserved conflicts when correctness depends on unchanged inputs.
 
 `--locked` never writes data.lock. a dataset already in place answers as usual, since nothing needs writing; one that needs a sync first, such as a dataset added to data.toml by hand, fails with `lock.outdated` instead of being pinned and downloaded. only the named dataset's entry counts, so another dataset's stale entry stops nothing.
 
 ## exit codes
 
-0 returns a location. an unknown dataset, absent member or dataset whose archives contain no regular files exits 2 with `usage`. a [recipe](../recipes.md) `data.lock` pins no result of yet, or whose pinned result neither the cache nor a mirror holds, exits 60 with `build.needed`, since only `fetchloom build` makes a result. a missing lock, or a stale entry for the dataset, under `--locked` exits 1 with `lock.outdated`. implicit sync can also return its download, integrity or local [exit codes](../reference/exit-codes.md).
+0 returns a location. an unknown dataset, absent member, dataset with `place = false` or dataset whose archives contain no regular files exits 2 with `usage`. a [recipe](../recipes.md) `data.lock` pins no result of yet, or whose pinned result neither the cache nor a mirror holds, exits 60 with `build.needed`, since only `fetchloom build` makes a result. a missing lock, or a stale entry for the dataset, under `--locked` exits 1 with `lock.outdated`. implicit sync can also return its download, integrity or local [exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

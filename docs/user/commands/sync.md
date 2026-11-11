@@ -142,6 +142,12 @@ warning: clean's pinned result is not on this machine or a mirror, so it is left
 
 `sync clean`, which names the recipe, and `sync --locked` stop instead with `build.needed`, exit 60, before anything is placed.
 
+a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read) has nothing in the data folder: sync downloads nothing for it, and the first sync after `place = false` was set removes what sync placed of it before, unchanged files only, with one line for the dataset:
+
+```text
+    Retired data/raw · 1 file, since raw has place = false
+```
+
 ## dry run
 
 `sync --dry-run`, or `-n`, prints what sync would change without downloading files for placement, writing `data.lock` or state, changing `data/` or writing the cache. explicit `FETCHLOOM_TRACE` output is still created or truncated. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr after a dataset `cows` was added to `data.toml`, matching a test, where `[port]` stands for the test server's port:
