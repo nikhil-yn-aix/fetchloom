@@ -781,14 +781,12 @@ mod tests {
         std::fs::write(root.join("iris.csv"), b"iris\n").unwrap();
         std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("secret.txt")).unwrap();
         std::os::unix::fs::symlink(&outside, root.join("more")).unwrap();
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            root.join("queue"),
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_bits_truncate(0o600),
-            0,
-        )
-        .unwrap();
+        // rustix makes no fifo on macos, and every unix has mkfifo
+        let made = std::process::Command::new("mkfifo")
+            .arg(root.join("queue"))
+            .status()
+            .unwrap();
+        assert!(made.success());
         let walked = walk(&root, "./flowers", &entry(&[], &[]), &Stop::default()).unwrap();
         assert_eq!(paths(&walked), ["iris.csv"]);
         assert_eq!(walked.skipped, ["more", "queue", "secret.txt"]);
