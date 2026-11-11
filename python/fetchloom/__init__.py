@@ -31,6 +31,8 @@ _SWITCHES = {
 _VALUES = {"-o": "path", "--output": "path", "--dir": "folder", "--sha256": "sha256", "-C": "project"}
 # an example or command in backticks, or input fetchloom quotes, as in `found no dataset matching "x"`
 _QUOTED = re.compile(r'`[^`]*`|"[^"]*"')
+# how fetchloom says that no folder from -C upward holds a project
+_NO_PROJECT = "there is no data.toml in this folder or any folder above it"
 
 
 def __dir__() -> list[str]:
@@ -247,7 +249,10 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
     if answer["status"] != "ok":
         error = answer["errors"][0]
         help = error["help"]
-        if help:
+        if error["kind"] == "project.invalid" and error["message"].startswith(_NO_PROJECT):
+            # a script or notebook often runs in another folder than its project's
+            help = _no_project(project)
+        elif help:
             # the program quotes its own command line, which holds the flags this helper adds
             help = help.replace("`fetchloom --json ", "`fetchloom ")
             if os.fspath(project) == ".":
@@ -257,6 +262,16 @@ def _run(arguments: list[str], project: str | os.PathLike[str], keywords: set[st
         details = [_spoken(detail, keywords) for detail in error["details"]]
         raise Error(error["kind"], message, details, help, finished.returncode)
     return answer["result"]
+
+
+def _no_project(project: str | os.PathLike[str]) -> str:
+    """the help for a ``project`` that holds no data.toml, and has none above it."""
+    folder = _local(project)
+    add = "fetchloom add <link>" if os.fspath(project) == "." else f"fetchloom -C {_shell_word(folder)} add <link>"
+    return (
+        "give project= the folder that holds data.toml, "
+        f"or run `{add}` to start a project in {os.path.abspath(folder)}"
+    )
 
 
 def _spoken(text: str, keywords: set[str]) -> str:

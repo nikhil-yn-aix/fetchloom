@@ -318,6 +318,46 @@ class Errors(unittest.TestCase):
                             fetchloom.path("iris", project)
                 self.assertEqual(raised.exception.help, shown)
 
+    def test_a_script_outside_its_project_is_told_to_pass_project(self):
+        missing = "there is no data.toml in this folder or any folder above it"
+        start = "run `fetchloom add <link>` to start a project here"
+        elsewhere = os.path.abspath("elsewhere")
+        for call, message, help, shown in [
+            (
+                lambda: fetchloom.path("processed"),
+                missing,
+                start,
+                "give project= the folder that holds data.toml, "
+                f"or run `fetchloom add <link>` to start a project in {os.getcwd()}",
+            ),
+            (
+                lambda: fetchloom.sync("elsewhere"),
+                f"{missing} inside the git repository at /work",
+                f"{start}, or give -C the folder of a project outside this repository, "
+                "as in `fetchloom -C <folder> <command>`",
+                "give project= the folder that holds data.toml, "
+                f"or run `fetchloom -C elsewhere add <link>` to start a project in {elsewhere}",
+            ),
+            (
+                lambda: fetchloom.path("processed", "elsewhere"),
+                "data.toml is not valid TOML: unclosed table, expected `]`",
+                "fix that line, then run `fetchloom --json -C elsewhere path -- processed` again",
+                "fix that line, then run `fetchloom -C elsewhere path -- processed` again",
+            ),
+        ]:
+            answer = {
+                "status": "error",
+                "errors": [{"kind": "project.invalid", "message": message, "details": [], "help": help}],
+                "warnings": [],
+            }
+            response = subprocess.CompletedProcess([], 50, json.dumps(answer), "")
+            with self.subTest(message=message):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            call()
+                self.assertEqual((raised.exception.message, raised.exception.help), (message, shown))
+
     def test_help_names_the_keywords_a_python_caller_sets(self):
         # help is written for a person at a terminal; a command in backticks stays one they type
         for helper, help, shown in [
