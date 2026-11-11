@@ -39,6 +39,8 @@ it also says where the space goes. stderr from a test on a drive that makes hard
 
 the sizes are estimates in payload bytes, what the files hold, as gc counts them. `du` counts the whole blocks a file takes, often 4 KiB each, and the cache's folders, so it can show a little more. JSON adds `result.needed`, `linked`, `unneeded` and `freeable`, what `cache gc` frees now, so a script promises `freeable` rather than `bytes`, and `copies` and `unlinked_copies`, the part of `copies` that lost its link. `result.inputs_only` is null for now; it is meant for the raw input only builds read, once recipes tell their inputs apart. the report reads each registered project's record of what it placed and looks once at each placed file, so a project on a slow network drive slows it.
 
+byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. what they hold is the space they take on the disk: a download split into parts writes each part where it belongs, so until it finishes its file can be far longer than what the disk holds for it. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
+
 ### copies and backups
 
 a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a project together with its cache, or `cp -a` copies a project alone, holds a file of its own for every file that was linked to the cache, so its bytes take room twice. `status` and `sync` there find nothing wrong, since every file still holds its pinned bytes. `fetchloom cache` counts them. the end of its stderr in a run on linux, after `rsync -a` copied a project and its cache, holding one 3.0 MiB file, and `fetchloom sync` ran in the copy with `FETCHLOOM_CACHE` naming the copied cache:
@@ -51,8 +53,6 @@ a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a 
 ```
 
 in that run `du -sh` showed `3.3M` for the original project and cache and `6.3M` for the copy; deleting the copy's `data/` and running `fetchloom sync` there brought the copy back to `3.3M`. `rsync -aH` keeps the links; [backups and copies](../hpc.md#backups-and-copies) has more.
-
-byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. what they hold is the space they take on the disk: a download split into parts writes each part where it belongs, so until it finishes its file can be far longer than what the disk holds for it. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 
 ## gc
 

@@ -17,6 +17,7 @@ use crate::place::Method;
 use crate::project::Project;
 use crate::project::state::{Look, Placed};
 use crate::stop::Stop;
+use crate::threads::Threads;
 
 /// where a cache's space goes, in payload bytes as gc counts them. they estimate what the disk
 /// holds: the rest of a file's last block and a folder's own space are not counted.
@@ -58,13 +59,15 @@ pub(crate) struct Usage {
 
 impl Usage {
     /// what `scan`'s objects hold, against what `needed` keeps, as gc would count them at `now`,
-    /// and the copies of them the files placed in `projects` are. a windows listing does not
-    /// count an object's names, so there each object is opened once.
+    /// and the copies of them the files placed in `projects` are, looked at on up to `threads`
+    /// threads. a windows listing does not count an object's names, so there each object is
+    /// opened once.
     pub(crate) fn measure(
         scan: &Scan,
         needed: &Needed,
         projects: &[PathBuf],
         now: SystemTime,
+        threads: Threads,
         stop: &Stop,
     ) -> Result<Usage, Error> {
         let mut usage = Usage::default();
@@ -97,7 +100,7 @@ impl Usage {
         let held: HashSet<Sha256> = scan.objects.iter().map(|object| object.digest).collect();
         for root in projects {
             let before = usage.copies;
-            usage.count_copies(root, &held, stop)?;
+            usage.count_copies(root, &held, threads, stop)?;
             if usage.copies > before {
                 usage.copied_projects += 1;
             }
@@ -106,25 +109,34 @@ impl Usage {
     }
 
     /// adds the files placed in the project at `root` that are copies of objects in `held`,
-    /// with one look at each file.
+    /// with one look at each file, on a few threads when there are many, since each look waits
+    /// on the disk.
     fn count_copies(
         &mut self,
         root: &Path,
         held: &HashSet<Sha256>,
+        threads: Threads,
         stop: &Stop,
     ) -> Result<(), Error> {
         let (state, _) = Project {
             root: root.to_path_buf(),
         }
         .state();
-        for (path, placed) in &state.files {
-            stop.check()?;
-            // a file whose object the cache no longer holds is the only copy of its bytes
-            if !held.contains(&placed.sha256) {
-                continue;
-            }
+        // a file whose object the cache no longer holds is the only copy of its bytes
+        let files: Vec<(&String, &Placed)> = state
+            .files
+            .iter()
+            .filter(|(_, placed)| held.contains(&placed.sha256))
+            .collect();
+        let found = crate::place::run_all(&files, threads, |(path, placed)| {
+            (!stop.is_asked())
+                .then(|| copied(&root.join(path), placed))
+                .flatten()
+        });
+        stop.check()?;
+        for ((_, placed), method) in files.into_iter().zip(found) {
             let size = placed.look.size;
-            match copied(&root.join(path), placed) {
+            match method {
                 Some(Method::Copy) => self.copies += size,
                 Some(Method::Reflink) => {
                     self.copies += size;
@@ -150,14 +162,14 @@ fn copied(path: &Path, placed: &Placed) -> Option<Method> {
         return None;
     }
     match placed.method {
-        Method::Hardlink if other_names(path, &metadata) => None,
+        Method::Hardlink if file_has_other_names(path, &metadata) => None,
         method => Some(method),
     }
 }
 
 /// whether the file at `path`, which `metadata` describes, has another name. unix metadata
 /// counts names; windows opens the file to count them.
-fn other_names(path: &Path, metadata: &fs::Metadata) -> bool {
+fn file_has_other_names(path: &Path, metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         let _ = path;
@@ -180,10 +192,7 @@ fn has_other_names(object: &Object) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::time::Duration;
-
-    use std::fs;
 
     use super::super::Cache;
     use super::super::tests::store;
@@ -223,7 +232,15 @@ mod tests {
             needed.objects.insert(digest::sha256(name.as_bytes()));
         }
         assert_eq!(
-            Usage::measure(&scan, &needed, &[], now, &Stop::default()).unwrap(),
+            Usage::measure(
+                &scan,
+                &needed,
+                &[],
+                now,
+                Threads::default(),
+                &Stop::default()
+            )
+            .unwrap(),
             Usage {
                 objects: 5,
                 bytes: 11_111,
@@ -281,6 +298,7 @@ mod tests {
             &Needed::default(),
             &[root],
             SystemTime::now(),
+            Threads::default(),
             &Stop::default(),
         )
         .unwrap();
@@ -316,13 +334,13 @@ mod tests {
     fn an_object_gone_from_the_cache_is_no_copy() {
         let (_folder, usage) = report(
             &[
-                ("data/set/held.csv", Method::Copy, b"held\n", false),
+                ("data/set/held.csv", Method::Copy, b"held here\n", false),
                 ("data/set/gone.csv", Method::Copy, b"gone\n", false),
                 ("data/set/cloned.csv", Method::Reflink, b"cloned\n", false),
             ],
-            &[b"held\n", b"cloned\n"],
+            &[b"held here\n", b"cloned\n"],
         );
-        assert_eq!(usage.copies, 5 + 7);
+        assert_eq!(usage.copies, 10 + 7);
         assert_eq!(usage.cloned, 7);
         assert_eq!(usage.unlinked_copies, 0);
     }
@@ -342,6 +360,7 @@ mod tests {
             &Needed::default(),
             &[project],
             SystemTime::now(),
+            Threads::default(),
             &Stop::default(),
         )
         .unwrap();

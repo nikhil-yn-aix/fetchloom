@@ -11,6 +11,7 @@ fetchloom avoids repeated requests and byte copies while preserving checked iden
 | small-file durability | [copy flushing](../architecture/placing.md#copy-durability) and [archive publication](../architecture/archives.md#validate-before-publication) | [storage observations](measurements.md#storage-and-memory) |
 | repeated placement and no-op work | [placement](../architecture/placing.md) and [settled sync](../architecture/sync-loop.md#settled-sync-shortcut) | [placement observations](measurements.md#placement-and-settled-sync) |
 | windows scanning | [archive staging](../architecture/archives.md) | [defender observations](windows-defender.md) |
+| the cache report's look at every placed file | [cache usage](../architecture/cache.md#retention-and-cleanup) | [cache report](measurements.md#the-cache-report-on-100000-placed-files-2026-11-11) |
 | whole commands against main and other tools | [benchmark design](benchmark-design.md) | [final benchmark](measurements.md#final-benchmark-on-the-linux-lab-2026-11-09) |
 
 historical timings have [evidence limits](measurements.md#evidence-limits). the [benchmark suite](benchmark-design.md) records new comparisons with their commands and checker results.

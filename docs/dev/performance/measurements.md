@@ -114,6 +114,18 @@ a sync of four small files from a local server, each build once a round in a shu
 | the first 64 files of every batch flushed on their own | none kept | ext4 s1 1.078 [1.064, 1.303] in seven rounds; peak memory ext4 s2 1.151 [1.028, 1.266] and s3 1.078 [1.002, 1.146]: those 64 flushes held threads in every large batch | dropped |
 | a run of up to 64 downloads, copies or archive members flushed one by one, larger runs as before | 4639987 | ext4 s1 0.985 [0.894, 1.041] and xfs s1 1.004 [0.988, 1.025] in 15 rounds; ext4 s4 1.003 [0.909, 1.199], peak memory 1.033 [0.984, 1.110]; s2, s3, s5 and s6 run the same code as before | kept |
 
+## the cache report on 100,000 placed files, 2026-11-11
+
+`fetchloom cache` reads each registered project's state and looks once at every placed file whose object the cache holds, to count copies. the fixture: two projects that each imported a folder of 50,000 files of 60 to 600 bytes into one cache, so 100,000 objects and 100,000 placed files, all hardlinks, on ext4. release builds of f5de3fe with two temporary switches, one leaving the copies pass out and one running it on `place::run_all`, and of the change itself; `fetchloom --json cache` under `/usr/bin/time`, each variant once before the rounds and then once a round in a rotated order, nine rounds. the machine was shared: ubuntu 24.04 on 24 cores of an AMD EPYC 7V13, with a load average of 43 to 63 from other work.
+
+| report | median | range | peak RSS |
+|---|---:|---:|---:|
+| the needs walk and the object scan, as before the copies pass | 0.42 s | 0.41 to 0.43 s | 51.8 MiB |
+| with the copies pass on one thread | 0.82 s | 0.81 to 0.85 s | 76.2 MiB |
+| with the copies pass on `run_all`, at most eight threads | 0.60 s | 0.59 to 0.62 s | 76.2 MiB |
+
+the pass took 0.40 s on one thread and 0.18 s on `run_all`, so the report runs it there: 0.73 of the one-thread time, with the same peak memory, which a project's parsed state adds. caches were warm; a cold disk or a network drive makes each look wait longer.
+
 ## live sites against their own tools, 2026-11-09
 
 each service's public dataset from the [benchmark design](benchmark-design.md#tools), fetched on the shared machine of the final benchmark by fetchloom and by the service's own tool: five rounds, both tools in a new random order each round, every run with empty caches. `bench/live.py` ran them. fetchloom is the static musl build of f49f38e; the others are zenodo_get 3.1.0, `hf download` from huggingface_hub 0.35.3 with hf_xet 1.8.0 followed by `sha256sum -c`, kagglehub 0.3.13 and datahugger 0.13. a run counts only when every file it fetched matches the service's published SHA-256. a live site's speed changes from minute to minute, so, as the design says, each tool gets its median and range rather than a ratio.

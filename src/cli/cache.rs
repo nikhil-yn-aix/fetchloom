@@ -16,6 +16,7 @@ use crate::project::Project;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{Entry, Manifest};
 use crate::stop::Stop;
+use crate::threads::Threads;
 use crate::units;
 
 /// what `fetchloom cache` reports, as `--json` prints it.
@@ -40,7 +41,14 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
     }
-    let usage = Usage::measure(&scan, &needed, &projects, SystemTime::now(), &context.stop)?;
+    let usage = Usage::measure(
+        &scan,
+        &needed,
+        &projects,
+        SystemTime::now(),
+        context.threads,
+        &context.stop,
+    )?;
     let output = &context.output;
     output.step(
         "Cache",
@@ -574,7 +582,7 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
     };
     // what `fetchloom cache` says gc frees now, so the two never disagree. the reminder tells
     // nothing of copies, so it reads no project's files
-    let Ok(usage) = Usage::measure(&scan, &needed, &[], now, stop) else {
+    let Ok(usage) = Usage::measure(&scan, &needed, &[], now, Threads::default(), stop) else {
         return;
     };
     let freeable = usage.freeable;

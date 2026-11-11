@@ -13,7 +13,7 @@ each line goes when its feature lands, in the same change that documents it in t
 6. `fetchloom add ./folder` pins local bytes, and a list of links with their SHA-256 imports in one step.
 7. running recipes: `fetchloom build` runs the steps `build --dry-run` shows, captures and places their results, with `--check`, `--accept`, `--prepare`, `--locked`, `place = false` and a peak-space preview.
 8. `fetchloom push` to a folder mirror, with a `push_to` setting; reading mirrors and mirror-only mode are in place.
-9. `cache gc --inputs` frees inputs that a verified mirror holds, and `fetchloom cache` estimates needed, unneeded, linked and copied bytes.
+9. `cache gc --inputs` frees inputs that a verified mirror holds.
 10. member filters for archives and `fetchloom drop <path>`.
 11. private S3 buckets, with keys from the environment or shared profiles, and S3-compatible hosts.
 12. rar after a decoder trial, a hint for shards of numbered `.tar` files and a refusal before copying a file too big for FAT32.
