@@ -1115,6 +1115,59 @@ fn the_log_is_private_and_bounded() -> Result {
     Ok(())
 }
 
+/// sends `signal`, such as `-TERM`, to the process `pid` with `kill`.
+#[cfg(unix)]
+fn signal(pid: u32, signal: &str) -> Result {
+    let sent = Command::new("kill")
+        .args([signal, &pid.to_string()])
+        .status()?;
+    if sent.success() {
+        Ok(())
+    } else {
+        Err(format!("kill {signal} failed").into())
+    }
+}
+
+/// a stop, by ctrl-c or by the SIGTERM a scheduler sends a job it ends, ends the step and what
+/// it started, and leaves data.lock and the data folder as they were.
+#[cfg(unix)]
+#[test]
+fn a_stopped_step_leaves_no_process_behind() -> Result {
+    for stop in ["-INT", "-TERM"] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let held = sandbox.folder("held")?;
+        let (lock, marker) = (held.join("lock"), held.join("locked"));
+        with(
+            &sandbox,
+            &server,
+            &recipe(&[
+                "leave-child",
+                &lock.to_string_lossy(),
+                &marker.to_string_lossy(),
+            ]),
+        )?;
+        let pinned = pins(&sandbox.work())?;
+        let data = files(&sandbox.work().join("data"))?;
+        let running =
+            crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+        wait_until("the step's child to take its lock", || Ok(marker.exists()))?;
+        signal(running.child.id(), stop)?;
+        let (code, stderr) = running.finish()?;
+        assert_eq!(code, Some(130), "{stop}: {stderr}");
+        assert_eq!(pins(&sandbox.work())?, pinned, "{stop}");
+        assert_eq!(files(&sandbox.work().join("data"))?, data, "{stop}");
+        wait_until("the step's child to end and free its lock", || {
+            Ok(fs::OpenOptions::new()
+                .write(true)
+                .open(&lock)?
+                .try_lock()
+                .is_ok())
+        })?;
+    }
+    Ok(())
+}
+
 /// a step that runs fetchloom on its own project fails at once, rather than waiting for the
 /// build that runs it.
 #[test]

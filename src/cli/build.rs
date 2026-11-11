@@ -183,6 +183,8 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         return preview(context, &project, &manifest, &args.names, current).map(Report::Previewed);
     }
     let _held = hold(context, &project, "build").await?;
+    #[cfg(unix)]
+    let _terminate = Terminate::listen(context);
     if args.accept {
         return accept::accept(context, &project, &args.names)
             .await
@@ -202,6 +204,42 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         .finish()
         .await
         .map(|built| Report::Built(Box::new(built)))
+}
+
+/// SIGTERM, which a scheduler sends a job it ends, stops a build as ctrl-c does, and ends the
+/// group of the step running now at once, since a SIGKILL that ended fetchloom would leave the
+/// step running. a second one quits as a second ctrl-c does. dropping it stops listening.
+#[cfg(unix)]
+struct Terminate(tokio::task::AbortHandle);
+
+#[cfg(unix)]
+impl Terminate {
+    fn listen(context: &Context) -> Option<Terminate> {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = signal(SignalKind::terminate()).ok()?;
+        let (stop, output) = (Arc::clone(&context.stop), Arc::clone(&context.output));
+        let task = tokio::spawn(async move {
+            if terminate.recv().await.is_none() {
+                return;
+            }
+            // asked first, so the step's end reads as the stop it is
+            stop.ask();
+            output.stopping();
+            step::end_running();
+            if terminate.recv().await.is_some() {
+                output.abandon();
+                std::process::exit(130);
+            }
+        });
+        Some(Terminate(task.abort_handle()))
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Terminate {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// refuses a name data.toml does not have, and a dataset fetched from a source.

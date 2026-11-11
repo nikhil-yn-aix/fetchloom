@@ -16,6 +16,8 @@
 //! | `say <bytes>` | prints `bytes` bytes of lines, then copies |
 //! | `call <program>` | runs `program sync` and exits with its exit code |
 //! | `write-code <file>` | adds a line to `file`, as a step that edits its own code, then copies |
+//! | `leave-child <lock> <marker>` | starts a process that locks `lock`, waits until it made `marker`, then waits to be ended |
+//! | `lock <lock> <marker>` | locks the file `lock`, makes `marker` and waits to be ended, as `leave-child` starts it |
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -104,9 +106,45 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
             out(folders)?;
             return call(program);
         }
+        ("leave-child", [lock, marker, folders @ ..]) => {
+            out(folders)?;
+            let _child = Command::new(std::env::current_exe()?)
+                .args(["lock", lock, marker])
+                .spawn()?;
+            wait_for(Path::new(marker))?;
+            idle()?;
+        }
+        ("lock", [lock, marker]) => {
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(lock)?;
+            file.lock()?;
+            fs::write(marker, "locked")?;
+            idle()?;
+        }
         _ => return Err(invalid(&format!("cannot {mode} with {rest:?}"))),
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// waits until `path` exists, or gives up after [`PATIENCE`].
+fn wait_for(path: &Path) -> io::Result<()> {
+    let started = Instant::now();
+    while !path.exists() {
+        if started.elapsed() > PATIENCE {
+            return Err(invalid(&format!("{} never appeared", path.display())));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+/// waits to be ended, and fails after [`PATIENCE`] when nothing ended it.
+fn idle() -> io::Result<()> {
+    std::thread::sleep(PATIENCE);
+    Err(invalid("nothing ended the step"))
 }
 
 /// the result folder: the last of `folders`, which must be there.
