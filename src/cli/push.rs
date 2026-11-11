@@ -205,7 +205,11 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         tell_dry(context, &planned, &report);
         return Ok(report);
     }
+    // the question comes before any download, so a no costs no request and adds nothing to the
+    // cache
+    ask(context, &planned)?;
     if !planned.lacked.is_empty() || !planned.unknown.is_empty() {
+        let asked: Vec<String> = planned.asks.iter().map(|ask| ask.dataset.clone()).collect();
         fetch(
             context,
             &project,
@@ -234,6 +238,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
             &mut planned,
             false,
         )?;
+        ask_again(context, &mut planned, &asked)?;
         if !planned.lacked.is_empty() || !planned.unknown.is_empty() {
             let lacked: Vec<&Needed> = planned
                 .lacked
@@ -244,7 +249,6 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
             return Err(with_report(error, &report(&planned, Outcome::Stopped)));
         }
     }
-    ask(context, &planned)?;
     take(context, &project, &manifest, &lock, &cache, &planned)?;
     let (started, puts) = write(context, &cache, &planned)?;
     let report = report(&planned, Outcome::Written(started, &puts));
@@ -352,11 +356,13 @@ fn plan(
             &err,
         )
     })?;
+    // an archive whose files are not known yet has them to copy, as far as anyone can tell
     let copying: BTreeSet<&str> = needed
         .iter()
         .zip(&there)
         .filter(|(_, there)| **there != There::Present)
         .map(|(needed, _)| needed.dataset.as_str())
+        .chain(unknown.iter().map(|(dataset, _)| dataset.as_str()))
         .collect();
     let asks = asking(manifest, lock, &datasets)
         .into_iter()
@@ -839,6 +845,24 @@ fn ask(context: &Context, planned: &Planned) -> Result<(), Error> {
             ))
         }
     }
+}
+
+/// asks, once a push fetched what it lacked and planned again, about the datasets the first plan
+/// did not ask about, `asked` naming those it did, as when something changed the mirror
+/// meanwhile, so no dataset is pushed without its question.
+///
+/// # Errors
+///
+/// `unconfirmed` when nobody said yes.
+fn ask_again(context: &Context, planned: &mut Planned, asked: &[String]) -> Result<(), Error> {
+    let (earlier, fresh): (Vec<Asking>, Vec<Asking>) = std::mem::take(&mut planned.asks)
+        .into_iter()
+        .partition(|ask| asked.contains(&ask.dataset));
+    planned.asks = fresh;
+    let answered = ask(context, planned);
+    planned.asks.extend(earlier);
+    planned.asks.sort_by(|a, b| a.dataset.cmp(&b.dataset));
+    answered
 }
 
 /// why `asks` ask first, as a person reads it: `iris needs accepted terms`.

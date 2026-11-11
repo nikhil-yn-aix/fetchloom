@@ -128,7 +128,7 @@ error: this machine's cache lacks files the push needs, which only a build makes
 
 ## data you may not share
 
-`access` in [data.lock](../reference/data-lock.md) says what a dataset's source told about who may read it. a dataset whose source wanted an account (`login`) or accepted terms (`terms`), or did not say (`unknown`), is pushed only once you say yes, since anyone who can read the mirror can take its files without either. most sources say nothing, so most datasets ask. a recipe's result asks when a dataset it is made from does. a dataset whose files are all on the mirror already asks nothing.
+`access` in [data.lock](../reference/data-lock.md) says what a dataset's source told about who may read it. a dataset whose source wanted an account (`login`) or accepted terms (`terms`), or did not say (`unknown`), is pushed only once you say yes, since anyone who can read the mirror can take its files without either. most sources say nothing, so most datasets ask. a recipe's result asks when a dataset it is made from does. a dataset whose files are all on the mirror already asks nothing. push asks before it downloads anything, so a no costs no request and adds nothing to the cache.
 
 ```text
 iris needs accepted terms. anyone who can read /mnt/lab/fetchloom can take its files from there. push it anyway? [y/N]

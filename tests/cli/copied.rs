@@ -429,3 +429,44 @@ fn push_inputs_fetches_an_input_no_sync_places() -> Result {
     assert_eq!(fs::read(object(&mirror, b"done"))?, b"done");
     Ok(())
 }
+
+/// the files below `folder`, in every folder inside it, or none when it is not there.
+fn files_below(folder: &Path) -> Result<usize> {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return Ok(0);
+    };
+    let mut count = 0;
+    for entry in entries {
+        let entry = entry?;
+        count += if entry.file_type()?.is_dir() {
+            files_below(&entry.path())?
+        } else {
+            1
+        };
+    }
+    Ok(count)
+}
+
+/// push asks about data whose source did not say who may read it before it downloads what its
+/// cache lacks, so a push nobody says yes to costs no request and leaves the cache with nothing
+/// new.
+#[test]
+fn a_push_asks_before_it_downloads_anything() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 2)?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command_in(&two, &["--json", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "unconfirmed", "{document}");
+    assert_eq!(server.requests().len(), 1, "only the add downloaded");
+    for folder in ["objects", "unpacked", "partial"] {
+        assert_eq!(files_below(&cache.join(folder))?, 0, "{folder}");
+    }
+    assert!(!mirror.exists());
+    Ok(())
+}
