@@ -171,7 +171,7 @@ pub(super) mod tests {
     use ::zip::{CompressionMethod, System, ZipWriter};
 
     use super::super::samples::{Scratch, zip_of, zip_with};
-    use super::super::{Format, tree_hash};
+    use super::super::{Format, Unpacked, tree_hash};
     use crate::digest;
     use crate::error::Kind;
 
@@ -216,18 +216,32 @@ pub(super) mod tests {
         assert_eq!(unpacked.tree, tree_hash(&unpacked.members));
     }
 
+    fn assert_files(scratch: &Scratch, unpacked: &Unpacked) {
+        let paths: Vec<_> = unpacked
+            .members
+            .iter()
+            .map(|member| member.path.as_str())
+            .collect();
+        assert_eq!(paths, ["README.md", "data/empty.txt", "data/train.csv"]);
+        for member in &unpacked.members {
+            let (_, bytes) = FILES.iter().find(|(path, _)| *path == member.path).unwrap();
+            assert_eq!(member.size, bytes.len() as u64, "{}", member.path);
+            scratch.assert_stored(member, bytes);
+        }
+    }
+
     #[test]
     fn every_method_fetchloom_reads_unpacks() {
-        let scratch = Scratch::new();
         for method in [
             CompressionMethod::Stored,
             CompressionMethod::Bzip2,
             CompressionMethod::Zstd,
         ] {
+            let scratch = Scratch::new();
             let options = SimpleFileOptions::default().compression_method(method);
             let zip = zip_with(ZipWriter::new(Cursor::new(Vec::new())), FILES, options);
             let unpacked = scratch.unpack(Format::Zip, &zip.into_inner()).unwrap();
-            assert_eq!(unpacked.members.len(), 3, "{method}");
+            assert_files(&scratch, &unpacked);
         }
     }
 
@@ -241,8 +255,9 @@ pub(super) mod tests {
             !signatures(&bytes, *b"PK\x06\x06").is_empty(),
             "a zip64 end record"
         );
-        let unpacked = Scratch::new().unpack(Format::Zip, &bytes).unwrap();
-        assert_eq!(unpacked.members.len(), 3);
+        let scratch = Scratch::new();
+        let unpacked = scratch.unpack(Format::Zip, &bytes).unwrap();
+        assert_files(&scratch, &unpacked);
     }
 
     #[test]

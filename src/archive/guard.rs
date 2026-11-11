@@ -236,7 +236,9 @@ mod tests {
         guarded(limits, |guard, _| {
             assert_eq!(copy(guard, b"123456").unwrap(), b"123456");
             assert_eq!(copy(guard, b"7890").unwrap(), b"7890");
-            assert_eq!(copy(guard, b"x").unwrap_err().kind, Kind::SourceInvalid);
+            let err = copy(guard, b"x").unwrap_err();
+            assert_eq!(err.kind, Kind::SourceInvalid);
+            assert!(err.message.contains("past 10 B"), "{}", err.message);
         });
     }
 
@@ -314,28 +316,30 @@ mod tests {
     }
 
     #[test]
-    fn the_byte_limit_counts_what_is_written_across_members() {
-        let limits = Limits {
-            bytes: 10,
-            ..Limits::default()
-        };
-        guarded(limits, |guard, _| {
-            assert_eq!(copy(guard, b"123456").unwrap(), b"123456");
-            let err = copy(guard, b"12345").unwrap_err();
-            assert!(err.message.contains("past 10 B"), "{}", err.message);
-        });
-    }
-
-    #[test]
     fn the_ratio_waits_for_a_few_mib() {
-        guarded(Limits::default(), |guard, meter| {
-            meter.count(1);
-            let small = vec![0; 1 << 20];
-            assert!(copy(guard, &small).is_ok(), "1 MiB from 1 byte is allowed");
-            let more = vec![0; usize::try_from(RATIO_FLOOR).unwrap()];
-            let err = copy(guard, &more).unwrap_err();
-            assert!(err.message.contains("1000 times"), "{}", err.message);
-        });
+        let floor = 4_u64 << 20;
+        for (expanded, compressed, allowed) in [
+            (floor - 1, 1, true),
+            (floor, 1, false),
+            (floor + 1, 1, false),
+            (floor * 1000, floor, true),
+        ] {
+            guarded(Limits::default(), |guard, meter| {
+                meter.count(usize::try_from(compressed).unwrap());
+                assert_eq!(copy(guard, b"x").unwrap(), b"x");
+                let result = guard.skip(expanded - 1);
+                assert_eq!(
+                    result.is_ok(),
+                    allowed,
+                    "{expanded} expanded bytes from {compressed} compressed bytes"
+                );
+                if !allowed {
+                    let err = result.unwrap_err();
+                    assert_eq!(err.kind, Kind::SourceInvalid);
+                    assert!(err.message.contains("1000 times"), "{}", err.message);
+                }
+            });
+        }
     }
 
     #[test]

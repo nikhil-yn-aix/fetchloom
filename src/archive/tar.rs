@@ -316,7 +316,27 @@ mod tests {
             let mut joined = compress(format, head);
             joined.extend(compress(format, tail));
             let scratch = Scratch::new();
-            assert_eq!(paths(&scratch, format, &joined).len(), 3, "{format:?}");
+            let unpacked = scratch.unpack(format, &joined).unwrap();
+            let paths: Vec<_> = unpacked
+                .members
+                .iter()
+                .map(|member| member.path.as_str())
+                .collect();
+            assert_eq!(
+                paths,
+                ["README.md", "data/empty.txt", "data/train.csv"],
+                "{format:?}"
+            );
+            for member in &unpacked.members {
+                let (_, bytes) = FILES.iter().find(|(path, _)| *path == member.path).unwrap();
+                assert_eq!(
+                    member.size,
+                    bytes.len() as u64,
+                    "{format:?}: {}",
+                    member.path
+                );
+                scratch.assert_stored(member, bytes);
+            }
         }
     }
 

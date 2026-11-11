@@ -452,22 +452,61 @@ mod tests {
     #[test]
     fn a_list_that_changed_or_names_other_files_is_refused() {
         let root = tempfile::tempdir().unwrap();
-        let written = files(10);
+        let written = files(2);
         let listed = write(root.path(), "set", &written);
-        // a part that holds other files
-        let other = texts(&files(11));
-        fs::write(
-            root.path().join(&listed.parts[0]),
-            compress(&other[0]).unwrap(),
-        )
-        .unwrap();
-        let error = read::<LockedFile>(root.path(), "set", &listed).unwrap_err();
-        assert_eq!(error.kind, Kind::ProjectInvalid);
-        assert!(
-            error.message.contains("holds") || error.message.contains("damaged"),
-            "{}",
-            error.message
+        assert_eq!(
+            read::<LockedFile>(root.path(), "set", &listed).unwrap(),
+            written
         );
+        let mut changed = written.clone();
+        changed[1].sha256 = digest::sha256(b"changed");
+        // the suffix changes, so the part name still reaches the content check.
+        let mut wrong_hash = listed.sha256.hex();
+        let last = wrong_hash.pop().unwrap();
+        wrong_hash.push(if last == '0' { '1' } else { '0' });
+        let mismatch = "not the one data.lock records";
+        for (reason, rows, summary, message) in [
+            ("extra row", files(3), listed.clone(), "damaged"),
+            ("changed row", changed, listed.clone(), mismatch),
+            (
+                "file count",
+                written.clone(),
+                Listed {
+                    count: listed.count + 1,
+                    ..listed.clone()
+                },
+                mismatch,
+            ),
+            (
+                "byte count",
+                written.clone(),
+                Listed {
+                    bytes: listed.bytes + 1,
+                    ..listed.clone()
+                },
+                mismatch,
+            ),
+            (
+                "list hash",
+                written,
+                Listed {
+                    sha256: Sha256::from_hex(&wrong_hash).unwrap(),
+                    ..listed.clone()
+                },
+                mismatch,
+            ),
+        ] {
+            let text = texts(&rows).remove(0);
+            fs::write(root.path().join(&listed.parts[0]), compress(&text).unwrap()).unwrap();
+            let error = read::<LockedFile>(root.path(), "set", &summary).expect_err(reason);
+            assert_eq!(error.kind, Kind::ProjectInvalid, "{reason}");
+            assert!(
+                error.message.contains(message),
+                "{reason}: {}",
+                error.message
+            );
+            assert_eq!(error.help.as_deref(), Some(BROKEN), "{reason}");
+        }
         // a part fetchloom does not write, such as one outside its folder
         let elsewhere = Listed {
             parts: vec!["../outside.tsv.zst".to_owned()],
