@@ -151,13 +151,18 @@ impl Fetch {
 pub(crate) enum Event {
     /// another fetchloom on this machine is downloading the same URL, and this one waits for it.
     Waiting,
-    /// an earlier run kept this many bytes of the file, which the download goes on from when
-    /// the server allows it.
-    Kept(u64),
-    /// the server answered and bytes are about to flow. `total` counts the whole file.
+    /// an earlier run kept `bytes` of the file, which the download goes on from when the server
+    /// allows it, and what its record says a later run can do with them.
+    Kept {
+        bytes: u64,
+        resumable: Resumable,
+    },
+    /// the server answered and bytes are about to flow. `total` counts the whole file, and
+    /// `resumable` says whether a later run could go on from the bytes this one keeps.
     Started {
         total: Option<u64>,
         resumed: u64,
+        resumable: Resumable,
     },
     WebPage {
         name: Option<String>,
@@ -166,6 +171,47 @@ pub(crate) enum Event {
     /// fetchloom keeps them as sent, since a hash published for the file matches those.
     Encoded(String),
     Bytes(u64),
+}
+
+/// whether a later run can go on from the bytes a stopped download keeps. that run asks the
+/// server for the rest only with proof that the rest belongs to the same file, a pinned hash or a
+/// validator [`if_range`] can send, and the server then has to send the rest alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Resumable {
+    /// the server said it sends parts of a file, or sent one, and the bytes are proven.
+    Yes,
+    /// the bytes are proven, but the server has not said whether it sends parts of a file.
+    #[default]
+    Maybe,
+    /// nothing proves the bytes, or the server said it sends no parts, so a later run starts
+    /// over.
+    No,
+}
+
+impl Resumable {
+    /// what an answer of `status` with `head` allows, for bytes `proven` to be one file.
+    fn answered(status: StatusCode, head: &header::HeaderMap, proven: bool) -> Resumable {
+        if !proven {
+            return Resumable::No;
+        }
+        if status == StatusCode::PARTIAL_CONTENT || headers::accepts_ranges(head) {
+            Resumable::Yes
+        } else if head.contains_key(header::ACCEPT_RANGES) {
+            Resumable::No
+        } else {
+            Resumable::Maybe
+        }
+    }
+
+    /// what bytes an earlier run kept allow before any server answers: whatever the record
+    /// proves, since the record does not say whether the server sends parts.
+    fn kept(proven: bool) -> Resumable {
+        if proven {
+            Resumable::Maybe
+        } else {
+            Resumable::No
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -326,7 +372,7 @@ impl Reach {
                 self.held.fetch_add(*bytes, Ordering::Relaxed);
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
-            Event::Waiting | Event::Kept(_) | Event::WebPage { .. } | Event::Encoded(_) => {}
+            Event::Waiting | Event::Kept { .. } | Event::WebPage { .. } | Event::Encoded(_) => {}
         }
     }
 
@@ -477,8 +523,12 @@ impl Net {
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         // what an earlier run kept counts as kept from the start, before any server answers
-        if let Some((received, _)) = partial.resumable() {
-            on(Event::Kept(received))?;
+        if let Some((received, validators)) = partial.resumable() {
+            let proven = fetch.expect.proves() || if_range(&validators).is_some();
+            on(Event::Kept {
+                bytes: received,
+                resumable: Resumable::kept(proven),
+            })?;
         }
         let validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
@@ -699,14 +749,8 @@ impl Net {
             return Ok(Answer::StartOver);
         };
         let kept = writer.kept();
-        on(Event::Started {
-            total,
-            resumed: offset + kept,
-        })
-        .map_err(Failure::Final)?;
-        if offset + kept > 0 {
-            Work::add(&self.work.resumes, 1);
-        }
+        let resumable = Resumable::answered(status, &head, proven);
+        self.started(on, total, offset + kept, resumable)?;
         // ranges kept past the prefix leave gaps that only the split path fills
         let at_once = self.split.when == Splitting::Always || kept > 0;
         let watch = total.filter(|_| splits);
@@ -755,6 +799,27 @@ impl Net {
             name,
             resumed: offset + kept > 0 || pieced,
         })
+    }
+
+    /// tells `on` that the answer's bytes are about to flow, `resumed` of them kept already, and
+    /// counts a download that goes on from kept bytes.
+    fn started(
+        &self,
+        on: Listener<'_>,
+        total: Option<u64>,
+        resumed: u64,
+        resumable: Resumable,
+    ) -> Result<(), Failure> {
+        on(Event::Started {
+            total,
+            resumed,
+            resumable,
+        })
+        .map_err(Failure::Final)?;
+        if resumed > 0 {
+            Work::add(&self.work.resumes, 1);
+        }
+        Ok(())
     }
 
     /// whether a file of `total` bytes may come in ranges from several answers: large enough, from

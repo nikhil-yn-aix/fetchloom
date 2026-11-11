@@ -562,8 +562,8 @@ impl Server {
         })
     }
 
-    /// serves `body` with a strong `ETag`: slowly on the first connection, then at full speed and
-    /// from the asked range on the second.
+    /// serves `body` with a strong `ETag` and `Accept-Ranges: bytes`: slowly on the first
+    /// connection, then at full speed and from the asked range on the second.
     pub(crate) fn slow_file(path: &str, body: Vec<u8>) -> Result<Server> {
         Server::file_twice(path, body, false)
     }
@@ -594,7 +594,11 @@ impl Server {
                 seen.change(|heads| heads.push(asked));
                 let rest = &body[start.unwrap_or_default()..];
                 let length = rest.len().to_string();
-                let mut headers = vec![("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+                let mut headers = vec![
+                    ("Content-Length", length.as_str()),
+                    ("ETag", "\"v1\""),
+                    ("Accept-Ranges", "bytes"),
+                ];
                 let range =
                     start.map(|start| format!("bytes {start}-{}/{}", body.len() - 1, body.len()));
                 let status = match &range {

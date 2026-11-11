@@ -29,7 +29,7 @@ fetchloom fetches and pins published inputs; it leaves analysis, publication and
 | one file on a FAT32 disk | 4 GiB less one byte. a larger file is refused before it is downloaded to a cache there, copied into a data or `get` folder there, or unpacked there from an archive; exFAT has no such limit | a disk formatted as exFAT, NTFS, APFS or ext4 |
 | what one archive unpacks to | 10,000,000 entries, 16 TiB, 1000 times its packed size | `FETCHLOOM_ARCHIVE_FILES`, `FETCHLOOM_ARCHIVE_SIZE`, `FETCHLOOM_ARCHIVE_RATIO`, for an archive you trust |
 
-a stopped download keeps what it fetched and goes on from there in the next run, so a pull of hundreds of gigabytes survives a dropped connection or a full disk.
+a stopped download keeps what it fetched and goes on from there in the next run, where its server sends parts of a file, so a pull of hundreds of gigabytes survives a dropped connection or a full disk. the stop says when its server cannot continue, and the next run then starts over.
 
 ## commands and integrations not implemented
 

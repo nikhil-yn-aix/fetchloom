@@ -8,7 +8,7 @@ pub(super) mod mirrors;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tokio::task::JoinSet;
 use url::Url;
@@ -19,7 +19,7 @@ use crate::archive::{self, Packed};
 use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
-use crate::net::{Event, Expect, Fetch, Fetched, Net};
+use crate::net::{Event, Expect, Fetch, Fetched, Net, Resumable};
 use crate::output::{Bar, Output, Ticker};
 use crate::source::{self, Remote};
 use crate::units;
@@ -226,9 +226,12 @@ struct Watch<'a> {
     /// when the download gets large.
     unbounded: AtomicBool,
     received: AtomicU64,
-    /// how far into the file this download is: the bytes it holds, an earlier run's included,
-    /// which a stop keeps for the next run. the batch owns it, to say what a stop kept.
-    position: &'a AtomicU64,
+    /// what this download holds for the next run. the batch owns it, to say what a stop kept.
+    held: &'a Held,
+    /// the bytes an earlier run kept, so a start from the first byte can say they were lost.
+    earlier: AtomicU64,
+    /// whether the download said it starts over, which it says once.
+    restarted: AtomicBool,
     /// the furthest point the overall progress counted, so bytes fetched again after a retry or
     /// a fresh start count once.
     counted: AtomicU64,
@@ -245,7 +248,7 @@ impl<'a> Watch<'a> {
         overall: &'a Overall,
         approval: &'a Approval,
         yes: bool,
-        position: &'a AtomicU64,
+        held: &'a Held,
     ) -> Watch<'a> {
         Watch {
             job,
@@ -257,7 +260,9 @@ impl<'a> Watch<'a> {
             sized: AtomicBool::new(false),
             unbounded: AtomicBool::new(false),
             received: AtomicU64::new(0),
-            position,
+            held,
+            earlier: AtomicU64::new(0),
+            restarted: AtomicBool::new(false),
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
@@ -309,8 +314,15 @@ impl<'a> Watch<'a> {
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
             // no bar yet: the download may still wait for a free slot
-            Event::Kept(bytes) => self.position.store(bytes, Ordering::Relaxed),
-            Event::Started { total, resumed, .. } => {
+            Event::Kept { bytes, resumable } => {
+                self.held.keep(bytes, resumable);
+                self.earlier.store(bytes, Ordering::Relaxed);
+            }
+            Event::Started {
+                total,
+                resumed,
+                resumable,
+            } => {
                 self.waited().take();
                 // a size only the server states is checked here, before any byte is written
                 if let (Some(cache), Some(total)) = (self.approval.cache.as_deref(), total) {
@@ -344,10 +356,20 @@ impl<'a> Watch<'a> {
                     self.unbounded.store(total.is_none(), Ordering::Relaxed);
                     self.received.store(resumed, Ordering::Relaxed);
                 }
+                let earlier = self.earlier.load(Ordering::Relaxed);
+                if resumed < earlier && !self.restarted.swap(true, Ordering::Relaxed) {
+                    self.output.mark(
+                        "Restarting",
+                        &format!(
+                            "{label} · the {} an earlier run kept cannot be continued",
+                            units::size(earlier)
+                        ),
+                    );
+                }
                 let bar = self.bar();
                 bar.message("Downloading", label.clone());
                 bar.start(total, resumed);
-                self.position.store(resumed, Ordering::Relaxed);
+                self.held.keep(resumed, resumable);
                 self.count(resumed);
             }
             Event::WebPage { ref name } => {
@@ -391,7 +413,7 @@ impl<'a> Watch<'a> {
             }
             Event::Bytes(bytes) => {
                 self.bar().advance(bytes);
-                self.count(self.position.fetch_add(bytes, Ordering::Relaxed) + bytes);
+                self.count(self.held.bytes.fetch_add(bytes, Ordering::Relaxed) + bytes);
                 let received = self.received.fetch_add(bytes, Ordering::Relaxed) + bytes;
                 if self.unbounded.load(Ordering::Relaxed) && received > self.approval.above {
                     let size = format!("more than {}", units::size(self.approval.above));
@@ -608,9 +630,7 @@ async fn run_each(
         Arc::new(Approval::new(context.settings.ask_above.value).with_room(cache.root()));
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
-    let held: Arc<[AtomicU64]> = std::iter::repeat_with(AtomicU64::default)
-        .take(count)
-        .collect();
+    let held: Arc<[Held]> = std::iter::repeat_with(Held::default).take(count).collect();
     loop {
         while tasks.len() < in_flight
             && let Some((index, job)) = queue.next()
@@ -664,7 +684,7 @@ async fn run_each(
         };
         match joined {
             Ok((index, Ok(fetched))) => {
-                held[index].store(0, Ordering::Relaxed);
+                held[index].bytes.store(0, Ordering::Relaxed);
                 results[index] = Some(Ok(fetched));
                 done += 1;
                 if let Some(bar) = &overall.bar {
@@ -673,11 +693,11 @@ async fn run_each(
             }
             // a file that failed on its own leaves nothing the next run goes on from
             Ok((index, Err(err))) if on_its_own(&err) => {
-                held[index].store(0, Ordering::Relaxed);
+                held[index].bytes.store(0, Ordering::Relaxed);
                 results[index] = Some(Err(err));
             }
             Ok((index, Err(err))) if apart && err.kind != Kind::Interrupted => {
-                results[index] = Some(Err(kept(err, held[index].load(Ordering::Relaxed))));
+                results[index] = Some(Err(kept(err, std::slice::from_ref(&held[index]))));
             }
             Ok((_, Err(err))) => {
                 if err.kind == Kind::Interrupted {
@@ -689,8 +709,7 @@ async fn run_each(
                 } else {
                     tasks.abort_all();
                 }
-                let bytes = held.iter().map(|bytes| bytes.load(Ordering::Relaxed)).sum();
-                return Err(kept(err, bytes));
+                return Err(kept(err, &held));
             }
             Err(err) => {
                 tasks.abort_all();
@@ -706,27 +725,82 @@ async fn run_each(
 
 /// waits for the downloads still running to wind down from a stop, leaving in `held` what each
 /// one that stopped unfinished keeps for the next run.
-async fn wind_down(tasks: &mut JoinSet<(usize, Result<Fetched, Error>)>, held: &[AtomicU64]) {
+async fn wind_down(tasks: &mut JoinSet<(usize, Result<Fetched, Error>)>, held: &[Held]) {
     while let Some(joined) = tasks.join_next().await {
         // a finished file, or one failed on its own, leaves nothing to go on from
         if let Ok((index, result)) = joined
             && result.as_ref().map_or_else(on_its_own, |_| true)
         {
-            held[index].store(0, Ordering::Relaxed);
+            held[index].bytes.store(0, Ordering::Relaxed);
         }
     }
 }
 
-/// tells a person who stopped, or whose network failed, that the bytes so far are not lost:
-/// `bytes`, what the unfinished downloads hold, an earlier run's included.
-fn kept(error: Error, bytes: u64) -> Error {
-    if bytes == 0 || !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
+/// what one unfinished download holds for the next run: how far into the file it is, an earlier
+/// run's bytes included, and whether a later run can go on from there.
+#[derive(Default)]
+struct Held {
+    bytes: AtomicU64,
+    resumable: Mutex<Resumable>,
+}
+
+impl Held {
+    fn keep(&self, bytes: u64, resumable: Resumable) {
+        self.bytes.store(bytes, Ordering::Relaxed);
+        *self
+            .resumable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = resumable;
+    }
+
+    fn resumable(&self) -> Resumable {
+        *self
+            .resumable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// tells a person who stopped, or whose network failed, what the bytes so far are worth: what
+/// the unfinished downloads in `held` keep, an earlier run's included, and whether the next run
+/// goes on from them, which only the servers that send parts of a file allow.
+fn kept(error: Error, held: &[Held]) -> Error {
+    if !matches!(error.kind, Kind::Interrupted | Kind::NetworkUnreachable) {
         return error;
     }
-    error.detail(format!(
-        "the {} downloaded so far is kept, and the next run continues from there",
-        units::size(bytes)
-    ))
+    let (mut sure, mut maybe, mut lost) = (0_u64, 0_u64, 0_u64);
+    for held in held {
+        let bytes = held.bytes.load(Ordering::Relaxed);
+        let sum = match held.resumable() {
+            Resumable::Yes => &mut sure,
+            Resumable::Maybe => &mut maybe,
+            Resumable::No => &mut lost,
+        };
+        *sum = sum.saturating_add(bytes);
+    }
+    let going_on = sure.saturating_add(maybe);
+    let error = match (going_on, maybe) {
+        (0, _) => error,
+        (_, 0) => error.detail(format!(
+            "the {} downloaded so far is kept, and the next run continues from there",
+            units::size(going_on)
+        )),
+        _ => error.detail(format!(
+            "the {} downloaded so far is kept, and the next run continues from there if the server allows it",
+            units::size(going_on)
+        )),
+    };
+    match (lost, going_on) {
+        (0, _) => error,
+        (_, 0) => error.detail(format!(
+            "the server cannot continue from the {} downloaded so far, so the next run starts over",
+            units::size(lost)
+        )),
+        _ => error.detail(format!(
+            "the other {} starts over in the next run, since its server cannot continue from it",
+            units::size(lost)
+        )),
+    }
 }
 
 /// how many failed files one error names. the rest are counted.
@@ -1036,10 +1110,11 @@ mod tests {
         let unknown = || Event::Started {
             total: None,
             resumed: 0,
+            resumable: Resumable::Maybe,
         };
         let approval = Approval::new(crate::settings::ASK_ABOVE);
-        let position = AtomicU64::new(0);
-        let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+        let held = Held::default();
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
         watch.on(&unknown()).unwrap();
         watch.on(&Event::Bytes(crate::settings::ASK_ABOVE)).unwrap();
         let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
@@ -1057,20 +1132,21 @@ mod tests {
             Kind::Unconfirmed
         );
         let fresh = Approval::new(crate::settings::ASK_ABOVE);
-        let approved = Watch::new(&job, &output, &overall, &fresh, true, &position);
+        let approved = Watch::new(&job, &output, &overall, &fresh, true, &held);
         approved.on(&unknown()).unwrap();
         approved
             .on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
             .unwrap();
-        let another = Watch::new(&job, &output, &overall, &fresh, false, &position);
+        let another = Watch::new(&job, &output, &overall, &fresh, false, &held);
         another.on(&unknown()).unwrap();
         another
             .on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
             .unwrap();
-        let told = Watch::new(&job, &output, &overall, &fresh, false, &position);
+        let told = Watch::new(&job, &output, &overall, &fresh, false, &held);
         let small = Event::Started {
             total: Some(10),
             resumed: 0,
+            resumable: Resumable::Maybe,
         };
         told.on(&small).unwrap();
         told.on(&Event::Bytes(2 * crate::settings::ASK_ABOVE))
@@ -1101,17 +1177,18 @@ mod tests {
             again: None,
         };
         let overall = overall();
-        let position = AtomicU64::new(0);
+        let held = Held::default();
         for (total, resumed, needs_approval) in [
             (crate::settings::ASK_ABOVE, 0, false),
             (crate::settings::ASK_ABOVE + 1, 0, true),
             (crate::settings::ASK_ABOVE + 1, 1, false),
         ] {
             let approval = Approval::new(crate::settings::ASK_ABOVE);
-            let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
             let result = watch.on(&Event::Started {
                 total: Some(total),
                 resumed,
+                resumable: Resumable::Maybe,
             });
             if needs_approval {
                 assert_eq!(result.unwrap_err().kind, Kind::Unconfirmed);
@@ -1148,11 +1225,12 @@ mod tests {
         let event = Event::Started {
             total: Some(crate::settings::ASK_ABOVE + 1),
             resumed: 0,
+            resumable: Resumable::Maybe,
         };
-        let position = AtomicU64::new(0);
-        let first = Watch::new(&first, &output, &overall, &approval, false, &position);
+        let held = Held::default();
+        let first = Watch::new(&first, &output, &overall, &approval, false, &held);
         assert_eq!(first.on(&event).unwrap_err().kind, Kind::Unconfirmed);
-        let second = Watch::new(&second, &output, &overall, &approval, false, &position);
+        let second = Watch::new(&second, &output, &overall, &approval, false, &held);
         assert_eq!(second.on(&event).unwrap_err().kind, Kind::Unconfirmed);
     }
 
@@ -1182,17 +1260,18 @@ mod tests {
         let started = Event::Started {
             total: Some(crate::settings::ASK_ABOVE + 1),
             resumed: 0,
+            resumable: Resumable::Maybe,
         };
         let overall = overall();
-        let position = AtomicU64::new(0);
+        let held = Held::default();
         let approval = Approval::new(crate::settings::ASK_ABOVE);
         // a known size was asked about before the download started
-        Watch::new(&job, &output, &overall, &approval, false, &position)
+        Watch::new(&job, &output, &overall, &approval, false, &held)
             .on(&started)
             .unwrap();
         job.fetch.held = Some(crate::digest::sha256(b"the bytes fetched before"));
         let approval = Approval::new(crate::settings::ASK_ABOVE);
-        let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
         assert_eq!(watch.on(&started).unwrap_err().kind, Kind::Unconfirmed);
     }
 
@@ -1218,16 +1297,22 @@ mod tests {
         };
         let overall = Overall::new(&context, std::slice::from_ref(&job));
         let approval = Approval::new(crate::settings::ASK_ABOVE);
-        let position = AtomicU64::new(0);
-        let watch = Watch::new(&job, &context.output, &overall, &approval, false, &position);
+        let held = Held::default();
+        let watch = Watch::new(&job, &context.output, &overall, &approval, false, &held);
         // another fetchloom downloads the file while this run waits for it
         watch.on(&Event::Waiting).unwrap();
-        watch.on(&Event::Kept(0)).unwrap();
+        watch
+            .on(&Event::Kept {
+                bytes: 0,
+                resumable: Resumable::Maybe,
+            })
+            .unwrap();
         assert!(overall.ticker.get().is_none());
         watch
             .on(&Event::Started {
                 total: Some(10),
                 resumed: 0,
+                resumable: Resumable::Maybe,
             })
             .unwrap();
         assert!(overall.ticker.get().is_some());
@@ -1249,7 +1334,7 @@ mod tests {
         );
         let overall = overall();
         let approval = Approval::new(crate::settings::ASK_ABOVE);
-        let position = AtomicU64::new(0);
+        let held = Held::default();
         let pinned = Some(crate::digest::sha256(b"a pinned listing"));
         for (link, label, name, sha256, refused) in [
             ("http://lab.example/shards/", "shards", None, None, true),
@@ -1283,7 +1368,7 @@ mod tests {
                 dataset: None,
                 again: None,
             };
-            let watch = Watch::new(&job, &output, &overall, &approval, false, &position);
+            let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
             let page = Event::WebPage {
                 name: name.map(str::to_owned),
             };
@@ -1328,6 +1413,56 @@ mod tests {
         );
         assert_eq!(error.message, "the file differs");
         assert!(error.help.unwrap().contains("published size or SHA-256"));
+    }
+
+    /// a stop promises the next run goes on only from bytes their server lets a later run go on
+    /// from, says when a server never said whether it would, and says what starts over instead.
+    #[test]
+    fn a_stop_promises_to_go_on_only_where_a_server_allows() {
+        let mib = 1 << 20;
+        let said = |held: &[(u64, Resumable)]| {
+            let held: Vec<Held> = held
+                .iter()
+                .map(|&(bytes, resumable)| {
+                    let one = Held::default();
+                    one.keep(bytes, resumable);
+                    one
+                })
+                .collect();
+            kept(Error::new(Kind::Interrupted, "stopped"), &held).details
+        };
+        assert_eq!(
+            said(&[(3 * mib, Resumable::Yes), (0, Resumable::No)]),
+            ["the 3.0 MiB downloaded so far is kept, and the next run continues from there"]
+        );
+        assert_eq!(
+            said(&[(3 * mib, Resumable::Yes), (mib, Resumable::Maybe)]),
+            [
+                "the 4.0 MiB downloaded so far is kept, and the next run continues from there if the server allows it"
+            ]
+        );
+        assert_eq!(
+            said(&[(3 * mib, Resumable::No)]),
+            [
+                "the server cannot continue from the 3.0 MiB downloaded so far, so the next run starts over"
+            ]
+        );
+        assert_eq!(
+            said(&[(3 * mib, Resumable::Yes), (mib, Resumable::No)]),
+            [
+                "the 3.0 MiB downloaded so far is kept, and the next run continues from there",
+                "the other 1.0 MiB starts over in the next run, since its server cannot continue from it"
+            ]
+        );
+        assert_eq!(said(&[(0, Resumable::Yes)]), Vec::<String>::new());
+        let other = Held::default();
+        other.keep(mib, Resumable::Yes);
+        let mismatch = kept(Error::new(Kind::IntegrityMismatch, "x"), &[other]);
+        assert_eq!(
+            mismatch.details,
+            Vec::<String>::new(),
+            "only a stop or a network failure"
+        );
     }
 
     #[test]

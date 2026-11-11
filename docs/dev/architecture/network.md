@@ -12,7 +12,7 @@
 |---|---|---|
 | [net.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net.rs) | lazy clients, redirect policy and concurrency | `Net`, `Wire`, `Options`, `Credential`, `Offline`, `Splitting`, `Split`, `send`, `send_on` |
 | [api.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/api.rs) | bounded metadata responses | `Api`, `Response`, `json`, `text` |
-| [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | cache hits, resumes, body streaming and expected hashes | `Fetch`, `Expect`, `Fetched`, `Origin`, `Event`, `download` |
+| [download.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download.rs) | cache hits, resumes, body streaming and expected hashes | `Fetch`, `Expect`, `Fetched`, `Origin`, `Event`, `Resumable`, `download` |
 | [download/split.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/download/split.rs) | adaptive range scheduling | `Job`, `Board`, `Share`, `Streamed`, `split` |
 | [headers.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/headers.rs) | filenames, lengths and version validators | `file_name`, `if_range`, `changed`, `validators`, `range_start`, `range_end` |
 | [failure.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/failure.rs) | classifications and retry waits | `Failure`, `Retry`, `classify`, `retry_after` |
@@ -75,6 +75,8 @@ a finished stream takes half the largest remaining range only when that half is 
 ### resumption and revalidation
 
 resumption rehashes saved bytes and needs version proof before joining them to a response. `If-Range` uses a syntactically valid strong `ETag`, or a parsed `Last-Modified` only when there was no `ETag` and the saved response `Date` is at least a minute later. that interval allows for clock uncertainty. records always store the response date, or null when the response has none; without it, a modification date can still revalidate a whole object but cannot guard a range. unsuitable ranges restart from zero. a full `200` response replaces the earlier version and discards every saved range, including a suffix saved before any prefix arrived. a resumed checksum mismatch also gets one full restart. malformed, unquoted or weak entity tags never authorize range resumption or splitting; a pinned hash can still prove the final bytes.
+
+`Event::Kept` and `Event::Started` carry a `Resumable` verdict on the bytes a stop would keep, so a stop promises only what a later run can do. `Resumable::answered` gives `Yes` for proven bytes from an answer that is a `206` or says `Accept-Ranges: bytes`, `Maybe` when the answer does not mention ranges, and `No` for unproven bytes or another `Accept-Ranges` value; bytes known only from a partial record are `Maybe` at best, since the record does not say whether the server sends ranges. [cli/fetch.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch.rs) adds the bytes of each verdict into the stop's lines, and a `Started` that goes back past the bytes `Kept` named prints one `Restarting` line for the file.
 
 requests send no `Accept-Encoding`, so a body arrives compressed only when a server compresses it uninvited. `Event::Encoded` then names its `Content-Encoding`; the bytes are kept as sent, which is what a published hash matches, and the CLI warns once unless the file's name already says that compression, as `.gz` does.
 

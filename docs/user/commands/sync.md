@@ -219,6 +219,6 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 
 ## stopping a sync
 
-ctrl-c while a sync resolves or downloads stops it before it places any file. it ends with `Stopped while talking to zenodo.org, so nothing changed`, and a dim line under it says how much the unfinished downloads keep, which is what the next sync goes on from. a sync that already wrote `data.lock`, which it does before it downloads what placing needs, keeps the new `data.lock` and says `so the data folder is as it was` instead.
+ctrl-c while a sync resolves or downloads stops it before it places any file. it ends with `Stopped while talking to zenodo.org, so nothing changed`, and a dim line under it says how much the unfinished downloads keep, and whether the next sync goes on from there, which only a server that sends parts of a file allows, as [interruptions](../concepts.md#interruptions) explains. a sync that already wrote `data.lock`, which it does before it downloads what placing needs, keeps the new `data.lock` and says `so the data folder is as it was` instead.
 
 during placement, the first ctrl-c stops starting new placements and removals. an operation already in the filesystem may finish. completed files stay recorded; unfinished copies never take their final names. run sync again to finish.

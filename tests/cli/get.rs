@@ -777,6 +777,64 @@ fn a_stopped_get_says_so_in_a_plain_line() -> Result {
     Ok(())
 }
 
+/// a server that names no version of a file and sends all of it to every request cannot
+/// continue a download, as python's http.server cannot. a stop says the next run starts over
+/// rather than promising it continues, and the next run, which does start over, says so once,
+/// though a broken connection makes it start over again.
+#[cfg(unix)]
+#[test]
+fn a_stop_promises_only_what_the_server_allows() -> Result {
+    // more than the writer gathers before it writes, so the bytes reach the disk
+    let body: Vec<u8> = (0..4u32 << 20).map(|n| (n % 251) as u8).collect();
+    let length = body.len().to_string();
+    let head = [("Content-Length", length.as_str())];
+    let (release, wait) = std::sync::mpsc::channel();
+    let mut stopped = reply("200 OK", &head, &body[..2 << 20]);
+    stopped.push(Part::Wait(wait));
+    let broken = reply("200 OK", &head, &body[..1 << 20]);
+    let server = Server::start(
+        "/big.bin",
+        vec![stopped, broken, reply("200 OK", &head, &body)],
+    )?;
+    let sandbox = Sandbox::new()?;
+    let mut child = sandbox
+        .command(&["get", &server.url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let arrived = part_reaches(&sandbox, 1, &mut child)?;
+    let sent = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()?;
+    let output = child.wait_with_output()?;
+    drop(release);
+    let stderr = text(&output.stderr)?;
+    assert!(arrived > 0 && sent.success(), "{stderr}");
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    let kept = stderr.lines().last().unwrap_or_default();
+    assert!(
+        kept.starts_with("            the server cannot continue from the ")
+            && kept.ends_with(" downloaded so far, so the next run starts over"),
+        "{stderr}"
+    );
+    let rerun = sandbox.run(&["get", &server.url])?;
+    let stderr = text(&rerun.stderr)?;
+    assert_eq!(rerun.status.code(), Some(0), "{stderr}");
+    let restarts: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.contains("Restarting"))
+        .collect();
+    assert!(
+        matches!(restarts.as_slice(), [line] if line.starts_with(" Restarting big.bin · the ")
+            && line.ends_with(" an earlier run kept cannot be continued")),
+        "{stderr}"
+    );
+    assert_eq!(server.requests().len(), 3, "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("big").join("big.bin"))?, body);
+    Ok(())
+}
+
 /// waits until an unfinished download in the cache holds `size` bytes, or the run ends, and says
 /// how many it holds.
 fn part_reaches(sandbox: &Sandbox, size: u64, run: &mut Child) -> Result<u64> {

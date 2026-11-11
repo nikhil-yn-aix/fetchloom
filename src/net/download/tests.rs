@@ -625,7 +625,8 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
 }
 
 /// a download that goes on from what an earlier run kept says so before any server answers, so
-/// a stop while it waits for a slot or an answer still counts those bytes as kept.
+/// a stop while it waits for a slot or an answer still counts those bytes as kept. those bytes
+/// may be continued, as their `ETag` proves them, and once the server sends the rest, they can.
 #[test]
 fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers() {
     let body = "abcdefgh".repeat(1024);
@@ -661,8 +662,10 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
     let heard = Mutex::new(Vec::new());
     let listen = |event: Event| {
         let told = match event {
-            Event::Kept(bytes) => format!("kept {bytes}"),
-            Event::Started { resumed, .. } => format!("started at {resumed}"),
+            Event::Kept { bytes, resumable } => format!("kept {bytes}, {resumable:?}"),
+            Event::Started {
+                resumed, resumable, ..
+            } => format!("started at {resumed}, {resumable:?}"),
             _ => return Ok(()),
         };
         heard.lock().unwrap().push(told);
@@ -671,8 +674,47 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
     block_on(net.download(&fetch, &cache, &listen)).unwrap();
     assert_eq!(
         *heard.lock().unwrap(),
-        [format!("kept {received}"), format!("started at {received}")]
+        [
+            format!("kept {received}, Maybe"),
+            format!("started at {received}, Yes")
+        ]
     );
+}
+
+/// a later run goes on from kept bytes only when the server sends parts of a file and a pinned
+/// hash or a validator proves those parts belong to the bytes kept. a server that never said
+/// whether it sends parts may; one that says it sends none, or bytes nothing proves, start over.
+#[test]
+fn an_answer_says_whether_a_later_run_can_go_on_from_its_bytes() {
+    let head = |pairs: &[(&'static str, &'static str)]| {
+        let mut head = header::HeaderMap::new();
+        for (name, value) in pairs {
+            head.insert(*name, header::HeaderValue::from_static(value));
+        }
+        head
+    };
+    let ranges = [("accept-ranges", "bytes")];
+    for (status, pairs, proven, resumable) in [
+        (StatusCode::OK, &ranges[..], true, Resumable::Yes),
+        (StatusCode::PARTIAL_CONTENT, &[][..], true, Resumable::Yes),
+        (StatusCode::OK, &[][..], true, Resumable::Maybe),
+        (
+            StatusCode::OK,
+            &[("accept-ranges", "none")][..],
+            true,
+            Resumable::No,
+        ),
+        (StatusCode::OK, &ranges[..], false, Resumable::No),
+        (StatusCode::PARTIAL_CONTENT, &[][..], false, Resumable::No),
+    ] {
+        assert_eq!(
+            Resumable::answered(status, &head(pairs), proven),
+            resumable,
+            "{status} {pairs:?} proven: {proven}"
+        );
+    }
+    assert_eq!(Resumable::kept(true), Resumable::Maybe);
+    assert_eq!(Resumable::kept(false), Resumable::No);
 }
 
 #[test]
