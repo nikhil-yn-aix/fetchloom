@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use super::{Building, whole};
+use super::{Building, Course, course, whole};
 use crate::build::Staging;
 use crate::error::{Error, Kind};
 use crate::recipe::Step;
@@ -70,9 +70,9 @@ impl Building<'_> {
     }
 
     /// the steps a build, or with `check` a check, would run, as far as the cache tells before
-    /// any does: every one for a check; else each whose pin does not answer its key, or whose
-    /// files the cache lacks, unless a build of its key left a whole result, and each after one
-    /// that runs. a mirror may yet give a pinned result's files, so this errs on more.
+    /// any does: every one for a check; else each that [`course`] does not find held or built
+    /// before, and each after one that runs. a mirror may yet give a pinned result's files, so
+    /// this errs on more.
     fn running(&self, check: bool) -> Result<Vec<Step>, Error> {
         let cache = &self.work.cache;
         let mut running: Vec<Step> = Vec::new();
@@ -86,13 +86,10 @@ impl Building<'_> {
             let settled = !check
                 && !after
                 && step.key().is_some_and(|key| {
-                    self.lock
-                        .result(name)
-                        .filter(|pinned| pinned.key == key)
-                        .map_or_else(
-                            || !cache.results(&key).is_empty(),
-                            |pinned| whole(cache, &pinned.files),
-                        )
+                    matches!(
+                        course(&self.lock, name, key, |files| whole(cache, files), cache),
+                        Course::Held(_) | Course::Built(_)
+                    )
                 });
             if !settled {
                 running.push(step);

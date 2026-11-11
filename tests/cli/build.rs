@@ -319,7 +319,7 @@ fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
         "  Would run clean · not built yet\n",
         "            python3 clean.py <build>/in/iris <build>/out\n",
         "            reads iris and clean.py; writes data/clean\n",
-        "  Would run tidy · not built yet; clean is not built yet\n",
+        "    May run tidy · not built yet; clean is not built yet\n",
         "            python3 tidy.py <build>/in/clean --out=<build>/out\n",
         "            reads clean, with SEED=1; writes data/tidy\n",
         "         Ok dry run, nothing was run or changed\n",
@@ -356,6 +356,10 @@ fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
         "{clean}"
     );
     let tidy = &steps[1];
+    assert_eq!(
+        tidy["action"], "may_run",
+        "what clean makes is known once it ran"
+    );
     assert_eq!(tidy["key"], Value::Null, "its input is not pinned yet");
     assert_eq!(tidy["env"], serde_json::json!({"SEED": "1"}));
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
@@ -363,14 +367,17 @@ fn a_dry_run_shows_commands_and_runs_nothing() -> Result {
     Ok(())
 }
 
-/// a step data.lock pins as built now does not run again, until something it is made from
-/// moves.
+/// a step data.lock pins as built now, whose result the cache holds, does not run again, until
+/// something it is made from moves.
 #[test]
 fn a_dry_run_tells_up_to_date_steps_from_changed_ones() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     with_recipe(&sandbox, &server)?;
     pin_clean(&sandbox, CODE, &[])?;
+    let result = object(&sandbox, b"done");
+    fs::create_dir_all(result.parent().ok_or("no folder")?)?;
+    fs::write(&result, b"done")?;
     let output = sandbox.run(&["--json", "build", "--dry-run", "clean"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let document = json(&output)?;
@@ -688,6 +695,174 @@ fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     assert_eq!(runs(&sandbox.work())?, 1, "the step did not run again");
     assert!(object(&sandbox, b"made").is_file());
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// each step's action in the `--json` of a dry run, then in that of the build after it, as
+/// `<name> <action>`, with `mirror` set as a mirror for both.
+fn foreseen_then_done(
+    sandbox: &Sandbox,
+    mirror: Option<&Path>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let actions = |args: &[&str]| -> Result<Vec<String>> {
+        let mut command = building_in(sandbox, &sandbox.work(), args)?;
+        if let Some(mirror) = mirror {
+            command.env("FETCHLOOM_MIRRORS", mirror);
+        }
+        let output = command.output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stdout)?
+        );
+        Ok(json(&output)?["result"]["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|step| format!("{} {}", step["name"], step["action"]).replace('"', ""))
+            .collect())
+    };
+    Ok((
+        actions(&["--json", "build", "--dry-run"])?,
+        actions(&["--json", "build"])?,
+    ))
+}
+
+/// a project whose `clean` writes the file `made` and whose `tidy` copies it, built, and a folder
+/// mirror that holds `made`.
+fn made_and_mirrored(sandbox: &Sandbox, server: &Server) -> Result<PathBuf> {
+    let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
+    with(
+        sandbox,
+        server,
+        &format!("{}{tidy}", recipe(&["write", "clean.csv", "made"])),
+    )?;
+    assert_eq!(build(sandbox, &["build"])?.status.code(), Some(0));
+    let mirror = sandbox.folder("mirror")?;
+    mirror_holding(&mirror, &[b"made"])?;
+    Ok(mirror)
+}
+
+/// takes `made`, the one file of both results of [`made_and_mirrored`], out of the cache, and
+/// with `placed_too` out of the data folder, which holds it for each.
+fn lose_made(sandbox: &Sandbox, placed_too: bool) -> Result {
+    crate::support::delete(&object(sandbox, b"made"))?;
+    if placed_too {
+        for dataset in ["clean", "tidy"] {
+            crate::support::delete(&placed(sandbox, dataset, "clean.csv"))?;
+        }
+    }
+    Ok(())
+}
+
+/// a dry run takes each step as the build after it does: a pinned result the cache lacks comes
+/// from the data folder or a mirror that holds it, or its step runs, a result built before from
+/// the same inputs is reused, and a step that reads what a changed step makes may run. its action
+/// is the one the build then reports, as in a fresh clone, where every pinned result is missing.
+#[test]
+fn a_dry_run_says_what_the_build_then_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let mirror = made_and_mirrored(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    let (made, other) = ("made", "other");
+    for (case, lost, mirrored, writes, foreseen, done) in [
+        (
+            "the cache and the data folder lost both results",
+            Some(true),
+            false,
+            made,
+            "clean would_run, tidy up_to_date",
+            "clean ran, tidy up_to_date",
+        ),
+        (
+            "the data folder holds what the cache lost",
+            Some(false),
+            false,
+            made,
+            "clean would_fetch, tidy up_to_date",
+            "clean fetched, tidy up_to_date",
+        ),
+        (
+            "a mirror holds what the cache and the data folder lost",
+            Some(true),
+            true,
+            made,
+            "clean would_fetch, tidy up_to_date",
+            "clean fetched, tidy up_to_date",
+        ),
+        (
+            "the cache holds both results",
+            None,
+            false,
+            made,
+            "clean up_to_date, tidy up_to_date",
+            "clean up_to_date, tidy up_to_date",
+        ),
+        (
+            "clean's run changed",
+            None,
+            false,
+            other,
+            "clean would_run, tidy may_run",
+            "clean ran, tidy ran",
+        ),
+        (
+            "clean's run changed back",
+            None,
+            false,
+            made,
+            "clean would_reuse, tidy would_reuse",
+            "clean reused, tidy reused",
+        ),
+    ] {
+        fs::write(
+            &manifest,
+            written.replace("\"made\"", &format!("\"{writes}\"")),
+        )?;
+        if let Some(placed_too) = lost {
+            lose_made(&sandbox, placed_too)?;
+        }
+        let (said, did) = foreseen_then_done(&sandbox, mirrored.then_some(mirror.as_path()))?;
+        assert_eq!(
+            (said.join(", "), did.join(", ")),
+            (foreseen.into(), done.into()),
+            "{case}"
+        );
+    }
+    Ok(())
+}
+
+/// a dry run shows the command of a step whose pinned result is nowhere, and says where a result
+/// a mirror holds would come from, with no command, since nothing runs.
+#[test]
+fn a_dry_run_shows_what_runs_and_where_a_result_comes_from() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let mirror = made_and_mirrored(&sandbox, &server)?;
+    lose_made(&sandbox, true)?;
+    let told = text(&build(&sandbox, &["build", "--dry-run"])?.stderr)?;
+    for line in [
+        "  Would run clean · its pinned result is not on this machine or a mirror\n",
+        "            recipe-step write clean.csv made <build>/in/iris <build>/out\n",
+        " Up to date tidy\n",
+    ] {
+        assert!(told.contains(line), "{line:?} in\n{told}");
+    }
+    let told = text(
+        &building_in(&sandbox, &sandbox.work(), &["build", "--dry-run"])?
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?
+            .stderr,
+    )?;
+    let fetch = format!(
+        "Would fetch clean · 1 file, 4 B as data.lock pins it, from {}\n",
+        mirror.display()
+    );
+    assert!(told.contains(&fetch), "{fetch:?} in\n{told}");
+    assert!(!told.contains("recipe-step write"), "{told}");
     Ok(())
 }
 

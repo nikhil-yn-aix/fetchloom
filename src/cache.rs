@@ -35,9 +35,9 @@ pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed, holds_pin
 pub(crate) use partial::{
     Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
 };
-pub(crate) use results::Seen;
 #[cfg(unix)]
 pub(crate) use results::seal_captured;
+pub(crate) use results::{Built, Seen};
 pub(crate) use staging::{Staging, clear_tree, enterable};
 pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Supply, Use};

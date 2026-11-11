@@ -1,6 +1,6 @@
 # build
 
-`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` shows each command first and runs nothing.
+`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` says what the build would do with each step, shows the command of each that would run, and runs nothing.
 
 ```sh
 fetchloom build --dry-run
@@ -29,7 +29,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 | `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
 | `--prepare` | put in the cache everything the build, or with `--check` the check, needs, from a mirror first, and run nothing, as on a login node before a job builds without the network. [prepare](#prepare) has the details |
 | `--locked` | fail with `lock.outdated`, exit 1, instead of changing `data.lock`, for CI: before anything is fetched or run when `data.lock` does not pin every dataset the steps need as `data.toml` asks, and when building would change a pin anyway |
-| `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
+| `-n`, `--dry-run` | say what the build would do with each step, and the command, inputs and result folder of each that would or may run; run nothing. [dry run](#dry-run) has the details |
 
 [global options](README.md#global-options) apply.
 
@@ -192,28 +192,64 @@ without names, `--accept` pins every kept rebuild. it refuses with exit 2, and c
 
 ## dry run
 
-steps come in the order a build runs them: each after the datasets it is made from, ties by name. a dry run reads `data.toml`, `data.lock` and each recipe's code, and changes nothing: no file is written, no step runs and nothing is downloaded. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
+a dry run says what a build would do with each step, deciding each as the build does against the cache, the data folder and the mirrors, and shows the command of each step that would or may run, so you can read it before it runs as you. steps come in the order a build runs them: each after the datasets it is made from, ties by name. a dry run reads `data.toml`, `data.lock`, each recipe's code, the cache, the data folder and each folder [mirror](../mirrors.md), and changes nothing: no file is written, no step runs and nothing is downloaded. it asks no web mirror. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
 
 ```text
   Would run clean · not built yet
             python3 clean.py <build>/in/iris <build>/out
             reads iris and clean.py; writes data/clean
-  Would run tidy · not built yet; clean is not built yet
+    May run tidy · not built yet; clean is not built yet
             python3 tidy.py <build>/in/clean --out=<build>/out
-            reads clean, with SEED=1; writes data/tidy
+            reads clean and tidy.py, with SEED=1; writes data/tidy
          Ok dry run, nothing was run or changed
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
 the second line of a step is its command, the program and its arguments with each folder in place. no shell reads it, so a word with spaces stays one argument; the dry run quotes such a word. the third line names the datasets and code the step reads, the variables `env` sets for it, and the folder its result goes in.
 
-each step has one of three actions:
+each step has one of five actions, each the word for what the build after it reports in its JSON:
 
-| action | when |
-|---|---|
-| `Would run` | data.lock pins no result for it, or something it is made from moved since: a dataset it reads, its `run`, a file of its `code` or its `env`. the line says what |
-| `May run` | data.lock pins it as building it now would make, but it reads the result of a step that would run. it runs again only if that result changes |
-| `Up to date` | data.lock pins its result as building it now would make |
+| action | when | the build then |
+|---|---|---|
+| `Would run` | its step runs: data.lock pins no result for what building it now would make and no earlier build left one, since something it is made from moved: a dataset it reads, its `run`, a file of its `code` or its `env`; or the result data.lock pins is neither in the cache nor on a mirror, as in a fresh clone. the line says what | `ran` |
+| `Would fetch` | data.lock pins its result as building it now would make, and the data folder or a folder mirror holds the files the cache lacks, which the build copies in. the line says where from | `fetched` |
+| `Would reuse` | an earlier build of the same key, here or in another project that shares the cache, left a result the cache holds whole | `reused` |
+| `May run` | what the build does with it waits on what the build learns first: the result of a step before it that runs, a dataset whose entry in `data.toml` changed, which the build pins again first, or whether a web mirror holds its pinned result. the line says what | any of the others |
+| `Up to date` | data.lock pins its result as building it now would make, and the cache holds it | `up_to_date` |
+
+in a fresh clone, whose cache holds none of the results data.lock pins, every step runs, and the dry run says so:
+
+```text
+  Would run clean · its pinned result is not on this machine or a mirror
+            python3 clean.py <build>/in/iris <build>/out
+            reads iris and clean.py; writes data/clean
+  Would run tidy · its pinned result is not on this machine or a mirror
+            python3 tidy.py <build>/in/clean --out=<build>/out
+            reads clean and tidy.py, with SEED=1; writes data/tidy
+         Ok dry run, nothing was run or changed
+  hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
+```
+
+with a folder mirror that holds the results, as `fetchloom --mirror ../mirror build --dry-run` there, nothing runs. a cache that lost results the data folder still holds says `from data` instead, as the build copies them from there:
+
+```text
+Would fetch clean · 1 file, 46 B as data.lock pins it, from ../mirror
+Would fetch tidy · 1 file, 46 B as data.lock pins it, from ../mirror
+         Ok no step would run; dry run, nothing was run or changed
+```
+
+a step after one that runs for a changed recipe may run. here a comment was added to clean.py, so tidy runs again only if clean makes other files than before; the build that followed ran clean, which made the same file, and found tidy up to date:
+
+```text
+  Would run clean · clean.py changed
+            python3 clean.py <build>/in/iris <build>/out
+            reads iris and clean.py; writes data/clean
+    May run tidy · runs again if clean's result changes
+            python3 tidy.py <build>/in/clean --out=<build>/out
+            reads clean and tidy.py, with SEED=1; writes data/tidy
+         Ok dry run, nothing was run or changed
+  hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
+```
 
 when every step is up to date, the last line says so:
 
@@ -243,9 +279,9 @@ a failed build keeps the steps that finished before it in `result.steps`. a chec
 | field | value |
 |---|---|
 | `name` | the recipe |
-| `action` | `would_run`, `may_run` or `up_to_date` |
-| `key` | the key of the result building it now would make, `sha256:` and 64 hex digits, or null until data.lock pins every dataset it reads and all its code is there |
-| `changes` | what moved since data.lock's result of it was built, in the words of the human output; empty when it is up to date |
+| `action` | `would_run`, `would_fetch`, `would_reuse`, `may_run` or `up_to_date`; each but `may_run` is the action the build after it reports: `ran`, `fetched`, `reused` or `up_to_date` |
+| `key` | the key of the result building it now would make, `sha256:` and 64 hex digits, or null until data.lock pins every dataset it reads and all its code is there, and while it waits on a step before it |
+| `changes` | why it would or may run, in the words of the human output: what moved since data.lock's result of it was built, or that its pinned result is not on this machine or a mirror; empty when it is up to date |
 | `run` | the program and its arguments, each folder in place, `<build>` standing for the step's folder |
 | `env` | the variables set for the step alone |
 | `inputs` | each dataset it reads, as `name` and `folder` |

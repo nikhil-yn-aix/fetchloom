@@ -899,6 +899,12 @@ fn holds(name: &Path, size: u64) -> bool {
     fs::symlink_metadata(name).is_ok_and(|found| is_plain(&found) && found.len() == size)
 }
 
+/// whether the folder mirror at `root` holds a plain file of `size` bytes where it keeps the
+/// object `digest`, as a reader finds it before checking its bytes.
+pub(crate) fn has(root: &Path, digest: &Sha256, size: u64) -> bool {
+    holds(&place(root, super::OBJECTS, digest), size)
+}
+
 /// the files `wrote` gives, each in a slot a worker takes it from to name it, or the first that
 /// failed, in order. the others go with `wrote`.
 fn waiting(

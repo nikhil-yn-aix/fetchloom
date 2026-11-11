@@ -334,7 +334,7 @@ fn unbuilt_here(
                 && cache.find(&target.sha256, Some(target.size)).is_none()
                 && !folders
                     .iter()
-                    .any(|root| mirrored(root, &target.sha256, target.size))
+                    .any(|root| crate::mirror::folder::has(root, &target.sha256, target.size))
         })
         .map(|target| target.dataset.to_owned())
         .collect();
@@ -373,14 +373,6 @@ fn unbuilt_here(
         }
     }
     status.unbuilt = unbuilt;
-}
-
-/// whether the folder mirror at `root` holds the object `sha256` of `size` bytes where a sync
-/// looks for it.
-fn mirrored(root: &std::path::Path, sha256: &Sha256, size: u64) -> bool {
-    let [kind, fan, rest] = crate::mirror::below("objects", sha256);
-    std::fs::metadata(root.join(kind).join(fan).join(rest))
-        .is_ok_and(|found| found.is_file() && found.len() == size)
 }
 
 /// whether this machine holds every file a build reads of the fetched dataset `locked`: each

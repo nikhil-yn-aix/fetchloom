@@ -1,7 +1,6 @@
 //! `fetchloom build`: runs the recipes in data.toml, each step after the datasets it is made
 //! from, takes in what each step wrote, pins it in data.lock and places it in the data folder.
-//! `--dry-run` says each step's command with its folders in place, what it reads and where its
-//! result goes, and runs nothing.
+//! `--dry-run` says what the build would do with each step, and runs nothing.
 //!
 //! a build takes data.lock, relocks the sources its steps read and pins each result in memory,
 //! then writes data.lock once, after every step: a step that fails or is stopped leaves
@@ -9,9 +8,10 @@
 //! before it stay in the cache, so a build run again reuses them.
 
 mod accept;
+mod preview;
 mod room;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
+use self::preview::{Previewed, preview};
 use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{Run, committed, find, hold, ignore_data, known, locked, register, sync_all};
@@ -34,14 +35,13 @@ use crate::build::{Staging, inputs};
 use crate::cache::{Cache, Member};
 use crate::digest::{self, Sha256};
 use crate::error::{Error, Kind};
-use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::Manifest;
 use crate::project::state::Candidate;
-use crate::recipe::{self, Change, Slot, Step};
+use crate::recipe::{self, Slot, Step};
 use crate::units;
 
 /// what stands in a dry run for a step's private folder, which a build makes in the cache.
@@ -118,58 +118,6 @@ enum Did {
     Skipped,
     /// `--prepare` put in the cache everything a build of it reads, and ran nothing.
     Prepared,
-}
-
-/// what `build --dry-run` found.
-#[derive(Serialize)]
-pub(super) struct Previewed {
-    project: PathBuf,
-    /// the recipes named, or every recipe when none was.
-    selected: Vec<String>,
-    /// each recipe the selected ones need, in the order the steps would run.
-    steps: Vec<Planned>,
-    dry_run: bool,
-}
-
-/// one step as a dry run finds it.
-#[derive(Serialize)]
-struct Planned {
-    name: String,
-    action: Action,
-    /// the key of the result building it now would make, `sha256:` and its hash, once data.lock
-    /// pins every dataset it reads and all its code is there.
-    key: Option<String>,
-    /// what moved since data.lock's result of it was built.
-    changes: Vec<String>,
-    /// the program and its arguments, each folder in place.
-    run: Vec<String>,
-    /// the variables set for the step alone.
-    env: BTreeMap<String, String>,
-    /// each dataset it reads, with the folder the step finds a copy of its files in.
-    inputs: Vec<Input>,
-    /// the files and folders of code whose bytes enter its key.
-    code: Vec<String>,
-    /// the folder in the project its result goes in.
-    output: String,
-}
-
-#[derive(Serialize)]
-struct Input {
-    name: String,
-    folder: String,
-}
-
-/// what a build would do with a step.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Action {
-    /// data.lock does not pin what building it now would make.
-    WouldRun,
-    /// it agrees with data.lock, but reads the result of a step that would run, so it runs
-    /// again only if that result changes.
-    MayRun,
-    /// data.lock pins its result as building it now would make.
-    UpToDate,
 }
 
 pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report, Error> {
@@ -271,180 +219,6 @@ fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
             .collect()
     } else {
         names.to_vec()
-    }
-}
-
-/// what building `names` would do, told as a dry run tells it, with nothing run or changed. with
-/// `current`, as `--locked` asks, data.lock must pin what data.toml asks first.
-fn preview(
-    context: &Context,
-    project: &Project,
-    manifest: &Manifest,
-    names: &[String],
-    current: Option<&str>,
-) -> Result<Previewed, Error> {
-    let read = project.lock_and_text()?;
-    let selected = selected(manifest, names);
-    let roots: Vec<&str> = selected.iter().map(String::as_str).collect();
-    let closure = recipe::closure(&manifest.datasets, &roots);
-    if let Some(instead) = current {
-        let scope = Scope::Only(closure.iter().map(|name| (*name).to_owned()).collect());
-        pinned_as_asked(project, manifest, read.as_ref(), instead, &scope)?;
-    }
-    let lock = read.map(|(lock, _)| lock).unwrap_or_default();
-    let mut steps = Vec::new();
-    for name in closure {
-        if let Some(step) = Step::read(&project.root, manifest, &lock, name)? {
-            let changes = step.changes(lock.result(name));
-            steps.push((step, changes));
-        }
-    }
-    let actions = decide(&steps);
-    let steps: Vec<Planned> = steps
-        .into_iter()
-        .zip(actions)
-        .map(|((step, changes), action)| planned(manifest, &step, &changes, action))
-        .collect();
-    tell(&context.output, &steps);
-    Ok(Previewed {
-        project: project.root.clone(),
-        selected,
-        steps,
-        dry_run: true,
-    })
-}
-
-/// what a build would do with each of `steps`, given in the order they run, each with what moved
-/// since data.lock's result of it was built: run what moved, and treat a step that reads the
-/// result of one that may run as one that may run too, since only that result tells.
-fn decide(steps: &[(Step, Vec<Change>)]) -> Vec<Action> {
-    let mut running: BTreeSet<&str> = BTreeSet::new();
-    steps
-        .iter()
-        .map(|(step, changes)| {
-            let action = if !changes.is_empty() {
-                Action::WouldRun
-            } else if step
-                .inputs
-                .iter()
-                .any(|read| running.contains(read.name.as_str()))
-            {
-                Action::MayRun
-            } else {
-                Action::UpToDate
-            };
-            if action != Action::UpToDate {
-                running.insert(&step.name);
-            }
-            action
-        })
-        .collect()
-}
-
-/// `step` as a dry run reports it, its folders named by where a build puts them.
-fn planned(manifest: &Manifest, step: &Step, changes: &[Change], action: Action) -> Planned {
-    let folder = |slot: Slot<'_>| match slot {
-        Slot::Input(name) => OsString::from(format!("{BUILD}/in/{name}")),
-        Slot::Out => OsString::from(format!("{BUILD}/out")),
-    };
-    let run = manifest.datasets[&step.name]
-        .recipe()
-        .map(|recipe| {
-            recipe
-                .run
-                .iter()
-                .map(|word| word.expand(&folder).to_string_lossy().into_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-    Planned {
-        name: step.name.clone(),
-        action,
-        key: step.key().map(|key| format!("sha256:{key}")),
-        changes: changes.iter().map(ToString::to_string).collect(),
-        run,
-        env: step.env.clone(),
-        inputs: step
-            .inputs
-            .iter()
-            .map(|read| Input {
-                name: read.name.clone(),
-                folder: format!("{BUILD}/in/{}", read.name),
-            })
-            .collect(),
-        code: step.code.iter().map(|(path, _)| path.clone()).collect(),
-        output: plan::folder(manifest, &step.name),
-    }
-}
-
-/// a line for each step, and under one that may run its command and what it reads and writes.
-fn tell(output: &Output, steps: &[Planned]) {
-    for step in steps {
-        match step.action {
-            Action::UpToDate => {
-                output.step("Up to date", &step.name);
-                continue;
-            }
-            Action::WouldRun => output.step(
-                "Would run",
-                &format!("{} \u{b7} {}", step.name, step.changes.join("; ")),
-            ),
-            Action::MayRun => {
-                let after = steps
-                    .iter()
-                    .find(|other| {
-                        other.action != Action::UpToDate
-                            && step.inputs.iter().any(|input| input.name == other.name)
-                    })
-                    .map_or("", |other| other.name.as_str());
-                output.step(
-                    "May run",
-                    &format!(
-                        "{} \u{b7} runs again if {after}'s result changes",
-                        step.name
-                    ),
-                );
-            }
-        }
-        let words: Vec<String> = step.run.iter().map(|word| shown(word)).collect();
-        output.item(&words.join(" "));
-        let read: Vec<&str> = step
-            .inputs
-            .iter()
-            .map(|input| input.name.as_str())
-            .chain(step.code.iter().map(String::as_str))
-            .collect();
-        let with = if step.env.is_empty() {
-            String::new()
-        } else {
-            let pairs: Vec<String> = step
-                .env
-                .iter()
-                .map(|(name, value)| shown(&format!("{name}={value}")))
-                .collect();
-            format!(", with {}", pairs.join(" "))
-        };
-        output.item(&format!(
-            "reads {}{with}; writes {}",
-            listed(&read),
-            step.output
-        ));
-    }
-    if steps.is_empty() {
-        output.done(
-            "Ok",
-            "data.toml has no recipes, so there is nothing to build",
-        );
-    } else if steps.iter().all(|step| step.action == Action::UpToDate) {
-        output.done(
-            "Ok",
-            "every recipe is built as data.lock pins it; dry run, nothing was run or changed",
-        );
-    } else {
-        output.done("Ok", "dry run, nothing was run or changed");
-        output.hint(&format!(
-            "{BUILD} is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in {BUILD}/in, and what it writes in {BUILD}/out becomes its dataset"
-        ));
     }
 }
 
@@ -706,33 +480,18 @@ impl<'a> Building<'a> {
                 .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
             let after = step.inputs.iter().any(|read| running.contains(&read.name));
             let key = step.key();
+            if !check
+                && !after
+                && let Some(key) = key
+                && let Some(done) = self.as_pinned(&name, key).await?
+            {
+                self.report.steps.push(done);
+                continue;
+            }
             let pinned = self
                 .lock
                 .result(&name)
                 .filter(|pinned| Some(pinned.key) == key);
-            if !check
-                && !after
-                && let Some(pinned) = pinned
-            {
-                let (key, tree, files) = (pinned.key, pinned.tree, &pinned.files);
-                if whole(&self.work.cache, files) {
-                    output.step("Up to date", &name);
-                    self.report
-                        .steps
-                        .push(done(Did::UpToDate, &name, key, tree, files));
-                    continue;
-                }
-                if self.fetched(&name, files).await? {
-                    output.step(
-                        "Fetched",
-                        &format!("{name} · {} as data.lock pins it", sized(files)),
-                    );
-                    self.report
-                        .steps
-                        .push(done(Did::Fetched, &name, key, tree, files));
-                    continue;
-                }
-            }
             for read in step.inputs.iter().filter(|read| read.made) {
                 if !running.contains(&read.name)
                     && let Some(result) = self.lock.result(&read.name)
@@ -837,21 +596,15 @@ impl<'a> Building<'a> {
         let step = Step::read(&project.root, &self.manifest, &self.lock, name)?
             .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
         let key = keyed(&step)?;
-        let pinned = self.lock.result(name).filter(|pinned| pinned.key == key);
-        if let Some(pinned) = pinned {
-            if whole(&self.work.cache, &pinned.files) {
-                output.step("Up to date", name);
-                return Ok(done(Did::UpToDate, name, key, pinned.tree, &pinned.files));
-            }
-            if self.fetched(name, &pinned.files).await? {
-                output.step(
-                    "Fetched",
-                    &format!("{name} · {} as data.lock pins it", sized(&pinned.files)),
-                );
-                return Ok(done(Did::Fetched, name, key, pinned.tree, &pinned.files));
-            }
+        if let Some(done) = self.as_pinned(name, key).await? {
+            return Ok(done);
         }
-        let expected = pinned.map(|pinned| pinned.tree);
+        // a pin of this key still here is one whose files no mirror gave, so a run must remake it
+        let expected = self
+            .lock
+            .result(name)
+            .filter(|pinned| pinned.key == key)
+            .map(|pinned| pinned.tree);
         let _hold = tokio::task::block_in_place(|| {
             self.work.cache.hold_key(&key, &self.context.stop, || {
                 output.step("Waiting", &format!("for another fetchloom building {name}"));
@@ -862,8 +615,11 @@ impl<'a> Building<'a> {
                 format!("could not lock the build of {name} in the cache")
             })
         })?;
+        // under the key's lock, so a build of it another clone finished meanwhile is reused
+        let cache = &self.work.cache;
         if expected.is_none()
-            && let Some(built) = self.work.cache.results(&key).into_iter().next()
+            && let Course::Built(built) =
+                course(&self.lock, name, key, |files| whole(cache, files), cache)
         {
             output.step(
                 "Reused",
@@ -924,6 +680,40 @@ impl<'a> Building<'a> {
         done.seconds = Some(made.ran.took.as_secs_f64());
         self.pin(&step, key, made.tree, made.members);
         Ok(done)
+    }
+
+    /// the result of the recipe `name`, keyed `key`, as data.lock pins it, told as up to date
+    /// when the cache holds it or as fetched when a mirror gave what the cache lacked of it, as
+    /// [`course`] decides. none when the step must run or may be reused.
+    async fn as_pinned(&self, name: &str, key: Sha256) -> Result<Option<Done>, Error> {
+        let cache = &self.work.cache;
+        let output = &self.context.output;
+        match course(&self.lock, name, key, |files| whole(cache, files), cache) {
+            Course::Held(pinned) => {
+                output.step("Up to date", name);
+                Ok(Some(done(
+                    Did::UpToDate,
+                    name,
+                    key,
+                    pinned.tree,
+                    &pinned.files,
+                )))
+            }
+            Course::Lacking(pinned) if self.fetched(name, &pinned.files).await? => {
+                output.step(
+                    "Fetched",
+                    &format!("{name} · {} as data.lock pins it", sized(&pinned.files)),
+                );
+                Ok(Some(done(
+                    Did::Fetched,
+                    name,
+                    key,
+                    pinned.tree,
+                    &pinned.files,
+                )))
+            }
+            Course::Lacking(_) | Course::Built(_) | Course::New => Ok(None),
+        }
     }
 
     /// keeps `candidate`, a rebuild of `name` that differs from data.lock, in the state for
@@ -1326,6 +1116,41 @@ fn whole(cache: &Cache, files: &[Member]) -> bool {
         .all(|file| cache.find(&file.sha256, Some(file.size)).is_some())
 }
 
+/// what a build does with the step of a recipe whose key it knows, before it asks a mirror or
+/// runs anything. a build and its dry run both take this decision, so the dry run says what the
+/// build then does.
+enum Course<'l> {
+    /// data.lock pins this key, and the cache holds every file of it: up to date.
+    Held(&'l Derived),
+    /// data.lock pins this key, and the cache lacks files of it: a mirror that holds them gives
+    /// them, and otherwise the step runs again and must make the files data.lock pins.
+    Lacking(&'l Derived),
+    /// data.lock pins no result for this key, and a build of it left a whole result: reused.
+    Built(crate::cache::Built),
+    /// data.lock pins no result for this key, and no build left one: the step runs.
+    New,
+}
+
+/// the course of the recipe `name` whose key is `key`, with `lock` as the build holds it then:
+/// `holds` says whether the cache holds a set of files, and `cache` keeps what builds left.
+fn course<'l>(
+    lock: &'l Lock,
+    name: &str,
+    key: Sha256,
+    holds: impl Fn(&[Member]) -> bool,
+    cache: &Cache,
+) -> Course<'l> {
+    match lock.result(name).filter(|pinned| pinned.key == key) {
+        Some(pinned) if holds(&pinned.files) => Course::Held(pinned),
+        Some(pinned) => Course::Lacking(pinned),
+        None => cache
+            .results(&key)
+            .into_iter()
+            .next()
+            .map_or(Course::New, Course::Built),
+    }
+}
+
 /// what a step did, before it says where its log is and how long it ran.
 fn done(action: Did, name: &str, key: Sha256, tree: Sha256, files: &[Member]) -> Done {
     Done {
@@ -1609,47 +1434,6 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recipe::Read;
-
-    fn step(name: &str, reads: &[&str]) -> Step {
-        Step {
-            name: name.to_owned(),
-            inputs: reads
-                .iter()
-                .map(|read| Read {
-                    name: (*read).to_owned(),
-                    content: Some(crate::digest::sha256(read.as_bytes())),
-                    made: true,
-                })
-                .collect(),
-            run: Vec::new(),
-            code: Vec::new(),
-            env: BTreeMap::new(),
-        }
-    }
-
-    /// a step whose input may change runs again only if it does, and so may every step after it
-    /// that reads it, directly or not; a step reading only settled results stays as it is.
-    #[test]
-    fn a_step_after_one_that_runs_may_run() {
-        let steps = vec![
-            (step("a", &["raw"]), vec![Change::Run]),
-            (step("b", &["a"]), Vec::new()),
-            (step("c", &["b"]), Vec::new()),
-            (step("d", &["raw"]), Vec::new()),
-            (step("e", &["d", "c"]), vec![Change::Env]),
-        ];
-        assert_eq!(
-            decide(&steps),
-            [
-                Action::WouldRun,
-                Action::MayRun,
-                Action::MayRun,
-                Action::UpToDate,
-                Action::WouldRun
-            ]
-        );
-    }
 
     #[test]
     fn words_with_spaces_or_quotes_are_quoted() {

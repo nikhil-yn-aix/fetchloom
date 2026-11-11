@@ -84,7 +84,7 @@ no command but `build` runs a step. `sync` places a pinned result from the cache
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
-read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
+read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. the dry run decides each step as the build does. in a fresh clone, whose cache holds none of the results `data.lock` pins, it says `Would run clean · its pinned result is not on this machine or a mirror` and shows the command, since the build runs it; with a copy in the data folder or a [mirror](mirrors.md) that holds the result it says `Would fetch`, and nothing runs. [dry run](commands/build.md#dry-run) lists every action. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
 
 ```text
       Needs up to 72 B, besides what clean writes, on the disk holding the cache, which has 341.4 GiB free
