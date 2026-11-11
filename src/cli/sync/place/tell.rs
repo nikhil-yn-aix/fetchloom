@@ -69,12 +69,12 @@ pub(super) fn tell(
             ),
         );
     }
-    for (dataset, paths) in &placement.adopted {
+    for (folder, paths) in by_folder(manifest, &placement.adopted) {
         let (linked, kept): (Vec<&String>, Vec<&String>) = paths
-            .iter()
+            .into_iter()
             .partition(|path| placement.relinked.contains(*path));
-        tell_adopted(output, manifest, dataset, &linked, true);
-        tell_adopted(output, manifest, dataset, &kept, false);
+        tell_adopted(output, &folder, &linked, true);
+        tell_adopted(output, &folder, &kept, false);
     }
     tell_removed(output, manifest, ["Retired", "Removed"], placement);
     warn_adopted_removed(output, &placement.removed_adopted, "removed");
@@ -198,15 +198,33 @@ fn warn_put_back(output: &Output, manifest: &Manifest, paths: &[String], verb: &
     }
 }
 
-/// the files of `dataset` that were already at their places with the pinned bytes, which sync
-/// took as placed: `linked` to the cache's copy now, or kept as they were. `-v` names each file.
-fn tell_adopted(
-    output: &Output,
+/// the paths of `by_dataset` gathered by the folder of their dataset, in the order the folders
+/// first come, since datasets that share a folder share its line.
+fn by_folder<'p>(
     manifest: &Manifest,
-    dataset: &str,
-    paths: &[&String],
-    linked: bool,
-) {
+    by_dataset: impl IntoIterator<Item = (&'p String, &'p Vec<String>)>,
+) -> Vec<(String, Vec<&'p String>)> {
+    let mut folders: Vec<(String, Vec<&String>)> = Vec::new();
+    for (dataset, paths) in by_dataset {
+        let folder = plan::folder(manifest, dataset);
+        let at = folders
+            .iter()
+            .position(|(seen, _)| *seen == folder)
+            .unwrap_or_else(|| {
+                folders.push((folder, Vec::new()));
+                folders.len() - 1
+            });
+        folders[at].1.extend(paths);
+    }
+    for (_, paths) in &mut folders {
+        paths.sort();
+    }
+    folders
+}
+
+/// the files in `folder` that were already at their places with the pinned bytes, which sync
+/// took as placed: `linked` to the cache's copy now, or kept as they were. `-v` names each file.
+fn tell_adopted(output: &Output, folder: &str, paths: &[&String], linked: bool) {
     let said = match (paths.len(), linked) {
         (0, _) => return,
         (1, true) => {
@@ -220,10 +238,7 @@ fn tell_adopted(
             format!("{count} files already held the pinned bytes, so they stay as they are")
         }
     };
-    output.step(
-        "Adopted",
-        &format!("{} · {said}", plan::folder(manifest, dataset)),
-    );
+    output.step("Adopted", &format!("{folder} · {said}"));
     for path in paths {
         output.detail(path);
     }
@@ -283,8 +298,12 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     for (dataset, planned) in &preview.by_dataset {
         tell_checks(output, manifest, dataset, &planned.check);
     }
-    for (dataset, planned) in &preview.by_dataset {
-        tell_adoptions(output, manifest, dataset, &planned.adopt);
+    let adopting = preview
+        .by_dataset
+        .iter()
+        .map(|(dataset, planned)| (dataset, &planned.adopt));
+    for (folder, files) in by_folder(manifest, adopting) {
+        tell_adoptions(output, &folder, &files);
     }
     for overwritten in &preview.placement.overwritten {
         output.warn(&format!(
@@ -378,18 +397,15 @@ fn tell_checks(output: &Output, manifest: &Manifest, dataset: &str, files: &[Str
     }
 }
 
-/// the files of `dataset` fetchloom did not place that already hold the pinned bytes, which a
+/// the files in `folder` fetchloom did not place that already hold the pinned bytes, which a
 /// sync would take as placed. `-v` names each file.
-fn tell_adoptions(output: &Output, manifest: &Manifest, dataset: &str, files: &[String]) {
+fn tell_adoptions(output: &Output, folder: &str, files: &[&String]) {
     let said = match files.len() {
         0 => return,
         1 => "1 file already holds the pinned bytes".to_owned(),
         count => format!("{count} files already hold the pinned bytes"),
     };
-    output.step(
-        "Would adopt",
-        &format!("{} · {said}", plan::folder(manifest, dataset)),
-    );
+    output.step("Would adopt", &format!("{folder} · {said}"));
     for path in files {
         output.detail(path);
     }

@@ -294,8 +294,9 @@ fn ambiguous_aliases() -> Result {
     let status = sandbox.run(&["--json", "status"])?;
     assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
     let document: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    // no record joins the link, which holds the pinned bytes, so sync adopts it
     assert_eq!(
-        document["result"]["untracked"],
+        document["result"]["adoptable"],
         serde_json::json!(["Data/iris/iris.csv"])
     );
     assert_eq!(
@@ -1531,6 +1532,60 @@ fn a_file_already_in_place_is_linked_to_the_download_it_matches() -> Result {
         "         Ok everything matches data.lock by size and time\n"
     );
     assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
+/// three datasets moved into one folder, `raw`, that already holds a copy of each one's file, as
+/// files fetched by hand before the move. a plain sync adopts them, so status says so rather than
+/// offering `--force`, and sync tells the folder once rather than once for each dataset.
+#[test]
+fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let tables: [(&str, &[u8]); 3] = [("a", b"a,1\n"), ("b", b"b,2\n"), ("c", b"c,3\n")];
+    let routes = crate::support::Routes::start(
+        tables
+            .iter()
+            .map(|(name, bytes)| (format!("/{name}.csv"), file(bytes, "\"1\"")))
+            .collect(),
+    )?;
+    let manifest = sandbox.work().join("data.toml");
+    let raw = sandbox.work().join("data").join("raw");
+    fs::create_dir_all(&raw)?;
+    for (name, _) in tables {
+        let added = sandbox.run(&["add", &format!("{}/{name}.csv", routes.url)])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    for (name, bytes) in tables {
+        let table = format!("[datasets.{name}]\n");
+        let written = fs::read_to_string(&manifest)?;
+        fs::write(
+            &manifest,
+            written.replace(&table, &format!("{table}path = \"raw\"\n")),
+        )?;
+        fs::write(raw.join(format!("{name}.csv")), bytes)?;
+    }
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    for name in ["a", "b", "c"] {
+        let line = format!(
+            "  Untracked data/raw/{name}.csv · it holds the pinned bytes, so `fetchloom sync` adopts it\n"
+        );
+        assert!(told.contains(&line), "{line:?} in\n{told}");
+    }
+    assert!(!told.contains("--force"), "{told}");
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["untracked"], serde_json::json!([]));
+    assert_eq!(
+        status["result"]["adoptable"],
+        serde_json::json!(["data/raw/a.csv", "data/raw/b.csv", "data/raw/c.csv"])
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let told = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{told}");
+    assert_eq!(told.matches("Adopted data/raw · ").count(), 1, "{told}");
+    assert!(
+        told.contains("Adopted data/raw · 3 files already held the pinned bytes, so they "),
+        "{told}"
+    );
     Ok(())
 }
 

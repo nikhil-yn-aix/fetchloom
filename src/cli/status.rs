@@ -39,8 +39,12 @@ pub(super) struct Status {
     missing: Vec<String>,
     /// files fetchloom placed that changed since.
     edited: Vec<String>,
-    /// files where the lock places one, which fetchloom did not place.
+    /// files where the lock places one, which fetchloom did not place, with other bytes than it
+    /// pins there.
     untracked: Vec<String>,
+    /// files where the lock places one, which fetchloom did not place, that already hold the bytes
+    /// it pins there, which `sync` adopts without `--force`.
+    adoptable: Vec<String>,
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
@@ -525,6 +529,7 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
                 }
                 &mut status.edited
             }
+            (Some(seen), None) if place::holds_target(target, seen, &file) => &mut status.adoptable,
             (Some(_), None) => &mut status.untracked,
         };
         list.push(target.path.clone());
@@ -571,14 +576,20 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 }
 
 impl Status {
-    /// each kind of file difference, under the verb that marks it.
-    fn lists(&self) -> [(&'static str, &Vec<String>); 5] {
+    /// each kind of file difference, under the verb that marks it, with what follows each path
+    /// of it, if anything.
+    fn lists(&self) -> [(&'static str, &Vec<String>, Option<&'static str>); 6] {
         [
-            ("Missing", &self.missing),
-            ("Edited", &self.edited),
-            ("Untracked", &self.untracked),
-            ("Outdated", &self.outdated),
-            ("Extra", &self.extra),
+            ("Missing", &self.missing, None),
+            ("Edited", &self.edited, None),
+            ("Untracked", &self.untracked, None),
+            (
+                "Untracked",
+                &self.adoptable,
+                Some("it holds the pinned bytes, so `fetchloom sync` adopts it"),
+            ),
+            ("Outdated", &self.outdated, None),
+            ("Extra", &self.extra, None),
         ]
     }
 
@@ -593,6 +604,7 @@ impl Status {
             || !self.not_unpacked.is_empty()
             || !self.outdated.is_empty()
             || !self.untracked.is_empty()
+            || !self.adoptable.is_empty()
             || self
                 .damaged
                 .iter()
@@ -625,9 +637,11 @@ fn list(output: &Output, status: &Status) {
     for kept in &status.candidates {
         tell_kept(output, kept);
     }
-    for (verb, paths) in status.lists() {
+    for (verb, paths, said) in status.lists() {
         for path in paths.iter().take(SHOWN) {
-            if status.shared.contains(path) {
+            if let Some(said) = said {
+                output.mark(verb, &format!("{path} · {said}"));
+            } else if status.shared.contains(path) {
                 output.mark(
                     verb,
                     &format!("{path} · changed through a hardlink other projects may share"),
@@ -725,7 +739,7 @@ fn sum_up(output: &Output, status: &Status) -> bool {
         + status
             .lists()
             .iter()
-            .map(|(_, paths)| paths.len())
+            .map(|(_, paths, _)| paths.len())
             .sum::<usize>();
     if differences == 0 {
         output.done(
@@ -770,7 +784,7 @@ mod tests {
         let clean = Status::default();
         assert!(!clean.needs_sync());
         assert!(!sum_up(&output, &clean));
-        for category in 0..8 {
+        for category in 0..9 {
             let mut status = Status::default();
             let paths = match category {
                 0 => &mut status.removed,
@@ -779,11 +793,12 @@ mod tests {
                 3 => &mut status.not_unpacked,
                 4 => &mut status.outdated,
                 5 => &mut status.untracked,
-                6 => &mut status.edited,
+                6 => &mut status.adoptable,
+                7 => &mut status.edited,
                 _ => &mut status.extra,
             };
             paths.push("data/set/file.csv".to_owned());
-            assert_eq!(status.needs_sync(), category < 6, "category {category}");
+            assert_eq!(status.needs_sync(), category < 7, "category {category}");
             assert!(sum_up(&output, &status), "category {category}");
         }
         let mut damaged = Status::default();
