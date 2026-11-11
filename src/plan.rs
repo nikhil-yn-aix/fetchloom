@@ -97,7 +97,12 @@ fn planned<'a>(
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
     for dataset in datasets {
-        let Some(entry) = manifest.datasets.get(&dataset.name) else {
+        // a recipe's files come only from a build, never from a source pin left under its name
+        let Some(entry) = manifest
+            .datasets
+            .get(&dataset.name)
+            .filter(|entry| entry.source().is_some())
+        else {
             continue;
         };
         expand(
@@ -598,6 +603,22 @@ mod tests {
             err.message
         );
         assert!(err.help.unwrap_or_default().contains("extract = false"));
+    }
+
+    /// a dataset data.toml makes with a recipe places nothing from a source pin data.lock still
+    /// has under its name, since only a build makes its files.
+    #[test]
+    fn a_recipe_places_nothing_from_an_old_source_pin() {
+        let made = manifest(
+            "[datasets.a]\nref = \"x\"\n\n[datasets.b]\nfrom = [\"a\"]\nrun = [\"t\", \"{a}\", \"{out}\"]\n",
+        );
+        let locked = lock(&[("a", &["x.csv"]), ("b", &["y.csv"])]);
+        let paths: Vec<String> = targets(&made, &locked)
+            .unwrap()
+            .into_iter()
+            .map(|target| target.path)
+            .collect();
+        assert_eq!(paths, ["data/a/x.csv"]);
     }
 
     #[test]
