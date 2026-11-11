@@ -592,6 +592,15 @@ pub(crate) fn runs_code(command: &str) -> bool {
         )
 }
 
+/// whether `command`, as help quotes it, may write data.lock, which a run asked to leave it as it
+/// is never hands a script as the next step.
+pub(crate) fn changes_lock(command: &str) -> bool {
+    use clap::Parser;
+    command_words(command, cfg!(windows))
+        .and_then(|words| args::Args::try_parse_from(words).ok())
+        .is_some_and(|args| args.command.is_some_and(|command| command.writes_lock()))
+}
+
 /// reads the literal quoting in suggestions without interpreting expansions or shell operators.
 fn command_words(command: &str, windows: bool) -> Option<Vec<String>> {
     let mut words = Vec::new();
@@ -656,6 +665,9 @@ fn reminds(command: &args::Command) -> bool {
 
 fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) -> ExitCode {
     let name = Some(command.name());
+    if command.locked() {
+        context.output.leave_lock();
+    }
     match command {
         args::Command::Add(args) => {
             let outcome = block_on(context, add::add(context, args));

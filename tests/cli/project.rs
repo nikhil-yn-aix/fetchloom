@@ -706,6 +706,66 @@ fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     Ok(())
 }
 
+/// a run asked to leave data.lock as it is, with `--locked`, never ends with a JSON `fix` that
+/// would change it, whatever stops it: a script that runs `fix` would undo `--locked`. each state
+/// stops `sync`, `path` or `build` with `--locked` and the kind named, and the help still names
+/// the ways on for a person.
+#[test]
+fn a_locked_run_never_offers_a_fix_that_changes_data_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let changed = || file(b"species\nsetosa\n", "\"v2\"");
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), changed()])?;
+    crate::build::with(&sandbox, &server, crate::recipes::WRITE)?;
+    let work = sandbox.work();
+    let (manifest, pins) = (work.join("data.toml"), work.join("data.lock"));
+    let (asked, pinned) = (fs::read_to_string(&manifest)?, fs::read_to_string(&pins)?);
+    let stops = |args: &[&str], kind: &str| -> Result {
+        let output = crate::build::build(&sandbox, args)?;
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], kind, "{args:?}: {error}");
+        assert_eq!(error["fix"], serde_json::Value::Null, "{args:?}: {error}");
+        assert!(error["help"].is_string(), "{args:?}: {error}");
+        Ok(())
+    };
+
+    stops(&["--json", "sync", "--locked"], "build.needed")?;
+    stops(&["--json", "path", "--locked", "clean"], "build.needed")?;
+    fs::write(
+        &manifest,
+        asked.replacen(
+            "[datasets.iris]\n",
+            "[datasets.iris]\nselect = \"*.csv\"\n",
+            1,
+        ),
+    )?;
+    for args in [
+        &["--json", "sync", "--locked"][..],
+        &["--json", "path", "--locked", "iris"],
+        &["--json", "build", "--locked"],
+    ] {
+        stops(args, "lock.outdated")?;
+    }
+    fs::write(
+        &manifest,
+        format!("<<<<<<< HEAD\n{asked}=======\n{asked}>>>>>>> theirs\n"),
+    )?;
+    stops(&["--json", "sync", "--locked"], "project.invalid")?;
+    fs::write(&manifest, &asked)?;
+    delete(&pins)?;
+    stops(&["--json", "sync", "--locked"], "lock.outdated")?;
+    stops(&["--json", "path", "--locked", "iris"], "lock.outdated")?;
+    fs::write(&pins, &pinned)?;
+    let cold = clone(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&cold, &["--json", "sync", "--locked", "iris"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("other-cache")?)
+        .output()?;
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "integrity.mismatch", "{error}");
+    assert_eq!(error["fix"], serde_json::Value::Null, "{error}");
+    Ok(())
+}
+
 #[test]
 fn upgrading_to_the_same_data_leaves_the_lock_alone() -> Result {
     let sandbox = Sandbox::new()?;

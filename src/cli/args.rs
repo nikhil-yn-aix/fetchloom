@@ -581,6 +581,33 @@ impl Command {
             Command::Help(_) => "help",
         }
     }
+
+    /// whether the command was asked to leave data.lock as it is, as `--locked` asks.
+    pub(crate) fn locked(&self) -> bool {
+        match self {
+            Command::Sync(sync) => sync.locked,
+            Command::Path(path) => path.locked,
+            Command::Build(build) => build.locked,
+            _ => false,
+        }
+    }
+
+    /// whether the command may write data.lock: a lock, an add, a remove, a drop, a build that
+    /// pins, or a sync or path that may relock, none of them a dry run, a check or locked.
+    pub(crate) fn writes_lock(&self) -> bool {
+        match self {
+            Command::Lock(lock) => !lock.check && !lock.dry.dry_run,
+            Command::Sync(sync) => !sync.locked && !sync.dry.dry_run,
+            Command::Path(path) => !path.locked,
+            Command::Build(build) => {
+                !build.locked && !build.check && !build.prepare && !build.dry.dry_run
+            }
+            Command::Add(add) => !add.dry.dry_run,
+            Command::Remove(remove) => !remove.dry.dry_run,
+            Command::Drop(drop) => !drop.dry.dry_run,
+            _ => false,
+        }
+    }
 }
 
 /// show the cache, free what no project needs, or verify it

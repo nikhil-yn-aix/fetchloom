@@ -24,7 +24,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | kind | next step |
 |---|---|
 | `unconfirmed` | check the download size, or the room a build says its steps need, and pass `--yes` only if you approve; after a git merge, choose a side for each dataset named with `fetchloom lock --ours <name>` or `--theirs <name>`, which `--yes` never does. for `cache gc --inputs`, check `result.inputs` and the folder mirrors it relies on, and pass `--yes` only once those mirrors are to stay |
-| `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock. from `fetchloom build --check` or `--locked`, a recipe data.lock does not pin as building it now would make is outdated too: build it deliberately, then commit data.lock and data.lock.d |
+| `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock. from a `--locked` run, `errors[0].fix` is null, as it is for every error such a run ends with whose next step would change data.lock. from `fetchloom build --check` or `--locked`, a recipe data.lock does not pin as building it now would make is outdated too: build it deliberately, then commit data.lock and data.lock.d |
 | `usage` | check arguments and [environment settings](environment.md) |
 | `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules |
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |

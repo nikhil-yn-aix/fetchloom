@@ -28,7 +28,7 @@ steps:
 - the exact key hits when `data.lock` is unchanged. every file is then in the cache, and sync places them without using the network.
 - after a change to `data.lock`, `restore-keys` brings back the last cache, so only the files that changed download.
 - `cache gc --now` drops the files the new lock no longer needs before the cache is saved, so it does not grow with every change.
-- `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI.
+- `--locked` fails with `lock.outdated`, exit 1, when `data.toml` and `data.lock` disagree, instead of changing the lock in CI. no error a `--locked` run ends with has a JSON `fix` that would change data.lock, so a job that runs `fix` never undoes it.
 - without `--yes`, a download larger than 1 GiB, or the size `FETCHLOOM_ASK_ABOVE` sets, or one the cache's disk has no room for, fails the job with `unconfirmed`, exit 1, instead of starting.
 
 ## gitlab ci

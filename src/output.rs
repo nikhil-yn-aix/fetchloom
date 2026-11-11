@@ -7,6 +7,7 @@ mod style;
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -45,6 +46,9 @@ pub(crate) struct Output {
     failed: Mutex<Option<Error>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
     hints: bool,
+    /// whether the run was asked to leave data.lock as it is, as `--locked` asks, so no fix may
+    /// change it.
+    locked: AtomicBool,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -84,8 +88,10 @@ struct Problem<'a> {
 /// running it would act on a dataset nobody named or ask the same question again. a command
 /// that first needs a broken file deleted, or a file edited by hand, is not ready to run either,
 /// and a build runs the project's code, which only a person may agree to. neither is taking other
-/// bytes than data.lock pins, which a help offers only "if the new bytes are intended".
-fn fix(help: &str) -> Option<&str> {
+/// bytes than data.lock pins, which a help offers only "if the new bytes are intended". in a run
+/// that is `locked`, a command that may write data.lock is no fix either, since a script running
+/// it would undo `--locked`.
+fn fix(help: &str, locked: bool) -> Option<&str> {
     const NOT_A_FIX: [&str; 9] = [
         "as in",
         "such as",
@@ -112,6 +118,7 @@ fn fix(help: &str) -> Option<&str> {
             && !part.contains(['<', '>'])
             && crate::cli::runs(part)
             && !crate::cli::runs_code(part)
+            && (!locked || !crate::cli::changes_lock(part))
         {
             return Some(part);
         }
@@ -149,6 +156,7 @@ impl Output {
             warnings: Mutex::new(Vec::new()),
             failed: Mutex::new(None),
             hints: true,
+            locked: AtomicBool::new(false),
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -264,6 +272,12 @@ impl Output {
     pub(crate) fn without_hints(mut self, off: bool) -> Self {
         self.hints = !off;
         self
+    }
+
+    /// marks the run as one asked to leave data.lock as it is, as `--locked` asks, so `--json`
+    /// offers no fix that would change it.
+    pub(crate) fn leave_lock(&self) {
+        self.locked.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn hint(&self, text: &str) {
@@ -691,7 +705,10 @@ impl Output {
                 message: &error.message,
                 details: &error.details,
                 help: error.help.as_deref(),
-                fix: error.help.as_deref().and_then(fix),
+                fix: error
+                    .help
+                    .as_deref()
+                    .and_then(|help| fix(help, self.locked.load(Ordering::Relaxed))),
                 failures: (!error.failures.is_empty()).then_some(&*error.failures),
             }],
         };
@@ -1554,55 +1571,99 @@ mod tests {
     #[test]
     fn a_fix_is_the_first_runnable_command_in_the_help() {
         assert_eq!(
-            super::fix("sign in with `fetchloom auth login hf`, then run the same command again"),
+            super::fix(
+                "sign in with `fetchloom auth login hf`, then run the same command again",
+                false
+            ),
             Some("fetchloom auth login hf")
         );
         assert_eq!(
-            super::fix("run `fetchloom add <link>` to start, or `fetchloom search iris`"),
+            super::fix(
+                "run `fetchloom add <link>` to start, or `fetchloom search iris`",
+                false
+            ),
             Some("fetchloom search iris")
         );
         assert_eq!(
-            super::fix("add --yes to download it without being asked"),
+            super::fix("add --yes to download it without being asked", false),
             None
         );
-        assert_eq!(super::fix("quote it, as in `\"fashion mnist\"`"), None);
         assert_eq!(
-            super::fix("use a link or an id, as in `fetchloom add zenodo:3608990`"),
+            super::fix("quote it, as in `\"fashion mnist\"`", false),
             None
         );
-        assert_eq!(super::fix("did you mean `fetchloom remove iris`?"), None);
+        assert_eq!(
+            super::fix(
+                "use a link or an id, as in `fetchloom add zenodo:3608990`",
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            super::fix("did you mean `fetchloom remove iris`?", false),
+            None
+        );
         // a command named without what it needs is no fix a script could run
         assert_eq!(
             super::fix(
-                "ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`"
+                "ask its owner for a public link to pass to `fetchloom add` or `fetchloom get`",
+                false
             ),
             None
         );
         assert_eq!(
             super::fix(
-                "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`"
+                "in your own terminal, run `fetchloom auth login hf`. a script can pipe the key in, as in `fetchloom auth login hf --with-token`",
+                false
             ),
             None
         );
         assert_eq!(
-            super::fix("delete git's conflict lines by hand, then run `fetchloom lock`"),
+            super::fix(
+                "delete git's conflict lines by hand, then run `fetchloom lock`",
+                false
+            ),
             None
         );
         assert_eq!(
-            super::fix("run `fetchloom build clean`, then commit data.lock and data.lock.d"),
+            super::fix(
+                "run `fetchloom build clean`, then commit data.lock and data.lock.d",
+                false
+            ),
             None,
             "a build runs the project's code"
         );
         assert_eq!(
-            super::fix("run `fetchloom build -n clean` to see what it runs"),
+            super::fix("run `fetchloom build -n clean` to see what it runs", false),
             Some("fetchloom build -n clean")
         );
         assert_eq!(
             super::fix(
-                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`"
+                "to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`",
+                false
             ),
             None,
             "only a person may take other bytes than data.lock pins"
+        );
+        // a run asked to leave data.lock as it is gets no fix that writes it, and keeps one that
+        // does not
+        for (help, fix) in [
+            ("run `fetchloom lock` and commit data.lock", None),
+            ("run `fetchloom sync iris`", None),
+            (
+                "run `fetchloom lock --check` to see what moved",
+                Some("fetchloom lock --check"),
+            ),
+            (
+                "run `fetchloom sync --locked` again later",
+                Some("fetchloom sync --locked"),
+            ),
+        ] {
+            assert_eq!(super::fix(help, true), fix, "{help}");
+        }
+        assert_eq!(
+            super::fix("run `fetchloom lock` and commit data.lock", false),
+            Some("fetchloom lock")
         );
     }
 
