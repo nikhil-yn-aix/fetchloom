@@ -84,7 +84,7 @@ reading checks every part's name, line, order and count against `data.lock`, and
 
 ## recipe results
 
-a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, and running a build is still on the [roadmap](../../dev/roadmap.md); every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
+a table with `from` and `run` in place of `ref` pins a dataset a [recipe](../recipes.md) made: the files a command wrote from other datasets. only `fetchloom build` writes these tables, once every step of the build is done, after the result's files are in the cache; every other command reads and checks them, keeps one as it is while `data.toml` has its recipe and drops it with the recipe, and `sync` places a result's files like a fetched dataset's. `locked` moves only when the key or the tree changes, so a build that makes the same files again leaves the table as it is. a result always keeps its files in `data.lock.d`, since a rebuild replaces them all at once and `data.lock` then shows only what the recipe and its pins changed.
 
 ```toml
 [[dataset]]

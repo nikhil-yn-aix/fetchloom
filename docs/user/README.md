@@ -8,12 +8,12 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [concepts](concepts.md) | understand pins, placement, archives and offline work |
 | [working with raw data](raw-data.md) | keep results apart from inputs, leave out bad samples, edit inputs and free space |
 | [other tools](other-tools.md) | move a download step from curl, gdown, kaggle, hf, aws, dvc or pooch to fetchloom, keep the tools you use, or leave |
-| [recipes](recipes.md) | declare a dataset your own command makes from others, and see when it needs building |
+| [recipes](recipes.md) | declare a dataset your own command makes from others, build it, and see when it needs building again |
 | [commands](commands/README.md) | choose a command and check global options |
 | [add](commands/add.md) | put a dataset in a project and download it |
 | [sync](commands/sync.md) | restore pinned inputs and handle local conflicts |
 | [lock](commands/lock.md) | check or update exact input versions |
-| [build](commands/build.md) | see what the recipes in data.toml would run, in order |
+| [build](commands/build.md) | run the recipes in data.toml, pin what they made and place it |
 | [list](commands/list.md) | see dataset references, locked sizes and folders |
 | [export](commands/export.md) | write checksums or links of the project's files for other tools |
 | [search](commands/search.md) | find a dataset by words and choose a canonical reference |

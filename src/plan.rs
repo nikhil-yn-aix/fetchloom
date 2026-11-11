@@ -10,6 +10,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
+use crate::project::lock::derived::Derived;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, MemberFilter, Members, Source};
 
@@ -23,9 +24,33 @@ pub(crate) struct Target<'a> {
     pub(crate) size: u64,
     /// a writable copy, for tools that write into their inputs.
     pub(crate) copy: bool,
-    /// the locked file whose download holds these bytes: the file itself, or the archive it
+    /// what in data.lock holds these bytes.
+    pub(crate) holder: Holder<'a>,
+}
+
+/// what in data.lock holds a target's bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Holder<'a> {
+    /// a file a source lists, whose download holds them: the file itself, or the archive it
     /// unpacks from.
-    pub(crate) locked: &'a LockedFile,
+    File(&'a LockedFile),
+    /// a recipe's result, which only `fetchloom build` makes, so nothing downloads it.
+    Result,
+}
+
+impl<'a> Target<'a> {
+    /// the locked file whose download holds the target's bytes, or none for a recipe's result.
+    pub(crate) fn file(&self) -> Option<&'a LockedFile> {
+        match self.holder {
+            Holder::File(file) => Some(file),
+            Holder::Result => None,
+        }
+    }
+
+    /// whether the target is a file an archive unpacks to.
+    fn unpacked(&self) -> bool {
+        self.file().is_some_and(|file| file.unpacks_to.is_some())
+    }
 }
 
 /// every file a lock places, and the archives whose files this machine does not know yet.
@@ -81,26 +106,28 @@ pub(crate) fn foresee<'a>(
     // in data.lock's order, so a clash names its datasets as the later check does
     let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
-    planned(manifest, datasets, &|file| {
+    planned(manifest, datasets, &[], &|file| {
         cache.unpacked(&file.sha256, file.unpacks_to.as_ref())
     })
     .map(drop)
 }
 
-/// every file the lock places for the datasets data.toml lists, or the first clash. an archive
-/// is replaced by the files `members` says it unpacked to. datasets may share a folder, but no
-/// two files may share a path.
+/// every file the lock places for the datasets data.toml lists, or the first clash: the files of
+/// each source, an archive replaced by the files `members` says it unpacked to, and the result
+/// of each recipe as data.lock pins it. datasets may share a folder, but no two files may share
+/// a path.
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
     members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
-    planned(manifest, &lock.datasets, members)
+    planned(manifest, &lock.datasets, &lock.derived, members)
 }
 
 fn planned<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
+    results: &'a [Derived],
     members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
@@ -148,6 +175,27 @@ fn planned<'a>(
                 members,
             )?;
         }
+    }
+    for result in results {
+        // a fetched dataset's files come only from its source, never from a result left under
+        // its name
+        let Some(entry) = manifest
+            .datasets
+            .get(&result.name)
+            .filter(|entry| entry.recipe().is_some())
+        else {
+            continue;
+        };
+        let folder = folder(manifest, &result.name);
+        plan.targets
+            .extend(result.files.iter().map(|member| Target {
+                dataset: &result.name,
+                path: join(&folder, &member.path),
+                sha256: member.sha256,
+                size: member.size,
+                copy: entry.copy,
+                holder: Holder::Result,
+            }));
     }
     check(&plan.targets, Patterns::InDataToml)?;
     span.record("files", plan.targets.len());
@@ -211,7 +259,7 @@ pub(crate) fn expand<'a>(
             sha256,
             size,
             copy,
-            locked: file,
+            holder: Holder::File(file),
         };
         if file.unpacks_to.is_none() {
             plan.targets
@@ -329,10 +377,13 @@ pub(crate) struct Unreached {
 pub(crate) fn unreached(manifest: &Manifest, targets: &[Target]) -> Vec<Unreached> {
     let mut found: Vec<Unreached> = Vec::new();
     let mut by_dataset: HashMap<&str, Option<(String, glob::Set)>> = HashMap::new();
-    for target in targets
-        .iter()
-        .filter(|target| target.locked.unpacks_to.is_some())
-    {
+    let inside_archives = targets.iter().filter_map(|target| {
+        Some((
+            target,
+            target.file().filter(|file| file.unpacks_to.is_some())?,
+        ))
+    });
+    for (target, archive) in inside_archives {
         let Some((inside, excluded)) = by_dataset
             .entry(target.dataset)
             .or_insert_with(|| {
@@ -365,8 +416,8 @@ pub(crate) fn unreached(manifest: &Manifest, targets: &[Target]) -> Vec<Unreache
                 found.len() - 1
             });
         let unreached = &mut found[at];
-        if !unreached.archives.contains(&target.locked.path) {
-            unreached.archives.push(target.locked.path.clone());
+        if !unreached.archives.contains(&archive.path) {
+            unreached.archives.push(archive.path.clone());
         }
         unreached.paths.push(target.path.clone());
     }
@@ -558,25 +609,33 @@ fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
             first.dataset, second.dataset
         );
     }
-    let unpacked = [first, second]
-        .into_iter()
-        .find(|target| target.locked.unpacks_to.is_some());
+    let unpacked = [first, second].into_iter().find(|target| target.unpacked());
     leave_out("one of them", unpacked.unwrap_or(second), patterns)
 }
 
 fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
-    match (target.locked.unpacks_to.is_some(), patterns) {
-        (true, Patterns::InDataToml) => format!(
+    let archive = match target.holder {
+        Holder::Result => {
+            return format!(
+                "change the step that makes datasets.{} so it writes other names",
+                target.dataset
+            );
+        }
+        Holder::File(file) => file.unpacks_to.is_some().then_some(file.path.as_str()),
+    };
+    match (archive, patterns) {
+        (Some(archive), Patterns::InDataToml) => format!(
             "leave {what} out with exclude in [datasets.{dataset}.members.\"{archive}\"] in data.toml, or set extract = false on datasets.{dataset} to keep its archives packed",
             dataset = target.dataset,
-            archive = target.locked.path
         ),
-        (true, Patterns::OnCommandLine) => "pass --no-extract to keep archives packed".to_owned(),
-        (false, Patterns::InDataToml) => format!(
+        (Some(_), Patterns::OnCommandLine) => {
+            "pass --no-extract to keep archives packed".to_owned()
+        }
+        (None, Patterns::InDataToml) => format!(
             "leave {what} out with an exclude pattern in datasets.{} in data.toml",
             target.dataset
         ),
-        (false, Patterns::OnCommandLine) => format!("leave {what} out with --exclude"),
+        (None, Patterns::OnCommandLine) => format!("leave {what} out with --exclude"),
     }
 }
 
@@ -665,7 +724,7 @@ mod tests {
         let mut paths: Vec<String> = planned
             .targets
             .into_iter()
-            .filter(|target| target.locked.path == archive)
+            .filter(|target| target.file().is_some_and(|file| file.path == archive))
             .map(|target| target.path)
             .collect();
         paths.sort();

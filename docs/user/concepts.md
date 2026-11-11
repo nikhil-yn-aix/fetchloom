@@ -30,7 +30,7 @@ source checksum support covers MD5 and SHA-256. a known SHA-256 and size can all
 
 ## recipes
 
-a dataset can also be made from other datasets by a command of yours. a [recipe](recipes.md) in `data.toml` names the datasets it reads with `from`, the command with `run`, the files it depends on with `code` and its variables with `env`. fetchloom keys the result by the content of all of these, so `status`, `lock --check` and `sync --locked` say when data.lock's pin of it no longer matches. no command but `fetchloom build` will ever run a recipe, and this version only shows what a build would run, with `fetchloom build --dry-run`.
+a dataset can also be made from other datasets by a command of yours. a [recipe](recipes.md) in `data.toml` names the datasets it reads with `from`, the command with `run`, the files it depends on with `code` and its variables with `env`. fetchloom keys the result by the content of all of these, so `status`, `lock --check` and `sync --locked` say when data.lock's pin of it no longer matches. no command but `fetchloom build` runs a recipe: it runs the command on private copies of what it reads, pins what it wrote in `data.lock` and places it like any dataset. `fetchloom build --dry-run` shows the commands first.
 
 ## cache
 

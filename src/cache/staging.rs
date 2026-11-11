@@ -1,7 +1,8 @@
-//! per-archive staging folders. a held lock distinguishes live writers from killed runs; a
-//! filesystem without locks keeps the age rule used for other temporary files.
+//! per-archive staging folders, and the folders recipes' steps run in. a held lock distinguishes
+//! live writers from killed runs; a filesystem without locks keeps the age rule used for other
+//! temporary files.
 
-use std::fs::{self, File, TryLockError};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,6 +16,10 @@ use crate::place::Placer;
 use crate::stop::Stop;
 
 const SHARDS: usize = 16;
+
+/// the extension of the folder a recipe's step runs in, which a sweep clears once no build holds
+/// its lock.
+const BUILD: &str = "build";
 
 pub(crate) struct Staging {
     cache: Cache,
@@ -69,6 +74,48 @@ impl Cache {
         Ok(Arc::new(staging))
     }
 
+    /// makes a folder for one step of a build, `tmp/<16 hex>.build`, that only its owner may enter
+    /// on unix, after clearing those of builds that ended without clearing theirs. the lock it
+    /// holds inside tells a sweep that the build still runs, and it takes its name only once
+    /// held, as an archive's staging does.
+    pub(crate) fn build_folder(&self) -> io::Result<(PathBuf, Option<File>)> {
+        self.sweep_staging(SystemTime::now(), &Stop::default(), &mut Vec::new());
+        let folder = loop {
+            let folder = self
+                .root
+                .join("tmp")
+                .join(format!("{:016x}.{BUILD}", fastrand::u64(..)));
+            #[cfg(unix)]
+            let made = std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+                .create(&folder);
+            #[cfg(not(unix))]
+            let made = fs::create_dir(&folder);
+            match made {
+                Ok(()) => break folder,
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(err) => return Err(err),
+            }
+        };
+        let opening = folder.join("lock.new");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&opening)?;
+        match lock.try_lock() {
+            Ok(()) => {
+                fs::rename(&opening, folder.join("lock"))?;
+                Ok((folder, Some(lock)))
+            }
+            Err(TryLockError::WouldBlock) => Err(io::ErrorKind::WouldBlock.into()),
+            Err(TryLockError::Error(_)) => {
+                drop(lock);
+                fs::rename(&opening, folder.join("unlocked"))?;
+                Ok((folder, None))
+            }
+        }
+    }
+
     /// reclaims unlocked staging at once. a folder without a lock, one a writer is still opening
     /// or one on a filesystem without locks, waits for the age rule. a held lock wins over age.
     pub(super) fn sweep_staging(
@@ -93,9 +140,13 @@ impl Cache {
                 continue;
             }
             let folder = entry.path();
-            if folder
+            let build = folder
                 .extension()
-                .is_none_or(|extension| extension != "stage")
+                .is_some_and(|extension| extension == BUILD);
+            if !build
+                && folder
+                    .extension()
+                    .is_none_or(|extension| extension != "stage")
             {
                 continue;
             }
@@ -107,7 +158,16 @@ impl Cache {
                 },
                 Err(_) => None,
             };
-            if lock.is_some() || old_staging(&folder, now, stop) {
+            if build && (lock.is_some() || old_staging(&folder, now, stop)) {
+                // a pretending sweep only counts, since a build's folder is never a cache file
+                if !self.volume.is_pretending() {
+                    drop(lock);
+                    if let Err(error) = clear_tree(&folder) {
+                        not_removed.push(Failure::new(&folder, &error));
+                    }
+                }
+                removed += 1;
+            } else if lock.is_some() || old_staging(&folder, now, stop) {
                 removed += self.clear_staging(&folder, lock, stop, not_removed);
             }
         }
@@ -285,6 +345,80 @@ fn all_old(folder: &Path, deeper: bool, now: SystemTime, stop: &Stop) -> bool {
                 })
         })
     })
+}
+
+/// removes the folder at `root` and everything in it, never following a link: a link goes as
+/// itself. a step may leave a folder it took its owner's write access from, which gets it back
+/// first, and read-only files, which windows removes only once writable. it goes on past a
+/// failure and returns the first.
+pub(crate) fn clear_tree(root: &Path) -> io::Result<()> {
+    let mut first = None;
+    let mut todo = vec![(root.to_path_buf(), false)];
+    while let Some((path, emptied)) = todo.pop() {
+        let done = if emptied {
+            fs::remove_dir(&path)
+        } else {
+            match fs::symlink_metadata(&path) {
+                Ok(found) if found.is_dir() && !found.file_type().is_symlink() => {
+                    enterable(&path, &found).and_then(|()| {
+                        todo.push((path.clone(), true));
+                        for entry in fs::read_dir(&path)? {
+                            todo.push((entry?.path(), false));
+                        }
+                        Ok(())
+                    })
+                }
+                Ok(found) => remove_entry(&path, &found),
+                Err(err) => Err(err),
+            }
+        };
+        match done {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => {
+                first.get_or_insert(err);
+            }
+            _ => {}
+        }
+    }
+    first.map_or(Ok(()), Err)
+}
+
+/// gives the folder at `path`, which `found` describes, back its owner's access, which a step
+/// may have taken.
+pub(crate) fn enterable(path: &Path, found: &fs::Metadata) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = found.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode | 0o700))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, found);
+    Ok(())
+}
+
+/// removes the file or link at `path`, which `found` describes, as itself.
+fn remove_entry(path: &Path, found: &fs::Metadata) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        if found.file_type().is_symlink_dir() {
+            return fs::remove_dir(path);
+        }
+        match fs::remove_file(path) {
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                crate::volume::set_read_only(path, false)?;
+                fs::remove_file(path)
+            }
+            removed => removed,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = found;
+        fs::remove_file(path)
+    }
 }
 
 impl Staging {

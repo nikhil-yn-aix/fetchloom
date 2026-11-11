@@ -452,11 +452,23 @@ impl Step {
 /// the tree of a recipe's result.
 fn pinned(manifest: &Manifest, lock: &Lock, name: &str) -> Option<Sha256> {
     match &manifest.datasets.get(name)?.origin {
-        Origin::Source(source) => lock
-            .get(name)
-            .map(|locked| content(locked, &source.members)),
+        Origin::Source(_) => {
+            source_read(manifest, lock, name).map(|(locked, members)| content(locked, members))
+        }
         Origin::Derived(_) => lock.result(name).map(|result| result.tree),
     }
+}
+
+/// what a recipe reads of the fetched dataset `name`: its pin in `lock` and the members tables
+/// `manifest` gives it, which choose the files inside its archives. its content, and so a key,
+/// and the files a build lays out for the step both come from here, so they cannot disagree.
+pub(crate) fn source_read<'a>(
+    manifest: &'a Manifest,
+    lock: &'a Lock,
+    name: &str,
+) -> Option<(&'a Locked, &'a Members)> {
+    let source = manifest.datasets.get(name)?.source()?;
+    Some((lock.get(name)?, &source.members))
 }
 
 /// what moved since a recipe's result was built, so data.lock no longer pins what building it now

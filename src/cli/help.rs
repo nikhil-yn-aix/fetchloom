@@ -85,6 +85,8 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
   FETCHLOOM_NO_HINTS   1 drops the hint: and next: lines
   FETCHLOOM_KEYRING    0 keeps keys out of the system's credential store
+  FETCHLOOM_BUILDING   set by fetchloom build for its steps: the project
+                       a fetchloom inside a step may not lock
 
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation

@@ -7,7 +7,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`add`](add.md) | add a dataset, lock its files and sync the project | start using a dataset in a project |
 | [`sync`](sync.md) | place locked files, updating a stale lock first, for every dataset or only those named | restore data after cloning or changing the manifest |
 | [`lock`](lock.md) | update or check pins without placing files | review an input change before syncing |
-| [`build`](build.md) | show what the recipes in data.toml would run, in order, and run nothing | check the commands a [recipe](../recipes.md) would run before building it |
+| [`build`](build.md) | run the recipes in data.toml, pin what they made and place it; `--dry-run` shows the commands first | make a dataset from others with a [recipe](../recipes.md) of yours |
 | [`list`](list.md) | show dataset references, locked sizes and folders | inspect the project manifest and lock |
 | [`export`](export.md) | write the SHA-256 of placed files, or the links of downloaded ones | check files with `sha256sum`, or download them with another tool |
 | [`search`](search.md) | find datasets on public catalogs | choose a reference from plain words |

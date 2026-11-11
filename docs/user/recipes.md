@@ -1,6 +1,6 @@
 # recipes
 
-a recipe makes a dataset from other datasets with a command of yours, such as a script that cleans a raw table. `data.toml` declares it, `data.lock` pins what it made, and fetchloom tells you when the pin no longer matches the recipe. this version declares recipes, keys them and shows what a build would run with `fetchloom build --dry-run`; running the steps comes in the next version, so no command here runs your code.
+a recipe makes a dataset from other datasets with a command of yours, such as a script that cleans a raw table. `data.toml` declares it, `fetchloom build` runs it and pins what it made in `data.lock`, and fetchloom tells you when the pin no longer matches the recipe. only `fetchloom build` runs your code.
 
 ## declare a recipe
 
@@ -31,9 +31,9 @@ env = { SOURCE_DATE_EPOCH = "315532800" }
 - `run` names the folder of every dataset in `from` and `{out}`, so the step can find what it reads and has somewhere to write.
 - recipes cannot be made from each other: `datasets a and b are made from each other: a → b → a`.
 - `code` stays inside the project and out of the data folder, `data.lock`, `data.lock.d` and repository metadata.
-- `env` never sets fetchloom's own variables or anything named like a secret, such as `HF_TOKEN`, since `data.toml` and `data.lock` are shared. the step will inherit the environment of whoever builds it, so keys stay there.
+- `env` never sets fetchloom's own variables or anything named like a secret, such as `HF_TOKEN`, since `data.toml` and `data.lock` are shared. the step inherits the environment of whoever builds it, so keys stay there.
 
-a step will run in the project folder, so `clean.py` in `run` is the project's own file.
+a step runs in the project folder, so `clean.py` in `run` is the project's own file.
 
 ## what fetchloom keys
 
@@ -68,9 +68,9 @@ error: data.lock is out of date: clean changed since it was built
 
 a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, since `fetchloom lock` must pin it before a build can read it. the JSON `fix` of `build.needed` is always null: building runs the project's code, so a script or an agent asks a person first.
 
-`sync`, `lock`, `status`, `list` and every other command leave recipes alone: they resolve and download nothing for them and run nothing. `sync` and `lock` keep a recipe's pin while `data.toml` has the recipe, and drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` of a recipe fails with `build.needed`, since its result is not in the data folder yet.
+no command but `build` runs a step. `sync` places a pinned result from the cache like any dataset, also after its recipe changed, and never builds it: a pinned result neither the cache nor a [mirror](mirrors.md) holds, as in a fresh clone, fails with `build.needed`, exit 60, naming `fetchloom build` with the recipe. `lock` keeps a recipe's pin while `data.toml` has the recipe, and `sync` and `lock` drop it with the recipe, as they drop a removed dataset. a dataset a recipe is made from cannot be removed while the recipe reads it. `fetchloom path` answers a built recipe's folder, and fails with `build.needed` for one never built. `fetchloom export` lists a result's files with their SHA-256.
 
-## see what a build would run
+## build
 
 `fetchloom build --dry-run` lists the steps in the order a build runs them, each with its command, what it reads and where its result goes, and runs nothing:
 
@@ -82,4 +82,16 @@ a fetched dataset that is out of date fails first with `lock.outdated`, exit 1, 
   hint: <build> is a folder a build makes in the cache for each step: the step finds a copy of each dataset it reads in <build>/in, and what it writes in <build>/out becomes its dataset
 ```
 
-read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. [build](commands/build.md) has the details and the JSON.
+read the command before you build: a recipe in a repository you cloned runs as you, with your files and keys, and fetchloom has no sandbox. then `fetchloom build` runs each step that needs it, pins what it made and places it in `data/clean`:
+
+```text
+    Running clean · python3 clean.py <build>/in/iris <build>/out
+            kept 2 of 3 rows
+      Built clean · 1 file, 46 B in 31 ms
+     Placed data/clean · 1 file linked to the cache
+         Ok pinned clean's result in data.lock
+```
+
+the step reads a private copy of each dataset in `from`, made from the files `data.lock` pins, and writes its result into `{out}`, plain files whose names every system can store. the copy comes from the cache, fetched first when it lacks a file, and never from the data folder. a step that fails leaves `data.lock` and the data folder as they were, and its output is in `.fetchloom/builds/clean.log`. commit `data.lock` and `data.lock.d` with your code, so a teammate's build of the same commit finds the result pinned. [build](commands/build.md) has the details, the errors and the JSON.
+
+a step should make the same files from the same inputs. one that does not, as one using the time or an unseeded random number, fails with `build.differs` when it runs again for a pin whose files are not on the machine, and `data.lock` keeps the files it pins.

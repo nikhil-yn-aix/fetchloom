@@ -29,7 +29,7 @@ fetchloom export [options] [name]...
 
 ## what it writes
 
-`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything, takes no project hold, makes no cache and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited.
+`export` reads `data.toml`, `data.lock` and what the cache recorded of each archive it unpacked. it asks no server anything, takes no project hold, makes no cache and reads no file in the data folder: the hashes are the pins in `data.lock`, so `sha256sum -c` finds a file someone edited. a [recipe](../recipes.md)'s result is in the `sha256` form like any placed dataset, from the list of its files `data.lock` keeps, and in no list of links, since nothing downloads it.
 
 the `sha256` paths start at the project's folder, so check them from there. from a real run with a zenodo dataset and a zip from UCI, which unpacks to four files:
 
@@ -78,7 +78,7 @@ a text form is complete or not written: `export` stops before writing anything w
 | what is missing | text forms | JSON field |
 |---|---|---|
 | a dataset `data.lock` does not pin as `data.toml` asks | all forms stop with `lock.outdated`, exit 1: run `fetchloom lock` first | `unlocked` |
-| a dataset a [recipe](../recipes.md) makes | left out of every form, since nothing places a result yet | none |
+| a [recipe](../recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
 | a link that holds a login, a secret such as `token=`, a space or a control character | `links` and `aria2` stop with `project.invalid`, exit 50; fetchloom never pins such a link, so `data.lock` was changed by hand or by someone else | `no_link` |
 

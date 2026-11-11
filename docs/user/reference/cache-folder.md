@@ -32,8 +32,13 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   unpacked/<archive sha256>
   projects/<sha256 of project root>.json
   changed/<object sha256>
+  builds/<key sha256>/<tree sha256>
+  builds/<key sha256>/lock
   tmp/<random>.stage/lock
   tmp/<random>.stage/<random>.new
+  tmp/<random>.build/lock
+  tmp/<random>.build/in/<dataset>/...
+  tmp/<random>.build/out/...
   tmp/
 ```
 
@@ -46,6 +51,8 @@ the next unpack or gc removes a staging folder as soon as it can take that lock.
 where locking fails, `unlocked` replaces `lock`, and cleanup waits until the folder and every file are older than 24 hours. the writer locks `lock.new` before renaming it to `lock`, so a folder without `lock` is still being set up and also waits for the age rule.
 
 random names use 16 hexadecimal digits. unclaimed loose `.new` files use the age rule.
+
+each step of a [recipe](../recipes.md) runs in a `.build` folder under `tmp/`, which only you may enter on linux and macos: `in/` holds a copy of each dataset it reads and `out/` what it writes. its build holds its `lock` as an archive's staging does, removes the folder when the step ends, and the next build or gc removes one a killed build left once it can take that lock.
 
 `tmp/` also holds atomic record writes, private downloads when file locking is unavailable, and the empty files that test whether the volume can hardlink. these records are local cache indexes, not files to commit.
 
@@ -77,6 +84,7 @@ the `.lock` file coordinates writers; its contents are unused. a run waiting for
 
 - an MD5 mapping is `<sha256> <size>\n`, with a literal space and LF. it records an MD5 that a download of that URL computed and checked, and is used only for that URL, including when its object is no longer cached. a download pinned by SHA-256 records none.
 - an unpack record uses the [tree encoding](data-lock.md#the-tree-hash). its hash is checked against `data.lock` when one is supplied, and a sync writes only a tree that matches the lock's `unpacks_to`; a cache hit for the whole archive also requires every member object.
+- a result record, `builds/<key>/<tree>`, is the tree of what a recipe's step made, in the [tree encoding](data-lock.md#the-tree-hash), under the key of its recipe, so a record proves itself against the `tree` `data.lock` pins. a key may have several, from a step that does not make the same files each time. a build reuses the newest record whose every object is in the cache, and on linux and macos only one you wrote. a build holds `builds/<key>/lock` while it runs that key's step, so a second build of the key waits and reuses the result.
 - a project registration is JSON with one field, `root`, the project path. its filename hashes the path's OS-encoded bytes. registrations are written after successful project sync, including sync through `add` or `path`. `get` and standalone `lock` do not register.
 - a change mark is a file named by an object's SHA-256. its first line is empty until a repair writes a time there; each later line records a copy found changed as four numbers: device and inode on unix, or volume and file index on windows, then size and modification time in nanoseconds since 1970. a project's hardlink that is still one of those copies, edited through some link, is put back by sync rather than kept as an edit; at most 16 copies are kept. it is written when fetchloom finds that object's bytes changed: in a project sync's hardlink audit, in the hash a marked or writable object gets before it is placed, in an archive that unpacked to another tree than data.lock pins, in `cache verify`, or when a new copy of an object meets an old one that no longer holds its bytes. its modification time records when. before a replacement, fetchloom refreshes the mark with an empty first line, keeping its time as when the change was found, so the old object stays in doubt. only once the new copy holds the object's name does it write that copy's modification time on the first line, in nanoseconds since 1970; a failed replacement leaves that line empty, so the changed object is hashed and refused. the cache trusts objects written well after that time, and a project's hardlink that is the very file now in the cache is the replacement, so only projects linking the old copy recheck it. gc removes a mark only after its object is gone and no registered project needs it. [changed hardlinks and aliases](../../dev/architecture/placing.md#changed-hardlinks-and-aliases) explains what other projects do with a mark.
 

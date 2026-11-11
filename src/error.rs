@@ -31,6 +31,11 @@ pub(crate) enum Kind {
     /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
     /// can pin, since it runs the project's code.
     BuildNeeded,
+    /// a recipe's step could not start, failed, or wrote what a result cannot hold.
+    BuildFailed,
+    /// a step built again from the same inputs, command and code made other files than
+    /// data.lock pins for them.
+    BuildDiffers,
     Interrupted,
 }
 
@@ -57,6 +62,8 @@ impl Kind {
             Kind::ProjectChanged => "project.changed",
             Kind::Outdated => "lock.outdated",
             Kind::BuildNeeded => "build.needed",
+            Kind::BuildFailed => "build.failed",
+            Kind::BuildDiffers => "build.differs",
             Kind::Interrupted => "interrupted",
         }
     }
@@ -77,7 +84,7 @@ impl Kind {
             Kind::IntegrityMismatch => 30,
             Kind::AuthRequired => 40,
             Kind::LocalIo | Kind::LocalNotEmpty | Kind::ProjectInvalid | Kind::ProjectChanged => 50,
-            Kind::BuildNeeded => 60,
+            Kind::BuildNeeded | Kind::BuildFailed | Kind::BuildDiffers => 60,
             Kind::Interrupted => 130,
         }
     }
@@ -344,6 +351,8 @@ mod tests {
             ProjectChanged,
             Outdated,
             BuildNeeded,
+            BuildFailed,
+            BuildDiffers,
             Interrupted,
         ];
         let mut coded: Vec<(Option<u8>, String)> = kinds

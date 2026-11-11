@@ -1,8 +1,8 @@
 //! datasets a recipe makes: what each was made from, by which command and code, and the tree of
-//! files its result holds. only `fetchloom build` makes them; every other command reads them,
-//! keeps them as they are and places nothing from them yet. a result's files always live in a
-//! list in [`lists::FOLDER`], since a rebuild rewrites them wholesale and data.lock stays about
-//! recipes and pins.
+//! files its result holds. only `fetchloom build` makes them; every other command reads them and
+//! keeps them as they are, and a sync places their files as it places a fetched dataset's. a
+//! result's files always live in a list in [`lists::FOLDER`], since a rebuild rewrites them
+//! wholesale and data.lock stays about recipes and pins.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

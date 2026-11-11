@@ -999,6 +999,17 @@ pub(super) async fn hold_until<T>(
     command: &str,
     mut ready: impl FnMut() -> Result<Option<T>, Error>,
 ) -> Result<Waited<T>, Error> {
+    if let Some(building) = &context.building
+        && same_folder(building, &project.root)
+    {
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "`fetchloom {command}` runs inside `fetchloom build` of this project, which holds the project until the step ends"
+            ),
+        )
+        .help("a step reads each dataset it is made from in the folder {name} stands for in its run, and writes into {out}, with no fetchloom command"));
+    }
     let mut told = false;
     let mut told_owner = false;
     loop {
@@ -1032,6 +1043,11 @@ pub(super) async fn hold_until<T>(
             () = context.stop.asked() => return Err(Error::new(Kind::Interrupted, "stopped while waiting for another fetchloom")),
         }
     }
+}
+
+/// whether `a` and `b` name one folder, by their paths or, through links, where they lead.
+fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b))
 }
 
 /// refuses a dataset name data.toml does not have, suggesting the closest one as the `command`

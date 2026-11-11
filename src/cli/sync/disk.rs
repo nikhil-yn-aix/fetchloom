@@ -1641,7 +1641,7 @@ mod tests {
             sha256: placed.sha256,
             size: 1,
             copy: true,
-            locked: &locked,
+            holder: crate::plan::Holder::File(&locked),
         };
         survey.retarget(&project.root, &[target]);
         assert_eq!(survey.state.files.len(), 1);
@@ -1660,7 +1660,7 @@ mod tests {
             sha256: locked.sha256,
             size: locked.size,
             copy: false,
-            locked,
+            holder: crate::plan::Holder::File(locked),
         }
     }
 

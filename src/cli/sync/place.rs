@@ -425,6 +425,25 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
+    /// the recipes in scope whose result placing needs bytes of that `holds` says the cache
+    /// lacks, by name. nothing downloads a result; only a build makes it again.
+    pub(crate) fn unbuilt(&self, holds: impl Fn(&Sha256, u64) -> bool) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(target, action)| {
+                target.holder == plan::Holder::Result
+                    && needs_bytes(action)
+                    && !holds(&target.sha256, target.size)
+            })
+            .map(|(target, _)| target.dataset.to_owned())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
     fn lacking(
         &self,
@@ -454,11 +473,13 @@ impl<'a> Placing<'a> {
             }
         }
         let mut seen = HashSet::new();
+        // a recipe's result is made by a build, so nothing downloads it
         Ok(needed
             .into_iter()
             .filter(|target| !present.contains(&target.sha256))
-            .filter(|target| seen.insert(target.locked.sha256))
-            .map(|target| (target.dataset.to_owned(), target.locked))
+            .filter_map(|target| Some((target.dataset, target.file()?)))
+            .filter(|(_, file)| seen.insert(file.sha256))
+            .map(|(dataset, file)| (dataset.to_owned(), file))
             .collect())
     }
 
@@ -484,7 +505,9 @@ impl<'a> Placing<'a> {
             }
             if !guessed.is_empty()
                 && self.survey.disk.contains_key(&target.path)
-                && guessed.contains(&format!("{}/{}", target.dataset, target.locked.path))
+                && target.file().is_some_and(|file| {
+                    guessed.contains(&format!("{}/{}", target.dataset, file.path))
+                })
             {
                 preview
                     .by_dataset
@@ -1711,7 +1734,7 @@ mod tests {
             sha256: locked.sha256,
             size: locked.size,
             copy: false,
-            locked: &locked,
+            holder: crate::plan::Holder::File(&locked),
         };
         let project = Project {
             root: dir.path().join("project"),
@@ -1811,7 +1834,7 @@ mod tests {
                 sha256: locked.sha256,
                 size: locked.size,
                 copy: false,
-                locked: &locked,
+                holder: crate::plan::Holder::File(&locked),
             }],
             unknown: Vec::new(),
         };
@@ -1887,7 +1910,7 @@ mod tests {
                 sha256: stored.digest,
                 size: bytes.len() as u64,
                 copy: false,
-                locked: &locked,
+                holder: crate::plan::Holder::File(&locked),
             })
             .collect();
         let project = Project {
@@ -1981,7 +2004,7 @@ mod tests {
                 sha256: digest,
                 size: bytes.len() as u64,
                 copy: false,
-                locked: &locked,
+                holder: crate::plan::Holder::File(&locked),
             };
             let project = Project {
                 root: dir.path().join("project"),
@@ -2051,7 +2074,7 @@ mod tests {
                 sha256: digest,
                 size: bytes.len() as u64,
                 copy: false,
-                locked: &locked,
+                holder: crate::plan::Holder::File(&locked),
             };
             let project = Project {
                 root: dir.path().join("project"),

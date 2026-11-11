@@ -719,20 +719,26 @@ async fn finish(
         .targets
         .iter()
         .zip(outcomes)
-        .map(|(target, outcome)| Got {
-            path: target.path.clone(),
-            size: target.size,
-            sha256: target.sha256,
-            url: target.locked.url.clone(),
-            origin: origins
-                .get(target.locked.path.as_str())
-                .copied()
-                .unwrap_or(Origin::Cache),
-            method: match outcome {
-                Outcome::Placed(method) | Outcome::Replaced(method) => Some(method.into()),
-                Outcome::AlreadyThere => None,
-            },
-            unpacked_from: target.locked.unpacks_to.map(|_| target.locked.path.clone()),
+        .map(|(target, outcome)| {
+            // get places downloads alone, never a recipe's result
+            let file = target.file();
+            Got {
+                path: target.path.clone(),
+                size: target.size,
+                sha256: target.sha256,
+                url: file.map(|file| file.url.clone()).unwrap_or_default(),
+                origin: file
+                    .and_then(|file| origins.get(file.path.as_str()))
+                    .copied()
+                    .unwrap_or(Origin::Cache),
+                method: match outcome {
+                    Outcome::Placed(method) | Outcome::Replaced(method) => Some(method.into()),
+                    Outcome::AlreadyThere => None,
+                },
+                unpacked_from: file
+                    .filter(|file| file.unpacks_to.is_some())
+                    .map(|file| file.path.clone()),
+            }
         })
         .collect();
     Ok(Done { folder, files })

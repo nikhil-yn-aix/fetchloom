@@ -141,6 +141,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::plan::Holder;
     use crate::project::lock::LockedFile;
 
     #[test]
@@ -219,7 +220,7 @@ mod tests {
                 sha256: locked.sha256,
                 size: locked.size,
                 copy: false,
-                locked,
+                holder: Holder::File(locked),
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();
@@ -256,7 +257,7 @@ mod tests {
                 sha256: stored.digest,
                 size: bytes.len() as u64,
                 copy: true,
-                locked: &locked,
+                holder: Holder::File(&locked),
             })
             .collect();
         let todo: Vec<&Target> = targets.iter().collect();

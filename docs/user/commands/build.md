@@ -1,11 +1,12 @@
 # build
 
-`build` makes datasets from other datasets with the [recipes](../recipes.md) in `data.toml`. this version shows what a build would run and runs nothing: `--dry-run` is the only way to use it, and running steps comes in the next version.
+`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` shows each command first and runs nothing.
 
 ```sh
 fetchloom build --dry-run
-fetchloom build --dry-run clean
-fetchloom build -n --json
+fetchloom build
+fetchloom build clean
+fetchloom build --json
 ```
 
 ## usage
@@ -25,9 +26,76 @@ error: iris is fetched, not built; `fetchloom sync` places it
 |---|---|
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
-[global options](README.md#global-options) apply. without `--dry-run`, `build` stops with exit 2 and says to add it.
+[global options](README.md#global-options) apply.
 
-## what a dry run shows
+## what happens
+
+1. find the project and take its lock, which the build holds until it ends.
+2. pin the fetched datasets the steps read, resolving those whose entry changed as `sync` would, without writing `data.lock` yet.
+3. take each recipe in order, each after the datasets it is made from, ties by name:
+   - `Up to date` when `data.lock` pins what building it now would make and the cache holds those files;
+   - `Reused` when an earlier build of the same key, here or in another project that shares the cache, made a result the cache holds whole;
+   - otherwise put in the cache the files of the datasets it reads, from a mirror or their source when it lacks them, then run its step, as [the step](#the-step) describes, and take in what it wrote.
+4. write `data.lock` and `data.lock.d` once, after the last step, with each result's key and the list of its files.
+5. place the datasets the build took in the data folder, as `fetchloom sync` with their names would.
+
+this output is from a project where `clean` is made from `iris` with `python3 clean.py`:
+
+```text
+    Running clean · python3 clean.py <build>/in/iris <build>/out
+            kept 2 of 3 rows
+      Built clean · 1 file, 46 B in 31 ms
+     Placed data/clean · 1 file linked to the cache
+         Ok pinned clean's result in data.lock
+```
+
+the dim line under `Running` is the step's own output. a build of what `data.lock` already pins runs nothing:
+
+```text
+ Up to date clean
+         Ok every recipe is built as data.lock pins it
+```
+
+## the step
+
+a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. fetchloom makes a folder for it in the cache, which `<build>` stands for in the output:
+
+- `<build>/in/<name>` holds a copy of each dataset it reads, made from the files `data.lock` pins in the cache, never from the data folder, where you may have changed a file. the copies are reflinks where the disk clones files and plain copies elsewhere, never hardlinks, and read-only, so a step that writes one anyway changes only its own copy.
+- `<build>/out` is empty, and what the step writes there becomes the dataset.
+
+the step runs in the project folder, so a script in `run` is the project's own, with nothing on its input and the environment you run fetchloom in, plus the variables of `env` and `FETCHLOOM_BUILDING`, the project folder. a fetchloom the step runs on its own project stops at once with exit 2 rather than wait for the build that holds the project. on linux and macos the step runs in a process group of its own: when it ends, anything it started and left running is ended too, and ctrl-c ends the whole group. windows ends the step's own process only.
+
+the step's output goes to `.fetchloom/builds/<name>.log`, made anew for each run, which only you may read on linux and macos and which keeps the latest 16 MiB. it also shows under the step, except with `-q` or `--json`.
+
+## what a result may hold
+
+once the step exits with 0, fetchloom takes in what it wrote into `<build>/out`, without following links, and refuses the result with `build.failed` when it holds:
+
+- nothing at all;
+- a link, a device, a fifo or a socket, since a result holds plain files only;
+- a name some disk fetchloom supports cannot store, such as `a:b.csv` on windows or a name longer than 255 bytes, or one that names repository metadata, such as `.git`;
+- two names a disk takes for one, as `Data.csv` and `data.csv` on a disk that ignores case, or the same name with an accent written two ways;
+- more files than the `most_files` [setting](settings.md) allows;
+- a file that changed while fetchloom read it, as when something the step started still writes.
+
+a step that changed a file of its own `code` while it ran fails too, since its result would answer code that is no longer there. fetchloom hashes each file, then moves it into the cache when it has no other name and is yours, and copies it otherwise and on windows, so a file the step linked from elsewhere, such as one of your own, stays as it was.
+
+## what a failure leaves
+
+a step that fails, is stopped or writes what a result cannot hold leaves `data.lock`, `data.lock.d` and the data folder byte for byte as they were. the error names the exit code and shows the last 20 lines of output:
+
+```text
+error: clean failed: python3 exited with code 1 after 31 ms
+  kept 2 of 3 rows
+  stop
+  help: the whole output is in .fetchloom/builds/clean.log, and data.lock and data/clean are as they were
+```
+
+the results of the steps that finished before it stay in the cache by their key, so a build run again reuses them. a second build of a key another build is running, as in a second clone of the project, waits for it, says `Waiting for another fetchloom building clean`, and reuses what it made.
+
+a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, runs again. a step that makes the same files leaves the pin as it is; one that makes other files fails with `build.differs`, exit 60, and `data.lock` keeps the files it pins, since the step is not reproducible.
+
+## dry run
 
 steps come in the order a build runs them: each after the datasets it is made from, ties by name. a dry run reads `data.toml`, `data.lock` and each recipe's code, and changes nothing: no file is written, no step runs and nothing is downloaded. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
 
@@ -61,7 +129,19 @@ when every step is up to date, the last line says so:
 
 ## JSON
 
-`--json` returns `result.project`, `result.selected`, the recipes named or every recipe when none was, `result.dry_run`, always `true`, and `result.steps`, one record a step in build order:
+`--json` returns `result.project`; `result.selected`, the recipes named or every recipe when none was; `result.datasets`, the datasets whose pins changed; `result.lock_changed`; `result.placement`, as [sync](sync.md) reports it; and `result.steps`, one record a step in build order:
+
+| field | value |
+|---|---|
+| `name` | the recipe |
+| `action` | `ran`, `reused` or `up_to_date` |
+| `key` | the key of its result, `sha256:` and 64 hex digits |
+| `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits |
+| `files`, `bytes` | how many files its result holds, and their size |
+| `log` | `.fetchloom/builds/<name>.log` when it ran, else null |
+| `seconds` | how long it ran, else null |
+
+a failed build keeps the steps that finished before it in `result.steps`. with `--dry-run`, `result.dry_run` is `true` and each step record has:
 
 | field | value |
 |---|---|
@@ -75,6 +155,8 @@ when every step is up to date, the last line says so:
 | `code` | the files and folders of code whose bytes enter its key |
 | `output` | the folder in the project its result goes in |
 
+the JSON `fix` of a build's error is always null, since building runs the project's code.
+
 ## exit codes
 
-0 means the dry run completed, whatever it found. a name that is not a recipe, or a build without `--dry-run`, is a usage error, exit 2. code that is a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. the [shared exit codes](../reference/exit-codes.md) cover the rest.
+0 means every step is built and placed, or for a dry run, that it completed. a name that is not a recipe is a usage error, exit 2. a step that cannot start, fails or writes what a result cannot hold is `build.failed`, and one that makes other files than `data.lock` pins for its key is `build.differs`, both exit 60. code that is missing, a link or a special file is `project.invalid`, exit 50, and code that cannot be read is `local.io`, exit 50. ctrl-c stops the build with `interrupted`, exit 130. fetching what a step reads uses the [shared exit codes](../reference/exit-codes.md) for downloads.

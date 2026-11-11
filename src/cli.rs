@@ -68,6 +68,9 @@ struct Context {
     cautioned: std::sync::atomic::AtomicBool,
     /// the mirrors asked for pinned files before their sources, and what they answered.
     mirrors: fetch::mirrors::Mirrored,
+    /// the project whose `fetchloom build` runs this one inside a step, from
+    /// `FETCHLOOM_BUILDING`, which may not wait for that project's lock the build holds.
+    building: Option<std::path::PathBuf>,
 }
 
 impl Context {
@@ -87,6 +90,7 @@ impl Context {
             unsaved: std::sync::Mutex::default(),
             cautioned: std::sync::atomic::AtomicBool::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
+            building: None,
         }
     }
 
@@ -447,6 +451,9 @@ pub(crate) fn run() -> ExitCode {
     );
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
+    context.building = var("FETCHLOOM_BUILDING")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
     if args.version {
         let mut text = format!("fetchloom {}", env!("CARGO_PKG_VERSION"));
         // what a bug report needs: which build, on which system
@@ -658,7 +665,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
             finish(context, name, outcome, started)
         }
         args::Command::Build(args) => {
-            let outcome = blocking(context, move |context| build::run(context, &args));
+            let outcome = block_on(context, build::run(context, &args));
             finish(context, name, outcome, started)
         }
         args::Command::Status(args) => {
@@ -868,6 +875,8 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
             stopping.output.stopping();
         },
         move || {
+            // a step's process group ends with fetchloom, so nothing it started runs on
+            crate::build::step::end_running();
             quitting.output.abandon();
             std::process::exit(130);
         },

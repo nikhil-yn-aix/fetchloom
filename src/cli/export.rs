@@ -35,9 +35,12 @@ pub(super) struct Report {
     not_unpacked: Vec<String>,
     /// downloaded files, as `<dataset>/<path>`, whose link is not written.
     no_link: Vec<String>,
-    /// why each dataset in `unlocked` is there.
+    /// why each fetched dataset in `unlocked` is there.
     #[serde(skip)]
     stale: Vec<String>,
+    /// the recipes in `unlocked`: those data.lock pins no result of yet.
+    #[serde(skip)]
+    unbuilt: Vec<String>,
     /// why each link of `no_link` is not written.
     #[serde(skip)]
     refused: Vec<String>,
@@ -138,11 +141,20 @@ fn inventory(
         not_unpacked: Vec::new(),
         no_link: Vec::new(),
         stale: Vec::new(),
+        unbuilt: Vec::new(),
         refused: Vec::new(),
     };
     for (name, entry) in &manifest.datasets {
-        // a recipe's result is not placed yet, so there is nothing of it to export
-        if !wanted(name) || entry.recipe().is_some() {
+        if !wanted(name) {
+            continue;
+        }
+        // sync places a recipe's result as data.lock pins it, however its recipe changed since,
+        // so only one never built is missing
+        if entry.recipe().is_some() {
+            if lock.result(name).is_none() {
+                report.unlocked.push(name.clone());
+                report.unbuilt.push(name.clone());
+            }
             continue;
         }
         let stale = match lock.get(name).map(|locked| locked.drift(entry)) {
@@ -156,7 +168,7 @@ fn inventory(
     }
     lock.datasets
         .retain(|locked| wanted(&locked.name) && !report.unlocked.contains(&locked.name));
-    lock.derived.clear();
+    lock.derived.retain(|result| wanted(&result.name));
     let planned = plan::from_cache(manifest, &lock, cache)?;
     for target in &planned.targets {
         if let Some(reason) = name::escapes(&target.path) {
@@ -168,10 +180,9 @@ fn inventory(
             size: target.size,
             sha256: target.sha256,
             unpacked_from: target
-                .locked
-                .unpacks_to
-                .is_some()
-                .then(|| target.locked.path.clone()),
+                .file()
+                .filter(|file| file.unpacks_to.is_some())
+                .map(|file| file.path.clone()),
         });
     }
     report.placed.sort_by(|a, b| a.path.cmp(&b.path));
@@ -235,13 +246,26 @@ pub(super) fn link(text: &str) -> Result<String, &'static str> {
 /// refuses a text answer that would leave out what `format` needs: a dataset not pinned, files
 /// inside an archive this machine never unpacked, or a link that is not written.
 fn complete(report: &Report, format: Format) -> Result<(), Error> {
-    if !report.unlocked.is_empty() {
+    if !report.stale.is_empty() {
         let error = Error::new(Kind::Outdated, "data.lock is out of date with data.toml");
         return Err(report
             .stale
             .iter()
             .fold(error, |error, line| error.detail(line.clone()))
             .help("run `fetchloom lock` and commit data.lock, then export again"));
+    }
+    if !report.unbuilt.is_empty() {
+        return Err(Error::new(
+            Kind::BuildNeeded,
+            format!(
+                "data.lock pins no result of {} yet",
+                report.unbuilt.join(", ")
+            ),
+        )
+        .help(format!(
+            "run `fetchloom build {}`, then export again",
+            report.unbuilt.join(" ")
+        )));
     }
     match format {
         Format::Sha256 if !report.not_unpacked.is_empty() => {

@@ -1,13 +1,18 @@
 //! recipes declared in data.toml against servers on this machine: what each command does with
-//! them, and that none of them runs a step.
+//! them, that none but `fetchloom build` runs a step, and what a build runs, pins and places,
+//! with the step program `examples/recipe_step.rs`.
 
+use std::collections::BTreeMap;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 
 use serde_json::Value;
 
 use crate::export::sha256;
 use crate::project::{IRIS, PATH, added};
-use crate::support::{Result, Sandbox, Server, file, json, text};
+use crate::support::{Result, Running, Sandbox, Server, file, json, text, wait_until};
 
 /// a recipe that makes `clean` from iris with clean.py.
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
@@ -125,15 +130,16 @@ fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
     assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
 
     pin_clean(&sandbox, CODE, &[])?;
-    for args in [&["lock", "--check"][..], &["sync", "--locked"]] {
-        let output = sandbox.run(args)?;
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{args:?}: {}",
-            text(&output.stderr)?
-        );
-    }
+    let checked = sandbox.run(&["lock", "--check"])?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    // the pin was written by hand, so no build made its files here
+    let synced = sandbox.run(&["sync", "--locked"])?;
+    assert_eq!(synced.status.code(), Some(60));
+    assert!(
+        text(&synced.stderr)?.contains("clean's pinned result is not on this machine or a mirror"),
+        "{}",
+        text(&synced.stderr)?
+    );
     // a checkout with CRLF line endings is the same code
     fs::write(
         sandbox.work().join("clean.py"),
@@ -161,8 +167,17 @@ fn lock_check_and_sync_locked_report_recipe_drift() -> Result {
 fn status_names_what_changed() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    with_recipe(&sandbox, &server)?;
-    pin_clean(&sandbox, b"print('before')\n", &[("SEED", "1")])?;
+    with(
+        &sandbox,
+        &server,
+        &format!("{COPY_CODE}env = {{ SEED = \"1\" }}\n"),
+    )?;
+    fs::write(sandbox.work().join("clean.py"), "print('before')\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(sandbox.work().join("clean.py"), "print('after')\n")?;
+    let manifest = sandbox.work().join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, text_now.replace("SEED = \"1\"", "SEED = \"2\""))?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let stderr = text(&output.stderr)?;
@@ -395,22 +410,13 @@ fn build_names_only_recipes() -> Result {
             2,
             "data.toml has no dataset called claen",
         ),
-        (
-            &["build"],
-            2,
-            "this fetchloom shows what building would run, and cannot run recipes yet",
-        ),
+        (&["build", "iris"], 2, "iris is fetched, not built"),
     ] {
         let output = sandbox.run(args)?;
         assert_eq!(output.status.code(), Some(code), "{args:?}");
         let stderr = text(&output.stderr)?;
         assert!(stderr.contains(said), "{args:?}: {stderr}");
     }
-    let document = json(&sandbox.run(&["--json", "build", "clean"])?)?;
-    assert_eq!(
-        document["errors"][0]["fix"], "fetchloom build --dry-run clean",
-        "a dry run runs nothing, so a script may run it"
-    );
     Ok(())
 }
 
@@ -420,7 +426,14 @@ fn build_names_only_recipes() -> Result {
 #[test]
 fn no_other_command_runs_a_step() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let server = Server::start(
+        PATH,
+        vec![
+            file(IRIS, "\"v1\""),
+            file(IRIS, "\"v1\""),
+            file(IRIS, "\"v1\""),
+        ],
+    )?;
     added(&sandbox, &server)?;
     let manifest = sandbox.work().join("data.toml");
     let recipe = "\n[datasets.marked]\nfrom = [\"iris\"]\nrun = [\"sh\", \"-c\", \"touch ran\", \"{iris}\", \"{out}\"]\n";
@@ -441,8 +454,8 @@ fn no_other_command_runs_a_step() -> Result {
         &["path", "iris"],
         &["path", "marked"],
         &["build", "--dry-run"],
-        &["build"],
         &["remove", "marked", "--dry-run"],
+        &["add", &server.url, "--as", "again"],
     ] {
         sandbox.run(args)?;
         assert!(
@@ -450,5 +463,662 @@ fn no_other_command_runs_a_step() -> Result {
             "{args:?} ran the step"
         );
     }
+    Ok(())
+}
+
+/// the step program of these tests, built from `examples/recipe_step.rs` beside fetchloom: `cargo
+/// test` builds it, and a run of the cli tests alone builds it here once.
+fn step_program() -> Result<PathBuf> {
+    static BUILT: OnceLock<std::result::Result<PathBuf, String>> = OnceLock::new();
+    let built = BUILT.get_or_init(|| {
+        let fetchloom = Path::new(env!("CARGO_BIN_EXE_fetchloom"));
+        let program = fetchloom
+            .with_file_name("examples")
+            .join(format!("recipe_step{}", std::env::consts::EXE_SUFFIX));
+        if let Some(cargo) = std::env::var_os("CARGO") {
+            let mut build = Command::new(cargo);
+            build
+                .args(["build", "--locked", "--quiet", "--example", "recipe_step"])
+                .current_dir(env!("CARGO_MANIFEST_DIR"));
+            if fetchloom.parent().and_then(Path::file_name) == Some("release".as_ref()) {
+                build.arg("--release");
+            }
+            let output = build.output().map_err(|err| err.to_string())?;
+            if !output.status.success() {
+                return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+        }
+        if program.is_file() {
+            Ok(program)
+        } else {
+            Err(format!(
+                "{} is missing: run `cargo build --example recipe_step`",
+                program.display()
+            ))
+        }
+    });
+    built.clone().map_err(Into::into)
+}
+
+/// `fetchloom` with `args` in `folder`, with the step program on PATH as `recipe-step`.
+fn building_in(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Command> {
+    let bin = sandbox.folder("bin")?;
+    let program = bin.join(format!("recipe-step{}", std::env::consts::EXE_SUFFIX));
+    if !program.is_file() {
+        fs::copy(step_program()?, &program)?;
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(bin).chain(std::env::split_paths(&path));
+    let mut command = sandbox.command_in(folder, args);
+    command.env("PATH", std::env::join_paths(paths)?);
+    Ok(command)
+}
+
+/// [`building_in`] the work folder, run to its end.
+fn build(sandbox: &Sandbox, args: &[&str]) -> Result<std::process::Output> {
+    Ok(building_in(sandbox, &sandbox.work(), args)?.output()?)
+}
+
+/// a project with iris added from `server` and the recipes `recipes`, as data.toml tables.
+fn with(sandbox: &Sandbox, server: &Server, recipes: &str) -> Result {
+    added(sandbox, server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let text = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{text}{recipes}"))?;
+    Ok(())
+}
+
+/// a recipe that makes `clean` from iris by copying its files.
+const COPY: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
+
+/// [`COPY`], with clean.py as its code.
+const COPY_CODE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
+
+/// a recipe that makes `clean` from iris with the step program in `mode`, with its arguments.
+fn recipe(mode: &[&str]) -> String {
+    let words: Vec<String> = mode.iter().map(|word| format!("\"{word}\"")).collect();
+    format!(
+        "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", {}, \"{{iris}}\", \"{{out}}\"]\n",
+        words.join(", ")
+    )
+}
+
+/// how many times a step ran in `folder`, the folder steps run in.
+fn runs(folder: &Path) -> Result<usize> {
+    match fs::read_to_string(folder.join("runs")) {
+        Ok(runs) => Ok(runs.lines().count()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// every file below `folder` with its bytes, by its path there, to compare a folder before and
+/// after a command.
+fn files(folder: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    let mut todo = vec![folder.to_path_buf()];
+    while let Some(at) = todo.pop() {
+        let Ok(entries) = fs::read_dir(&at) else {
+            continue;
+        };
+        for entry in entries {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                todo.push(entry.path());
+            } else {
+                let path = entry
+                    .path()
+                    .strip_prefix(folder)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(path, fs::read(entry.path())?);
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// a build runs the step in the project folder, pins what it wrote with its key and tree, keeps
+/// the list of its files beside data.lock and places them in the data folder.
+#[test]
+fn build_pins_and_places_a_result() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        runs(&sandbox.work())?,
+        1,
+        "the step runs in the project folder"
+    );
+    let placed = sandbox.work().join("data").join("clean").join("iris.csv");
+    assert_eq!(fs::read(&placed)?, IRIS);
+    let tree = sha256(format!("iris.csv\t{}\t{}\n", IRIS.len(), sha256(IRIS)).as_bytes());
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains("name = \"clean\""), "{lock}");
+    assert!(
+        lock.contains(&format!("tree = \"sha256:{tree}\"")),
+        "{lock}"
+    );
+    assert!(
+        fs::read_dir(sandbox.work().join("data.lock.d"))?.count() == 1,
+        "the result's files are listed beside data.lock"
+    );
+    let document = json(&output)?;
+    let step = &document["result"]["steps"][0];
+    assert_eq!(step["name"], "clean");
+    assert_eq!(step["action"], "ran");
+    assert_eq!(step["tree"], format!("sha256:{tree}"));
+    assert_eq!(step["files"], 1);
+    assert_eq!(step["log"], ".fetchloom/builds/clean.log");
+    assert_eq!(document["result"]["lock_changed"], true);
+    assert_eq!(document["result"]["datasets"], serde_json::json!(["clean"]));
+    assert_eq!(document["result"]["placement"]["placed"], 1);
+    assert!(sandbox.work().join(".fetchloom/builds/clean.log").is_file());
+    for args in [&["lock", "--check"][..], &["sync", "--locked"]] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    Ok(())
+}
+
+/// a build of what data.lock pins as built now, with its files in the cache, runs nothing and
+/// leaves data.lock as it is.
+#[test]
+fn a_second_build_runs_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let again = build(&sandbox, &["--json", "build", "clean"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stdout)?);
+    assert_eq!(runs(&sandbox.work())?, 1);
+    let document = json(&again)?;
+    assert_eq!(document["result"]["steps"][0]["action"], "up_to_date");
+    assert_eq!(document["result"]["lock_changed"], false);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    let told = text(&build(&sandbox, &["build"])?.stderr)?;
+    assert!(told.contains(" Up to date clean\n"), "{told}");
+    Ok(())
+}
+
+/// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
+/// its list and the data folder byte for byte as they were.
+#[test]
+fn a_failed_step_keeps_lock_and_data() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let manifest = sandbox.work().join("data.toml");
+    let text_before = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        text_before.replace("\"copy\"", "\"fail\", \"3\""),
+    )?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let parts = files(&sandbox.work().join("data.lock.d"))?;
+    let data = files(&sandbox.work().join("data"))?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, details, help, fix) = error(&document);
+    assert_eq!(kind, "build.failed");
+    assert!(
+        message.starts_with("clean failed: recipe-step exited with code 3 after "),
+        "{message}"
+    );
+    assert_eq!(details.len(), 20, "{details:?}");
+    assert!(details.contains(&"working on part 30"), "{details:?}");
+    assert!(
+        help.contains(".fetchloom/builds/clean.log, and data.lock and data/clean are as they were"),
+        "{help}"
+    );
+    assert_eq!(fix, &Value::Null);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert_eq!(files(&sandbox.work().join("data.lock.d"))?, parts);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    let log = fs::read_to_string(sandbox.work().join(".fetchloom/builds/clean.log"))?;
+    for line in ["working on part 1\n", "something went wrong in part 30\n"] {
+        assert!(log.contains(line), "{log}");
+    }
+    Ok(())
+}
+
+/// a step that writes nothing into its result folder has made no result.
+#[test]
+fn an_empty_result_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["nothing"]))?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, _, _) = error(&document);
+    assert_eq!(kind, "build.failed");
+    assert_eq!(message, "clean wrote nothing into {out}");
+    assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains("clean"));
+    Ok(())
+}
+
+/// a result holds plain files only, so a link the step wrote is refused, never followed.
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_result_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["link"]))?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(60));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("clean wrote a link at latest, and results hold plain files only"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// two names a disk that ignores case takes for one stop the build here, not on a teammate's
+/// machine.
+#[cfg(target_os = "linux")]
+#[test]
+fn case_twins_are_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["case"]))?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(60));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("which are one name on disks that ignore case"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Data.csv") && stderr.contains("data.csv"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a step reads the files data.lock pins, copied from the cache, never the data folder, where a
+/// person may have changed them.
+#[test]
+fn inputs_come_from_pins_not_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    // a file of its own, so the edit cannot reach the cache through a link
+    let placed = sandbox.work().join("data").join("iris").join("iris.csv");
+    crate::support::delete(&placed)?;
+    fs::write(&placed, b"edited by hand\n")?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read(sandbox.work().join("data").join("clean").join("iris.csv"))?,
+        IRIS
+    );
+    assert_eq!(fs::read(&placed)?, b"edited by hand\n", "the edit stays");
+    Ok(())
+}
+
+/// a zip of two files, with `images/x.png` inside.
+fn zipped() -> Result<Vec<u8>> {
+    use std::io::Write as _;
+    let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (path, bytes) in [("images/x.png", &b"x"[..]), ("labels.csv", b"file,label\n")] {
+        archive.start_file(path, zip::write::SimpleFileOptions::default())?;
+        archive.write_all(bytes)?;
+    }
+    Ok(archive.finish()?.into_inner())
+}
+
+/// the paths of the files below `folder`, sorted.
+fn names(folder: &Path) -> Result<Vec<String>> {
+    Ok(files(folder)?.into_keys().collect())
+}
+
+/// a members table that leaves a file of an archive out leaves it out of the step too: the step
+/// never sees it, and its key differs from the one of the whole archive.
+#[test]
+fn a_members_table_keeps_a_file_from_the_step() -> Result {
+    let sandbox = Sandbox::new()?;
+    let set = sandbox.folder("set")?;
+    fs::write(set.join("set.zip"), zipped()?)?;
+    let added = sandbox.run(&["add", "../set"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let plain = fs::read_to_string(&manifest)?;
+    let copy = "\n[datasets.clean]\nfrom = [\"set\"]\nrun = [\"recipe-step\", \"copy\", \"{set}\", \"{out}\"]\n";
+    fs::write(&manifest, format!("{plain}{copy}"))?;
+    let whole = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(whole.status.code(), Some(0), "{}", text(&whole.stdout)?);
+    let result = sandbox.work().join("data").join("clean");
+    let all = names(&result)?;
+    assert!(all.iter().any(|name| name.ends_with("x.png")), "{all:?}");
+
+    fs::write(
+        &manifest,
+        format!(
+            "{plain}\n[datasets.set.members.\"set.zip\"]\nexclude = [\"images/x.png\"]\n{copy}"
+        ),
+    )?;
+    let filtered = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(
+        filtered.status.code(),
+        Some(0),
+        "{}",
+        text(&filtered.stdout)?
+    );
+    assert_eq!(runs(&sandbox.work())?, 2);
+    let kept = names(&result)?;
+    assert!(!kept.iter().any(|name| name.ends_with("x.png")), "{kept:?}");
+    assert_eq!(kept.len(), all.len() - 1, "{kept:?}");
+    let key = |output: &std::process::Output| -> Result<Value> {
+        Ok(json(output)?["result"]["steps"][0]["key"].clone())
+    };
+    assert_ne!(key(&filtered)?, key(&whole)?);
+    Ok(())
+}
+
+/// the code of a recipe is in its key, so a build after an edit runs the step again and pins
+/// the new key.
+#[test]
+fn editing_code_makes_build_pin_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY_CODE)?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    let first = json(&build(&sandbox, &["--json", "build"])?)?;
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let second = json(&output)?;
+    assert_eq!(runs(&sandbox.work())?, 2);
+    let (before, after) = (&first["result"]["steps"][0], &second["result"]["steps"][0]);
+    assert_eq!(after["action"], "ran");
+    assert_ne!(after["key"], before["key"]);
+    assert_eq!(after["tree"], before["tree"]);
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&format!(
+        "key = \"{}\"",
+        after["key"].as_str().unwrap_or_default()
+    )));
+    assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    Ok(())
+}
+
+/// a recipe made from another takes that one's tree, so an upstream rebuild that makes the same
+/// files leaves the downstream pin, and its step, alone.
+#[test]
+fn an_upstream_rebuild_with_the_same_tree_keeps_the_downstream_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"write\", \"tidy.csv\", \"done\", \"{clean}\", \"{out}\"]\n";
+    with(&sandbox, &server, &format!("{COPY_CODE}{tidy}"))?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let pinned = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    let tidy_pin = |lock: &str| lock[lock.find("name = \"tidy\"").unwrap_or_default()..].to_owned();
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    let output = build(&sandbox, &["--json", "build", "tidy"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let actions: Vec<&str> = document["result"]["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|step| step["action"].as_str())
+        .collect();
+    assert_eq!(actions, ["ran", "up_to_date"]);
+    let runs = fs::read_to_string(sandbox.work().join("runs"))?;
+    assert_eq!(runs, "copy\nwrite\ncopy\n");
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert_eq!(tidy_pin(&lock), tidy_pin(&pinned));
+    Ok(())
+}
+
+/// a key holds nothing of where the project is, so a moved project's results stay built.
+#[test]
+fn a_moved_project_keeps_its_keys() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let moved = sandbox.folder("moved")?.join("project");
+    fs::rename(sandbox.work(), &moved)?;
+    let checked = sandbox.command_in(&moved, &["lock", "--check"]).output()?;
+    assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
+    let output = building_in(&sandbox, &moved, &["--json", "build"])?.output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["result"]["steps"][0]["action"], "up_to_date");
+    assert_eq!(runs(&moved)?, 1);
+    assert_eq!(fs::read(moved.join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// a second build of a key another build is running waits for it and takes its result, so the
+/// step runs once.
+#[test]
+fn two_builds_of_one_key_run_it_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let marker = sandbox.folder("hold")?.join("started");
+    let release = marker.with_file_name("release");
+    let (marker_text, release_text) = (marker.to_string_lossy(), release.to_string_lossy());
+    with(
+        &sandbox,
+        &server,
+        &recipe(&[
+            "hold",
+            &marker_text.replace('\\', "\\\\"),
+            &release_text.replace('\\', "\\\\"),
+        ]),
+    )?;
+    let other = crate::project::clone(&sandbox, "other")?;
+    let first = Running::start(&mut building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    wait_until("the first step to start", || Ok(marker.exists()))?;
+    let second = Running::start(&mut building_in(&sandbox, &other, &["build"])?)?;
+    second.wait_for("Waiting for another fetchloom building clean")?;
+    fs::write(&release, "go")?;
+    let first = first.finish()?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let second = second.finish()?;
+    assert_eq!(second.status.code(), Some(0), "{}", text(&second.stderr)?);
+    let told = text(&second.stderr)?;
+    assert!(
+        told.contains("Reused clean · built before from the same inputs"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 1);
+    assert_eq!(runs(&other)?, 0);
+    assert_eq!(
+        fs::read(other.join("data").join("clean").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
+/// a step's log is for its owner alone, and keeps only the latest 16 MiB of its output.
+#[cfg(unix)]
+#[test]
+fn the_log_is_private_and_bounded() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let bytes = (17 << 20).to_string();
+    with(&sandbox, &server, &recipe(&["say", &bytes]))?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let log = sandbox.work().join(".fetchloom/builds/clean.log");
+    assert_eq!(fs::metadata(&log)?.permissions().mode() & 0o777, 0o600);
+    let kept = fs::read(&log)?;
+    assert!(kept.len() <= 16 << 20, "{}", kept.len());
+    assert!(kept.ends_with(b"to fill its log\n"));
+    Ok(())
+}
+
+/// a step that runs fetchloom on its own project fails at once, rather than waiting for the
+/// build that runs it.
+#[test]
+fn a_step_calling_fetchloom_on_its_project_fails_fast() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let fetchloom = env!("CARGO_BIN_EXE_fetchloom").replace('\\', "\\\\");
+    with(&sandbox, &server, &recipe(&["call", &fetchloom]))?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, details, _, _) = error(&document);
+    assert_eq!(kind, "build.failed");
+    assert!(message.contains("exited with code 2"), "{message}");
+    assert!(
+        details
+            .iter()
+            .any(|line| line.contains("runs inside `fetchloom build` of this project")),
+        "{details:?}"
+    );
+    Ok(())
+}
+
+/// a rebuild of an unchanged recipe that makes other files is refused: data.lock keeps the pin
+/// it has, since only a person may choose the new files.
+#[test]
+fn a_rebuild_with_other_files_keeps_the_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["random"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, _) = error(&document);
+    assert_eq!(kind, "build.differs");
+    assert_eq!(
+        message,
+        "clean made other files than data.lock pins for the same inputs, command and code"
+    );
+    assert!(
+        help.contains("data.lock and data/clean are as they were"),
+        "{help}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 2);
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    Ok(())
+}
+
+/// sync places a pinned result from the cache and never runs its step; with the result in no
+/// cache, it names the build that makes it.
+#[test]
+fn sync_places_a_result_and_never_builds_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let placed = sandbox.work().join("data").join("clean").join("iris.csv");
+    crate::support::delete(&placed)?;
+    let synced = build(&sandbox, &["sync", "clean"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(&placed)?, IRIS);
+    crate::support::delete(&placed)?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let output = building_in(&sandbox, &sandbox.work(), &["--json", "sync", "clean"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, help, fix) = error(&document);
+    assert_eq!(kind, "build.needed");
+    assert_eq!(
+        message,
+        "clean's pinned result is not on this machine or a mirror"
+    );
+    assert_eq!(help, "run `fetchloom build clean` to make it here");
+    assert_eq!(fix, &Value::Null, "building runs the project's code");
+    assert_eq!(runs(&sandbox.work())?, 1, "sync never runs a step");
+    Ok(())
+}
+
+/// `path` answers a built recipe's folder and files, and `export` lists them, as for any
+/// dataset.
+#[test]
+fn path_and_export_answer_a_built_result() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let folder = json(&sandbox.run(&["--json", "path", "clean"])?)?;
+    assert_eq!(
+        folder["result"]["path"],
+        sandbox
+            .work()
+            .join("data")
+            .join("clean")
+            .to_string_lossy()
+            .as_ref()
+    );
+    let file = sandbox.run(&["path", "clean/iris.csv"])?;
+    assert_eq!(file.status.code(), Some(0), "{}", text(&file.stderr)?);
+    let exported = sandbox.run(&["export"])?;
+    assert_eq!(
+        exported.status.code(),
+        Some(0),
+        "{}",
+        text(&exported.stderr)?
+    );
+    assert!(
+        text(&exported.stdout)?.contains(&format!("{}  data/clean/iris.csv", sha256(IRIS))),
+        "{}",
+        text(&exported.stdout)?
+    );
+    Ok(())
+}
+
+/// a step that changes its own code leaves a result no recipe answers, so the build fails.
+#[test]
+fn a_step_that_edits_its_code_fails() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let edits = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write-code\", \"clean.py\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
+    with(&sandbox, &server, edits)?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(60));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("clean changed its own code while it ran: clean.py"),
+        "{stderr}"
+    );
+    assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains("clean"));
+    Ok(())
+}
+
+/// a step whose program is not on PATH cannot start, and the build says which program.
+#[test]
+fn a_missing_program_cannot_start() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let missing = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"no-such-program-here\", \"{iris}\", \"{out}\"]\n";
+    with(&sandbox, &server, missing)?;
+    let output = build(&sandbox, &["build"])?;
+    assert_eq!(output.status.code(), Some(60));
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains(
+            "clean cannot start: no program called no-such-program-here was found on PATH"
+        ),
+        "{stderr}"
+    );
     Ok(())
 }

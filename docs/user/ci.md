@@ -70,6 +70,16 @@ fetchloom sync --locked --verify --yes
 
 it hashes every placed file, downloads again any whose bytes differ from `data.lock`, and keeps the changed copy beside it as `<path>.changed`, with a warning. it reads every byte of the data, so it takes longer than plain `--locked`.
 
+## recipes
+
+in a project with [recipes](recipes.md), `fetchloom sync --locked` places each pinned result from the cache or a mirror, and fails with `build.needed`, exit 60, when a recipe changed since it was built or neither holds its result, as on a fresh runner. a job that builds runs the repository's code, so give it only branches you trust:
+
+```sh
+fetchloom build --json
+```
+
+a job that builds commits nothing: commit `data.lock` and `data.lock.d` from the machine you built on, so a runner places the same results. a step that fails exits 60 with `build.failed`, and the last lines of its output are in `errors[0].details`.
+
 ## checking the result
 
 the commands above check that sync worked. a job that must also fail on files someone edited in the data folder can read `--json` output, as [scripting](scripting.md#checking-and-syncing) shows. [exit codes](reference/exit-codes.md) lists every failure kind and what to do next.

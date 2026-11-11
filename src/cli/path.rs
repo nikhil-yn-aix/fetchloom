@@ -1,6 +1,6 @@
 //! `fetchloom path`: where a dataset, or a file or folder in it, is. it answers from data.lock and
 //! the data folder when the files are in place, and syncs that dataset alone first when they are
-//! not.
+//! not. a recipe's result is placed as data.lock pins it, and never built here.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -40,18 +40,8 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         None => (args.target.as_str(), None),
     };
     known(&manifest, name, "path")?;
-    // only `fetchloom build` makes a recipe's result, and nothing places one yet
-    if manifest.datasets[name].recipe().is_some() {
-        return Err(Error::new(
-            Kind::BuildNeeded,
-            format!(
-                "{name} is made by a recipe, and its result is not in {}/ yet",
-                manifest.data_dir
-            ),
-        )
-        .help(format!("run `fetchloom build {name}`, which makes it")));
-    }
     let lock = project.lock()?;
+    unbuilt(&manifest, lock.as_ref(), name)?;
     let mut cache = None;
     let path = if let Some(path) = ready_path(
         context,
@@ -72,6 +62,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                 let (text, manifest) = project.manifest()?;
                 known(&manifest, name, "path")?;
                 let read = project.lock_and_text()?;
+                unbuilt(&manifest, read.as_ref().map(|(lock, _)| lock), name)?;
                 if let Some(path) = ready_path(
                     context,
                     &project,
@@ -127,6 +118,24 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         "a placed file is a link to its file in the cache folder, or a copy of it; `fetchloom cache` shows the cache",
     );
     Ok(Report { path })
+}
+
+/// refuses a recipe data.lock pins no result of: only `fetchloom build` makes one, so it has no
+/// folder in the data folder yet.
+fn unbuilt(manifest: &Manifest, lock: Option<&Lock>, name: &str) -> Result<(), Error> {
+    if manifest.datasets[name].recipe().is_none()
+        || lock.is_some_and(|lock| lock.result(name).is_some())
+    {
+        return Ok(());
+    }
+    Err(Error::new(
+        Kind::BuildNeeded,
+        format!(
+            "{name} is made by a recipe, and its result is not in {}/ yet",
+            manifest.data_dir
+        ),
+    )
+    .help(format!("run `fetchloom build {name}`, which makes it")))
 }
 
 /// validates the answer against the same plan used to check readiness.
@@ -214,12 +223,14 @@ fn ready_path(
     let Some(lock) = lock else {
         return Ok(None);
     };
-    let fresh = lock.get(name).is_some_and(|locked| {
-        manifest
-            .datasets
+    // a recipe's pin stands until a build, which alone makes another
+    let fresh = match manifest.datasets.get(name) {
+        Some(entry) if entry.recipe().is_some() => lock.result(name).is_some(),
+        Some(entry) => lock
             .get(name)
-            .is_some_and(|entry| locked.drift(entry).is_none())
-    });
+            .is_some_and(|locked| locked.drift(entry).is_none()),
+        None => false,
+    };
     if !fresh {
         return Ok(None);
     }

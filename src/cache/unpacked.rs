@@ -115,7 +115,7 @@ impl Cache {
 
 /// the members a record lists. a record with a path that leaves the folder it unpacks into, as
 /// a hand-edited one could, counts as no record, so the archive is unpacked again.
-fn parse(text: &str) -> Option<Vec<Member>> {
+pub(super) fn parse(text: &str) -> Option<Vec<Member>> {
     text.lines()
         .map(|line| {
             let mut parts = line.split('\t');

@@ -4,6 +4,7 @@
 
 mod archive;
 mod auth;
+mod build;
 mod cache;
 mod cli;
 mod digest;

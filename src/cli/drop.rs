@@ -325,39 +325,45 @@ fn edits<'a>(
     let mut edits: BTreeMap<&'a str, Edit<'a>> = BTreeMap::new();
     let mut seen: HashSet<&str> = HashSet::new();
     for request in asked {
-        let mut by_origin: BTreeMap<(&'a str, &'a str), Vec<&Target<'a>>> = BTreeMap::new();
-        for target in &request.targets {
+        let mut by_origin: BTreeMap<(&'a str, &'a str), Vec<(&Target<'a>, &'a LockedFile)>> =
+            BTreeMap::new();
+        // `asked` refuses a recipe's files, so each target comes from a file a source lists
+        let listed = request
+            .targets
+            .iter()
+            .filter_map(|target| Some((*target, target.file()?)));
+        for (target, file) in listed {
             if seen.insert(target.path.as_str()) {
                 by_origin
-                    .entry((target.dataset, target.locked.path.as_str()))
+                    .entry((target.dataset, file.path.as_str()))
                     .or_default()
-                    .push(target);
+                    .push((target, file));
             }
         }
         for ((dataset, origin), targets) in by_origin {
             let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
             let edit = edits.entry(dataset).or_default();
-            if targets[0].locked.unpacks_to.is_none() {
+            if targets[0].1.unpacks_to.is_none() {
                 let chosen: Vec<(&str, &str)> = targets
                     .iter()
-                    .map(|target| (target.path.as_str(), target.locked.path.as_str()))
+                    .map(|(target, file)| (target.path.as_str(), file.path.as_str()))
                     .collect();
                 let listed = locked.files.iter().map(|file| file.path.as_str());
                 let patterns = written_for(request, &chosen, listed);
                 record(edit, dataset, None, &chosen, &patterns);
                 edit.leaving
-                    .extend(targets.iter().map(|target| target.locked.path.as_str()));
+                    .extend(targets.iter().map(|(_, file)| file.path.as_str()));
                 continue;
             }
             let inside: &Inside = match archives.entry((dataset, origin)) {
                 std::collections::hash_map::Entry::Occupied(found) => found.into_mut(),
                 std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(unpacked(manifest, locked, targets[0].locked, cache)?)
+                    slot.insert(unpacked(manifest, locked, targets[0].1, cache)?)
                 }
             };
             let chosen: Vec<(&str, &str)> = targets
                 .iter()
-                .filter_map(|target| {
+                .filter_map(|(target, _)| {
                     let member = inside.get(&target.path)?;
                     Some((target.path.as_str(), member.as_str()))
                 })

@@ -199,6 +199,10 @@ impl<'a> Loop<'a> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
+        let unbuilt = placing.unbuilt(|digest, size| self.cache.find(digest, Some(size)).is_some());
+        if !unbuilt.is_empty() {
+            return Err(self.as_left(unbuilt_here(&unbuilt)));
+        }
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
             .into_iter()
@@ -206,6 +210,67 @@ impl<'a> Loop<'a> {
         self.download_prepared(manifest, lock, &files).await?;
         self.unpack_locked(manifest, lock, &archives).await?;
         Ok(placing)
+    }
+
+    /// puts in the cache every file the fetched datasets `names` of `lock` hold, whatever the data
+    /// folder holds, as a build's private copy of them needs: from the mirrors first, else from
+    /// their sources, an archive unpacked again when a file it holds is missing. nothing in the
+    /// project changes.
+    pub(super) async fn ready(
+        &self,
+        manifest: &Manifest,
+        lock: &Lock,
+        names: &BTreeSet<&str>,
+    ) -> Result<(), Error> {
+        let sources = Lock {
+            datasets: lock
+                .datasets
+                .iter()
+                .filter(|locked| names.contains(locked.name.as_str()))
+                .cloned()
+                .collect(),
+            derived: Vec::new(),
+        };
+        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
+        let unknown: Vec<(String, &LockedFile)> = planned
+            .unknown
+            .iter()
+            .map(|(dataset, file)| ((*dataset).to_owned(), *file))
+            .collect();
+        if !unknown.is_empty() {
+            let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
+                .await
+                .map_err(|error| self.as_left(error))?;
+            self.unpack_locked(manifest, &sources, &unknown).await?;
+        }
+        let planned = plan::from_cache(manifest, &sources, &self.cache)?;
+        let lacking = || -> Vec<&plan::Target> {
+            planned
+                .targets
+                .iter()
+                .filter(|target| self.cache.find(&target.sha256, Some(target.size)).is_none())
+                .collect()
+        };
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+            lacking()
+                .into_iter()
+                .map(|target| crate::mirror::Wanted {
+                    digest: target.sha256,
+                    size: target.size,
+                    label: target.path.clone(),
+                })
+                .collect()
+        })
+        .await
+        .map_err(|error| self.as_left(error))?;
+        let mut seen = HashSet::new();
+        let (archives, files): (Vec<_>, Vec<_>) = lacking()
+            .into_iter()
+            .filter_map(|target| Some((target.dataset.to_owned(), target.file()?)))
+            .filter(|(_, file)| seen.insert(file.sha256))
+            .partition(|(_, file)| file.unpacks_to.is_some());
+        self.download_prepared(manifest, &sources, &files).await?;
+        self.unpack_locked(manifest, &sources, &archives).await
     }
 
     /// places what [`Loop::prepare`] readied, and records `synced` in the state.
@@ -564,6 +629,15 @@ impl<'a> Loop<'a> {
             &self.scope,
             survey,
         )?;
+        // a dry run asks no mirror, so only with none could a result come from nowhere else
+        if self.context.mirrors.mirrors.list.is_empty() {
+            let unbuilt = placing.unbuilt(|digest, size| {
+                !damaged.contains(digest) && self.cache.find(digest, Some(size)).is_some()
+            });
+            if !unbuilt.is_empty() {
+                return Err(unbuilt_here(&unbuilt));
+            }
+        }
         let mut unpack = Vec::new();
         for (dataset, file) in placing
             .unknown()
@@ -984,6 +1058,28 @@ impl<'a> Loop<'a> {
         error = shown_five(error, missing);
         error.help(self.net.offline().missing_help("them"))
     }
+}
+
+/// the error for recipes whose results data.lock pins but neither the cache nor a mirror holds,
+/// which only a build makes again, since it runs the project's code.
+pub(super) fn unbuilt_here(names: &[String]) -> Error {
+    let (message, them) = match names {
+        [name] => (
+            format!("{name}'s pinned result is not on this machine or a mirror"),
+            "it",
+        ),
+        many => (
+            format!(
+                "the pinned results of {} are not on this machine or a mirror",
+                many.join(", ")
+            ),
+            "them",
+        ),
+    };
+    Error::new(Kind::BuildNeeded, message).help(format!(
+        "run `fetchloom build {}` to make {them} here",
+        names.join(" ")
+    ))
 }
 
 /// names the first five of `labels` in `error`, and how many more there are.

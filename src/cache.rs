@@ -6,6 +6,7 @@ mod failure;
 mod held;
 mod object;
 mod partial;
+mod results;
 mod staging;
 mod unpacked;
 mod upkeep;
@@ -34,7 +35,10 @@ pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed};
 pub(crate) use partial::{
     Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
 };
-pub(crate) use staging::Staging;
+pub(crate) use results::Seen;
+#[cfg(unix)]
+pub(crate) use results::seal_captured;
+pub(crate) use staging::{Staging, clear_tree, enterable};
 pub(crate) use unpacked::{Member, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed};
 pub(crate) use usage::Usage;
@@ -766,7 +770,7 @@ impl std::error::Error for Explained {
 pub(crate) mod tests {
     use super::*;
 
-    pub(super) fn cache() -> (tempfile::TempDir, Cache) {
+    pub(crate) fn cache() -> (tempfile::TempDir, Cache) {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         (dir, cache)

@@ -62,6 +62,9 @@ pub(crate) struct Placer {
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
+    /// whether a placed copy must reach the disk before it counts as placed. a build's private
+    /// copy of what a step reads is scratch, which a crash leaves for the next sweep.
+    durable: bool,
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
     other_volume: AtomicBool,
@@ -194,6 +197,20 @@ impl Placer {
         }
     }
 
+    /// prepares placement of scratch files under `root` that never makes a hardlink: a reflink
+    /// where the disk clones, else a copy, which is not flushed. no file placed this way is the
+    /// cache's object under another name, so a write to it, as by a recipe's step, never
+    /// reaches the cache.
+    pub(crate) fn without_hardlinks(root: &Path) -> Placer {
+        let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+        let placer = Placer {
+            durable: false,
+            ..Placer::starting_at(root, Method::Reflink, None)
+        };
+        placer.can_hardlink.store(false, Ordering::Relaxed);
+        placer
+    }
+
     /// a placer that skips the methods above `first`, as if the filesystem had refused them.
     fn starting_at(root: PathBuf, first: Method, synced: Option<&'static str>) -> Placer {
         Placer {
@@ -212,6 +229,7 @@ impl Placer {
             checks_root: true,
             folders: HashSet::new(),
             synced,
+            durable: true,
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
             other_volume: AtomicBool::new(false),
@@ -327,7 +345,8 @@ impl Placer {
         let threads = grouped.threads(this.threads);
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
         // for everything other programs wrote there
-        let batch = (cfg!(not(target_os = "linux")) || count > crate::cache::MOST_FLUSHED_ALONE)
+        let batch = this.durable
+            && (cfg!(not(target_os = "linux")) || count > crate::cache::MOST_FLUSHED_ALONE)
             && this.batches_copies();
         // keeping a whole Metadata for each of 100,000 files cost tens of megabytes
         let put = |index: &usize| {
@@ -417,9 +436,9 @@ impl Placer {
         }
         // outside a batch a copy flushes on its own, as on a nested mount, which the root
         // filesystem's batch flush does not cover.
-        let flush = !batch;
+        let flush = self.durable && !batch;
         #[cfg(unix)]
-        let flush = flush || location.other_device();
+        let flush = flush || (self.durable && location.other_device());
         let put = if batch && !flush {
             let (staged, file) =
                 stage_copy_at(object, &location, writable, self.threads, &self.stop)?;

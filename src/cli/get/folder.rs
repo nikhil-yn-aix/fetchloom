@@ -410,6 +410,7 @@ fn within(folder: &Path, path: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plan::Holder;
 
     #[test]
     fn a_filled_folder_lists_its_top_level_largest_first() {
@@ -553,7 +554,7 @@ mod tests {
                 sha256: file.sha256,
                 size: file.size,
                 copy: false,
-                locked: file,
+                holder: Holder::File(file),
             })
             .collect();
         let style = Style {
@@ -620,7 +621,7 @@ mod tests {
                 sha256: file.sha256,
                 size: file.size,
                 copy: false,
-                locked: file,
+                holder: Holder::File(file),
             })
             .collect();
         let context = Context::new(Output::new(
@@ -677,7 +678,7 @@ mod tests {
                 sha256: stored.digest,
                 size: 6,
                 copy: false,
-                locked: &locked,
+                holder: Holder::File(&locked),
             })
             .collect();
         let context = Context::new(Output::new(
@@ -725,7 +726,7 @@ mod tests {
                 size: stored.size,
                 sha256: stored.digest,
                 copy: false,
-                locked: &locked,
+                holder: Holder::File(&locked),
             }];
             let context = Context::new(Output::new(
                 Style {

@@ -16,7 +16,8 @@ objects are read-only files named by their content digest. the cache owns public
 | [held.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/held.rs) | the cache-wide lock that keeps gc apart from runs using the cache | `Access`, `hold` |
 | [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
 | [partial/hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | ordered prefix hashing, inline or on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
-| [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
+| [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members, the folders recipes' steps run in, and reclaimable locks | `Staging`, `staging`, `build_folder`, `sweep_staging`, `clear_tree` |
+| [results.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/results.rs) | what recipes made, by key, their key locks, and captured files moved into `objects/` | `Built`, `KeyHold`, `Seen`, `record_result`, `results`, `hold_key`, `seal_captured`, `publish_captured` |
 | [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `record_tree_bytes`, `unpacked`, `holds_unpacked` |
 | [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
 | [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `scan_objects`, `sweep_with_stop`, `verify_scanned` |
@@ -35,7 +36,8 @@ flowchart TD
     root --> unpacked["unpacked: archive member trees"]
     root --> changed["changed: damaged-object marks"]
     root --> projects["projects: registered project roots"]
-    root --> tmp["tmp: private writes and archive staging"]
+    root --> builds["builds: recipe results by key and tree"]
+    root --> tmp["tmp: private writes, archive staging, build folders"]
     root --> tag["CACHEDIR.TAG"]
     root --> gclock["gc.lock: shared by runs, exclusive for gc"]
 ```
@@ -98,7 +100,7 @@ successful sync registers the project root. gc follows registered manifests and 
 
 exclusive cache access fails on every lock error, so gc never treats failed exclusion as permission to delete. gc also refuses when a read-only root prevents opening the lock: an object subdirectory can be a different writable mount. shared access may continue only when locking is explicitly unsupported; other errors stop it. opening another user's lock file read-only still permits a shared lock. on NFS that descriptor cannot take an exclusive lock, so gc refuses and reports the locking error instead of proceeding.
 
-archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation.
+archive staging holds an OS lock until publication or discard. the next unpack or gc immediately reclaims unheld staging; held locks protect active work regardless of age. without locking, staging needs 24 hours without a write before reclamation. a recipe's step runs in a `.build` folder under `tmp/` with the same lock; what a step left there, such as read-only files and folders it took its owner's access from, goes with `clear_tree`, which never follows a link. `builds/` is created when a build first records a result; gc keeps every object a registered project's pinned results name, and leaves records themselves alone for now.
 
 `Usage::measure` tells where the space goes, from one object scan and the needs walk gc uses: what registered projects need and how much of it has another name, unneeded bytes gc frees now, those that wait for their day, and those a name outside the cache keeps, which gc removes without freeing. all are payload bytes, as gc counts them. on unix the scan's own metadata gives each object's link count, so this costs no extra call; a windows listing does not count links, so there `place::has_other_names` opens each object once. copies come from each registered project's `.fetchloom/state`: a placed file whose object the scan found gets one `symlink_metadata` call, and counts while its size and modification time match the state's record, as a copy or clone, or as a hardlink with no other name. windows opens such a hardlink once more to count its names. the calls run on `place::run_all`, since each waits on the disk; for 100,000 files that took the pass from 0.40 s to 0.18 s, [measured](../performance/measurements.md#the-cache-report-on-100000-placed-files-2026-11-11). `fetchloom cache` renders it and the weekly reminder in cli/cache.rs uses its `freeable`, so the two cannot disagree. `inputs_only` stays none until recipes tell which inputs only builds read.
 

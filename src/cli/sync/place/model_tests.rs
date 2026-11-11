@@ -6,6 +6,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
 use crate::digest;
+use crate::plan::Holder;
 use crate::threads::Threads;
 
 const PATH: &str = "data/set/file.bin";
@@ -211,7 +212,7 @@ fn observation_case(project: &Project, bytes: [u8; 5]) {
         sha256: file.sha256,
         size: 16,
         copy,
-        locked: &file,
+        holder: Holder::File(&file),
     };
     let expected = reference(
         Observation {
@@ -278,7 +279,7 @@ fn a_damaged_file_is_replaced_without_force() {
             sha256: file.sha256,
             size: 16,
             copy,
-            locked: &file,
+            holder: Holder::File(&file),
         };
         let actual = decide(&target, &survey, false, &destination).unwrap();
         assert_eq!(choice(&actual), Choice::Replace, "copy {copy}");

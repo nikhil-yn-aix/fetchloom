@@ -425,6 +425,35 @@ pub(crate) fn unstorable(path: &str) -> Option<String> {
     None
 }
 
+/// why some disk fetchloom supports cannot store `path`, whatever this machine is: a name longer
+/// than 255 bytes, which ext4 refuses, or one windows refuses, with a character it does not
+/// allow, a dot or a space at its end, or a name it keeps for devices. a recipe's result is
+/// checked by it, so files a step wrote on linux place on a teammate's windows too.
+pub(crate) fn unportable(path: &str) -> Option<String> {
+    for part in path.split('/') {
+        if part.len() > 255 {
+            return Some(format!("\"{}…\" is longer than disks allow", shorten(part)));
+        }
+        if let Some(c) = part
+            .chars()
+            .find(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+        {
+            return Some(format!(
+                "\"{part}\" has {c:?}, which windows does not allow in names"
+            ));
+        }
+        if part.ends_with(['.', ' ']) {
+            return Some(format!(
+                "\"{part}\" ends with a dot or a space, which windows drops"
+            ));
+        }
+        if is_reserved_on_windows(part) {
+            return Some(format!("\"{part}\" is a name windows reserves for devices"));
+        }
+    }
+    None
+}
+
 /// a key for portable collision checks and possible filesystem aliases. unicode names are
 /// composed and lowercased first to join both sharp-s forms; the round trip through uppercase
 /// joins letters like the two greek sigmas,
@@ -653,6 +682,30 @@ mod tests {
         );
         assert_eq!(unstorable("data/CON.txt").is_some(), cfg!(windows));
         assert_eq!(unstorable("notes. ").is_some(), cfg!(windows));
+    }
+
+    /// what windows or ext4 cannot store is refused on every machine, so a result made on one
+    /// system places on all of them.
+    #[test]
+    fn unportable_names_are_refused_everywhere() {
+        assert_eq!(unportable("data/train.csv"), None);
+        assert_eq!(unportable(&format!("{}/x", "名".repeat(85))), None);
+        for path in [
+            "2020-01-01T10:00:00.csv",
+            "data/CON.txt",
+            "notes. ",
+            "notes.",
+            "a\u{7}b",
+            "what?.csv",
+        ] {
+            assert!(unportable(path).is_some(), "{path:?}");
+        }
+        // 255 bytes is the most ext4 takes, though windows counts 86 units of utf-16 here
+        assert!(unportable(&"名".repeat(86)).is_some());
+        assert_eq!(
+            unportable("a/b:c.csv").as_deref(),
+            Some("\"b:c.csv\" has ':', which windows does not allow in names")
+        );
     }
 
     #[test]

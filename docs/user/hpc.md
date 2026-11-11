@@ -83,6 +83,17 @@ a lab that would rather not share a cache can share a [mirror](mirrors.md): a fo
 
 a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. an offline job still reads a folder [mirror](mirrors.md) on a shared disk. [CI](ci.md) shows the same idea for build machines.
 
+## recipes in jobs
+
+`fetchloom build` runs each [recipe](recipes.md)'s step on the machine it runs on, one step at a time, so run it inside a job when a step needs the cluster. a step reads its inputs from the cache, so a job on a node without internet builds offline once the login node has put them there:
+
+```sh
+fetchloom sync                  # on the login node
+fetchloom --offline build       # in the job
+```
+
+a job that ends before its build does leaves `data.lock` and the data folder as they were, and the next build clears what the step left in the cache's `tmp` folder. two jobs that build one recipe from the same inputs into one cache run its step once: the second waits for the first and takes its result. a step that submits jobs of its own must wait for them to finish, since fetchloom takes in `{out}` as the step leaves it.
+
 ## backups and copies
 
 a file fetchloom placed by hardlink and its cached copy are one file with two names. `rsync -a` copies each name as a file of its own, so a backup of a project together with its cache stores every file twice. `rsync -aH`, and `cp -a` on linux, keep the links among the files they copy. in one test on linux, a project and its cache holding one 4.0 MiB file took 4.1 MiB after `rsync -aH` and 8.1 MiB after `rsync -a`.
