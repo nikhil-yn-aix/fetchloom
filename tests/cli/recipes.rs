@@ -320,6 +320,37 @@ fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
     Ok(())
 }
 
+/// a file sync puts back says how to leave it out for good as drop would: a file of a recipe's
+/// result in the recipe's step, and the only file of a dataset by removing the dataset.
+#[test]
+fn a_put_back_file_names_what_leaves_it_out() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    for (path, help) in [
+        (
+            "data/clean/clean.csv",
+            "clean makes data/clean/clean.csv, so to leave it out for good, choose the files inside clean's step",
+        ),
+        (
+            "data/iris/iris.csv",
+            "data/iris/iris.csv is the only file of iris, so to leave it out for good, run `fetchloom remove iris`",
+        ),
+    ] {
+        delete(&sandbox.work().join(path))?;
+        let synced = sandbox.run(&["sync"])?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        let told = text(&synced.stderr)?;
+        let warning = format!(
+            "warning: put back {path}, which was deleted or moved, since data.lock pins it\n  help: {help}; keep files of your own in a folder outside data/\n"
+        );
+        assert!(told.contains(&warning), "{warning:?} in\n{told}");
+    }
+    Ok(())
+}
+
 /// a clone whose cache lacks a pinned result gets it from a folder mirror that holds it, with
 /// no request to the source and no step run, and status calls its files missing until then.
 #[test]

@@ -33,7 +33,7 @@ warning: put back data/uci/iris.names, which was deleted or moved, since data.lo
      Synced 2 datasets into data
 ```
 
-`fetchloom drop` leaves a file out for good by writing a pattern into data.toml, so every clone leaves it out too. it works for files inside archives as well:
+`fetchloom drop` leaves a file out for good by writing a pattern into data.toml, so every clone leaves it out too. the help names it only for a file drop takes: a file a recipe makes comes from the recipe's step, and the only file of a dataset goes with `fetchloom remove`. drop works for files inside archives as well:
 
 ```text
 $ fetchloom drop data/uci/bezdekIris.data

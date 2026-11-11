@@ -8,7 +8,7 @@ mod model_tests;
 mod put;
 mod tell;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -52,6 +52,9 @@ pub(crate) struct Placement {
     /// files fetchloom placed that were gone, deleted or moved by someone, and that it placed
     /// again since data.lock still pins them. `placed` counts them.
     pub(crate) put_back: Vec<String>,
+    /// those of `put_back` that `fetchloom drop` would not leave out, by path, with why.
+    #[serde(skip)]
+    pub(crate) undroppable: BTreeMap<String, Undroppable>,
     /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
     /// a mirror holds them and only `fetchloom build` makes them.
     pub(crate) unbuilt: Vec<String>,
@@ -89,10 +92,20 @@ pub(crate) struct Placement {
     pub(crate) left_behind: Option<LeftBehind>,
 }
 
+/// why `fetchloom drop` would not leave out a file sync put back.
+#[derive(Debug)]
+pub(crate) enum Undroppable {
+    /// a file of the result of this recipe, whose step decides its files.
+    Made(String),
+    /// the only file of this dataset, which needs one.
+    Only(String),
+}
+
 impl Placement {
     /// notes what a placing tells beside its counts: the files it places that the state records
-    /// as placed, which someone deleted or moved while data.lock still pins them, and the
-    /// excludes of datasets in `scope` that name files inside an archive.
+    /// as placed, which someone deleted or moved while data.lock still pins them, with those of
+    /// them drop would refuse, and the excludes of datasets in `scope` that name files inside an
+    /// archive. `unknown` are the archives whose files are not planned yet.
     fn notice(
         &mut self,
         manifest: &Manifest,
@@ -100,6 +113,7 @@ impl Placement {
         actions: &[Action],
         survey: &Survey,
         scope: &Scope,
+        unknown: &[(&str, &LockedFile)],
     ) {
         self.put_back = targets
             .iter()
@@ -108,6 +122,29 @@ impl Placement {
                 matches!(action, Action::Place) && survey.state.files.contains_key(&target.path)
             })
             .map(|(target, _)| target.path.clone())
+            .collect();
+        let mut planned: HashMap<&str, usize> = HashMap::new();
+        for target in targets {
+            *planned.entry(target.dataset).or_default() += 1;
+        }
+        let back: HashSet<&str> = self.put_back.iter().map(String::as_str).collect();
+        // as drop refuses them: a result's file, and a dataset's every file
+        self.undroppable = targets
+            .iter()
+            .filter(|target| back.contains(target.path.as_str()))
+            .filter_map(|target| {
+                let dataset = target.dataset.to_owned();
+                let why = if target.holder == plan::Holder::Result {
+                    Undroppable::Made(dataset)
+                } else if planned.get(target.dataset) == Some(&1)
+                    && !unknown.iter().any(|(name, _)| *name == target.dataset)
+                {
+                    Undroppable::Only(dataset)
+                } else {
+                    return None;
+                };
+                Some((target.path.clone(), why))
+            })
             .collect();
         self.unreached = plan::unreached(manifest, targets)
             .into_iter()
@@ -614,6 +651,7 @@ impl<'a> Placing<'a> {
             &self.actions,
             &self.survey,
             &self.scope,
+            &self.unknown,
         );
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
@@ -795,7 +833,7 @@ impl<'a> Placing<'a> {
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
-        placement.notice(manifest, &targets, &actions, &survey, &scope);
+        placement.notice(manifest, &targets, &actions, &survey, &scope, &unknown);
         let settled = settle(
             project,
             &mut placer,

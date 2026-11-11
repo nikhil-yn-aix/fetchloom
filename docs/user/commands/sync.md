@@ -86,7 +86,7 @@ a file sync must place whose bytes the cache lacks comes from another file that 
      Copied 1 file · 21 B from data into the cache
      Placed data/squares · 1 file linked to the cache
 warning: put back data/squares/table.csv, which was deleted or moved, since data.lock pins it
-  help: to leave a file out for good, run `fetchloom drop data/squares/table.csv`; keep files of your own in a folder outside data/
+  help: squares makes data/squares/table.csv, so to leave it out for good, choose the files inside squares's step; keep files of your own in a folder outside data/
      Synced 2 datasets into data
 ```
 
@@ -124,7 +124,7 @@ warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or mov
   help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
 ```
 
-to leave a sample out for good, [`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves it out too. a copy you moved elsewhere in the data folder stays, and status lists it as extra; outputs of your own belong in a folder outside the data folder. a dry run warns the same way, as `a sync would put back`.
+to leave a sample out for good, [`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves it out too. the help names drop only for a file it leaves out: a file of a recipe's result comes from the recipe's step, which chooses its files, as the example above shows, and the only file of a dataset goes with the dataset, through `fetchloom remove`. a copy you moved elsewhere in the data folder stays, and status lists it as extra; outputs of your own belong in a folder outside the data folder. a dry run warns the same way, as `a sync would put back`.
 
 without `--force`, edited files and conflicting untracked files stay in place. JSON lists them in `result.placement.kept`. unrelated extras are not included there; use [status](status.md) to find them.
 
