@@ -20,6 +20,7 @@ use crate::name;
 use crate::place::run_all;
 use crate::stop::Stop;
 use crate::threads::Threads;
+use crate::work::Work;
 
 /// what a step wrote that a result cannot hold, by its path in the result folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,7 +254,8 @@ fn take(
 }
 
 /// puts every file of `found` in `cache`: past `MOST_FLUSHED_ALONE` files they reach the disk with
-/// one flush where the system can, before any takes its name in `objects/`.
+/// one flush where the system can, before any takes its name in `objects/`. `work` counts each
+/// object the cache did not hold before.
 ///
 /// # Errors
 ///
@@ -264,6 +266,7 @@ pub(crate) fn publish(
     found: &Found,
     threads: Threads,
     stop: &Arc<Stop>,
+    work: &Work,
 ) -> Result<(), Fault> {
     let _span = tracing::debug_span!("publish", files = found.files.len()).entered();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -291,12 +294,18 @@ pub(crate) fn publish(
             None => moved.push(file),
         }
     }
-    for published in run_all(&moved, threads, |file| move_in(cache, file)) {
-        published?;
+    let published = run_all(&moved, threads, |file| move_in(cache, file));
+    for (file, new) in moved.iter().zip(published) {
+        if new? {
+            work.wrote(&file.member.sha256);
+        }
     }
     for copy in copies {
         stopped(stop)?;
-        copy.publish(cache)?;
+        let stored = copy.publish(cache)?;
+        if stored.new {
+            work.wrote(&stored.digest);
+        }
     }
     Ok(())
 }
@@ -337,11 +346,11 @@ fn seal(
     }
 }
 
-/// moves a sealed file into `objects/`.
+/// moves a sealed file into `objects/`, and says whether the cache lacked its bytes.
 #[cfg(unix)]
-fn move_in(cache: &Cache, file: &Taken) -> Result<(), Fault> {
+fn move_in(cache: &Cache, file: &Taken) -> Result<bool, Fault> {
     match cache.publish_captured(&file.disk, file.member.sha256, &file.seen) {
-        Ok(_) => Ok(()),
+        Ok(stored) => Ok(stored.new),
         Err(err) if err.kind() == io::ErrorKind::InvalidData => {
             Err(Refused::Changed(file.member.path.clone()).into())
         }
@@ -354,8 +363,8 @@ fn move_in(cache: &Cache, file: &Taken) -> Result<(), Fault> {
     clippy::unnecessary_wraps,
     reason = "windows copies every file, so nothing moves"
 )]
-fn move_in(_cache: &Cache, _file: &Taken) -> Result<(), Fault> {
-    Ok(())
+fn move_in(_cache: &Cache, _file: &Taken) -> Result<bool, Fault> {
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -440,7 +449,14 @@ mod tests {
         fs::write(out.join("alone.csv"), b"a,b\n").unwrap();
         let alone = fs::metadata(out.join("alone.csv")).unwrap().ino();
         let found = read_all(&out).unwrap();
-        publish(&cache, &found, Threads::default(), &Arc::default()).unwrap();
+        publish(
+            &cache,
+            &found,
+            Threads::default(),
+            &Arc::default(),
+            &Work::default(),
+        )
+        .unwrap();
         let object = |bytes: &[u8]| cache.object_path(&crate::digest::sha256(bytes));
         assert!(!fs::metadata(&notes).unwrap().permissions().readonly());
         assert_ne!(
@@ -479,7 +495,13 @@ mod tests {
         );
         let found = read_all(&out).unwrap();
         grow(&out.join("a.csv"));
-        let after = publish(&cache, &found, Threads::default(), &Arc::default());
+        let after = publish(
+            &cache,
+            &found,
+            Threads::default(),
+            &Arc::default(),
+            &Work::default(),
+        );
         assert!(
             matches!(after, Err(Fault::Refused(Refused::Changed(_)))),
             "{after:?}"
@@ -501,7 +523,14 @@ mod tests {
             fs::set_permissions(&folder, fs::Permissions::from_mode(0o555)).unwrap();
         }
         let found = read_all(&out).unwrap();
-        publish(&cache, &found, Threads::default(), &Arc::default()).unwrap();
+        publish(
+            &cache,
+            &found,
+            Threads::default(),
+            &Arc::default(),
+            &Work::default(),
+        )
+        .unwrap();
         assert!(cache.find(&found.members[0].sha256, Some(4)).is_some());
         assert!(!out.join("sub").join("a.csv").exists(), "it moved");
     }

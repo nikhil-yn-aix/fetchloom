@@ -589,8 +589,14 @@ impl<'a> Building<'a> {
                 &plan::folder(&self.manifest, name),
             ));
         }
-        capture::publish(cache, &found, threads, &self.context.stop)
-            .map_err(|fault| taken(name, fault))?;
+        capture::publish(
+            cache,
+            &found,
+            threads,
+            &self.context.stop,
+            &self.context.work,
+        )
+        .map_err(|fault| taken(name, fault))?;
         cache.record_result(&key, &found.members).map_err(|err| {
             Error::io(
                 format_args!("could not record what {name} made in the cache"),

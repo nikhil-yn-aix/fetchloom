@@ -147,7 +147,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `bytes_down` | body bytes read, including metadata and unsuccessful attempts; excludes headers and the saved resume prefix |
 | `retries` | scheduled retry waits |
 | `resumes` | accepted nonzero range starts |
-| `objects_written` | new objects counted after successful downloads and archive unpacking |
+| `objects_written` | new objects counted after successful downloads, archive unpacking and the files a recipe's step wrote |
 | `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
 | `mirror_objects`, `mirror_bytes` | pinned files a [mirror](../mirrors.md) gave this run, now in the cache, and their bytes. a file the cache already held is never asked for |

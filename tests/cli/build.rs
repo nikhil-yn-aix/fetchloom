@@ -628,6 +628,28 @@ fn build_pins_and_places_a_result() -> Result {
     Ok(())
 }
 
+/// a file a step writes enters the cache as one the build wrote, unless the cache held its
+/// bytes already, as it holds iris's for a step that copies iris.
+#[test]
+fn a_build_counts_what_its_steps_add_to_the_cache() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["work"]["objects_written"], 1);
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("\"write\", \"clean.csv\", \"made\"", "\"copy\""),
+    )?;
+    let output = build(&sandbox, &["--json", "build"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(json(&output)?["work"]["objects_written"], 0);
+    Ok(())
+}
+
 /// a build of what data.lock pins as built now, with its files in the cache, runs nothing and
 /// leaves data.lock as it is.
 #[test]
