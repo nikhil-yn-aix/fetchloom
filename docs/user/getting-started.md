@@ -51,6 +51,14 @@ fetchloom --version
 
 the second line prints `fetchloom` and its version. if `cargo install` says your rust is too old, run `rustup update` and try again.
 
+cargo installs `fetchloom` alone, while the installers also make `fl`, a short name for it. on linux and macos, this line makes the same link in cargo's folder; skip it when `command -v fl` prints another program:
+
+```sh
+ln -s fetchloom ~/.cargo/bin/fl
+```
+
+in powershell, `fl` means `Format-List`; [windows](windows.md#short-name) shows how to get the short name there.
+
 fetchloom runs on windows 10 or later, macos 11 or later and linux, on x86_64 and arm64 machines. for the [python helper](scripting.md#python-helper) as well, install the python package instead. to finish the setup, see [shell completions](commands/completions.md).
 
 after the first release, the [README](https://github.com/nikhil-yn-aix/fetchloom#install) lists one-line installers that need no rust.
@@ -152,7 +160,7 @@ to remove the whole project, delete its folder. to remove every copy of a datase
 
 | installed with | remove with |
 |---|---|
-| `cargo install` | `cargo uninstall fetchloom` |
+| `cargo install` | `cargo uninstall fetchloom`, and `rm ~/.cargo/bin/fl` if you made that link |
 | `pip install fetchloom` | `pip uninstall fetchloom` |
 | `install.sh` | `rm ~/.local/bin/fetchloom ~/.local/bin/fl`, and the line marked `# added by the fetchloom installer` in your shell profiles. if the installer said it left `fl` alone, that `fl` is another program: remove only `fetchloom` |
 | `install.ps1` | delete `%LOCALAPPDATA%\Programs\fetchloom`, which holds `fl.exe` too, and that folder's `bin` from your user PATH in the environment variables settings |

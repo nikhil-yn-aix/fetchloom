@@ -33,18 +33,13 @@ keep projects on the same drive to permit linking. changing the variable selects
 
 ## short name
 
+the installer also makes `fl.exe` beside `fetchloom.exe`, made again on every install so it never runs an old version. `fl sync` runs `fetchloom sync` in cmd and other shells. powershell runs an alias before any program, and there `fl` is the alias of `Format-List`, so type `fl.exe sync`, or give `fl` to fetchloom in your powershell profile:
+
 ```powershell
-Set-Alias fl fetchloom
-fl sync
+Set-Alias fl fetchloom -Force
 ```
 
-put the `Set-Alias` line in your powershell profile to keep it in later sessions. the installed executable remains `fetchloom`; the alias belongs to your shell.
-
-on a linux or macos shell, use:
-
-```sh
-alias fl=fetchloom
-```
+`-Force` is needed because the `Format-List` alias is read-only; `Format-List` keeps its full name. when another program is called `fl`, the installer makes no `fl.exe` and says so, and the alias still works in powershell.
 
 ## onedrive and synced folders
 

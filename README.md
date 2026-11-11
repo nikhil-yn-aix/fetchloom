@@ -49,7 +49,7 @@ the python package will install the executable and [python helper](docs/user/scr
 pip install fetchloom
 ```
 
-the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_PATH=1` to keep them out of your shell profiles. [getting started](docs/user/getting-started.md#uninstall) says how to uninstall.
+the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_PATH=1` to keep them out of your shell profiles. they and the python package also make `fl`, a short name for `fetchloom`, unless another program already answers to it; `cargo install` makes `fetchloom` alone. [getting started](docs/user/getting-started.md#uninstall) says how to uninstall.
 
 ## quick start
 
@@ -71,7 +71,7 @@ a name is looked up on hugging face, kaggle and zenodo. a link works too:
 learn more with `fetchloom help concepts` and `fetchloom <command> --help`
 ```
 
-that is the introductory part of the welcome outside a project. it follows a version line and, at a wide terminal, a wordmark. inside a project, bare `fetchloom` shows its status.
+that is the introductory part of the welcome outside a project. it follows a version line and, at a wide terminal, a wordmark. inside a project, bare `fetchloom` shows its status. where an installer made it, `fl` is the same program under a shorter name: `fl sync` is `fetchloom sync`.
 
 files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the python helper.
 

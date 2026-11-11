@@ -60,6 +60,7 @@ fetchloom places nothing it cannot check, so the clone stays without the file. t
 
 | symptom | cause | fix |
 |---|---|---|
+| `fl` runs another program, or an installer said it left `fl` alone | another program here is already called `fl`, and the installers never replace or hide it. in powershell, `fl` is the alias of `Format-List`, which runs before any program | type `fetchloom`, which always works. for the short name in your own shell, add `alias fl=fetchloom` to its startup file; in powershell, [short name](windows.md#short-name) shows the alias |
 | sync succeeds but a file is still edited | conflicts are preserved by default | inspect `status` and JSON `placement.kept`; save edits before choosing `--force` |
 | `warning: put back data/pets/images/x.png, which was deleted or moved, since data.lock pins it` | you deleted or moved a file fetchloom placed, and data.lock still pins it | to leave it out for good, run [`fetchloom drop <path>`](commands/drop.md); keep files of your own outside the data folder |
 | `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | a dataset's `exclude` chooses among the files its source lists, and the archive is one file to it | run the `fetchloom drop` command the help names; it writes the archive's [members table](reference/data-toml.md#files-inside-archives) |

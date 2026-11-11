@@ -48,6 +48,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 
 ## rules that keep a run safe
 
+- write `fetchloom`, never `fl`, in the commands, scripts and docs you produce. `fl` is a short name some installs give a person; on another machine it is missing or another program, such as powershell's alias for `Format-List`.
 - pass `--json`. stdout is then one JSON document, with no colors and no questions, whatever the terminal. `-q`, `-v` and `--color` change only what a person reads on stderr.
 - project commands look for `data.toml` from the current folder up to the top of its git repository, never above it. to use a project above the repository, name its folder with `-C <folder>`.
 - plain words given to `add` or `get` are a search. without a terminal fetchloom does not guess: it exits 10 with `reference.ambiguous` and lists `result.candidates`. pick one and run again with its `reference`.

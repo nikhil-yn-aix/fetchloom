@@ -55,9 +55,10 @@ two files in a dataset whose paths differ only in case would be one file on such
 
 ## short name
 
+the installer also makes `fl` in `~/.local/bin`, a link to fetchloom, so `fl sync` runs `fetchloom sync` and follows every upgrade. when another program is already called `fl`, the installer leaves it alone and says so. an alias then gives you the short name in your own shell:
+
 ```sh
 alias fl=fetchloom
-fl sync
 ```
 
-put the alias in `~/.zshrc` to keep it in later sessions. the installed executable remains `fetchloom`. [completions](commands/completions.md) shows how zsh and bash complete fetchloom's commands and options.
+put the alias in `~/.zshrc` to keep it in later sessions. [completions](commands/completions.md) shows how zsh and bash complete fetchloom's commands and options, under either name.

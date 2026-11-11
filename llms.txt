@@ -2,6 +2,8 @@
 
 fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm64. `data.toml` lists the datasets, `data.lock` pins their files by SHA-256 and size, and one cache folder keeps each file once for every project. `fetchloom sync` fills `data/` by reflink, hardlink or copy.
 
+scripts and agents write `fetchloom`. `fl` is a short name the installers give a person, and on another machine it may be missing or another program.
+
 ## using fetchloom
 
 - [front page](README.md): install and quick start

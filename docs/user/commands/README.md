@@ -56,7 +56,7 @@ fetchloom help cache gc
 fetchloom help --json
 ```
 
-`help <command>` matches `<command> --help`. help is text for people. `fetchloom help --json` prints one JSON document describing every command, option and example instead; `<command> --help --json` describes only that command. a shell alias can provide a [shorter name](../windows.md#short-name).
+`help <command>` matches `<command> --help`. help is text for people. `fetchloom help --json` prints one JSON document describing every command, option and example instead; `<command> --help --json` describes only that command. help and messages always say `fetchloom`, also when you typed `fl`, its short name.
 
 ## project discovery
 

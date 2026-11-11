@@ -11,7 +11,7 @@ research code can outlive the dataset version it used. keep input identities bes
 | what | why | implementation |
 |---|---|---|
 | keep one rust crate | modules provide boundaries without separate package versions; split only when an independent consumer needs one | [architecture](architecture/README.md) |
-| ship one executable named `fetchloom` | powershell uses `fl` for `Format-List`; the full executable name avoids that collision, and users can choose their own shell alias | [CLI](architecture/cli.md) |
+| ship one executable, `fetchloom`, and give it the short name `fl` by a link beside it, never in place of another `fl` | a link follows every upgrade and needs nothing more downloaded, so it cannot fall behind, and messages, docs and scripts keep the one name `fetchloom`. the windows installer makes its hardlink again on each install, since a hardlink keeps the old bytes, and the wheel, which can hold no link, runs a python launcher. powershell runs its `fl` alias for `Format-List` before any program, so there `fl.exe` or the user's own alias gives the short name | [installers](engineering/releasing.md#installers) |
 | keep adapters in the crate | version, checksum and paging rules stay beside their tests; there is no current plugin-protocol consumer | [sources](architecture/sources.md) |
 | route DOIs through the registered handle URL | DOI prefixes and landing-page redirects do not reliably identify the repository | [source routing](architecture/sources.md#parse-before-resolving) |
 | support shared-link sources alongside repositories | research inputs also arrive through hugging face, kaggle, drive and dropbox | [source behavior](../user/sources/README.md) |
