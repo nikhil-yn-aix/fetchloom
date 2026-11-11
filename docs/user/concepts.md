@@ -90,6 +90,32 @@ an archive with no regular files creates no dataset folder in a project. `get` s
 
 [tree hashes](reference/data-lock.md#the-tree-hash) records archive member paths before placement strips a folder. empty directories are not placed.
 
+### split archives
+
+a big dataset may come as one archive cut into parts, such as `scans.zip.001` to `scans.zip.003` on zenodo, or `train.tar.gz.aa` and `.ab` in a hugging face repository. `split` and 7-Zip cut an archive's bytes, so its parts read one after another are the archive. when a dataset lists every part, fetchloom unpacks them as that one archive, reading part after part where the cache keeps them, and places the files as it would place the whole archive's; the parts themselves are not placed. a dataset that is one split archive gets the files straight in its folder, and one beside other files puts them under the name before the counter, `scans/` for `scans.zip.001`. data.lock pins each part as a file and gives the first part `unpacks_to`, as [split archives in data.lock](reference/data-lock.md#split-archives) describes, and the cache drops the parts once the files are in. a [members table](reference/data-toml.md#files-inside-archives) and `fetchloom drop` name the archive by its first part, as in `[datasets.scans.members."scans.zip.001"]`.
+
+parts belong together only inside one dataset and one folder, after the name of an archive fetchloom unpacks, so `weights.bin.001` stays a file. their counters run as `split` and 7-Zip write them, letters from `aa` or numbers from `00`, `000` or `001`, and `.part`, `.part-` or `.part_` may come before a counter. a counter after a bare `.` has at least two characters, so a copy named `data.tar.gz.1` stays a file. stderr from `fetchloom add ../zipped`, a folder holding `headers.zip.00` to `.02` that `split -b 256K -d` made of a zip of 300 files:
+
+```text
+   Imported zipped · 3 files · 748.6 KiB, copied into the cache; ../zipped is unchanged
+   Unpacked zipped/headers.zip.00 · 300 files · 2.2 MiB in 522 ms
+```
+
+what stays packed is told once, with what to do. stderr from `fetchloom add` of a folder missing `headers.zip.01`, of a folder of rar volumes and a zip spanned over `.z01` files, and of `add -i` with one link for each part:
+
+```text
+warning: gap/headers.zip.01 is missing, so the parts of headers.zip stay as they are
+  help: fetchloom joins a split archive only from every one of its parts: check that select and exclude keep them all, or ask the dataset's authors for the missing one
+warning: volumes/clips.part1.rar stays packed with 7 other volumes of its rar, since fetchloom does not unpack rar
+  help: unpack it with unrar from your package manager: `unrar x data/volumes/clips.part1.rar clips.part1-unpacked/`. extract = false stops this warning
+warning: volumes/maps.zip stays packed with 1 other file it spans, since fetchloom does not unpack a zip spanned over several files
+  help: join its parts with zip from your package manager, then unpack them: `zip -s 0 data/volumes/maps.zip --out maps-joined.zip`, then `unzip maps-joined.zip -d maps-unpacked`. extract = false stops this warning
+warning: headers-zip/headers.zip.00 stays packed, since it does not unpack on its own
+  help: it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part
+```
+
+the parts of an archive missing one are placed as plain files. rar volumes and spanned zips are no cut of the bytes, so only their own tools join them: a rar's help is the one for a single rar, given its first volume, from which unrar and 7-Zip read the others, and a spanned zip's joins its parts with zip and unpacks them with unzip, or on windows runs 7-Zip, which reads them itself. a first part alone, as `add -i` makes each link a dataset of its own, is unpacked when its bytes are a whole archive, and otherwise stays packed with the last warning above. `extract = false` and `--no-extract` keep the parts packed, and switching `extract` back on unpacks them from the cache with no request.
+
 ### webdataset shards
 
 webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket:

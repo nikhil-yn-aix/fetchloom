@@ -167,6 +167,46 @@ fn a_member_left_out_of_a_dataset_is_not_pushed() -> Result {
     Ok(())
 }
 
+/// a split archive goes to the mirror as its files and the list of them, never as its parts, and
+/// a clone with an empty cache places it from there.
+#[test]
+fn a_split_archive_is_pushed_as_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fs::read(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/archives/python.zip"),
+    )?;
+    let scans = sandbox.folder("scans")?;
+    let (first, second) = zip.split_at(zip.len() / 2);
+    fs::write(scans.join("dataset.zip.001"), first)?;
+    fs::write(scans.join("dataset.zip.002"), second)?;
+    ok(&sandbox.run(&["add", "../scans", "--as", "dataset"])?)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    ok(&sandbox
+        .command(&["--yes", "push", "--to"])
+        .arg(&root)
+        .output()?)?;
+    let mut members: Vec<String> = MEMBERS.iter().map(|(_, bytes)| sha256(bytes)).collect();
+    members.sort();
+    assert_eq!(named(&root, "objects")?, members);
+    assert_eq!(named(&root, "trees")?.len(), 1);
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    ok(&sandbox
+        .command_in(&folder, &["sync", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?)?;
+    for (path, bytes) in MEMBERS {
+        assert_eq!(
+            fs::read(folder.join("data/dataset").join(path))?,
+            bytes,
+            "{path}"
+        );
+    }
+    Ok(())
+}
+
 /// a dry run says what a push would write and what it would ask about, and writes nothing.
 #[test]
 fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {

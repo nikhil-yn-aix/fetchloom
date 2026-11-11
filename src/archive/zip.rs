@@ -12,7 +12,7 @@ use ::zip::read::ZipFileEntry;
 use ::zip::{SUPPORTED_COMPRESSION_METHODS, System, ZipArchive};
 
 use super::guard::{Guard, Meter};
-use super::input::{self, Source};
+use super::input::{Input, Joined, Source};
 use super::names::Named;
 use super::{Keep, damaged, refused, refused_member, unreadable};
 use crate::error::Error;
@@ -23,16 +23,16 @@ const REGULAR: u32 = 0o100_000;
 const DIRECTORY: u32 = 0o040_000;
 
 pub(super) fn unpack(
-    archive: &Path,
+    input: &Input,
     guard: &mut Guard<'_>,
     keep: &mut Keep<'_>,
 ) -> Result<(), Error> {
-    let mut file = input::open(archive, guard.meter())?;
+    let mut file = input.open(guard.meter())?;
     directory::check(&mut file, guard)?;
-    let source = Source::new(file, guard.meter()).map_err(|err| unreadable(archive, &err))?;
+    let source = Source::new(file, guard.meter()).map_err(|err| unreadable(input.first(), &err))?;
     let mut zip = ZipArchive::new(source).map_err(|err| damaged(None, &err))?;
     if zip.has_duplicate_names() {
-        let name = repeated_name(archive, zip.central_directory_start())
+        let name = repeated_name(input, zip.central_directory_start())
             .unwrap_or_else(|| "a name".to_owned());
         return Err(refused(format!("the archive holds \"{name}\" twice")));
     }
@@ -119,8 +119,8 @@ fn refusal(entry: &ZipFileEntry<'_>, is_folder: bool) -> Option<String> {
 
 /// the first name the central directory lists twice. the zip crate keeps one entry per name, so
 /// only reading the directory again finds which name it was.
-fn repeated_name(archive: &Path, directory: u64) -> Option<String> {
-    let mut file = BufReader::new(File::open(archive).ok()?);
+fn repeated_name(input: &Input, directory: u64) -> Option<String> {
+    let mut file = BufReader::new(Joined::open(input).ok()?);
     file.seek(SeekFrom::Start(directory)).ok()?;
     let mut seen = HashSet::new();
     let mut header = [0; 46];
@@ -164,7 +164,7 @@ pub(super) fn sole_member(archive: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::io::{Cursor, Write};
 
     use ::zip::write::SimpleFileOptions;
@@ -401,9 +401,8 @@ mod tests {
         scratch.assert_stored(&unpacked.members[1], b"readme\n");
     }
 
-    #[test]
-    fn overlapping_members_cannot_expand_past_the_archive_ratio() {
-        let payload = vec![b'x'; 64 << 10];
+    /// a zip of `count` members that all share the bytes of one stored member of 64 KiB.
+    pub(in crate::archive) fn overlapping(count: usize) -> Vec<u8> {
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         writer
             .start_file(
@@ -411,13 +410,19 @@ mod tests {
                 SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
             )
             .unwrap();
-        writer.write_all(&payload).unwrap();
-        for index in 1..512 {
+        writer.write_all(&vec![b'x'; 64 << 10]).unwrap();
+        for index in 1..count {
             writer
                 .shallow_copy_file("member-0000.bin", &format!("member-{index:04}.bin"))
                 .unwrap();
         }
-        let bytes = writer.finish().unwrap().into_inner();
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn overlapping_members_cannot_expand_past_the_archive_ratio() {
+        let payload = vec![b'x'; 64 << 10];
+        let bytes = overlapping(512);
         let limits = crate::archive::Limits {
             ratio: 200,
             ..crate::archive::Limits::default()
@@ -432,7 +437,7 @@ mod tests {
         let scratch = Scratch::new();
         let path = scratch.file("shared.zip", &bytes);
         let result = crate::archive::unpack(
-            &path,
+            &crate::archive::Input::File(path),
             Format::Zip,
             &limits,
             &scratch.cache,

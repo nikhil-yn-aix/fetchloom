@@ -5,12 +5,11 @@
 
 use std::borrow::Cow;
 use std::io::{self, Read};
-use std::path::Path;
 
 use sevenz_rust2::{ArchiveEntry, ArchiveReader, EncoderMethod, Password};
 
 use super::guard::Guard;
-use super::input::{self, Source};
+use super::input::{Input, Source};
 use super::names::Named;
 use super::tar::unreadable_stream;
 use super::{Keep, damaged, past, refused, refused_member, unreadable};
@@ -25,12 +24,12 @@ const FILE_TYPE: u32 = 0o170_000;
 const SYMLINK: u32 = 0o120_000;
 
 pub(super) fn unpack(
-    archive: &Path,
+    input: &Input,
     guard: &mut Guard<'_>,
     keep: &mut Keep<'_>,
 ) -> Result<(), Error> {
-    let file = input::open(archive, guard.meter())?;
-    let source = Source::new(file, guard.meter()).map_err(|err| unreadable(archive, &err))?;
+    let file = input.open(guard.meter())?;
+    let source = Source::new(file, guard.meter()).map_err(|err| unreadable(input.first(), &err))?;
     let limit = usize::try_from(guard.limits().memory / 1024).unwrap_or(usize::MAX);
     let mut reader =
         ArchiveReader::new_with_memory_limit(source, Password::empty(), limit).map_err(failed)?;
@@ -359,7 +358,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let limits = Limits::default();
         let err = unpack(
-            folder.path(),
+            &crate::archive::Input::File(folder.path().to_path_buf()),
             Format::SevenZ,
             &limits,
             &scratch.cache,

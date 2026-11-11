@@ -1338,7 +1338,7 @@ fn input_files(
         false,
         &locked.files,
         members,
-        &|file| cache.unpacked(&file.sha256, file.unpacks_to.as_ref()),
+        &|archive| archive.recorded(cache),
     )?;
     if let Some((_, archive)) = planned.unknown.first() {
         return Err(Error::new(

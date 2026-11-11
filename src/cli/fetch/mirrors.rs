@@ -14,7 +14,7 @@ use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Gave, Missing};
 use crate::mirror::{Location, Mirrors, Wanted, web};
 use crate::net::Net;
-use crate::project::lock::LockedFile;
+use crate::project::lock::archives::Archive;
 use crate::settings::{Origin, Settings};
 use crate::stop::Stop;
 use crate::units;
@@ -533,20 +533,20 @@ pub(in crate::cli) async fn trees<'f>(
     context: &Context,
     net: &Net,
     cache: &Cache,
-    unknown: Vec<(String, &'f LockedFile)>,
-) -> Result<Vec<(String, &'f LockedFile)>, Error> {
+    unknown: Vec<(String, Archive<'f>)>,
+) -> Result<Vec<(String, Archive<'f>)>, Error> {
     let mirrored = &context.mirrors;
     if mirrored.mirrors.list.is_empty() {
         return Ok(unknown);
     }
     let mut rest = Vec::with_capacity(unknown.len());
-    for (dataset, file) in unknown {
-        let found = match file.unpacks_to {
-            Some(tree) => tree_from_mirrors(context, net, cache, &dataset, file, tree).await?,
+    for (dataset, archive) in unknown {
+        let found = match archive.file.unpacks_to {
+            Some(tree) => tree_from_mirrors(context, net, cache, &dataset, &archive, tree).await?,
             None => false,
         };
         if !found {
-            rest.push((dataset, file));
+            rest.push((dataset, archive));
         }
     }
     Ok(rest)
@@ -561,16 +561,18 @@ enum Got {
     Trouble(String),
 }
 
-/// asks each mirror in order for the tree `tree` that `file` of `dataset` unpacks to, and records
-/// the first that matches. says whether one did.
+/// asks each mirror in order for the tree `tree` that `archive` of `dataset` unpacks to, and
+/// records the first that matches under the archive's own key, for a split archive the one its
+/// parts give. says whether one did.
 async fn tree_from_mirrors(
     context: &Context,
     net: &Net,
     cache: &Cache,
     dataset: &str,
-    file: &LockedFile,
+    archive: &Archive<'_>,
     tree: Sha256,
 ) -> Result<bool, Error> {
+    let file = archive.file;
     let mirrored = &context.mirrors;
     let label = format!("the list of files {dataset}/{} holds", file.path);
     for (index, location) in mirrored.mirrors.list.iter().enumerate() {
@@ -622,7 +624,7 @@ async fn tree_from_mirrors(
         };
         let recorded = !bytes.is_empty()
             && cache
-                .record_tree_bytes(&file.sha256, &tree, &bytes)
+                .record_tree_bytes(&archive.key(), &tree, &bytes)
                 .map_err(|err| {
                     Error::io(
                         format_args!("could not record what {dataset}/{} holds", file.path),

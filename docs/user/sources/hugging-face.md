@@ -16,6 +16,8 @@ a pasted link to a file, such as `https://huggingface.co/datasets/org/name/blob/
 
 use quoted `--select` and `--exclude` patterns to choose listed files. patterns do not filter members inside a downloaded archive. an explicit commit still names that commit under `lock --upgrade`.
 
+a repository may hold one large archive cut into parts, such as `train.tar.gz.aa` and `train.tar.gz.ab`. they unpack as that one archive when the dataset lists every part, so a folder link or a `--select` should take all of them; [split archives](../concepts.md#split-archives) explains the rules.
+
 when every select pattern starts with a folder, as `sample/10BT/**` or `data/train/*.parquet` do, fetchloom lists only those folders, up to eight of them. the hub sends a thousand files a page, so a repository of a million files costs a few requests instead of a thousand, and its rate limit lasts. `Resolved` then says what it listed, as `3 files in cola`. a pattern such as `*.csv` or `**/x.csv` can match anywhere, so the whole repository is listed. a folder the hub does not have, or one without files, is listed with everything else, so a pattern that matches nothing is told against all the repository holds.
 
 ## credentials

@@ -1077,12 +1077,12 @@ async fn unpack(
             continue;
         }
         slots.push(index);
-        todo.push(Unpack {
-            archive: file.sha256,
-            size: file.size,
-            label: file.path.clone(),
-            tree: None,
-        });
+        todo.push(Unpack::whole(
+            file.sha256,
+            file.size,
+            file.path.clone(),
+            None,
+        ));
     }
     let results = unpacking::unpack_all(context, cache, todo).await?;
     for (index, result) in slots.into_iter().zip(results) {
@@ -1102,7 +1102,8 @@ async fn unpack(
 fn planned<'a>(cache: &Cache, files: &'a [LockedFile], trees: Trees) -> Result<Plan<'a>, Error> {
     let mut planned = Plan::default();
     let trees = std::cell::RefCell::new(trees);
-    let members = |file: &LockedFile| {
+    let members = |archive: &crate::project::lock::archives::Archive<'_>| {
+        let file = archive.file;
         let tree = file.unpacks_to?;
         trees
             .borrow_mut()

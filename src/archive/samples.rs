@@ -9,7 +9,7 @@ use ::zip::ZipWriter;
 use ::zip::write::SimpleFileOptions;
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
-use super::{Format, Limits, Member, Unpacked, unpack};
+use super::{Format, Input, Limits, Member, Unpacked, unpack};
 use crate::cache::Cache;
 use crate::error::Error;
 
@@ -31,6 +31,21 @@ impl Scratch {
         path
     }
 
+    /// `bytes` cut at each offset in `cuts`, as `split` cuts an archive, each part a file of its
+    /// own.
+    pub(super) fn parts(&self, bytes: &[u8], cuts: &[usize]) -> Input {
+        let mut ends = cuts.to_vec();
+        ends.push(bytes.len());
+        let mut start = 0;
+        let mut parts = Vec::new();
+        for (index, end) in ends.into_iter().enumerate() {
+            let path = self.file(&format!("archive.{:03}", index + 1), &bytes[start..end]);
+            parts.push((path, (end - start) as u64));
+            start = end;
+        }
+        Input::Joined(parts)
+    }
+
     pub(super) fn unpack(&self, format: Format, bytes: &[u8]) -> Result<Unpacked, Error> {
         self.unpack_with(format, bytes, &Limits::default(), &|_| false)
     }
@@ -43,7 +58,7 @@ impl Scratch {
         watch: &dyn Fn(u64) -> bool,
     ) -> Result<Unpacked, Error> {
         let path = self.file("archive", bytes);
-        unpack(&path, format, limits, &self.cache, watch, None)
+        unpack(&Input::File(path), format, limits, &self.cache, watch, None)
     }
 
     /// unpacks an archive the guard must refuse, and checks it left nothing behind.

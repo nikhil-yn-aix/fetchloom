@@ -14,6 +14,7 @@ use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Supply, Usage
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
+use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::{self, Lock};
 use crate::project::manifest::{Entry, Manifest};
 use crate::recipe;
@@ -732,11 +733,11 @@ struct Read<'a> {
 }
 
 /// adds what one lock needs. an archive needs the files it unpacked to that `read`'s members
-/// tables keep, and its own bytes too while this machine never unpacked it or lost such a file,
-/// since unpacking again is the only way back. without data.toml, every file is kept. a recipe's
-/// pinned result needs its files, which only a build makes again, and its record. with the
-/// project's folder, each object is noted with how the project uses it, as [`Readers::use_of`]
-/// tells; otherwise as placed or, for a result, as its output.
+/// tables keep, and its own bytes too, every part of a split one, while this machine never
+/// unpacked it or lost such a file, since unpacking again is the only way back. without data.toml,
+/// every file is kept. a recipe's pinned result needs its files, which only a build makes again,
+/// and its record. with the project's folder, each object is noted with how the project uses it,
+/// as [`Readers::use_of`] tells; otherwise as placed or, for a result, as its output.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
@@ -768,17 +769,23 @@ fn add_with_stop(
             Some(readers) => readers.use_of(&dataset.name, false, stop)?,
             None => Use::Placed,
         };
-        for file in &dataset.files {
+        for pinned in archives::pinned(&dataset.files) {
             stop.check()?;
-            let members = file
-                .unpacks_to
-                .and_then(|tree| cache.unpacked(&file.sha256, Some(&tree)));
-            let Some(members) = members else {
-                needed.add(file.sha256, used);
+            let archive = match pinned {
+                Pinned::File(file) => {
+                    needed.add(file.sha256, used);
+                    continue;
+                }
+                Pinned::Archive(archive) => archive,
+            };
+            let Some(members) = archive.recorded(cache) else {
+                for file in archive.files() {
+                    needed.add(file.sha256, used);
+                }
                 continue;
             };
-            needed.unpacked.insert(file.sha256);
-            let filter = filters.and_then(|filters| filters.get(&file.path));
+            needed.unpacked.insert(archive.key());
+            let filter = filters.and_then(|filters| filters.get(&archive.file.path));
             let mut whole = true;
             for member in members
                 .iter()
@@ -789,7 +796,9 @@ fn add_with_stop(
                 whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
             }
             if !whole {
-                needed.add(file.sha256, used);
+                for file in archive.files() {
+                    needed.add(file.sha256, used);
+                }
             }
         }
     }
@@ -949,6 +958,56 @@ mod tests {
             ..Lock::default()
         };
         (lock, [archive, first, second])
+    }
+
+    /// a split archive's record goes by its parts, and its parts are needed only while a file
+    /// it unpacked to is missing, as an archive in one file is.
+    #[test]
+    fn a_split_archive_needs_its_parts_only_while_a_file_it_unpacked_to_is_missing() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let (first, second) = (store(&cache, b"first half"), store(&cache, b"second half"));
+        let inside = store(&cache, b"inside\n");
+        let key =
+            crate::cache::parts_key([(first.digest, first.size), (second.digest, second.size)]);
+        let member = Member {
+            path: "inside.txt".to_owned(),
+            size: inside.size,
+            sha256: inside.digest,
+        };
+        let tree = cache.record_unpacked(&key, &[member]).unwrap();
+        let (mut lock, _) = unpacked_archive(&cache);
+        let part = |path: &str, stored: &crate::cache::Stored, unpacks_to| LockedFile {
+            path: path.to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+            md5: None,
+            url: format!("https://example.org/{path}"),
+            unpacks_to,
+        };
+        lock.datasets[0].files = vec![
+            part("scans.zip.001", &first, Some(tree)),
+            part("scans.zip.002", &second, None),
+        ];
+        let mut whole = Needed::default();
+        add_with_stop(&mut whole, &cache, &lock, None, &Stop::default()).unwrap();
+        assert!(whole.objects.contains(&inside.digest));
+        assert!(whole.unpacked.contains(&key), "its record");
+        for part in [&first, &second] {
+            assert!(
+                !whole.objects.contains(&part.digest),
+                "its files stand for it"
+            );
+        }
+        cache.drop_object(&inside.digest).unwrap();
+        let mut missing = Needed::default();
+        add_with_stop(&mut missing, &cache, &lock, None, &Stop::default()).unwrap();
+        for part in [&first, &second] {
+            assert!(
+                missing.objects.contains(&part.digest),
+                "every part unpacks again"
+            );
+        }
     }
 
     #[test]

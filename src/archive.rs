@@ -5,6 +5,7 @@ mod detect;
 mod guard;
 mod input;
 mod names;
+pub(crate) mod parts;
 mod sevenz;
 mod shards;
 mod store;
@@ -14,12 +15,13 @@ mod zip;
 use std::io::{self, Read};
 use std::path::Path;
 
-use crate::cache::{Cache, Member, tree_hash};
+use crate::cache::{Cache, Member, parts_key, tree_hash};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
 pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
+pub(crate) use input::Input;
 pub(crate) use shards::{Shards, shards};
 
 use guard::{Guard, Meter};
@@ -73,8 +75,10 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
     let Some(object) = cache.find(digest, None) else {
         return false;
     };
-    matches!(detect(&object), Ok(Detected::Archive(Format::Zip)))
-        && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
+    matches!(
+        detect(&Input::File(object.clone())),
+        Ok(Detected::Archive(Format::Zip))
+    ) && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
 }
 
 /// an archive's file name without its archive ending: `train` for `train.tar.gz`.
@@ -164,6 +168,33 @@ pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &
     }
 }
 
+/// how a person on `system` unpacks the zip at `path` whose bytes go on in `.z01` files beside
+/// it, which fetchloom leaves packed, as [`unpack_elsewhere`] tells it for a rar: zip joins the
+/// parts into one archive in `parent` for unzip to unpack, and on windows 7-Zip reads the parts
+/// itself.
+pub(crate) fn join_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let folder = format!("{parent}{}-unpacked", stem(name));
+    let archive = system.word(path);
+    let joined = system.word(&format!("{parent}{}-joined.zip", stem(name)));
+    let unzip = format!(
+        "`zip -s 0 {archive} --out {joined}`, then `unzip {joined} -d {}`",
+        system.word(&folder)
+    );
+    match system {
+        System::Linux => format!(
+            "join its parts with zip from your package manager, then unpack them: {unzip}. {stop} stops this warning"
+        ),
+        System::Macos => format!(
+            "join its parts with the zip macos has, then unpack them: {unzip}. {stop} stops this warning"
+        ),
+        System::Windows => format!(
+            r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {archive} {}`. {stop} stops this warning"#,
+            system.word(&format!("-o{folder}"))
+        ),
+    }
+}
+
 /// what an archive may unpack to. every limit counts the bytes actually written, never the sizes
 /// the archive declares. they guard against archives built to fill a disk, so only the person
 /// running fetchloom moves them, through `FETCHLOOM_ARCHIVE_*` or the settings file, and never a
@@ -218,7 +249,7 @@ pub(crate) struct Unpacked {
 /// stores one file the guard let through, reading it from the archive.
 type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), Error> + 'k;
 
-/// unpacks every file in `archive` into the cache. an archive refused part way leaves no object
+/// unpacks every file in `input` into the cache. an archive refused part way leaves no object
 /// behind. `writers` caps its writer threads; zero keeps storage on the reading thread.
 ///
 /// # Errors
@@ -227,7 +258,7 @@ type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, &mut dyn Read) -> Result<(), E
 /// be read or the cache cannot take its files, and `interrupted` once `watch` returns true. `watch` hears how many bytes of the
 /// archive were read so far.
 pub(crate) fn unpack(
-    archive: &Path,
+    input: &Input,
     format: Format,
     limits: &Limits,
     cache: &Cache,
@@ -243,10 +274,10 @@ pub(crate) fn unpack(
             writers.keep(guard, path, from, &mut buffer)
         };
         match format {
-            Format::Zip => zip::unpack(archive, &mut guard, &mut keep)?,
-            Format::SevenZ => sevenz::unpack(archive, &mut guard, &mut keep)?,
+            Format::Zip => zip::unpack(input, &mut guard, &mut keep)?,
+            Format::SevenZ => sevenz::unpack(input, &mut guard, &mut keep)?,
             Format::Tar | Format::TarGz | Format::TarXz | Format::TarZst | Format::TarBz2 => {
-                tar::unpack(archive, format, &mut guard, &mut keep)?;
+                tar::unpack(input, format, &mut guard, &mut keep)?;
             }
         }
         guard.check_stopped()
@@ -276,21 +307,49 @@ pub(crate) fn unpack_cached(
     watch: &dyn Fn(u64) -> bool,
     writers: Option<usize>,
 ) -> Result<Option<Unpacked>, Error> {
-    let object = cache.find(archive, Some(size)).ok_or_else(|| {
-        Error::new(
-            Kind::LocalIo,
-            "the cache lost an archive while unpacking it",
-        )
-        .help("run the same command again to download it")
-    })?;
-    let format = match detect(&object).map_err(|err| unreadable(&object, &err))? {
+    let object = cache.find(archive, Some(size)).ok_or_else(lost)?;
+    unpack_recorded(cache, archive, &Input::File(object), tree, watch, writers)
+}
+
+/// [`unpack_cached`] for an archive split into `parts`, each the SHA-256 and size of an object
+/// the cache holds, in order. what it unpacked to is recorded under the key [`parts_key`] gives.
+///
+/// # Errors
+///
+/// as [`unpack_cached`].
+pub(crate) fn unpack_cached_parts(
+    cache: &Cache,
+    parts: &[(Sha256, u64)],
+    tree: Option<&Sha256>,
+    watch: &dyn Fn(u64) -> bool,
+    writers: Option<usize>,
+) -> Result<Option<Unpacked>, Error> {
+    let found = parts
+        .iter()
+        .map(|(part, size)| Some((cache.find(part, Some(*size))?, *size)))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(lost)?;
+    let key = parts_key(parts.iter().copied());
+    unpack_recorded(cache, &key, &Input::Joined(found), tree, watch, writers)
+}
+
+/// unpacks `input` and records what it unpacked to under `key`, as [`unpack_cached`] describes.
+fn unpack_recorded(
+    cache: &Cache,
+    key: &Sha256,
+    input: &Input,
+    tree: Option<&Sha256>,
+    watch: &dyn Fn(u64) -> bool,
+    writers: Option<usize>,
+) -> Result<Option<Unpacked>, Error> {
+    let format = match detect(input)? {
         Detected::Archive(format) => format,
         Detected::Unsupported(_) | Detected::Plain => return Ok(None),
     };
-    let unpacked = unpack(&object, format, &Limits::current(), cache, watch, writers)?;
+    let unpacked = unpack(input, format, &Limits::current(), cache, watch, writers)?;
     if tree.is_none_or(|tree| *tree == unpacked.tree) {
         cache
-            .record_unpacked(archive, &unpacked.members)
+            .record_unpacked(key, &unpacked.members)
             .map_err(|err| {
                 Error::io(
                     format_args!(
@@ -302,6 +361,14 @@ pub(crate) fn unpack_cached(
             })?;
     }
     Ok(Some(unpacked))
+}
+
+fn lost() -> Error {
+    Error::new(
+        Kind::LocalIo,
+        "the cache lost an archive while unpacking it",
+    )
+    .help("run the same command again to download it")
 }
 
 const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";

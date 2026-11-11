@@ -1,7 +1,8 @@
-//! what each archive unpacked to, kept under `unpacked/` by the archive's SHA-256. a record is
-//! the archive's tree: one line per file, sorted by path, holding the path, a tab, the size, a
-//! tab and the SHA-256 in hex. the record's own SHA-256 is the tree hash `data.lock` keeps as
-//! `unpacks_to`, so a record proves itself against the lock.
+//! what each archive unpacked to, kept under `unpacked/` by the archive's SHA-256, or for an
+//! archive split into parts, by the key [`parts_key`] gives. a record is the archive's tree: one
+//! line per file, sorted by path, holding the path, a tab, the size, a tab and the SHA-256 in
+//! hex. the record's own SHA-256 is the tree hash `data.lock` keeps as `unpacks_to`, so a record
+//! proves itself against the lock.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -36,6 +37,18 @@ pub(crate) fn tree(members: &[Member]) -> String {
 /// the tree hash `data.lock` records as `unpacks_to`.
 pub(crate) fn tree_hash(members: &[Member]) -> Sha256 {
     digest::sha256(tree(members).as_bytes())
+}
+
+/// the key the record of an archive split into `parts` goes by: the SHA-256 of `fetchloom parts`
+/// and a line, then a line of each part's SHA-256 in hex, a space and its size, in order. never
+/// the first part's own hash, or a later part that changed would find the files its old bytes
+/// unpacked to.
+pub(crate) fn parts_key(parts: impl IntoIterator<Item = (Sha256, u64)>) -> Sha256 {
+    let mut text = String::from("fetchloom parts\n");
+    for (sha256, size) in parts {
+        let _ = writeln!(text, "{sha256} {size}");
+    }
+    digest::sha256(text.as_bytes())
 }
 
 impl Cache {
@@ -174,6 +187,24 @@ mod tests {
         for path in ["../victim", "a/../../b", "/etc/x", "C:/x", "a\\b"] {
             assert!(parse(&format!("{path}\t1\t{digest}")).is_none(), "{path}");
         }
+    }
+
+    #[test]
+    fn a_split_archive_is_keyed_by_every_part_in_order() {
+        // python: sha256(("fetchloom parts\n" + "".join(f"{sha256(p).hexdigest()} {len(p)}\n" for p in parts)).encode())
+        let part = |bytes: &[u8]| (digest::sha256(bytes), bytes.len() as u64);
+        let parts = [part(b"first half"), part(b"second half")];
+        assert_eq!(
+            parts_key(parts).hex(),
+            "710e6ecbd5118e6471ca66146a8e733b8d89d66e3a817a7820a5ee2843ac7171"
+        );
+        let [first, second] = parts;
+        assert_ne!(parts_key([second, first]), parts_key(parts), "order");
+        assert_ne!(
+            parts_key([first]),
+            first.0,
+            "never the first part's own hash"
+        );
     }
 
     #[test]

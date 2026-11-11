@@ -39,7 +39,7 @@ pub(crate) use results::Seen;
 #[cfg(unix)]
 pub(crate) use results::seal_captured;
 pub(crate) use staging::{Staging, clear_tree, enterable};
-pub(crate) use unpacked::{Member, tree, tree_hash};
+pub(crate) use unpacked::{Member, parts_key, tree, tree_hash};
 pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Supply, Use};
 pub(crate) use usage::Usage;
 

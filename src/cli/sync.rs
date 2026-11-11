@@ -26,6 +26,7 @@ use crate::net::{Expect, Fetch, Fetched, Net, Origin};
 use crate::output::Output;
 use crate::plan;
 use crate::project::Project;
+use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{self, Drift, Lock, Locked, LockedFile};
 use crate::project::manifest::{Entry, Manifest, Source};
@@ -187,8 +188,8 @@ impl<'a> Loop<'a> {
         }
         let mut placing =
             Placing::from_plan(self.project, manifest, plan, force, &self.scope, survey)?;
-        self.ask_room(&placing)?;
-        let unknown = placing.unknown();
+        self.ask_room(lock, &placing)?;
+        let unknown = archives::of(lock, placing.unknown());
         if !unknown.is_empty() {
             let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
                 .await
@@ -214,12 +215,13 @@ impl<'a> Loop<'a> {
             self.cache.find(digest, Some(size)).is_some()
         })
         .map_err(|error| self.as_left(error))?;
-        let (archives, files): (Vec<_>, Vec<_>) = placing
+        let (unpacking, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
             .into_iter()
             .partition(|(_, file)| file.unpacks_to.is_some());
         self.download_prepared(manifest, lock, &files).await?;
-        self.unpack_locked(manifest, lock, &archives).await?;
+        self.unpack_locked(manifest, lock, &archives::of(lock, unpacking))
+            .await?;
         Ok(placing)
     }
 
@@ -301,6 +303,7 @@ impl<'a> Loop<'a> {
             .iter()
             .map(|(dataset, file)| ((*dataset).to_owned(), *file))
             .collect();
+        let unknown = archives::of(&sources, unknown);
         if !unknown.is_empty() {
             let unknown = fetch::mirrors::trees(self.context, &self.net, &self.cache, unknown)
                 .await
@@ -328,15 +331,20 @@ impl<'a> Loop<'a> {
         .await
         .map_err(|error| self.as_left(error))?;
         let mut seen = HashSet::new();
-        let (archives, files): (Vec<_>, Vec<_>) = lacking()
+        let (unpacking, files): (Vec<_>, Vec<_>) = lacking()
             .into_iter()
             .filter_map(|target| Some((target.dataset.to_owned(), target.file()?)))
             .filter(|(_, file)| seen.insert(file.sha256))
             .partition(|(_, file)| file.unpacks_to.is_some());
+        let unpacking = archives::of(&sources, unpacking);
         // no link fetches an import, and its copy in data/ is no input
+        let imported = unpacking.iter().flat_map(|(dataset, archive)| {
+            archive.files().into_iter().map(move |file| (dataset, file))
+        });
         if let Some((dataset, _)) = files
             .iter()
-            .chain(&archives)
+            .map(|(dataset, file)| (dataset, *file))
+            .chain(imported)
             .find(|(_, file)| file.url.is_empty())
         {
             let folder = plan::folder(manifest, dataset);
@@ -345,7 +353,7 @@ impl<'a> Loop<'a> {
             )));
         }
         self.download_prepared(manifest, &sources, &files).await?;
-        self.unpack_locked(manifest, &sources, &archives).await
+        self.unpack_locked(manifest, &sources, &unpacking).await
     }
 
     /// places what [`Loop::prepare`] readied, and records `synced` in the state.
@@ -457,7 +465,7 @@ impl<'a> Loop<'a> {
                 draft
                     .unknown_archives(&self.cache)
                     .into_iter()
-                    .map(|archive| archive.label),
+                    .map(|(_, archive)| archive.label),
             );
             jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
         }
@@ -711,15 +719,18 @@ impl<'a> Loop<'a> {
             })?;
         }
         let mut unpack = Vec::new();
-        for (dataset, file) in placing
+        let wanted = placing
             .unknown()
             .into_iter()
             .chain(placing.missing_as_is(&self.cache, damaged)?)
-        {
-            if file.unpacks_to.is_some() {
-                unpack.push(format!("{dataset}/{}", file.path));
+            .collect();
+        for (dataset, archive) in archives::of(lock, wanted) {
+            if archive.file.unpacks_to.is_some() {
+                unpack.push(format!("{dataset}/{}", archive.file.path));
             }
-            jobs.push(job(manifest, lock, &dataset, file)?);
+            for file in archive.files() {
+                jobs.push(job(manifest, lock, &dataset, file)?);
+            }
         }
         let mut seen = BTreeSet::new();
         jobs.retain(|job| seen.insert(job.label.clone()));
@@ -924,16 +935,26 @@ impl<'a> Loop<'a> {
     /// asks for its own part too, which this covers when they only together pass the room. a file
     /// the disk cannot hold at all, as FAT32 holds none of 4 GiB, is refused first, since no room
     /// would let it in.
-    fn ask_room(&self, placing: &Placing<'_>) -> Result<(), Error> {
+    fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
         if self.yes() || self.net.offline().enabled() {
             return Ok(());
         }
         let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
-        let missing = placing.missing_as_is(&self.cache, &HashSet::new())?;
-        let unknown = placing.unknown();
+        let missing = archives::of(lock, placing.missing_as_is(&self.cache, &HashSet::new())?);
+        let unknown = archives::of(lock, placing.unknown());
+        let files = |archives: &[(String, Archive<'_>)]| -> Vec<(String, LockedFile)> {
+            archives
+                .iter()
+                .flat_map(|(dataset, archive)| {
+                    let files = archive.files().into_iter();
+                    files.map(move |file| (dataset.clone(), file.clone()))
+                })
+                .collect()
+        };
+        let (missing, unknown_files) = (files(&missing), files(&unknown));
         let large: Vec<(String, u64)> = missing
             .iter()
-            .chain(&unknown)
+            .chain(&unknown_files)
             .filter(|(_, file)| file.size > crate::space::FAT_LARGEST && lacks(file))
             .map(|(dataset, file)| (format!("{dataset}/{}", file.path), file.size))
             .collect();
@@ -947,7 +968,7 @@ impl<'a> Loop<'a> {
             .filter(|(_, file)| lacks(file))
             .map(|(_, file)| file.size)
             .fold(0, u64::saturating_add);
-        for (_, file) in &unknown {
+        for (_, file) in &unknown_files {
             let download = if lacks(file) { file.size } else { 0 };
             needed = needed.saturating_add(download).saturating_add(file.size);
         }

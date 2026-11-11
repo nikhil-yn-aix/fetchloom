@@ -13,6 +13,7 @@ use std::path::Path;
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::glob::Glob;
+use crate::project::lock::archives::{self, Pinned};
 use crate::project::lock::derived::{Code, Derived, Input};
 use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::{Entry, Manifest, Members, Origin};
@@ -210,13 +211,20 @@ pub(crate) fn closure<'a>(datasets: &'a BTreeMap<String, Entry>, names: &[&str])
 
 /// what a recipe reads of a dataset fetched from a source: each file data.lock pins, and an
 /// archive that unpacks by the tree of what it unpacks to, never its own bytes, since the step
-/// finds its files and not it: a source that packs the same files again keeps the content. the
+/// finds its files and not it: a source that packs the same files again keeps the content. a
+/// split archive is one line at its first part, so the same files split again keep it too. the
 /// lines decide which files the step finds and where. links, versions and when it was pinned
 /// stay out, so a source that moves or renames a version keeps the content. the dataset's
 /// members tables, which choose files inside its archives, follow as lines of their own, sorted,
 /// so a dataset without them keeps its content.
 pub(crate) fn content(locked: &Locked, members: &Members) -> Sha256 {
-    let mut files: Vec<_> = locked.files.iter().collect();
+    let mut files: Vec<_> = archives::pinned(&locked.files)
+        .into_iter()
+        .map(|pinned| match pinned {
+            Pinned::Archive(archive) => archive.file,
+            Pinned::File(file) => file,
+        })
+        .collect();
     files.sort_by(|a, b| a.path.cmp(&b.path));
     let mut text = String::new();
     for file in files {
@@ -696,6 +704,27 @@ mod tests {
         for other in [packed, edited, renamed] {
             assert_ne!(content(&other, &none), content(&raw, &none));
         }
+    }
+
+    /// a split archive keys as an archive in one file does, by the tree it unpacks to, at its
+    /// first part: the same files split again into other parts keep the content.
+    #[test]
+    fn a_split_archive_keys_by_its_tree_however_it_is_split() {
+        let tree = Some(digest::sha256(b"tree"));
+        let none = Members::new();
+        let in_two = locked(vec![
+            pinned("scans.zip.001", b"first", tree),
+            pinned("scans.zip.002", b"second", None),
+        ]);
+        let in_three = locked(vec![
+            pinned("scans.zip.001", b"fir", tree),
+            pinned("scans.zip.002", b"stsec", None),
+            pinned("scans.zip.003", b"ond", None),
+        ]);
+        assert_eq!(content(&in_three, &none), content(&in_two, &none));
+        let mut packed = in_two.clone();
+        packed.files[0].unpacks_to = None;
+        assert_ne!(content(&packed, &none), content(&in_two, &none));
     }
 
     /// a dataset's members tables decide which files a step finds, so each pattern follows the

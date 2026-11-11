@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use super::guard::{Guard, Meter};
 use super::samples::{Scratch, compress, seven_zip, tar_of, zip_of, zstd_asking_for};
-use super::{Detected, Format, Limits, System, Unpacked, detect, unpack};
+use super::{Detected, Format, Input, Limits, System, Unpacked, detect, unpack};
 use crate::error::{Error, Kind};
 
 /// the tree hash of the folder every good fixture archives, as python computed it from the files
@@ -17,12 +17,13 @@ fn fixture(name: &str) -> Result<Unpacked, Error> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/archives")
         .join(name);
-    let Detected::Archive(format) = detect(&path).unwrap() else {
+    let input = Input::File(path);
+    let Detected::Archive(format) = detect(&input).unwrap() else {
         panic!("{name} is not detected as an archive");
     };
     let scratch = Scratch::new();
     let unpacked = unpack(
-        &path,
+        &input,
         format,
         &Limits::default(),
         &scratch.cache,
@@ -127,6 +128,96 @@ fn large_archives_with_modest_expansion_unpack() {
         assert_eq!(unpacked.members.len(), 1);
         scratch.assert_stored(&unpacked.members[0], &bytes);
     }
+}
+
+/// offsets where `pattern` starts in `bytes`.
+fn found(bytes: &[u8], pattern: &[u8]) -> Vec<usize> {
+    let windows = bytes.windows(pattern.len()).enumerate();
+    windows
+        .filter(|(_, window)| *window == pattern)
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// an archive cut anywhere into parts, a zip inside a local header or its central directory
+/// too, unpacks from them to what it unpacks to whole.
+#[test]
+fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
+    let files: &[(&str, &[u8])] = &[
+        ("data/a.csv", b"x,y\n1,2\n"),
+        ("data/b.csv", b"x,y\n3,4\n"),
+        ("README.md", b"# readme\n"),
+    ];
+    for format in [Format::Zip, Format::TarGz, Format::TarZst, Format::SevenZ] {
+        let bytes = archive(format, files);
+        let whole = Scratch::new().unpack(format, &bytes).unwrap();
+        let mut cuts = vec![vec![bytes.len() / 2], (1..bytes.len()).collect()];
+        if format == Format::Zip {
+            let local = found(&bytes, b"PK\x03\x04")[1] + 10;
+            let central = found(&bytes, b"PK\x01\x02")[1] + 20;
+            cuts.extend([vec![local], vec![central], vec![local, central]]);
+        }
+        for cut in cuts {
+            let scratch = Scratch::new();
+            let input = scratch.parts(&bytes, &cut);
+            assert_eq!(detect(&input).unwrap(), Detected::Archive(format));
+            let unpacked = unpack(
+                &input,
+                format,
+                &Limits::default(),
+                &scratch.cache,
+                &|_| false,
+                None,
+            )
+            .unwrap();
+            assert_eq!(unpacked.members, whole.members, "{format:?} cut at {cut:?}");
+            for member in &unpacked.members {
+                let (_, bytes) = files.iter().find(|(path, _)| *path == member.path).unwrap();
+                scratch.assert_stored(member, bytes);
+            }
+        }
+    }
+}
+
+/// the ratio counts each byte of every part once: a split archive well inside the ratio unpacks,
+/// though counting only one part would put it far past, and rereads of a zip's shared data still
+/// cannot raise the count past the parts' total.
+#[test]
+fn the_ratio_counts_every_part_once() {
+    let mut rng = fastrand::Rng::with_seed(7);
+    let digits: Vec<u8> = (0..5 << 20).map(|_| b'0' + rng.u8(..10)).collect();
+    for format in FAMILIES {
+        let bytes = archive(format, &[("digits.txt", &digits)]);
+        let limits = Limits {
+            ratio: 3 * (digits.len() as u64).div_ceil(bytes.len() as u64),
+            ..Limits::default()
+        };
+        let tenth = bytes.len() / 10;
+        let cuts: Vec<usize> = (1..10).map(|part| part * tenth).collect();
+        let scratch = Scratch::new();
+        let input = scratch.parts(&bytes, &cuts);
+        let unpacked = unpack(&input, format, &limits, &scratch.cache, &|_| false, None);
+        assert!(unpacked.is_ok(), "{format:?}: {:?}", unpacked.err());
+    }
+    let shared = super::zip::tests::overlapping(512);
+    let limits = Limits {
+        ratio: 200,
+        ..Limits::default()
+    };
+    let scratch = Scratch::new();
+    let third = shared.len() / 3;
+    let input = scratch.parts(&shared, &[third, 2 * third]);
+    let err = unpack(
+        &input,
+        Format::Zip,
+        &limits,
+        &scratch.cache,
+        &|_| false,
+        Some(0),
+    )
+    .unwrap_err();
+    assert!(err.message.contains("200 times"), "{}", err.message);
+    scratch.assert_empty();
 }
 
 #[test]
@@ -409,6 +500,26 @@ fn a_rar_left_packed_has_a_next_step_for_each_system() {
     );
 }
 
+/// a zip spanned over `.z01` files stays packed, and the next step joins its parts with zip, or
+/// on windows unpacks them with 7-Zip, which reads them all from the `.zip`.
+#[test]
+fn a_spanned_zip_left_packed_has_a_next_step_for_each_system() {
+    let step =
+        |system| super::join_elsewhere(system, "data/scans/scans.zip", "", "extract = false");
+    assert_eq!(
+        step(System::Linux),
+        "join its parts with zip from your package manager, then unpack them: `zip -s 0 data/scans/scans.zip --out scans-joined.zip`, then `unzip scans-joined.zip -d scans-unpacked`. extract = false stops this warning"
+    );
+    assert_eq!(
+        step(System::Macos),
+        "join its parts with the zip macos has, then unpack them: `zip -s 0 data/scans/scans.zip --out scans-joined.zip`, then `unzip scans-joined.zip -d scans-unpacked`. extract = false stops this warning"
+    );
+    assert_eq!(
+        step(System::Windows),
+        r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x data\scans\scans.zip -oscans-unpacked`. extract = false stops this warning"#
+    );
+}
+
 /// run below the project's folder, the command reaches the archive and the project's folder from
 /// there, and quotes what its shell would split or expand as that shell reads it.
 #[test]
@@ -485,7 +596,7 @@ fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
     for format in FAMILIES {
         let scratch = Scratch::new();
         let files: &[(&str, &[u8])] = &[("small.csv", b"abc"), ("large.csv", b"abcd")];
-        let path = scratch.file("archive", &archive(format, files));
+        let path = Input::File(scratch.file("archive", &archive(format, files)));
         let meter = Meter::default();
         let mut guard =
             Guard::new(&limits, &|_| false, &meter).holding_at_most(scratch.cache.root(), 3);

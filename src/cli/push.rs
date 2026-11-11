@@ -21,7 +21,8 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
 use crate::mirror::{Location, OBJECTS, TREES};
-use crate::project::lock::{Lock, LockedFile};
+use crate::project::lock::Lock;
+use crate::project::lock::archives::Archive;
 use crate::project::manifest::Manifest;
 use crate::source::Access;
 use crate::stop::Stop;
@@ -99,7 +100,8 @@ enum Source {
     Pinned,
     /// a file of a recipe's result, in the cache once `fetchloom build` made it.
     Result,
-    /// the cache's record of what the archive with this SHA-256 unpacks to.
+    /// the cache's record of what an archive unpacks to, by the record's key: the archive's
+    /// SHA-256, or a split archive's parts key.
     List(Sha256),
 }
 
@@ -322,9 +324,9 @@ fn needed(
         };
         // each archive's list of files, as the record that gave its members holds it
         let records = RefCell::new(Vec::new());
-        let members = |file: &LockedFile| {
-            let found = cache.unpacked(&file.sha256, file.unpacks_to.as_ref())?;
-            if let Some(tree) = file.unpacks_to {
+        let members = |archive: &Archive<'_>| {
+            let found = archive.recorded(cache)?;
+            if let Some(tree) = archive.file.unpacks_to {
                 let size = crate::cache::tree(&found).len() as u64;
                 let item = Item {
                     folder: TREES,
@@ -333,7 +335,7 @@ fn needed(
                 };
                 records
                     .borrow_mut()
-                    .push((item, file.sha256, file.path.clone()));
+                    .push((item, archive.key(), archive.file.path.clone()));
             }
             Some(found)
         };

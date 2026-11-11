@@ -29,7 +29,7 @@ nonempty `FETCHLOOM_CACHE` overrides the root and may be relative to the working
   partial/<first sha256 digit>/<sha256 of URL>.lock
   urls/<sha256 of URL>.json
   stated/md5/<first 2 md5 digits>/<remaining 30 digits>-<sha256 of URL>
-  unpacked/<archive sha256>
+  unpacked/<archive sha256, or the key a split archive's parts give>
   projects/<sha256 of project root>.json
   changed/<object sha256>
   builds/<key sha256>/<tree sha256>

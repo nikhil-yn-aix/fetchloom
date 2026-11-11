@@ -7,7 +7,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [front page](README.md): install and quick start
 - [user guide](docs/user/README.md): every user page and when to read it
 - [getting started](docs/user/getting-started.md): install from source until the first release, first project, restoring and undoing it
-- [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives, webdataset shards and offline preparation
+- [concepts](docs/user/concepts.md): manifest, lock, cache, placement, archives, archives cut into parts, webdataset shards and offline preparation
 - [working with raw data](docs/user/raw-data.md): results outside the data folder, extras kept, put-back warnings and drop for bad samples, copy = true for edits, path and members for layout, place = false once a recipe reads the raw data, remove and gc to free space
 - [other tools](docs/user/other-tools.md): the fetchloom command for each download step from curl, wget, gdown, zenodo_get, osfclient, kaggle, hf, aws s3, dvc import-url, pooch and kagglehub; sha256sums and registry lists; which tools to keep; leaving with export and aria2c
 - [recipes](docs/user/recipes.md): datasets a command makes from others, declared with from, run, code and env, keyed by content, built with `fetchloom build`, and reported as `build.needed` when they change; `place = false` keeps raw data pinned and cached for builds but out of the data folder
@@ -41,7 +41,7 @@ fetchloom is uv for research data on windows, linux and macos, on x86_64 and arm
 - [dropbox](docs/user/sources/dropbox.md): shared file links and folder zips
 - [cloud buckets](docs/user/sources/buckets.md): `s3://`, `s3:https://` and `gs://` prefixes, listing, version pins, and private S3 buckets read with AWS keys once `s3_buckets` lists them
 - [data.toml](docs/user/reference/data-toml.md): manifest keys, path rules, `path = "."` for files straight in `data/`, `place = false` for data only recipes read, shared folders and clashes, secret-URL rejection and credential-safe diagnostic citations
-- [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, source records and hash encodings
+- [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, split archives' parts, source records and hash encodings
 - [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
 - [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior

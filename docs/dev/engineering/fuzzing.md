@@ -7,6 +7,7 @@ bolero exercises parsers inside their modules without exposing a separate public
 | test target | source | property |
 |---|---|---|
 | `archive::names::tests::fuzz_member_names` | [archive/names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | accepted member names obey path and collision rules |
+| `archive::input::tests::joined_parts_read_and_seek_as_the_whole` | [archive/input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | reads and seeks over bytes cut into parts anywhere, parts of no bytes too, give what they give over the bytes whole |
 | `archive::sevenz::tests::fuzz_seven_zip` | [archive/sevenz.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/sevenz.rs) | a 7z with any of its bytes changed never panics, and fails only as a damaged or refused archive |
 | `project::lock::canonical::tests::fuzz_lock_reader` | [project/lock/canonical.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/canonical.rs) | the fast lock reader agrees with validated lock parsing |
 | `project::manifest::tests::fuzz_manifest` | [project/manifest.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/manifest.rs) | accepted manifests keep their invariants through dataset edits |

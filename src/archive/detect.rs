@@ -1,10 +1,10 @@
 //! what kind of file a download is, read from its first bytes.
 
-use std::fs::File;
 use std::io::{self, BufReader, Read, Seek};
-use std::path::Path;
 
-use super::tar;
+use super::input::{Input, Joined};
+use super::{tar, unreadable};
+use crate::error::Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Format {
@@ -31,10 +31,15 @@ const BLOCK: usize = 512;
 
 /// tells an archive from any other file by its first bytes. the cache names files by hash, so a
 /// document that is a zip inside, such as `.xlsx`, is kept whole earlier, by its listed name.
-pub(crate) fn detect(path: &Path) -> io::Result<Detected> {
-    let mut file = File::open(path)?;
+///
+/// # Errors
+///
+/// `local.io` when the archive's files cannot be read.
+pub(crate) fn detect(input: &Input) -> Result<Detected, Error> {
+    let mut file = Joined::open(input).map_err(|(path, err)| unreadable(path, &err))?;
+    let unread = |err: io::Error| unreadable(input.first(), &err);
     let mut block = [0; BLOCK];
-    let len = read_up_to(&mut file, &mut block)?;
+    let len = read_up_to(&mut file, &mut block).map_err(unread)?;
     let head = &block[..len];
     if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
         return Ok(Detected::Archive(Format::Zip));
@@ -46,7 +51,7 @@ pub(crate) fn detect(path: &Path) -> io::Result<Detected> {
         return Ok(Detected::Unsupported("rar"));
     }
     if let Some(format) = compression(head) {
-        file.rewind()?;
+        file.rewind().map_err(unread)?;
         return Ok(if holds_tar(format, file) {
             Detected::Archive(format)
         } else {
@@ -80,7 +85,7 @@ fn compression(head: &[u8]) -> Option<Format> {
 /// whether the stream decompresses to a tar header. a stream that fails to decompress is no
 /// archive, unless xz or zstd asks for more memory than unpacking allows: unpacking then refuses
 /// it and says why, rather than a tar staying packed unnoticed.
-fn holds_tar(format: Format, file: File) -> bool {
+fn holds_tar(format: Format, file: Joined) -> bool {
     let memory = super::Limits::current().memory;
     let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
         return false;
@@ -140,7 +145,7 @@ mod tests {
 
     fn detected(name: &str, bytes: &[u8]) -> Detected {
         let scratch = Scratch::new();
-        detect(&scratch.file(name, bytes)).unwrap()
+        detect(&Input::File(scratch.file(name, bytes))).unwrap()
     }
 
     #[test]

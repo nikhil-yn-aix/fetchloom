@@ -19,6 +19,8 @@ fetchloom add zenodo:3608990 --as flowers --select "*.csv"
 
 patterns match listed paths. listing limits and access checks apply before filtering.
 
+a record may hold one large archive cut into parts, such as `scans.zip.001` to `scans.zip.003`. they unpack as that one archive when the dataset lists every part; a `--select` that keeps only some of them leaves them packed with a warning, as [split archives](../concepts.md#split-archives) explains.
+
 ## search
 
 `fetchloom search` asks zenodo for datasets whose titles hold every search word, most viewed first. whitespace, including pasted nonbreaking spaces, separates words. when no title holds them all, it asks again for titles with any of the words.

@@ -10,6 +10,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
+use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, MemberFilter, Members, Source};
@@ -90,9 +91,7 @@ pub(crate) fn from_cache<'a>(
     lock: &'a Lock,
     cache: &Cache,
 ) -> Result<Plan<'a>, Error> {
-    plan(manifest, lock, &|file| {
-        cache.unpacked(&file.sha256, file.unpacks_to.as_ref())
-    })
+    plan(manifest, lock, &|archive| archive.recorded(cache))
 }
 
 /// every file of `lock`'s fetched datasets as a build reads them: [`from_cache`]'s, then those of
@@ -103,7 +102,7 @@ pub(crate) fn inputs<'a>(
     lock: &'a Lock,
     cache: &Cache,
 ) -> Result<Plan<'a>, Error> {
-    let members = |file: &LockedFile| cache.unpacked(&file.sha256, file.unpacks_to.as_ref());
+    let members = |archive: &Archive<'_>| archive.recorded(cache);
     let mut plan = plan(manifest, lock, &members)?;
     for dataset in &lock.datasets {
         let Some((entry, source)) = manifest
@@ -142,10 +141,7 @@ pub(crate) fn foresee<'a>(
     // in data.lock's order, so a clash names its datasets as the later check does
     let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
     datasets.sort_by(|a, b| a.name.cmp(&b.name));
-    planned(manifest, datasets, &[], &|file| {
-        cache.unpacked(&file.sha256, file.unpacks_to.as_ref())
-    })
-    .map(drop)
+    planned(manifest, datasets, &[], &|archive| archive.recorded(cache)).map(drop)
 }
 
 /// every file the lock places for the datasets data.toml lists, or the first clash: the files of
@@ -155,7 +151,7 @@ pub(crate) fn foresee<'a>(
 pub(crate) fn plan<'a>(
     manifest: &Manifest,
     lock: &'a Lock,
-    members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
+    members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
     planned(manifest, &lock.datasets, &lock.derived, members)
 }
@@ -164,7 +160,7 @@ fn planned<'a>(
     manifest: &Manifest,
     datasets: impl IntoIterator<Item = &'a Locked>,
     results: &'a [Derived],
-    members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
+    members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<Plan<'a>, Error> {
     let span = tracing::debug_span!("plan", files = tracing::field::Empty).entered();
     let mut plan = Plan::default();
@@ -274,7 +270,8 @@ fn archives_named(name: &str, source: &Source, locked: &Locked) -> Result<(), Er
 
 /// adds where one dataset's files land in `folder`, an archive standing for the files `members`
 /// says it unpacked to that its table in `filters` keeps. where each kept file lands is decided
-/// from every file the archive holds, so a filter never moves another file.
+/// from every file the archive holds, so a filter never moves another file. a split archive
+/// stands at its first part, and its other parts land nowhere.
 ///
 /// # Errors
 ///
@@ -287,10 +284,26 @@ pub(crate) fn expand<'a>(
     copy: bool,
     files: &'a [LockedFile],
     filters: &Members,
-    members: &dyn Fn(&LockedFile) -> Option<Vec<Member>>,
+    members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
 ) -> Result<(), Error> {
-    let alone = files.len() == 1;
-    for file in files {
+    let pinned = archives::pinned(files);
+    let alone = pinned.len() == 1;
+    for each in pinned {
+        let archive = match each {
+            Pinned::File(file) => {
+                plan.targets.push(Target {
+                    dataset,
+                    path: join(folder, &file.path),
+                    sha256: file.sha256,
+                    size: file.size,
+                    copy,
+                    holder: Holder::File(file),
+                });
+                continue;
+            }
+            Pinned::Archive(archive) => archive,
+        };
+        let file = archive.file;
         let target = |path: &str, sha256, size| Target {
             dataset,
             path: join(folder, path),
@@ -299,12 +312,7 @@ pub(crate) fn expand<'a>(
             copy,
             holder: Holder::File(file),
         };
-        if file.unpacks_to.is_none() {
-            plan.targets
-                .push(target(&file.path, file.sha256, file.size));
-            continue;
-        }
-        let Some(members) = members(file) else {
+        let Some(members) = members(&archive) else {
             plan.unknown.push((dataset, file));
             continue;
         };
@@ -315,7 +323,7 @@ pub(crate) fn expand<'a>(
         let before = plan.targets.len();
         for (member, path) in members
             .iter()
-            .zip(unpacked_paths(&file.path, alone, &members))
+            .zip(unpacked_paths(archive.path(), alone, &members))
         {
             if filter.is_none_or(|filter| filter.keeps(&member.path)) {
                 plan.targets.push(target(&path, member.sha256, member.size));
@@ -755,8 +763,8 @@ mod tests {
         file.unpacks_to = Some(digest::sha256(b"tree"));
         locked.datasets[0].files.push(file);
         let members: Vec<Member> = members.iter().map(|path| member(path)).collect();
-        let planned = plan(&manifest(ONE), &locked, &|file| {
-            (file.path == archive).then(|| members.clone())
+        let planned = plan(&manifest(ONE), &locked, &|unpacking| {
+            (unpacking.file.path == archive).then(|| members.clone())
         })
         .unwrap();
         let mut paths: Vec<String> = planned
@@ -794,10 +802,10 @@ mod tests {
         lock: &Lock,
         archives: &[(&str, &[&str])],
     ) -> Result<Vec<String>, Error> {
-        let members = |file: &LockedFile| {
+        let members = |unpacking: &Archive<'_>| {
             archives
                 .iter()
-                .find(|(archive, _)| *archive == file.path)
+                .find(|(archive, _)| *archive == unpacking.file.path)
                 .map(|(_, paths)| paths.iter().map(|path| member(path)).collect())
         };
         Ok(plan(manifest, lock, &members)?
@@ -805,6 +813,45 @@ mod tests {
             .into_iter()
             .map(|target| target.path)
             .collect())
+    }
+
+    /// a split archive lands as the archive whole would, by its name before the counter, while
+    /// its parts land nowhere; one that stays packed lands as its parts.
+    #[test]
+    fn a_split_archive_lands_as_the_whole_would() {
+        let parts: &[&str] = &["scans.zip.001", "scans.zip.002"];
+        let members: &[&str] = &["top/a.csv", "top/b.csv", "c.csv"];
+        let with_readme = [&["README.md"][..], parts].concat();
+        let (manifest, mut beside) = pinned(ONE, &[("a", &with_readme)]);
+        beside.datasets[0].files[1].unpacks_to = Some(digest::sha256(b"tree"));
+        assert_eq!(
+            placed_from(&manifest, &beside, &[("scans.zip.001", members)]).unwrap(),
+            [
+                "data/a/README.md",
+                "data/a/scans/top/a.csv",
+                "data/a/scans/top/b.csv",
+                "data/a/scans/c.csv"
+            ]
+        );
+        let unknown = plan(&manifest, &beside, &|_| None).unwrap();
+        assert_eq!(unknown.targets.len(), 1, "README.md alone");
+        assert_eq!(
+            unknown.unknown,
+            [("a", &beside.datasets[0].files[1])],
+            "never unpacked here, by its first part"
+        );
+        let (manifest, mut alone) = pinned(ONE, &[("a", parts)]);
+        alone.datasets[0].files[0].unpacks_to = Some(digest::sha256(b"tree"));
+        assert_eq!(
+            placed_from(&manifest, &alone, &[("scans.zip.001", &members[..2])]).unwrap(),
+            ["data/a/a.csv", "data/a/b.csv"],
+            "alone, without the folder its files share"
+        );
+        let (manifest, packed) = pinned(ONE, &[("a", parts)]);
+        assert_eq!(
+            placed_from(&manifest, &packed, &[]).unwrap(),
+            ["data/a/scans.zip.001", "data/a/scans.zip.002"]
+        );
     }
 
     /// a filter decides which members are placed, never where: a kept file lands where it would
@@ -962,7 +1009,7 @@ mod tests {
         let paths = |archive: &str| -> Option<Vec<Member>> {
             (archive == "pets.zip").then(|| members.iter().map(|path| member(path)).collect())
         };
-        let planned = plan(&manifest, &locked, &|file| paths(&file.path)).unwrap();
+        let planned = plan(&manifest, &locked, &|archive| paths(&archive.file.path)).unwrap();
         assert_eq!(
             unreached(&manifest, &planned.targets),
             [
@@ -984,7 +1031,7 @@ mod tests {
             ]
         );
         let (plain, locked) = pinned(ONE, &[("a", &["pets.zip"])]);
-        let planned = plan(&plain, &locked, &|file| paths(&file.path)).unwrap();
+        let planned = plan(&plain, &locked, &|archive| paths(&archive.file.path)).unwrap();
         assert_eq!(unreached(&plain, &planned.targets), []);
     }
 
@@ -1125,8 +1172,8 @@ mod tests {
         let mut locked = lock(&[("a", &["notes.txt", "x.zip"])]);
         locked.datasets[0].files[1].unpacks_to = Some(digest::sha256(b"tree"));
         let members = vec![member("notes.txt")];
-        let err = plan(&manifest(ONE), &locked, &|file| {
-            (file.path == "x.zip").then(|| members.clone())
+        let err = plan(&manifest(ONE), &locked, &|archive| {
+            (archive.file.path == "x.zip").then(|| members.clone())
         })
         .unwrap_err();
         assert!(

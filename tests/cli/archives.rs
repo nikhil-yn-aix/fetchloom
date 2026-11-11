@@ -702,18 +702,23 @@ const RAR: &[u8] = b"Rar!\x1a\x07\x01\x00no decoder reads this";
 /// the help a warning about a rar left packed gives on this system: a command that unpacks the
 /// rar at `path` into sample-unpacked, then what stops the warning.
 fn next_step(path: &str, stop: &str) -> String {
+    next_step_into(path, "sample-unpacked", stop)
+}
+
+/// [`next_step`] for a rar that unpacks into `folder`.
+fn next_step_into(path: &str, folder: &str, stop: &str) -> String {
     if cfg!(windows) {
         format!(
-            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -osample-unpacked`. {stop} stops this warning"#,
+            r#"unpack it with 7-Zip: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{folder}`. {stop} stops this warning"#,
             path.replace('/', "\\")
         )
     } else if cfg!(target_os = "macos") {
         format!(
-            "unpack it with unar: `brew install unar`, then `unar -D -o sample-unpacked {path}`. {stop} stops this warning"
+            "unpack it with unar: `brew install unar`, then `unar -D -o {folder} {path}`. {stop} stops this warning"
         )
     } else {
         format!(
-            "unpack it with unrar from your package manager: `unrar x {path} sample-unpacked/`. {stop} stops this warning"
+            "unpack it with unrar from your package manager: `unrar x {path} {folder}/`. {stop} stops this warning"
         )
     }
 }
@@ -1019,4 +1024,380 @@ fn an_exclude_naming_a_member_warns_and_points_at_drop() -> Result {
     let stderr = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(!stderr.contains("warning"), "{stderr}");
     Ok(())
+}
+
+/// archives cut into parts, as `split` and 7-Zip cut them: `scans.zip.001` and on.
+mod split {
+    use std::path::{Path, PathBuf};
+
+    use super::{RAR, Result, Sandbox, Server, file, fs, next_step_into, ok, text};
+
+    /// five files under one top folder, as a dataset's authors zip them.
+    const SCANS: [(&str, &[u8]); 5] = [
+        ("scans/a.csv", b"a\n"),
+        ("scans/b.csv", b"b\n"),
+        ("scans/c/d.csv", b"d\n"),
+        ("scans/e.txt", b"e\n"),
+        ("scans/f.txt", b"f\n"),
+    ];
+
+    fn scans_zip() -> Result<Vec<u8>> {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, bytes) in SCANS {
+            zip.start_file(path, zip::write::SimpleFileOptions::default())?;
+            std::io::Write::write_all(&mut zip, bytes)?;
+        }
+        Ok(zip.finish()?.into_inner())
+    }
+
+    /// `bytes` cut into as many parts as `names`, of nearly one size, each written to
+    /// `folder` under its name.
+    fn cut(folder: &Path, bytes: &[u8], names: &[&str]) -> Result<Vec<Vec<u8>>> {
+        let size = bytes.len().div_ceil(names.len());
+        let parts: Vec<Vec<u8>> = bytes.chunks(size).map(<[u8]>::to_vec).collect();
+        for (name, part) in names.iter().zip(&parts) {
+            fs::write(folder.join(name), part)?;
+        }
+        Ok(parts)
+    }
+
+    /// every file below `folder`, by its path from there.
+    fn files_in(folder: &Path) -> Result<Vec<String>> {
+        let mut found = Vec::new();
+        let mut folders = vec![folder.to_path_buf()];
+        while let Some(next) = folders.pop() {
+            for entry in fs::read_dir(next)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else {
+                    let below = path.strip_prefix(folder)?.to_string_lossy();
+                    found.push(below.replace('\\', "/"));
+                }
+            }
+        }
+        found.sort();
+        Ok(found)
+    }
+
+    fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
+        let digest = crate::add::sha256_hex(bytes);
+        cache.join("objects").join(&digest[..2]).join(&digest[2..])
+    }
+
+    /// d4's acceptance on a folder: two halves of a zip of five files place those five files,
+    /// pinned at the first part, and the halves leave the cache once the files are in.
+    #[test]
+    fn a_folder_of_parts_unpacks_as_one_archive() -> Result {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("scans")?;
+        let zip = scans_zip()?;
+        let halves = cut(&folder, &zip, &["scans.zip.001", "scans.zip.002"])?;
+        ok(&sandbox.run(&["add", "../scans"])?)?;
+        let data = sandbox.work().join("data/scans");
+        assert_eq!(
+            files_in(&data)?,
+            ["a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"]
+        );
+        for (path, bytes) in SCANS {
+            assert_eq!(fs::read(data.join(&path["scans/".len()..]))?, bytes);
+        }
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        let line = |name: &str| {
+            lock.lines()
+                .find(|line| line.contains(name))
+                .unwrap_or_default()
+        };
+        assert!(
+            line("scans.zip.001").contains("unpacks_to = \"sha256:"),
+            "{lock}"
+        );
+        assert!(!line("scans.zip.002").is_empty() && !line("scans.zip.002").contains("unpacks_to"));
+        assert_eq!(lock.matches("unpacks_to").count(), 1, "{lock}");
+        for half in &halves {
+            assert!(
+                !object(&sandbox.cache(), half).exists(),
+                "a part left the cache"
+            );
+        }
+        let status = sandbox.run(&["status"])?;
+        assert_eq!(
+            text(&status.stderr)?,
+            "         Ok everything matches data.lock by size and time\n"
+        );
+        // another project on this machine places the files from what the parts unpacked to
+        let clone = sandbox.folder("clone")?;
+        for name in ["data.toml", "data.lock"] {
+            fs::copy(sandbox.work().join(name), clone.join(name))?;
+        }
+        ok(&sandbox
+            .command_in(&clone, &["--offline", "sync"])
+            .output()?)?;
+        assert_eq!(files_in(&clone.join("data/scans"))?.len(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_part_is_named_and_the_others_stay_as_they_are() -> Result {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("scans")?;
+        let names = ["scans.zip.001", "scans.zip.002", "scans.zip.003"];
+        let parts = cut(&folder, &scans_zip()?, &names)?;
+        fs::remove_file(folder.join("scans.zip.002"))?;
+        let added = sandbox.run(&["add", "../scans"])?;
+        ok(&added)?;
+        assert!(
+            text(&added.stderr)?.contains(
+                "warning: scans/scans.zip.002 is missing, so the parts of scans.zip stay as they are\n  help: fetchloom joins a split archive only from every one of its parts: check that select and exclude keep them all, or ask the dataset's authors for the missing one\n"
+            ),
+            "{}",
+            text(&added.stderr)?
+        );
+        let data = sandbox.work().join("data/scans");
+        assert_eq!(files_in(&data)?, ["scans.zip.001", "scans.zip.003"]);
+        assert_eq!(fs::read(data.join("scans.zip.003"))?, parts[2]);
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        assert!(!lock.contains("unpacks_to"), "{lock}");
+        Ok(())
+    }
+
+    /// the help for a zip spanned over `.z01` files, on this system.
+    fn join_step(path: &str, name: &str) -> String {
+        if cfg!(windows) {
+            format!(
+                r#"unpack it with 7-Zip, which reads its parts: `winget install 7zip.7zip`, then `& "C:\Program Files\7-Zip\7z.exe" x {} -o{name}-unpacked`. extract = false stops this warning"#,
+                path.replace('/', "\\")
+            )
+        } else {
+            let zip = if cfg!(target_os = "macos") {
+                "the zip macos has"
+            } else {
+                "zip from your package manager"
+            };
+            format!(
+                "join its parts with {zip}, then unpack them: `zip -s 0 {path} --out {name}-joined.zip`, then `unzip {name}-joined.zip -d {name}-unpacked`. extract = false stops this warning"
+            )
+        }
+    }
+
+    /// rar volumes and a zip spanned over `.z01` files stay packed, each told once, with what
+    /// reads all of its volumes.
+    #[test]
+    fn rar_volumes_and_a_spanned_zip_stay_packed_with_one_next_step_each() -> Result {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("shots")?;
+        for name in ["clips.part1.rar", "clips.part2.rar"] {
+            fs::write(folder.join(name), RAR)?;
+        }
+        fs::write(folder.join("maps.z01"), b"PK\x07\x08the first volume")?;
+        fs::write(
+            folder.join("maps.zip"),
+            b"the last volume, and its directory",
+        )?;
+        let added = sandbox.run(&["add", "../shots"])?;
+        ok(&added)?;
+        let stderr = text(&added.stderr)?;
+        let rar = format!(
+            "warning: shots/clips.part1.rar stays packed with 1 other volume of its rar, since fetchloom does not unpack rar\n  help: {}\n",
+            next_step_into(
+                "data/shots/clips.part1.rar",
+                "clips.part1-unpacked",
+                "extract = false"
+            )
+        );
+        let zip = format!(
+            "warning: shots/maps.zip stays packed with 1 other file it spans, since fetchloom does not unpack a zip spanned over several files\n  help: {}\n",
+            join_step("data/shots/maps.zip", "maps")
+        );
+        assert!(stderr.contains(&rar), "{stderr}");
+        assert!(stderr.contains(&zip), "{stderr}");
+        assert_eq!(stderr.matches("warning:").count(), 2, "{stderr}");
+        assert_eq!(
+            files_in(&sandbox.work().join("data/shots"))?,
+            ["clips.part1.rar", "clips.part2.rar", "maps.z01", "maps.zip"]
+        );
+        Ok(())
+    }
+
+    /// parts in a bucket prefix, which only debug builds can point at a server of their own.
+    #[cfg(debug_assertions)]
+    mod bucket {
+        use super::super::{Output, ok, text};
+        use super::{SCANS, Sandbox, cut, files_in, fs, scans_zip};
+        use crate::buckets::{md5, s3_listing, s3_page};
+        use crate::support::{Result, Routes, file};
+
+        const LINK: &str = "s3://split-bucket/scans/";
+
+        /// a bucket whose `scans/` prefix holds two halves of a zip of five files, and the halves.
+        fn bucket() -> Result<(Routes, Vec<Vec<u8>>)> {
+            let base = "/split-bucket.s3.amazonaws.com/";
+            let folder = tempfile::tempdir()?;
+            let halves = cut(folder.path(), &scans_zip()?, &["001", "002"])?;
+            let keys = ["scans/scans.zip.001", "scans/scans.zip.002"];
+            let listed: Vec<(&str, &[u8])> = keys
+                .iter()
+                .zip(&halves)
+                .map(|(key, half)| (*key, half.as_slice()))
+                .collect();
+            let mut routes = vec![(s3_listing(base, "scans/", None), s3_page(&listed, None))];
+            for (key, half) in keys.iter().zip(&halves) {
+                for _ in 0..2 {
+                    routes.push((
+                        format!("{base}{key}"),
+                        file(half, &format!("\"{}\"", md5(half))),
+                    ));
+                }
+            }
+            Ok((Routes::start(routes)?, halves))
+        }
+
+        fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
+            Ok(sandbox
+                .command(args)
+                .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+                .output()?)
+        }
+
+        /// d4's acceptance on a bucket prefix: the five files land and no part does, and a
+        /// clone with an empty cache downloads both parts once to place them.
+        #[test]
+        fn a_bucket_prefix_of_parts_unpacks_as_one_archive_here_and_in_a_clone() -> Result {
+            let sandbox = Sandbox::new()?;
+            let (routes, _) = bucket()?;
+            let added = run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?;
+            ok(&added)?;
+            assert!(!text(&added.stderr)?.contains("webdataset"));
+            let placed = ["a.csv", "b.csv", "c/d.csv", "e.txt", "f.txt"];
+            assert_eq!(files_in(&sandbox.work().join("data/scans"))?, placed);
+            let clone = sandbox.folder("clone")?;
+            for name in ["data.toml", "data.lock"] {
+                fs::copy(sandbox.work().join(name), clone.join(name))?;
+            }
+            let cold = sandbox.folder("cold")?;
+            let before = routes.requests().len();
+            let synced = sandbox
+                .command_in(&clone, &["sync"])
+                .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+                .env("FETCHLOOM_CACHE", &cold)
+                .output()?;
+            ok(&synced)?;
+            assert_eq!(files_in(&clone.join("data/scans"))?, placed);
+            let asked = routes.requests()[before..].to_vec();
+            assert_eq!(asked.len(), 2, "each part once: {asked:?}");
+            for (path, bytes) in SCANS {
+                let placed = clone.join("data/scans").join(&path["scans/".len()..]);
+                assert_eq!(fs::read(placed)?, bytes);
+            }
+            Ok(())
+        }
+
+        /// export names each file by the first part it came from, and lists every part as a
+        /// download.
+        #[test]
+        fn export_names_files_by_the_first_part_and_lists_every_part() -> Result {
+            let sandbox = Sandbox::new()?;
+            let (routes, _) = bucket()?;
+            ok(&run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?)?;
+            let exported = sandbox.run(&["--json", "export"])?;
+            ok(&exported)?;
+            let result = &crate::support::json(&exported)?["result"];
+            let from: Vec<&str> = result["placed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|placed| placed["unpacked_from"].as_str())
+                .collect();
+            assert_eq!(from, ["scans.zip.001"; 5]);
+            let sources: Vec<&str> = result["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|source| source["path"].as_str())
+                .collect();
+            assert_eq!(sources, ["scans.zip.001", "scans.zip.002"]);
+            Ok(())
+        }
+
+        /// a file inside a split archive is dropped through the members table of its first
+        /// part, and leaving every file out leaves out every part.
+        #[test]
+        fn drop_names_a_split_archive_by_its_first_part() -> Result {
+            let sandbox = Sandbox::new()?;
+            let (routes, _) = bucket()?;
+            ok(&run(&sandbox, &routes, &["add", LINK, "--as", "scans"])?)?;
+            ok(&sandbox.run(&["drop", "data/scans/a.csv"])?)?;
+            let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+            assert!(
+                manifest.contains("[datasets.scans.members.\"scans.zip.001\"]"),
+                "{manifest}"
+            );
+            assert!(!sandbox.work().join("data/scans/a.csv").exists());
+            assert_eq!(files_in(&sandbox.work().join("data/scans"))?.len(), 4);
+            Ok(())
+        }
+
+        /// with extract = false the parts are files like any other, and switching back unpacks
+        /// them from the cache without asking the bucket again.
+        #[test]
+        fn kept_packed_the_parts_are_files_and_switching_back_asks_nothing() -> Result {
+            let sandbox = Sandbox::new()?;
+            let (routes, halves) = bucket()?;
+            let added = run(
+                &sandbox,
+                &routes,
+                &["add", LINK, "--as", "scans", "--no-extract"],
+            )?;
+            ok(&added)?;
+            let data = sandbox.work().join("data/scans");
+            assert_eq!(files_in(&data)?, ["scans.zip.001", "scans.zip.002"]);
+            assert_eq!(fs::read(data.join("scans.zip.002"))?, halves[1]);
+            let manifest = sandbox.work().join("data.toml");
+            let text_before = fs::read_to_string(&manifest)?;
+            fs::write(&manifest, text_before.replace("extract = false\n", ""))?;
+            let before = routes.requests().len();
+            let switched = sandbox.run(&["--offline", "sync"])?;
+            ok(&switched)?;
+            assert_eq!(routes.requests().len(), before, "no request");
+            assert_eq!(files_in(&data)?.len(), 5, "{}", text(&switched.stderr)?);
+            let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+            assert_eq!(lock.matches("unpacks_to").count(), 1, "{lock}");
+            Ok(())
+        }
+    }
+
+    /// parts added each as a dataset of its own never join: a part that could start a split
+    /// archive stays packed, with a warning that says where parts join, as `split -d` numbers
+    /// them from `00`, or from `01` with `--numeric-suffixes=1`.
+    #[test]
+    fn parts_added_one_link_each_say_they_join_only_inside_one_dataset() -> Result {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("parts")?;
+        let names = ["scans.zip.00", "scans.zip.01", "scans.zip.02"];
+        let parts = cut(&folder, &scans_zip()?, &names)?;
+        let mut servers = Vec::new();
+        for (name, part) in names.iter().zip(&parts) {
+            let server = Server::start(&format!("/files/{name}"), vec![file(part, "\"p\"")])?;
+            sandbox.allow(&server.url);
+            servers.push(server);
+        }
+        let links: Vec<&str> = servers.iter().map(|server| server.url.as_str()).collect();
+        fs::write(sandbox.work().join("links.txt"), links.join("\n"))?;
+        let added = sandbox.run(&["add", "-i", "links.txt"])?;
+        ok(&added)?;
+        let stderr = text(&added.stderr)?;
+        for start in ["scans.zip.00", "scans.zip.01"] {
+            assert!(
+                stderr.contains(&format!("/{start} stays packed, since it does not unpack on its own\n  help: it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part\n")),
+                "{stderr}"
+            );
+        }
+        assert_eq!(
+            stderr.matches("warning: ").count(),
+            4,
+            "two taken names, two parts: {stderr}"
+        );
+        assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains("unpacks_to"));
+        Ok(())
+    }
 }

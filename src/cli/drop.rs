@@ -18,6 +18,7 @@ use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
 use crate::plan::{self, Plan, Target};
+use crate::project::lock::archives::{self, Archive, Pinned};
 use crate::project::lock::{self, Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest};
 use crate::units;
@@ -378,7 +379,8 @@ fn edits<'a>(
         }
     }
     for (dataset, edit) in &mut edits {
-        whole_archives(dataset, edit, &archives);
+        let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
+        whole_archives(locked, edit, &archives);
     }
     Ok(edits)
 }
@@ -400,25 +402,24 @@ fn unpacked(
     file: &LockedFile,
     cache: &Cache,
 ) -> Result<Inside, Error> {
-    let members = cache
-        .unpacked(&file.sha256, file.unpacks_to.as_ref())
-        .ok_or_else(|| {
-            Error::new(
-                Kind::LocalIo,
-                format!("the cache lost what {} unpacked to", file.path),
-            )
-            .help("run `fetchloom sync`, then drop again")
-        })?;
+    let archive = archives::archive(&locked.files, file);
+    let members = archive.recorded(cache).ok_or_else(|| {
+        Error::new(
+            Kind::LocalIo,
+            format!("the cache lost what {} unpacked to", file.path),
+        )
+        .help("run `fetchloom sync`, then drop again")
+    })?;
     let filter = manifest
         .datasets
         .get(&locked.name)
         .and_then(|entry| entry.source())
         .and_then(|source| source.members.get(&file.path));
     let folder = plan::folder(manifest, &locked.name);
-    let alone = locked.files.len() == 1;
+    let alone = archives::pinned(&locked.files).len() == 1;
     Ok(members
         .iter()
-        .zip(plan::unpacked_paths(&file.path, alone, &members))
+        .zip(plan::unpacked_paths(archive.path(), alone, &members))
         .filter(|(member, _)| filter.is_none_or(|filter| filter.keeps(&member.path)))
         .map(|(member, path)| (format!("{folder}/{path}"), member.path.clone()))
         .collect())
@@ -500,9 +501,15 @@ fn record(
     }
 }
 
-/// turns a request for every file an archive keeps into leaving out the archive itself, in the
-/// dataset's exclude, since a members table may not leave its archive no file.
-fn whole_archives(dataset: &str, edit: &mut Edit, archives: &HashMap<(&str, &str), Inside>) {
+/// turns a request for every file an archive keeps into leaving out the archive itself, every
+/// part of a split one, in the dataset's exclude, since a members table may not leave its
+/// archive no file.
+fn whole_archives<'a>(
+    locked: &'a Locked,
+    edit: &mut Edit<'a>,
+    archives: &HashMap<(&str, &str), Inside>,
+) {
+    let dataset = locked.name.as_str();
     let whole: Vec<&str> = edit
         .members
         .keys()
@@ -522,8 +529,15 @@ fn whole_archives(dataset: &str, edit: &mut Edit, archives: &HashMap<(&str, &str
     for archive in whole {
         edit.members.remove(archive);
         let pattern = glob::escape(archive);
-        edit.exclude.insert(pattern.clone());
-        edit.leaving.insert(archive);
+        let files = locked
+            .files
+            .iter()
+            .find(|file| file.path == archive)
+            .map(|file| archives::archive(&locked.files, file).files());
+        for file in files.into_iter().flatten() {
+            edit.exclude.insert(glob::escape(&file.path));
+            edit.leaving.insert(&file.path);
+        }
         for left in &mut edit.left {
             if left.archive.as_deref() == Some(archive) {
                 left.pattern.clone_from(&pattern);
@@ -571,41 +585,43 @@ fn refuse_what_breaks(
             )
             .help("run `fetchloom sync` to bring data.lock in line, then drop again"));
         }
-        let left: Vec<&LockedFile> = locked
-            .files
+        let pinned = archives::pinned(&locked.files);
+        let left: Vec<&Pinned> = pinned
             .iter()
-            .filter(|file| !edit.leaving.contains(file.path.as_str()))
+            .filter(|pinned| {
+                let file = match pinned {
+                    Pinned::File(file) => file,
+                    Pinned::Archive(archive) => archive.file,
+                };
+                !edit.leaving.contains(file.path.as_str())
+            })
             .collect();
-        if let [only] = left.as_slice()
-            && locked.files.len() > 1
-            && only.unpacks_to.is_some()
+        if let [Pinned::Archive(only)] = left.as_slice()
+            && pinned.len() > 1
             && moves_alone(only, cache)
         {
+            let only = &only.file.path;
             return Err(Error::new(
                 Kind::Usage,
                 format!(
-                    "that would leave {} the only file of {dataset}, and its files would move, since a dataset that is one archive places them straight in its folder",
-                    only.path
+                    "that would leave {only} the only file of {dataset}, and its files would move, since a dataset that is one archive places them straight in its folder"
                 ),
             )
             .help(format!(
-                "keep the files, or leave them out with exclude in datasets.{dataset} in data.toml and run `fetchloom sync`, which moves the files of {}",
-                only.path
+                "keep the files, or leave them out with exclude in datasets.{dataset} in data.toml and run `fetchloom sync`, which moves the files of {only}"
             )));
         }
     }
     Ok(())
 }
 
-/// whether the files of the archive `file` land elsewhere once it is the only file of its
-/// dataset, as when nothing records what it holds.
-fn moves_alone(file: &LockedFile, cache: &Cache) -> bool {
-    cache
-        .unpacked(&file.sha256, file.unpacks_to.as_ref())
-        .is_none_or(|members| {
-            plan::unpacked_paths(&file.path, true, &members)
-                != plan::unpacked_paths(&file.path, false, &members)
-        })
+/// whether the files of `archive` land elsewhere once it is the only archive of its dataset, as
+/// when nothing records what it holds.
+fn moves_alone(archive: &Archive<'_>, cache: &Cache) -> bool {
+    archive.recorded(cache).is_none_or(|members| {
+        plan::unpacked_paths(archive.path(), true, &members)
+            != plan::unpacked_paths(archive.path(), false, &members)
+    })
 }
 
 /// data.toml's and data.lock's new content once `edits` are written.

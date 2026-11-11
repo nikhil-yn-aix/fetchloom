@@ -10,10 +10,11 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 
 | file | what it holds | types and functions |
 |---|---|---|
-| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits, entry points and the next step for an archive left packed | `Packed`, `Limits`, `Unpacked`, `System`, `by_name`, `stem`, `unpack`, `unpack_cached`, `unpack_elsewhere` |
+| [archive.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive.rs) | archive selection, limits, entry points and the next step for an archive left packed | `Packed`, `Limits`, `Unpacked`, `System`, `by_name`, `stem`, `unpack`, `unpack_cached`, `unpack_cached_parts`, `unpack_elsewhere`, `join_elsewhere` |
 | [detect.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/detect.rs) | byte signatures and document exclusions | `Format`, `Detected`, `detect` |
 | [guard.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/guard.rs) | entry counts, byte metering and cancellation | `Guard`, `Meter`, `entry`, `copy`, `check_stopped` |
-| [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | the archive file zip and 7z read: buffered, seekable and metered | `open`, `Source` |
+| [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs) | an archive's bytes as every reader takes them: one file, or a split archive's parts read in order with one file open; buffered, seekable and metered for zip and 7z | `Input`, `Joined`, `Source` |
+| [parts.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/parts.rs) | split archives, rar volumes and spanned zips, found by their names | `Split`, `Volumes`, `split`, `whole` |
 | [names.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/names.rs) | normalized paths and collision tracking | `Named`, `Names`, `add` |
 | [zip.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
 | [tar.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
@@ -21,6 +22,7 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 | [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs) | numbered tar shards in a listing, and the hint about them | `Shards`, `shards`, `hint` |
 | [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
 | [cli/sync/unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
+| [project/lock/archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/archives.rs) | the archives among a dataset's pinned files, a split one with its parts | `Archive`, `Pinned`, `pinned`, `archive`, `of` |
 
 ## how it works
 
@@ -81,13 +83,21 @@ members are sorted by path and hashed as a tree of names, sizes and digests. get
 
 when a locked tree differs, or decoding fails with an archive error, the sync layer checks whether the packed object itself was damaged. damaged bytes are marked and fetched again. an intact archive that produces another tree fails rather than silently changing the pin. an intact damaged archive keeps its original source error; repair is attempted only when the cached bytes changed. packed objects can be dropped only when current and registered locks no longer require them. successful syncs also consider archives whose cached member records were reused from an earlier failed operation.
 
+### split archives
+
+`parts::split` finds, in one pass over a listing's names, the archives `split` and 7-Zip cut into parts: files in one folder named `<archive><separator><counter>`, where `<archive>` is a name `by_name` unpacks and no file whose own name is an archive counts. it groups them by archive, separator and alphabet, sorts each group's counters by length then text, and checks them against the numberings tools write: numbers from 0 or 1 that grow past their width, letters of one width, and GNU split's widening, which follows `89` with `9000`. a group needs its first part; one with a gap names the first part missing. a lone `.002` is a file like any other, and a lone `.001` is a set of one. the same pass finds rar volumes, `<stem>.part<n>.rar`, and zips whose `.zip` has `.z01` beside it, which stay packed with `unpack_elsewhere` or `join_elsewhere` for the volume their tools open. `train-000.tar` is no part, and `train.tar.000` no shard, so neither the [shard hint](#the-shard-hint) nor a set mistakes the other.
+
+`Input::Joined` reads the parts the cache holds as one stream for every reader and for `detect`. `Joined` keeps where each part starts, finds the part holding a position by halving those starts, and keeps that part's file alone open, so the seeks zip and 7z make cost a reopen at most, and a set of a hundred parts one handle. it refuses a part whose size differs from its pin before reading, since it would move every byte after it. the guard's meter caps at the parts' total, as at one file's size, so rereads cannot raise the ratio's denominator past the archive. no joined copy is written: a 2 GiB stored zip cut into 20 parts by `split -n 20 -d` unpacked in 24 to 37 s with at most one part file open in 287 samples, and a peak of 25 MiB against 24 MiB for the zip whole, which took 24 to 53 s, on a debug build, on ext4, at a load average of 45 to 67.
+
+data.lock gives `unpacks_to` to a set's first part alone, and the cache records the set's tree under `parts_key`, the SHA-256 of `fetchloom parts`, a line break and a `<sha256> <size>` line for each part, never under the first part's own hash, which would hand a changed later part the old files. `project::lock::archives` reads a dataset's pinned files as placing takes them: `pinned` makes each set whose first part has `unpacks_to` one `Archive` holding its parts, and `archive` finds one first part's set among the files sharing its path, a range of data.lock's sorted list. `Archive::recorded` is the one lookup of what an archive unpacked to, keyed by `Archive::key`, so `plan::expand` and each caller's `members` closure take the set, never its first part alone. drafts and imports decide from the names, through `draft::archives`, what unpacks and why the rest stays packed; `Draft::carry_split` keeps a set's pinned tree only while every part matches the earlier pin. a set of one part with no pinned tree may be only the start of an archive whose other parts are elsewhere, as `add -i` makes each link a dataset, so `unpack_all` turns its failure, or bytes that are no archive, into a warning, and the part stays a plain file.
+
 ### the shard hint
 
 `shards` finds the largest group of at least 8 files in one folder of a listing named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. it makes one pass, keyed by slices of the listing's own paths, so a listing of 100,000 files or more costs a map entry for each group rather than a copy of each path. `cli/sync` asks for each dataset `draft` lists because it is new or its entry changed, not for an upgrade of an unchanged one, nor for an entry whose `extract` alone changed, which `Draft::switched` drafts without a listing; `cli/get` asks for each link once `prepare` has its files. both ask only while archives unpack and `Output::shows_hints` holds, so `-q`, `--json` and `FETCHLOOM_NO_HINTS=1` skip the work. the hint comes after the `Resolved` line and before any download or size question, while keeping the shards packed costs nothing; sync still drops an archive's own bytes once its files are in.
 
 ### member filters
 
-a dataset's `members` tables in data.toml choose which members a project places. unpacking never sees them: an archive is always unpacked whole, every member is stored and recorded, and the tree data.lock pins covers them all, so a filter changes no pin and a project that keeps a member another one leaves out finds it cached. [planning](placing.md#expand-destinations-first) applies the filters to the targets once `unpacked_paths` placed every member.
+a dataset's `members` tables in data.toml choose which members a project places, naming a split archive by its first part. unpacking never sees them: an archive is always unpacked whole, every member is stored and recorded, and the tree data.lock pins covers them all, so a filter changes no pin and a project that keeps a member another one leaves out finds it cached. [planning](placing.md#expand-destinations-first) applies the filters to the targets once `unpacked_paths` placed every member.
 
 ## invariants and traps
 
@@ -101,7 +111,8 @@ a dataset's `members` tables in data.toml choose which members a project places.
 
 | files | cargo filter |
 |---|---|
-| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
+| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs), [parts.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/parts.rs), [input.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/input.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
+| [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/project/lock/archives.rs) | `cargo test --locked --lib project::lock::archives::` |
 | [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::unpack::` |
 | [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 

@@ -3,6 +3,7 @@
 //! fixed order, so the same inputs always give the same bytes and a diff shows exactly what
 //! changed.
 
+pub(crate) mod archives;
 mod canonical;
 pub(crate) mod derived;
 pub(crate) mod lists;

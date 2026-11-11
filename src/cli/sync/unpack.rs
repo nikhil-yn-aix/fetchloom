@@ -12,14 +12,15 @@ use tokio::task::JoinSet;
 
 use super::super::Context;
 use super::super::cache::needed_by_all;
-use super::draft::Draft;
+use super::draft::{self, Draft, Unit, Why};
 use super::{Loop, job};
-use crate::archive::{self, Packed, System, Unpacked};
-use crate::cache::Cache;
+use crate::archive::{self, System, Unpacked, parts};
+use crate::cache::{Cache, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::plan;
+use crate::project::lock::archives::{self, Archive};
 use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::source::local;
@@ -27,11 +28,74 @@ use crate::units;
 
 /// an archive the cache holds, to unpack on this machine.
 pub(in crate::cli) struct Unpack {
+    /// the key its record goes by: its SHA-256, or for a split archive, the key
+    /// [`parts_key`] gives its parts.
     pub(in crate::cli) archive: Sha256,
+    /// a split archive's parts, each SHA-256 and size, in order; none for an archive in one
+    /// file.
+    pub(in crate::cli) parts: Vec<(Sha256, u64)>,
     pub(in crate::cli) size: u64,
     pub(in crate::cli) label: String,
     /// the tree data.lock pins for it, the only one recorded once known.
     pub(in crate::cli) tree: Option<Sha256>,
+    /// a first part with no other part beside it and no tree pinned yet. its bytes may be only
+    /// the start of an archive whose other parts are elsewhere, so when they do not unpack it
+    /// stays packed with a warning rather than failing the run.
+    pub(in crate::cli) lone: bool,
+}
+
+impl Unpack {
+    /// an archive in one file.
+    pub(in crate::cli) fn whole(
+        archive: Sha256,
+        size: u64,
+        label: String,
+        tree: Option<Sha256>,
+    ) -> Unpack {
+        Unpack {
+            archive,
+            parts: Vec::new(),
+            size,
+            label,
+            tree,
+            lone: false,
+        }
+    }
+
+    /// an archive split into `parts`, each SHA-256 and size, in order.
+    pub(in crate::cli) fn split(
+        parts: Vec<(Sha256, u64)>,
+        label: String,
+        tree: Option<Sha256>,
+    ) -> Unpack {
+        Unpack {
+            archive: parts_key(parts.iter().copied()),
+            size: parts.iter().map(|(_, size)| size).sum(),
+            lone: parts.len() == 1 && tree.is_none(),
+            parts,
+            label,
+            tree,
+        }
+    }
+
+    /// the archive data.lock pins as `archive`, labelled `label`.
+    pub(in crate::cli) fn pinned(archive: &Archive<'_>, label: String) -> Unpack {
+        let tree = archive.file.unpacks_to;
+        if archive.parts.is_empty() {
+            return Unpack::whole(archive.file.sha256, archive.file.size, label, tree);
+        }
+        let parts = archive.parts.iter().map(|part| (part.sha256, part.size));
+        Unpack::split(parts.collect(), label, tree)
+    }
+
+    /// the cache objects holding its bytes.
+    fn objects(&self) -> Vec<Sha256> {
+        if self.parts.is_empty() {
+            vec![self.archive]
+        } else {
+            self.parts.iter().map(|(part, _)| *part).collect()
+        }
+    }
 }
 
 /// unpacks archives the cache holds and records what each unpacked to: what it holds, or none
@@ -88,14 +152,13 @@ pub(in crate::cli) async fn unpack_all(
                     ticker.advance(bytes);
                     stop.is_asked() || failed.load(Ordering::Relaxed)
                 };
-                let unpacked = archive::unpack_cached(
-                    &cache,
-                    &unpack.archive,
-                    unpack.size,
-                    unpack.tree.as_ref(),
-                    &watch,
-                    writers,
-                );
+                let tree = unpack.tree.as_ref();
+                let unpacked = if unpack.parts.is_empty() {
+                    let size = unpack.size;
+                    archive::unpack_cached(&cache, &unpack.archive, size, tree, &watch, writers)
+                } else {
+                    archive::unpack_cached_parts(&cache, &unpack.parts, tree, &watch, writers)
+                };
                 drop(bar);
                 (index, unpack, started.elapsed(), unpacked)
             });
@@ -117,10 +180,14 @@ pub(in crate::cli) async fn unpack_all(
                 tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
                 results[index] = Some(unpacked);
             }
-            Ok(None) => context.output.warn(&format!(
+            Ok(None) if !unpack.lone => context.output.warn(&format!(
                 "{} is no archive fetchloom can read, so it stays as it is",
                 unpack.label
             )),
+            Ok(None) => tell_lone(&context.output, &unpack.label),
+            Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
+                tell_lone(&context.output, &unpack.label);
+            }
             Err(err) => {
                 // the others stop at their next read
                 failed.store(true, Ordering::Relaxed);
@@ -204,26 +271,13 @@ impl Loop<'_> {
     ) -> Result<(), Error> {
         let mut slots = Vec::new();
         let mut unpacks = Vec::new();
-        let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
-        let up = crate::cli::up_to(&self.project.root, &here);
         for (index, draft) in drafts.iter_mut().enumerate() {
-            for (dataset, path, format) in draft.left_packed() {
-                let placed = format!("{up}{}/{path}", plan::folder(manifest, dataset));
-                self.context.output.warn_with(
-                    &format!(
-                        "{dataset}/{path} stays packed, since fetchloom does not unpack {format}"
-                    ),
-                    &archive::unpack_elsewhere(System::RUNNING, &placed, &up, "extract = false"),
-                );
+            for (dataset, path, why) in draft.left_packed() {
+                self.tell_packed(manifest, dataset, path, &why);
             }
-            for todo in draft.unknown_archives(&self.cache) {
-                slots.push((index, todo.file));
-                unpacks.push(Unpack {
-                    archive: todo.archive,
-                    size: todo.size,
-                    label: todo.label,
-                    tree: None,
-                });
+            for (file, unpack) in draft.unknown_archives(&self.cache) {
+                slots.push((index, file));
+                unpacks.push(unpack);
             }
         }
         let trees = self.unpack(unpacks).await?;
@@ -231,6 +285,46 @@ impl Loop<'_> {
             drafts[draft].unpacked(file, tree);
         }
         Ok(())
+    }
+
+    /// says that the archive at `path` in `dataset` stays packed and why, with how a person
+    /// unpacks it outside the data folder `manifest` sets, as typed where fetchloom runs.
+    fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
+        let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
+        let up = crate::cli::up_to(&self.project.root, &here);
+        let placed = format!("{up}{}/{path}", plan::folder(manifest, dataset));
+        let stop = "extract = false";
+        let (said, help) = match why {
+            Why::Format(format) => (
+                format!("{dataset}/{path} stays packed, since fetchloom does not unpack {format}"),
+                archive::unpack_elsewhere(System::RUNNING, &placed, &up, stop),
+            ),
+            Why::Volumes {
+                format: "rar",
+                count,
+            } => (
+                format!(
+                    "{dataset}/{path} stays packed with {} of its rar, since fetchloom does not unpack rar",
+                    units::count(*count as u64 - 1, "other volume", "other volumes")
+                ),
+                archive::unpack_elsewhere(System::RUNNING, &placed, &up, stop),
+            ),
+            Why::Volumes { count, .. } => (
+                format!(
+                    "{dataset}/{path} stays packed with {} it spans, since fetchloom does not unpack a zip spanned over several files",
+                    units::count(*count as u64 - 1, "other file", "other files")
+                ),
+                archive::join_elsewhere(System::RUNNING, &placed, &up, stop),
+            ),
+            Why::Missing(missing) => (
+                format!(
+                    "{dataset}/{missing} is missing, so the parts of {} stay as they are",
+                    parts::whole(missing).unwrap_or(missing)
+                ),
+                "fetchloom joins a split archive only from every one of its parts: check that select and exclude keep them all, or ask the dataset's authors for the missing one".to_owned(),
+            ),
+        };
+        self.context.output.warn_with(&said, &help);
     }
 
     /// learns what every archive of `pinned`, imports pinned whole, unpacks to, from its bytes in
@@ -244,35 +338,46 @@ impl Loop<'_> {
         let mut slots = Vec::new();
         let mut unpacks = Vec::new();
         for (index, locked) in pinned.iter_mut().enumerate() {
-            if !locked.extract {
-                continue;
+            let found = draft::archives(
+                locked.files.iter().map(|file| file.path.as_str()),
+                locked.extract,
+            );
+            for (at, why) in &found.packed {
+                self.tell_packed(manifest, &locked.name, &locked.files[*at].path, why);
             }
-            for (at, file) in locked.files.iter_mut().enumerate() {
-                let label = format!("{}/{}", locked.name, file.path);
-                match archive::by_name(&file.path) {
-                    Some(Packed::Unsupported(format)) => self.context.output.warn(&format!(
-                        "{label} stays packed, since fetchloom does not unpack {format}"
-                    )),
-                    Some(Packed::Archive) if file.unpacks_to.is_none() => {
-                        if let Some(tree) = self.cache.unpacked_tree(&file.sha256) {
-                            file.unpacks_to = Some(tree);
-                        } else if self.cache.find(&file.sha256, Some(file.size)).is_none() {
-                            return Err(local::imported_elsewhere(
-                                &locked.name,
-                                &plan::folder(manifest, &locked.name),
-                            ));
-                        } else {
-                            slots.push((index, at));
-                            unpacks.push(Unpack {
-                                archive: file.sha256,
-                                size: file.size,
-                                label,
-                                tree: None,
-                            });
-                        }
-                    }
-                    _ => {}
+            for unit in found.unpack {
+                let at = unit.first();
+                if locked.files[at].unpacks_to.is_some() {
+                    continue;
                 }
+                let key = unit.key(&locked.files, |file| (file.sha256, file.size));
+                if let Some(tree) = self.cache.unpacked_tree(&key) {
+                    locked.files[at].unpacks_to = Some(tree);
+                    continue;
+                }
+                let lacks = |index: &usize| {
+                    let file = &locked.files[*index];
+                    self.cache.find(&file.sha256, Some(file.size)).is_none()
+                };
+                if unit.files().iter().any(lacks) {
+                    return Err(local::imported_elsewhere(
+                        &locked.name,
+                        &plan::folder(manifest, &locked.name),
+                    ));
+                }
+                let label = format!("{}/{}", locked.name, locked.files[at].path);
+                let file = &locked.files[at];
+                slots.push((index, at));
+                unpacks.push(match &unit {
+                    Unit::Whole(_) => Unpack::whole(file.sha256, file.size, label, None),
+                    Unit::Split(set) => {
+                        let parts = set.iter().map(|index| {
+                            let part = &locked.files[*index];
+                            (part.sha256, part.size)
+                        });
+                        Unpack::split(parts.collect(), label, None)
+                    }
+                });
             }
         }
         let trees = self.unpack(unpacks).await?;
@@ -282,22 +387,22 @@ impl Loop<'_> {
         Ok(())
     }
 
-    /// unpacks archives the cache holds, remembers them for [`Loop::drop_unpacked`], and says each
-    /// one's tree hash, or none for a file whose bytes are no archive after all.
+    /// unpacks archives the cache holds, remembers their bytes for [`Loop::drop_unpacked`], and
+    /// says each one's tree hash, or none for a file whose bytes are no archive after all.
     async fn unpack(&self, archives: Vec<Unpack>) -> Result<Vec<Option<Sha256>>, Error> {
         // most syncs unpack nothing, and need no progress ticker for it
         if archives.is_empty() {
             return Ok(Vec::new());
         }
-        let digests: Vec<Sha256> = archives.iter().map(|unpack| unpack.archive).collect();
+        let objects: Vec<Vec<Sha256>> = archives.iter().map(Unpack::objects).collect();
         let unpacked = unpack_all(self.context, &self.cache, archives).await?;
         let mut done = self.unpacked.lock().unwrap_or_else(PoisonError::into_inner);
-        Ok(digests
+        Ok(objects
             .into_iter()
             .zip(unpacked)
-            .map(|(digest, unpacked)| {
+            .map(|(objects, unpacked)| {
                 unpacked.map(|unpacked| {
-                    done.push(digest);
+                    done.extend(objects);
                     unpacked.tree
                 })
             })
@@ -312,28 +417,34 @@ impl Loop<'_> {
         &self,
         manifest: &Manifest,
         lock: &Lock,
-        archives: &[(String, &LockedFile)],
+        archives: &[(String, Archive<'_>)],
     ) -> Result<(), Error> {
-        let intact = |dataset: &str, file: &LockedFile| {
-            self.cache.verify(&file.sha256).map_err(|err| {
-                Error::io(
-                    format_args!("could not check {dataset}/{}", file.path),
-                    &err,
-                )
-            })
+        // says whether every file of the archive is intact, and which of them changed
+        let intact = |dataset: &str, archive: &Archive<'_>| {
+            let mut whole = true;
+            for file in archive.files() {
+                let checked = self.cache.verify(&file.sha256).map_err(|err| {
+                    Error::io(
+                        format_args!("could not check {dataset}/{}", file.path),
+                        &err,
+                    )
+                })?;
+                if !checked {
+                    self.context.output.warn(&format!(
+                        "{dataset}/{} changed in the cache, so it is downloaded again",
+                        file.path
+                    ));
+                }
+                whole &= checked;
+            }
+            Ok::<bool, Error>(whole)
         };
         let checked = match self.unpack_checked(manifest, lock, archives).await {
             Err(error) if error.kind == Kind::SourceInvalid => {
                 // a checksum can fail before a tree exists to compare with the lock.
                 let mut changed = false;
-                for (dataset, file) in archives {
-                    if !intact(dataset, file)? {
-                        changed = true;
-                        self.context.output.warn(&format!(
-                            "{dataset}/{} changed in the cache, so it is downloaded again",
-                            file.path
-                        ));
-                    }
+                for (dataset, archive) in archives {
+                    changed |= !intact(dataset, archive)?;
                 }
                 if !changed {
                     return Err(error);
@@ -343,39 +454,40 @@ impl Loop<'_> {
             result => result?,
         };
         let mut damaged = Vec::new();
-        for (dataset, file) in checked {
-            if intact(&dataset, file)? {
-                return Err(other_files(&dataset, file));
+        for (dataset, archive) in checked {
+            if intact(&dataset, &archive)? {
+                return Err(other_files(&dataset, archive.file));
             }
-            self.context.output.warn(&format!(
-                "{dataset}/{} changed in the cache, so it is downloaded again",
-                file.path
-            ));
-            damaged.push((dataset, file));
+            damaged.push((dataset, archive));
         }
         match self.unpack_checked(manifest, lock, &damaged).await?.first() {
-            Some((dataset, file)) => Err(other_files(dataset, file)),
+            Some((dataset, archive)) => Err(other_files(dataset, archive.file)),
             None => Ok(()),
         }
     }
 
-    /// downloads the archives the cache lacks and unpacks every one, and returns those that
-    /// unpacked to other files than the lock says.
+    /// downloads the archives' files the cache lacks and unpacks every archive, and returns
+    /// those that unpacked to other files than the lock says.
     async fn unpack_checked<'f>(
         &self,
         manifest: &Manifest,
         lock: &Lock,
-        archives: &[(String, &'f LockedFile)],
-    ) -> Result<Vec<(String, &'f LockedFile)>, Error> {
+        archives: &[(String, Archive<'f>)],
+    ) -> Result<Vec<(String, Archive<'f>)>, Error> {
         if archives.is_empty() {
             return Ok(Vec::new());
         }
-        let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
+        let lacking = || {
+            archives.iter().flat_map(|(dataset, archive)| {
+                let files = archive.files().into_iter();
+                files
+                    .filter(|file| self.cache.find(&file.sha256, Some(file.size)).is_none())
+                    .map(move |file| (dataset, file))
+            })
+        };
         // before any link is read, so one that cannot be followed stops no mirror
         super::fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
-            archives
-                .iter()
-                .filter(|(_, file)| lacks(file))
+            lacking()
                 .map(|(dataset, file)| crate::mirror::Wanted {
                     digest: file.sha256,
                     size: file.size,
@@ -385,42 +497,38 @@ impl Loop<'_> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
-        let jobs = archives
-            .iter()
-            .filter(|(_, file)| lacks(file))
+        let jobs = lacking()
             .map(|(dataset, file)| job(manifest, lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
         self.download(jobs).await?;
         let unpacks = archives
             .iter()
-            .map(|(dataset, file)| Unpack {
-                archive: file.sha256,
-                size: file.size,
-                label: format!("{dataset}/{}", file.path),
-                tree: file.unpacks_to,
+            .map(|(dataset, archive)| {
+                Unpack::pinned(archive, format!("{dataset}/{}", archive.file.path))
             })
             .collect();
         let trees = self.unpack(unpacks).await?;
         Ok(archives
             .iter()
             .zip(trees)
-            .filter(|((_, file), tree)| *tree != file.unpacks_to)
+            .filter(|((_, archive), tree)| *tree != archive.file.unpacks_to)
             .map(|(archive, _)| archive.clone())
             .collect())
     }
 
-    /// drops archives whose members are now cached, including records reused after an earlier
-    /// failed run, unless something on this machine still needs their packed bytes.
+    /// drops archives whose members are now cached, each part of a split one, including records
+    /// reused after an earlier failed run, unless something on this machine still needs their
+    /// packed bytes.
     pub(in crate::cli) fn drop_unpacked(&self, lock: &Lock) {
         let mut unpacked =
             std::mem::take(&mut *self.unpacked.lock().unwrap_or_else(PoisonError::into_inner));
-        unpacked.extend(
-            lock.datasets
-                .iter()
-                .flat_map(|dataset| &dataset.files)
-                .filter(|file| file.unpacks_to.is_some())
-                .map(|file| file.sha256),
-        );
+        for dataset in &lock.datasets {
+            for pinned in archives::pinned(&dataset.files) {
+                if let archives::Pinned::Archive(archive) = pinned {
+                    unpacked.extend(archive.files().into_iter().map(|file| file.sha256));
+                }
+            }
+        }
         unpacked.sort_unstable();
         unpacked.dedup();
         drop_archives(&self.cache, &unpacked, Some(lock));
@@ -440,6 +548,14 @@ fn other_files(dataset: &str, file: &LockedFile) -> Error {
     .help(format!(
         "data.lock may come from another version of fetchloom. `fetchloom lock --upgrade {dataset}` pins what this one unpacks"
     ))
+}
+
+/// says that the lone part `label` stays packed, as its bytes are no archive on their own.
+fn tell_lone(output: &Output, label: &str) {
+    output.warn_with(
+        &format!("{label} stays packed, since it does not unpack on its own"),
+        "it may be the first part of an archive split into several files, which fetchloom joins only inside one dataset, such as a folder or a record that lists every part",
+    );
 }
 
 fn tell_unpacked(output: &Output, label: &str, unpacked: &Unpacked, elapsed: Duration) {
@@ -529,12 +645,7 @@ mod tests {
             ("second.tar", &second),
         ]
         .into_iter()
-        .map(|(label, stored)| Unpack {
-            archive: stored.digest,
-            size: stored.size,
-            label: label.to_owned(),
-            tree: None,
-        })
+        .map(|(label, stored)| Unpack::whole(stored.digest, stored.size, label.to_owned(), None))
         .collect();
         let unpacked = block_on(unpack_all(&context, &cache, archives)).unwrap();
         assert_eq!(unpacked.len(), 3);
@@ -557,17 +668,35 @@ mod tests {
         );
     }
 
+    /// a first part alone may be only the start of an archive whose other parts are elsewhere,
+    /// so one that does not unpack stays packed; parts together that do not unpack are a
+    /// damaged archive, as one file would be.
+    #[test]
+    fn a_lone_first_part_that_does_not_unpack_stays_packed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let whole = tar(&b"a member much longer than one tar block, ".repeat(64));
+        let half = store(&cache, &whole[..whole.len() / 2]);
+        let first = (half.digest, half.size);
+        let lone = Unpack::split(vec![first], "set/set.tar.001".to_owned(), None);
+        let unpacked = block_on(unpack_all(&context(), &cache, vec![lone])).unwrap();
+        assert!(unpacked[0].is_none(), "stays packed");
+        let wrong = store(&cache, b"not the rest of it");
+        let parts = vec![first, (wrong.digest, wrong.size)];
+        let two = Unpack::split(parts, "set/set.tar.001".to_owned(), None);
+        let error = block_on(unpack_all(&context(), &cache, vec![two])).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid, "{}", error.message);
+        let pinned = Unpack::split(vec![first], "set/set.tar.001".to_owned(), Some(half.digest));
+        let error = block_on(unpack_all(&context(), &cache, vec![pinned])).unwrap_err();
+        assert_eq!(error.kind, Kind::SourceInvalid, "a pinned tree must unpack");
+    }
+
     #[test]
     fn an_archive_unpacked_meanwhile_is_not_unpacked_again() {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::open(dir.path().join("cache")).unwrap();
         let stored = store(&cache, &tar(b"member"));
-        let unpack = || Unpack {
-            archive: stored.digest,
-            size: stored.size,
-            label: "set/set.tar".to_owned(),
-            tree: None,
-        };
+        let unpack = || Unpack::whole(stored.digest, stored.size, "set/set.tar".to_owned(), None);
         // another run unpacks the archive, then drops its bytes as a sync does once its files
         // are in, while this run waited for the download
         let theirs = block_on(unpack_all(&context(), &cache, vec![unpack()])).unwrap();
@@ -592,12 +721,12 @@ mod tests {
         let error = block_on(unpack_all(
             &context,
             &cache,
-            vec![Unpack {
-                archive: digest::sha256(b"missing"),
-                size: 7,
-                label: "set/missing.tar".to_owned(),
-                tree: None,
-            }],
+            vec![Unpack::whole(
+                digest::sha256(b"missing"),
+                7,
+                "set/missing.tar".to_owned(),
+                None,
+            )],
         ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::LocalIo);
@@ -627,7 +756,7 @@ mod tests {
         let error = block_on(runner.unpack_locked(
             &Manifest::parse("").unwrap(),
             &lock,
-            &[("set".to_owned(), &lock.datasets[0].files[0])],
+            &archives::of(&lock, vec![("set".to_owned(), &lock.datasets[0].files[0])]),
         ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::IntegrityMismatch);
@@ -715,7 +844,7 @@ mod tests {
         let error = block_on(runner.unpack_locked(
             &Manifest::parse("").unwrap(),
             &lock,
-            &[("set".to_owned(), &lock.datasets[0].files[0])],
+            &archives::of(&lock, vec![("set".to_owned(), &lock.datasets[0].files[0])]),
         ))
         .unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid);

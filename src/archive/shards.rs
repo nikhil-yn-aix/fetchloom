@@ -130,6 +130,8 @@ mod tests {
         for ending in [".zip", ".tar.xz", ".tar.bak", "tar"] {
             assert_eq!(found(&numbered("", "train-", ending, 8)), None, "{ending}");
         }
+        let parts: Vec<String> = (0..8).map(|part| format!("train.tar.{part:03}")).collect();
+        assert_eq!(found(&parts), None, "the parts of one split tar");
     }
 
     #[test]

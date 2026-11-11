@@ -1,9 +1,7 @@
 //! tar archives, plain or compressed, read in one pass from start to end.
 
 use std::cell::Cell;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
+use std::io::{self, BufRead, Read};
 
 use ::tar::{Archive, Entry, EntryType};
 use bzip2::bufread::MultiBzDecoder;
@@ -12,8 +10,9 @@ use liblzma::bufread::XzDecoder;
 use liblzma::stream::{CONCATENATED, Stream};
 
 use super::guard::{Guard, Meter};
+use super::input::Input;
 use super::names::Named;
-use super::{BUFFER, Format, Keep, damaged, refused, refused_member, unreadable};
+use super::{Format, Keep, damaged, refused, refused_member};
 use crate::error::Error;
 use crate::units;
 
@@ -95,14 +94,13 @@ pub(super) fn unreadable_stream(
 }
 
 pub(super) fn unpack(
-    archive: &Path,
+    input: &Input,
     format: Format,
     guard: &mut Guard<'_>,
     keep: &mut Keep<'_>,
 ) -> Result<(), Error> {
-    let file = File::open(archive).map_err(|err| unreadable(archive, &err))?;
     let counted = Counted {
-        inner: BufReader::with_capacity(BUFFER, file),
+        inner: input.open(guard.meter())?,
         meter: guard.meter(),
     };
     let memory = guard.limits().memory;

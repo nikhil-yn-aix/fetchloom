@@ -6,8 +6,9 @@ use std::collections::{HashMap, HashSet};
 use url::Url;
 
 use super::super::fetch::{self, Job};
-use crate::archive::{self, Packed};
-use crate::cache::Cache;
+use super::unpack::Unpack;
+use crate::archive::{self, Packed, parts};
+use crate::cache::{Cache, parts_key};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
@@ -51,14 +52,6 @@ struct DraftFile {
     /// the pin data.lock had for a file an upgrade asks about again, since no checksum tells
     /// whether its bytes changed. only a dry run, which cannot ask, plans with it.
     was: Option<LockedFile>,
-}
-
-/// an archive a draft needs unpacked to learn what it unpacks to.
-pub(super) struct ToUnpack {
-    pub(super) file: usize,
-    pub(super) archive: Sha256,
-    pub(super) size: u64,
-    pub(super) label: String,
 }
 
 impl Draft {
@@ -143,7 +136,7 @@ impl Draft {
                 }
             })
             .collect();
-        Ok(Draft {
+        let mut draft = Draft {
             name: name.to_owned(),
             reference: source.reference.clone(),
             spec: lock::spec(source),
@@ -156,7 +149,65 @@ impl Draft {
             access: listing.access,
             versions,
             files,
-        })
+        };
+        draft.carry_split(previous, upgrading, cache);
+        Ok(draft)
+    }
+
+    /// gives each split archive's first part the tree data.lock pinned for it, while every part
+    /// is the one pinned then, or for an upgrade, the tree this machine recorded for those
+    /// parts. a part that changed, came or went makes another archive.
+    fn carry_split(&mut self, previous: Option<&Locked>, upgrading: bool, cache: &Cache) {
+        let pinned = previous.map(|locked| lock::archives::pinned(&locked.files));
+        let earlier: HashMap<&str, lock::archives::Archive<'_>> = pinned
+            .into_iter()
+            .flatten()
+            .filter_map(|pinned| match pinned {
+                lock::archives::Pinned::Archive(archive) if !archive.parts.is_empty() => {
+                    Some((archive.file.path.as_str(), archive))
+                }
+                _ => None,
+            })
+            .collect();
+        for unit in self.archives().unpack {
+            let Unit::Split(set) = unit else {
+                continue;
+            };
+            let key = self.parts(&set).map(parts_key);
+            let was = earlier
+                .get(self.files[set[0]].path.as_str())
+                .filter(|archive| Some(archive.key()) == key)
+                .and_then(|archive| archive.file.unpacks_to);
+            let recorded = key
+                .filter(|_| upgrading)
+                .and_then(|key| cache.unpacked_tree(&key));
+            self.files[set[0]].unpacks_to = recorded.or(was);
+        }
+    }
+
+    /// the archives among the dataset's files, by their names, while it unpacks.
+    fn archives(&self) -> Archives {
+        archives(
+            self.files.iter().map(|file| file.path.as_str()),
+            self.extract,
+        )
+    }
+
+    /// what the parts `set` are, each part's SHA-256 and size in order, once every one is known.
+    fn parts(&self, set: &[usize]) -> Option<Vec<(Sha256, u64)>> {
+        set.iter().map(|index| self.files[*index].known).collect()
+    }
+
+    /// what this machine recorded the archive `unit` unpacks to, once its bytes are known.
+    fn recorded(&self, unit: &Unit, cache: &Cache) -> Option<Sha256> {
+        match unit {
+            Unit::Whole(index) => self.files[*index]
+                .known
+                .and_then(|(sha256, _)| cache.unpacked_tree(&sha256)),
+            Unit::Split(set) => self
+                .parts(set)
+                .and_then(|parts| cache.unpacked_tree(&parts_key(parts))),
+        }
     }
 
     /// a dataset whose entry changed only in `extract`, from the files data.lock pins, so it
@@ -207,9 +258,23 @@ impl Draft {
 
     /// the downloads this dataset needs, each with the index of the file whose hash it learns:
     /// every file whose hash is unknown, and every archive whose bytes must be unpacked to learn
-    /// what it unpacks to. a file no checksum pins is asked about with what its URL served
-    /// before, so bytes the cache already holds are not sent again.
+    /// what it unpacks to, each part of a split one. a file no checksum pins is asked about with
+    /// what its URL served before, so bytes the cache already holds are not sent again.
     pub(super) fn jobs(&self, cache: &Cache) -> Vec<(Option<usize>, Job)> {
+        let mut unpacking = vec![false; self.files.len()];
+        let mut whole = vec![false; self.files.len()];
+        for unit in self.archives().unpack {
+            if let Unit::Whole(index) = unit {
+                whole[index] = true;
+            }
+            if self.files[unit.first()].unpacks_to.is_none()
+                && self.recorded(&unit, cache).is_none()
+            {
+                for index in unit.files() {
+                    unpacking[index] = true;
+                }
+            }
+        }
         let mut jobs = Vec::new();
         for (index, file) in self.files.iter().enumerate() {
             let remote = &file.remote;
@@ -223,10 +288,7 @@ impl Draft {
                     true,
                 ),
                 Some((sha256, size))
-                    if self.unpacks(file)
-                        && file.unpacks_to.is_none()
-                        && cache.unpacked_tree(&sha256).is_none()
-                        && cache.find(&sha256, Some(size)).is_none() =>
+                    if unpacking[index] && cache.find(&sha256, Some(size)).is_none() =>
                 {
                     let expect = Expect {
                         sha256: Some(sha256),
@@ -241,7 +303,7 @@ impl Draft {
             let fetch = Fetch {
                 expect,
                 revalidate: learn && remote.sha256.is_none() && remote.md5.is_none(),
-                unpack: self.unpacks(file),
+                unpack: whole[index],
                 ..source::fetch_plan(&remote.url)
             };
             let job = Job {
@@ -276,24 +338,28 @@ impl Draft {
     /// and an archive this machine never unpacked, stand as archives with no record, so the
     /// check after the downloads takes them.
     pub(super) fn foreseen(&self, cache: &Cache) -> Locked {
-        let mut files: Vec<LockedFile> = self
+        let mut trees: Vec<Option<Sha256>> = self
             .files
             .iter()
             .map(|file| {
+                renamed_by_download(file)
+                    .then(|| stand_in(&format!("{}/{} unpacked", self.name, file.path)))
+            })
+            .collect();
+        for unit in self.archives().unpack {
+            let index = unit.first();
+            let label = format!("{}/{} unpacked", self.name, self.files[index].path);
+            trees[index] = trees[index]
+                .or(self.files[index].unpacks_to)
+                .or_else(|| self.recorded(&unit, cache))
+                .or_else(|| Some(stand_in(&label)));
+        }
+        let mut files: Vec<LockedFile> = self
+            .files
+            .iter()
+            .zip(trees)
+            .map(|(file, unpacks_to)| {
                 let label = format!("{}/{}", self.name, file.path);
-                let unrecorded = || Some(stand_in(&format!("{label} unpacked")));
-                let unpacks_to = if renamed_by_download(file) {
-                    unrecorded()
-                } else if self.unpacks(file) {
-                    file.unpacks_to
-                        .or_else(|| {
-                            file.known
-                                .and_then(|(sha256, _)| cache.unpacked_tree(&sha256))
-                        })
-                        .or_else(unrecorded)
-                } else {
-                    None
-                };
                 let (sha256, size) = file
                     .known
                     .unwrap_or_else(|| (stand_in(&label), file.remote.size.unwrap_or_default()));
@@ -323,27 +389,30 @@ impl Draft {
         }
     }
 
-    /// the archives that must be unpacked to learn what they unpack to. an archive this machine
-    /// unpacked before is known from its record and needs no unpacking.
-    pub(super) fn unknown_archives(&mut self, cache: &Cache) -> Vec<ToUnpack> {
+    /// the archives that must be unpacked to learn what they unpack to, each with the index of
+    /// the file data.lock gives what it unpacks to: the archive, or a split archive's first part.
+    /// an archive this machine unpacked before is known from its record and needs no unpacking.
+    pub(super) fn unknown_archives(&mut self, cache: &Cache) -> Vec<(usize, Unpack)> {
         let mut todo = Vec::new();
-        for index in 0..self.files.len() {
-            let file = &self.files[index];
-            let Some((archive, size)) = file.known else {
+        for unit in self.archives().unpack {
+            let index = unit.first();
+            if self.files[index].unpacks_to.is_some() {
                 continue;
+            }
+            if let Some(tree) = self.recorded(&unit, cache) {
+                self.files[index].unpacks_to = Some(tree);
+                continue;
+            }
+            let label = format!("{}/{}", self.name, self.files[index].path);
+            let unpack = match &unit {
+                Unit::Whole(index) => self.files[*index]
+                    .known
+                    .map(|(archive, size)| Unpack::whole(archive, size, label, None)),
+                Unit::Split(set) => self
+                    .parts(set)
+                    .map(|parts| Unpack::split(parts, label, None)),
             };
-            if !self.unpacks(file) || file.unpacks_to.is_some() {
-                continue;
-            }
-            match cache.unpacked_tree(&archive) {
-                Some(tree) => self.files[index].unpacks_to = Some(tree),
-                None => todo.push(ToUnpack {
-                    file: index,
-                    archive,
-                    size,
-                    label: format!("{}/{}", self.name, file.path),
-                }),
-            }
+            todo.extend(unpack.map(|unpack| (index, unpack)));
         }
         todo
     }
@@ -353,24 +422,14 @@ impl Draft {
         self.files[index].unpacks_to = tree;
     }
 
-    /// archives in this dataset that fetchloom leaves packed: the dataset's name, each archive's
-    /// path in it and its format.
-    pub(super) fn left_packed(&self) -> Vec<(&str, &str, &'static str)> {
-        self.files
-            .iter()
-            .filter(|_| self.extract)
-            .filter_map(|file| match archive::by_name(&file.path) {
-                Some(Packed::Unsupported(format)) => {
-                    Some((self.name.as_str(), file.path.as_str(), format))
-                }
-                _ => None,
-            })
+    /// the archives in this dataset that stay packed: the dataset's name, each archive's path
+    /// in it, and why.
+    pub(super) fn left_packed(&self) -> Vec<(&str, &str, Why)> {
+        self.archives()
+            .packed
+            .into_iter()
+            .map(|(index, why)| (self.name.as_str(), self.files[index].path.as_str(), why))
             .collect()
-    }
-
-    /// whether the file is an archive that unpacks, by its name and data.toml.
-    fn unpacks(&self, file: &DraftFile) -> bool {
-        self.extract && archive::by_name(&file.path) == Some(Packed::Archive)
     }
 
     /// the numbered tar shards among the dataset's files, while its archives unpack.
@@ -388,13 +447,11 @@ impl Draft {
     /// had, since only its bytes could tell a change. also returns the files, as
     /// `<dataset>/<path>`, whose hash is a stand-in.
     pub(super) fn stand_in(mut self, now: &str) -> Result<(Locked, Vec<String>), Error> {
-        let extract = self.extract;
         let mut guessed = Vec::new();
         for file in &mut self.files {
             if file.known.is_none() {
                 if let Some(was) = &file.was {
                     file.known = Some((was.sha256, was.size));
-                    file.path.clone_from(&was.path);
                     file.unpacks_to = was.unpacks_to;
                 } else {
                     let label = format!("{}/{}", self.name, file.path);
@@ -403,9 +460,11 @@ impl Draft {
                     guessed.push(label);
                 }
             }
-            let label = format!("{}/{}", self.name, file.path);
-            let unpacks = extract && archive::by_name(&file.path) == Some(Packed::Archive);
-            if unpacks && file.unpacks_to.is_none() {
+        }
+        for unit in self.archives().unpack {
+            let file = &mut self.files[unit.first()];
+            if file.unpacks_to.is_none() {
+                let label = format!("{}/{}", self.name, file.path);
                 file.unpacks_to = Some(stand_in(&format!("{label} unpacked")));
             }
         }
@@ -503,21 +562,127 @@ pub(in crate::cli) fn without_files(
 /// run would unpack to learn it.
 pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> {
     let mut unknown = Vec::new();
-    if !locked.extract {
-        return unknown;
-    }
-    for file in &mut locked.files {
-        if file.unpacks_to.is_some() || archive::by_name(&file.path) != Some(Packed::Archive) {
+    let found = archives(
+        locked.files.iter().map(|file| file.path.as_str()),
+        locked.extract,
+    );
+    for unit in found.unpack {
+        let index = unit.first();
+        if locked.files[index].unpacks_to.is_some() {
             continue;
         }
-        let label = format!("{}/{}", locked.name, file.path);
-        file.unpacks_to = Some(cache.unpacked_tree(&file.sha256).unwrap_or_else(|| {
+        let key = unit.key(&locked.files, |file| (file.sha256, file.size));
+        let label = format!("{}/{}", locked.name, locked.files[index].path);
+        locked.files[index].unpacks_to = Some(cache.unpacked_tree(&key).unwrap_or_else(|| {
             let tree = stand_in(&format!("{label} unpacked"));
             unknown.push(label);
             tree
         }));
     }
     unknown
+}
+
+/// the archives among a dataset's files by their names, while the dataset unpacks: what unpacks,
+/// and what stays packed and why.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Archives {
+    pub(super) unpack: Vec<Unit>,
+    /// each archive that stays packed, by the index of the file a person's tools open first.
+    pub(super) packed: Vec<(usize, Why)>,
+}
+
+/// an archive that unpacks, by the index of each of its files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Unit {
+    /// an archive in one file.
+    Whole(usize),
+    /// an archive split into parts, in order.
+    Split(Vec<usize>),
+}
+
+impl Unit {
+    /// the file data.lock gives what the archive unpacks to: the archive, or its first part.
+    pub(super) fn first(&self) -> usize {
+        match self {
+            Unit::Whole(index) => *index,
+            Unit::Split(set) => set[0],
+        }
+    }
+
+    /// every file of the archive, in order.
+    pub(super) fn files(&self) -> Vec<usize> {
+        match self {
+            Unit::Whole(index) => vec![*index],
+            Unit::Split(set) => set.clone(),
+        }
+    }
+
+    /// the key the cache's record of what the archive unpacks to goes by, from each of `files`'
+    /// SHA-256 and size as `known` gives them.
+    pub(super) fn key<T>(&self, files: &[T], known: impl Fn(&T) -> (Sha256, u64)) -> Sha256 {
+        match self {
+            Unit::Whole(index) => known(&files[*index]).0,
+            Unit::Split(set) => parts_key(set.iter().map(|index| known(&files[*index]))),
+        }
+    }
+}
+
+/// why an archive stays packed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Why {
+    /// fetchloom does not unpack its format, `rar`.
+    Format(&'static str),
+    /// it spans several volumes only its own tools join: rar's, or a zip's `.z01` and on.
+    Volumes { format: &'static str, count: usize },
+    /// it is split into parts, and the part at this path is missing.
+    Missing(String),
+}
+
+/// the archives among `paths`, a dataset's files, by their names: none when the dataset keeps
+/// its archives packed.
+pub(super) fn archives<'a>(paths: impl Iterator<Item = &'a str>, extract: bool) -> Archives {
+    let mut found = Archives::default();
+    if !extract {
+        return found;
+    }
+    let paths: Vec<&str> = paths.collect();
+    let split = parts::split(paths.iter().copied());
+    let mut taken = vec![false; paths.len()];
+    for set in split.sets {
+        for index in &set {
+            taken[*index] = true;
+        }
+        found.unpack.push(Unit::Split(set));
+    }
+    for (set, missing) in split.incomplete {
+        for index in &set {
+            taken[*index] = true;
+        }
+        found.packed.push((set[0], Why::Missing(missing)));
+    }
+    for volumes in split.volumes {
+        for index in &volumes.files {
+            taken[*index] = true;
+        }
+        let why = match volumes.files.len() {
+            1 => Why::Format(volumes.format),
+            count => Why::Volumes {
+                format: volumes.format,
+                count,
+            },
+        };
+        found.packed.push((volumes.files[0], why));
+    }
+    for (index, path) in paths.iter().enumerate().filter(|(index, _)| !taken[*index]) {
+        match archive::by_name(path) {
+            Some(Packed::Archive) => found.unpack.push(Unit::Whole(index)),
+            Some(Packed::Unsupported(format)) => found.packed.push((index, Why::Format(format))),
+            None => {}
+        }
+    }
+    found.unpack.sort_unstable_by_key(Unit::first);
+    found.packed.sort_unstable_by_key(|(index, _)| *index);
+    found
 }
 
 /// the link data.lock pins for `file` of `dataset`.
@@ -862,6 +1027,129 @@ mod tests {
             Some(recorded),
             "an upgrade pins what this fetchloom unpacks"
         );
+    }
+
+    /// the names say what unpacks: an archive in one file, and a split archive whose parts are
+    /// all there, as one; a part missing, rar and spanned zips stay packed, each said once.
+    #[test]
+    fn names_say_what_unpacks_and_why_the_rest_stays_packed() {
+        let paths = [
+            "a.zip",
+            "b.zip.001",
+            "b.zip.002",
+            "c.zip.001",
+            "c.zip.003",
+            "d.part1.rar",
+            "d.part2.rar",
+            "e.rar",
+            "f.z01",
+            "f.zip",
+            "g.csv",
+        ];
+        let found = archives(paths.into_iter(), true);
+        assert_eq!(found.unpack, [Unit::Whole(0), Unit::Split(vec![1, 2])]);
+        assert_eq!(
+            found.packed,
+            [
+                (3, Why::Missing("c.zip.002".to_owned())),
+                (
+                    5,
+                    Why::Volumes {
+                        format: "rar",
+                        count: 2
+                    }
+                ),
+                (7, Why::Format("rar")),
+                (
+                    9,
+                    Why::Volumes {
+                        format: "zip",
+                        count: 2
+                    }
+                ),
+            ]
+        );
+        assert_eq!(archives(paths.into_iter(), false), Archives::default());
+    }
+
+    /// a split archive unpacks once from all of its parts, recorded at its first part, and keeps
+    /// the tree data.lock pinned only while every part is the one pinned then: a part that
+    /// changed, or one more, makes another archive.
+    #[test]
+    fn a_split_archive_keeps_its_tree_only_while_every_part_is_unchanged() {
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse("[datasets.scans]\nref = \"zenodo:1\"\n").unwrap();
+        let entry = &manifest.datasets["scans"];
+        let remote = |path: &str, bytes: &[u8]| Remote {
+            path: path.to_owned(),
+            size: Some(bytes.len() as u64),
+            sha256: Some(digest::sha256(bytes)),
+            md5: None,
+            url: Url::parse(&format!("https://example.org/files/{path}")).unwrap(),
+            named_by_server: false,
+        };
+        let drafted = |files: Vec<Remote>, previous: Option<&Locked>| {
+            let listing = Listing {
+                within: Vec::new(),
+                access: Access::Public,
+                unavailable: Vec::new(),
+                warnings: Vec::new(),
+                resolved: Reference::parse("zenodo:1").unwrap().reference,
+                title: None,
+                license: None,
+                doi: None,
+                files,
+            };
+            Draft::new(
+                "scans",
+                entry,
+                entry.source().unwrap(),
+                listing,
+                previous,
+                false,
+                &cache,
+            )
+            .unwrap()
+        };
+        let parts = vec![
+            remote("scans.zip.001", b"first"),
+            remote("scans.zip.002", b"second"),
+        ];
+        let mut draft = drafted(parts.clone(), None);
+        let jobs: Vec<String> = draft
+            .jobs(&cache)
+            .into_iter()
+            .map(|(_, job)| job.label)
+            .collect();
+        assert_eq!(jobs, ["scans/scans.zip.001", "scans/scans.zip.002"]);
+        let todo = draft.unknown_archives(&cache);
+        let sizes = [
+            (digest::sha256(b"first"), 5),
+            (digest::sha256(b"second"), 6),
+        ];
+        assert_eq!(todo.len(), 1, "one archive");
+        assert_eq!((todo[0].0, &todo[0].1.parts), (0, &sizes.to_vec()));
+        assert_eq!(todo[0].1.archive, parts_key(sizes));
+        let tree = digest::sha256(b"tree");
+        draft.unpacked(0, Some(tree));
+        let locked = draft.finish("2026-11-11T00:00:00Z").unwrap();
+        let trees: Vec<Option<Sha256>> = locked.files.iter().map(|file| file.unpacks_to).collect();
+        assert_eq!(trees, [Some(tree), None], "the first part says it");
+        let again = drafted(parts.clone(), Some(&locked));
+        assert_eq!(again.files[0].unpacks_to, Some(tree));
+        assert!(again.jobs(&cache).is_empty());
+        let changed = drafted(
+            vec![parts[0].clone(), remote("scans.zip.002", b"other")],
+            Some(&locked),
+        );
+        let more = drafted(
+            [parts, vec![remote("scans.zip.003", b"third")]].concat(),
+            Some(&locked),
+        );
+        for other in [changed, more] {
+            assert_eq!(other.files[0].unpacks_to, None);
+        }
     }
 
     /// drop rewrites a dataset's pin offline when it leaves out a file its source lists: the
@@ -1451,7 +1739,8 @@ mod tests {
     /// where a dataset's locked files land, each as its path, hash and size.
     fn placed(cache: &Cache, files: &[LockedFile]) -> Vec<(String, Sha256, u64)> {
         let mut planned = crate::plan::Plan::default();
-        let members = |file: &LockedFile| cache.unpacked(&file.sha256, file.unpacks_to.as_ref());
+        let members =
+            |archive: &crate::project::lock::archives::Archive<'_>| archive.recorded(cache);
         crate::plan::expand(
             &mut planned,
             "titanic",
@@ -1514,12 +1803,12 @@ mod tests {
             };
             draft.learn(index, &fetched, &cache);
         }
-        for todo in draft.unknown_archives(&cache) {
+        for (file, todo) in draft.unknown_archives(&cache) {
             let unpacked =
                 archive::unpack_cached(&cache, &todo.archive, todo.size, None, &|_| false, None)
                     .unwrap()
                     .unwrap();
-            draft.unpacked(todo.file, Some(unpacked.tree));
+            draft.unpacked(file, Some(unpacked.tree));
         }
         let locked = draft.finish("2026-11-01T00:00:00Z").unwrap();
         let pinned: Vec<(&str, Sha256, bool)> = locked
