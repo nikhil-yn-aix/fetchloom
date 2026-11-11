@@ -1056,7 +1056,7 @@ pub(crate) mod tests {
         );
     }
 
-    /// two datasets in the data folder itself: `a` pinned with a README, and `b`, whose listing
+    /// two datasets in the data folder itself: `b` pinned with a README, and `a`, whose listing
     /// has `remote` as its one file and needs a download to learn its hash. the error a sync
     /// meets first, when every download fails, and whether data.lock stayed as it was.
     fn sync_beside_a_readme(remote: crate::source::Remote) -> (Error, bool) {
@@ -1070,20 +1070,20 @@ pub(crate) mod tests {
             "[datasets.a]\nref = \"https://example.org/a\"\npath = \".\"\n\n[datasets.b]\nref = \"https://example.org/b\"\npath = \".\"\n",
         )
         .unwrap();
-        let a = pinned(
-            "a",
-            lock::spec(&manifest.datasets["a"]),
-            vec![pinned_file("README", "https://example.org/a", b"a")],
+        let b = pinned(
+            "b",
+            lock::spec(&manifest.datasets["b"]),
+            vec![pinned_file("README", "https://example.org/b", b"b")],
         );
         let old = Lock {
-            datasets: vec![a],
+            datasets: vec![b],
             ..Lock::default()
         };
         std::fs::write(project.root.join(lock::FILE), old.render()).unwrap();
         let work = Loop::new(&context, &project, Arc::new(context.net()), cache);
         let given = (
-            "b".to_owned(),
-            listed("https://example.org/b", vec![remote]),
+            "a".to_owned(),
+            listed("https://example.org/a", vec![remote]),
         );
         let error = block_on(sync_all(
             &work,
@@ -1101,13 +1101,14 @@ pub(crate) mod tests {
     }
 
     /// a listing names its files before any is downloaded, so a clash it shows stops the sync
-    /// before the download that would only learn the file's hash.
+    /// before the download that would only learn the file's hash. the datasets are named in
+    /// data.lock's order, as the check after the downloads names them.
     #[test]
     fn a_clash_the_listing_shows_is_found_before_any_download() {
-        let mut listed = stated("README", "https://example.org/b/README", b"b");
+        let mut listed = stated("README", "https://example.org/a/README", b"a");
         listed.sha256 = None;
-        // the MD5 of b, as zenodo and S3 list it
-        listed.md5 = crate::digest::Md5::from_hex("92eb5ffee6ae2fec3ad71c777531578f");
+        // the MD5 of a, as zenodo and S3 list it
+        listed.md5 = crate::digest::Md5::from_hex("0cc175b9c0f1b6a831c399e269772661");
 
         let (error, kept) = sync_beside_a_readme(listed);
 
@@ -1123,7 +1124,7 @@ pub(crate) mod tests {
     /// clash before the download that tells it.
     #[test]
     fn a_name_the_server_gives_is_checked_once_downloaded() {
-        let mut guessed = stated("README", "https://example.org/b/README", b"b");
+        let mut guessed = stated("README", "https://example.org/a/README", b"a");
         guessed.sha256 = None;
         guessed.size = None;
         guessed.named_by_server = true;

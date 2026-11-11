@@ -69,6 +69,9 @@ pub(crate) fn foresee<'a>(
     datasets: impl IntoIterator<Item = &'a Locked>,
     cache: &Cache,
 ) -> Result<(), Error> {
+    // in data.lock's order, so a clash names its datasets as the later check does
+    let mut datasets: Vec<&Locked> = datasets.into_iter().collect();
+    datasets.sort_by(|a, b| a.name.cmp(&b.name));
     planned(manifest, datasets, &|file| {
         cache.unpacked(&file.sha256, file.unpacks_to.as_ref())
     })
