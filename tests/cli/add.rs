@@ -565,7 +565,7 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     added(&sandbox, &server)?;
     let work = sandbox.work();
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::slow_file("/files/cows.csv", body)?;
+    let slow = Server::held_file("/files/cows.csv", body)?;
     let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",
@@ -609,7 +609,7 @@ fn a_stopped_add_says_the_project_is_as_it_was_and_a_rerun_continues() -> Result
         fs::read(work.join("data.lock"))?,
     );
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
-    let slow = Server::slow_file("/files/cows.csv", body.clone())?;
+    let slow = Server::held_file("/files/cows.csv", body.clone())?;
     let running = Background::start(sandbox.command(&["add", &slow.url, "--as", "cows"]))?;
     wait_until(
         "bytes to arrive",

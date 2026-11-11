@@ -558,6 +558,18 @@ impl Server {
     /// serves `body` with a strong `ETag`: slowly on the first connection, then at full speed and
     /// from the asked range on the second.
     pub(crate) fn slow_file(path: &str, body: Vec<u8>) -> Result<Server> {
+        Server::file_twice(path, body, false)
+    }
+
+    /// [`Server::slow_file`], except that the first connection holds back its last 64 KiB until
+    /// its client hangs up, so a stop lands inside the body however busy the machine is.
+    #[cfg(unix)]
+    pub(crate) fn held_file(path: &str, body: Vec<u8>) -> Result<Server> {
+        Server::file_twice(path, body, true)
+    }
+
+    /// [`Server::slow_file`], or with `hold` [`Server::held_file`].
+    fn file_twice(path: &str, body: Vec<u8>, hold: bool) -> Result<Server> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}{path}", listener.local_addr()?);
         let heads = Arc::new(Watched::<Vec<String>>::default());
@@ -586,7 +598,14 @@ impl Server {
                     None => "200 OK",
                 };
                 let _ = stream.write_all(&head(status, &headers));
-                for chunk in rest.chunks(64 * 1024) {
+                let mut chunks = rest.chunks(64 * 1024).peekable();
+                while let Some(chunk) = chunks.next() {
+                    if slow && hold && chunks.peek().is_none() {
+                        // a read ends when the client hangs up or the server stops
+                        let mut probe = [0; 1];
+                        while stream.read(&mut probe).is_ok_and(|read| read > 0) {}
+                        break;
+                    }
                     if stream.write_all(chunk).is_err() {
                         break;
                     }

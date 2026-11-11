@@ -476,7 +476,7 @@ fn a_killed_download_continues_with_a_range_from_its_last_second() -> Result {
 fn a_stopped_get_says_so_in_a_plain_line() -> Result {
     let body: Vec<u8> = (0..1u32 << 20).map(|n| (n % 251) as u8).collect();
     let sandbox = Sandbox::new()?;
-    let server = Server::slow_file("/big.bin", body)?;
+    let server = Server::held_file("/big.bin", body)?;
     let mut child = sandbox
         .command(&["get", &server.url])
         .stdin(Stdio::null())
