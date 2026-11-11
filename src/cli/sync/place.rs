@@ -889,7 +889,7 @@ fn settle_aside(
 /// carries out every decision short of placing files: counts what stays, records files found to
 /// hold the locked bytes, and removes files about to be replaced unless they changed since the
 /// scan, moving those `--force` replaces aside instead. returns the targets left to place, and
-/// whether the state gained a file.
+/// whether the state gained a file or changed a record.
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
@@ -905,6 +905,14 @@ fn settle<'t, 'a>(
     let mut cleared: BTreeMap<String, bool> = BTreeMap::new();
     for (target, action) in targets.iter().zip(actions) {
         placer.stop().check()?;
+        // a file that stays where another dataset placed it is this dataset's now, so its
+        // removal follows this dataset
+        if let Some(placed) = survey.state.files.get_mut(&target.path)
+            && placed.dataset != target.dataset
+        {
+            target.dataset.clone_into(&mut placed.dataset);
+            adopted = true;
+        }
         match action {
             Action::Keep => placement.unchanged += 1,
             Action::Unblock(blocker) => {
@@ -1496,6 +1504,77 @@ mod tests {
 
     fn surveyed(project: &Project) -> Survey {
         Survey::read(project, "data", crate::threads::Threads::default())
+    }
+
+    /// a file that stays where it is but now belongs to another dataset, as when two datasets in
+    /// one folder trade a file, is recorded for its new dataset, which removal then follows.
+    #[test]
+    fn a_kept_file_is_recorded_for_the_dataset_that_places_it_now() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: crate::digest::sha256(bytes),
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let target = Target {
+            dataset: "weather",
+            path: "data/weather.csv".to_owned(),
+            sha256: locked.sha256,
+            size: locked.size,
+            copy: false,
+            locked: &locked,
+        };
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let placed = project.root.join(&target.path);
+        fs::create_dir_all(placed.parent().unwrap()).unwrap();
+        fs::write(&placed, bytes).unwrap();
+        let mut state = State::default();
+        state.files.insert(
+            target.path.clone(),
+            Placed {
+                dataset: "climate".to_owned(),
+                sha256: target.sha256,
+                method: Method::Copy,
+                look: now(&placed).unwrap(),
+                writable: true,
+                checked: 0,
+                adopted: false,
+            },
+        );
+        project.write_state(&state).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.weather]\nref = \"https://example.org/weather.csv\"\npath = \".\"\n",
+        )
+        .unwrap();
+        let placing = Placing {
+            project: &project,
+            manifest: &manifest,
+            targets: vec![target],
+            unknown: Vec::new(),
+            actions: vec![Action::Keep],
+            survey: surveyed(&project),
+        };
+
+        placing
+            .apply(
+                &quiet(),
+                &Work::default(),
+                &cache,
+                None,
+                None,
+                &std::sync::Arc::default(),
+            )
+            .unwrap();
+
+        let (recorded, _) = project.state();
+        assert_eq!(recorded.files["data/weather.csv"].dataset, "weather");
     }
 
     #[test]
