@@ -999,6 +999,28 @@ fn a_list_adds_one_dataset_per_line_and_checks_hashes() -> Result {
     Ok(())
 }
 
+/// a list takes no --as, so the help for a name an earlier line took points at data.toml, where
+/// a dataset can be renamed with its pin.
+#[test]
+fn a_list_line_whose_name_is_taken_says_how_to_rename_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let first = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let second = Server::start("/iris.csv", vec![file(WINE, "\"w1\"")])?;
+    sandbox.allow(&first.url);
+    sandbox.allow(&second.url);
+    let links = format!("{}\n{}\n", first.url, second.url);
+    fs::write(sandbox.work().join("links.txt"), links)?;
+    let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    assert_eq!(
+        json(&output)?["warnings"],
+        serde_json::json!([
+            "iris was taken, so this one is iris-2; to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name"
+        ])
+    );
+    Ok(())
+}
+
 #[test]
 fn a_list_with_a_secret_makes_no_request_and_changes_nothing() -> Result {
     let sandbox = Sandbox::new()?;

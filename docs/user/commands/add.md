@@ -134,7 +134,7 @@ the plan covers the whole project, as the sync after a real addition would. a fi
 
 ## generated names
 
-the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions. use `--as` to choose your own.
+the [dataset naming rules](../reference/data-toml.md#dataset-names) choose a name from a file, title or reference and handle collisions. use `--as` to choose your own. `-i` takes no `--as`, so when a line's name is taken its warning says to rename the dataset's table in data.toml afterwards, and the next sync moves its pin to the new name.
 
 ## exit codes
 

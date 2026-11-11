@@ -436,7 +436,7 @@ async fn add_held(
     }
     let name = match args.name.take() {
         Some(asked) => asked,
-        None => choose_name(&context.output, &addition.listing, &parsed, manifest)?,
+        None => choose_name(&context.output, &addition.listing, &parsed, manifest, AS)?,
     };
     let text = adding.text.as_deref().unwrap_or_default();
     let (updated, new_manifest) = added(text, &name, &args, &addition)?;
@@ -538,7 +538,7 @@ async fn import_held(
         let name = if supplying || args.name.is_some() {
             own
         } else {
-            free_name(&context.output, own, manifest)?
+            free_name(&context.output, own, manifest, AS)?
         };
         let work = Loop::new(context, project, net, cache).telling(&name);
         let found = (&walked, shown, supplying);
@@ -570,7 +570,7 @@ async fn import_held(
     let name = if args.name.is_some() {
         own
     } else {
-        free_name(&context.output, own, manifest)?
+        free_name(&context.output, own, manifest, AS)?
     };
     context.output.step("Imported", &format!("{name} · {told}"));
     let work = Loop::new(context, project, net, cache).telling(&name);
@@ -953,7 +953,7 @@ async fn add_list_held(
             already.push(name);
             continue;
         }
-        let name = choose_name(&context.output, &listing, parsed, &manifest)?;
+        let name = choose_name(&context.output, &listing, parsed, &manifest, RENAME)?;
         text = manifest::with_dataset(
             &text,
             &name,
@@ -1841,12 +1841,20 @@ fn unreserved(name: String) -> String {
     }
 }
 
-/// the name a new dataset gets without `--as`: one made from its file or its title.
+/// how to name a dataset of one add yourself.
+const AS: &str = "choose a name with --as <name>";
+
+/// how to name a dataset of a list yourself, which takes no `--as`.
+const RENAME: &str = "to name it yourself, rename its table in data.toml, and the next sync moves its pin to the new name";
+
+/// the name a new dataset gets without `--as`: one made from its file or its title. `rename` is
+/// how a person names it otherwise, should that name be taken.
 fn choose_name(
     output: &Output,
     listing: &Listing,
     parsed: &Parsed,
     manifest: &Manifest,
+    rename: &str,
 ) -> Result<String, Error> {
     let single = match (listing.files.as_slice(), &parsed.file) {
         ([only], _) => Some(
@@ -1864,12 +1872,17 @@ fn choose_name(
         .or_else(|| listing.naming_title().and_then(name::title_name))
         .or_else(|| name::reference_name(&parsed.reference.to_string()))
         .unwrap_or_else(|| "dataset".to_owned());
-    free_name(output, name, manifest)
+    free_name(output, name, manifest, rename)
 }
 
 /// `name`, a name fetchloom chose, made usable: with `-data` added where windows keeps it for a
-/// device, and the next number when data.toml has it already.
-fn free_name(output: &Output, name: String, manifest: &Manifest) -> Result<String, Error> {
+/// device, and the next number when data.toml has it already, told with `rename`.
+fn free_name(
+    output: &Output,
+    name: String,
+    manifest: &Manifest,
+    rename: &str,
+) -> Result<String, Error> {
     // data.toml travels to windows machines, where a folder named con or aux cannot exist
     let name = unreserved(name);
     // a clash with --as is refused, but a name fetchloom chose can simply take the next number
@@ -1884,7 +1897,7 @@ fn free_name(output: &Output, name: String, manifest: &Manifest) -> Result<Strin
     };
     output.warn_with(
         &format!("{name} was taken, so this one is {numbered}"),
-        "choose a name with --as <name>",
+        rename,
     );
     Ok(numbered)
 }
