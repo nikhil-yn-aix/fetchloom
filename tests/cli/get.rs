@@ -269,7 +269,14 @@ fn output_copies_bytes_a_project_needs_and_keeps_them_cached() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     crate::project::added(&sandbox, &server)?;
     // the project's pin stays while the cache loses the bytes, so get downloads them again
-    fs::remove_dir_all(sandbox.cache().join("objects"))?;
+    for shard in fs::read_dir(sandbox.cache().join("objects"))? {
+        let shard = shard?.path();
+        if shard.is_dir() {
+            for object in fs::read_dir(&shard)? {
+                crate::support::delete(&object?.path())?;
+            }
+        }
+    }
     let output = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_ne!(json(&output)?["result"]["files"][0]["method"], "move");
