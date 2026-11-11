@@ -663,7 +663,9 @@ impl<'a> Placing<'a> {
         if let Some(error) = failure {
             return Err(error);
         }
-        tell(output, manifest, &placer, &tallies, &placement, told);
+        tell(
+            output, manifest, &placer, &tallies, &placement, told, &scope,
+        );
         Ok(placement)
     }
 
@@ -705,6 +707,7 @@ impl<'a> Placing<'a> {
             &BTreeMap::new(),
             &placement,
             None,
+            &scope,
         );
         Ok(placement)
     }

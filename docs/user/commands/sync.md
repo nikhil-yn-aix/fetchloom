@@ -61,7 +61,7 @@ follow the upgrade hint only when you intend to change the input. [recovery](../
      Synced small into data · 1 other dataset left as it was
 ```
 
-`--force small` replaces edits in small's files only, `--verify small` hashes small's files only, `--locked small` checks only small's entry in data.lock, so a job needing small passes while another entry is stale, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
+`--force small` replaces edits in small's files only, and the warning about a file a named sync keeps names that command, so following it replaces nothing in the other datasets. `--verify small` hashes small's files only, `--locked small` checks only small's entry in data.lock, so a job needing small passes while another entry is stale, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
 
 ```text
 error: data.toml has no dataset called smal

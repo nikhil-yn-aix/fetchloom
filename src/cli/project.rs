@@ -809,7 +809,7 @@ pub(super) async fn preview_all(
     if !preview.changes.unpack.is_empty() {
         output.hint("an archive's files are known once it is unpacked, so they are not counted");
     }
-    place::tell_preview(output, manifest, &preview);
+    place::tell_preview(output, manifest, &work.scope, &preview);
     Ok(Outcome {
         lock_changed: changed,
         pins: engine::repinned(&before, &lock),

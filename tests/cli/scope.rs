@@ -165,7 +165,8 @@ fn sync_named_never_removes_other_datasets_files() -> Result {
 }
 
 /// `--force` with a name replaces only that dataset's edits; another dataset's edit stays byte
-/// for byte.
+/// for byte. the named sync before it keeps the edit and names that same command, which
+/// replaces nothing in the other datasets.
 #[test]
 fn force_named_replaces_only_that_datasets_edits() -> Result {
     let sandbox = Sandbox::new()?;
@@ -178,8 +179,14 @@ fn force_named_replaces_only_that_datasets_edits() -> Result {
         fs::write(placed(name), format!("my {name} notes\n"))?;
     }
 
+    let kept = sandbox.run(&["sync", "small"])?;
     let forced = sandbox.run(&["sync", "--force", "small"])?;
 
+    let stderr = text(&kept.stderr)?;
+    assert!(
+        stderr.contains("help: `fetchloom sync --force small` replaces it"),
+        "{stderr}"
+    );
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
     assert_eq!(fs::read(placed("small"))?, SMALL);
     assert_eq!(fs::read_to_string(placed("large"))?, "my large notes\n");

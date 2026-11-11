@@ -45,7 +45,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             "Would drop",
             &format!("{} from data.toml and data.lock", args.name),
         );
-        place::tell_preview(&context.output, &new_manifest, &preview);
+        place::tell_preview(&context.output, &new_manifest, &Scope::All, &preview);
         dry_run_done(&context.output, None);
         let outcome = Outcome {
             lock_changed: true,

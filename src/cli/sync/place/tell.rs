@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::put::Tally;
-use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Preview, Reason};
+use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Preview, Reason, Scope};
 use crate::output::Output;
 use crate::place::{Because, Placer, Unlinked};
 use crate::plan;
@@ -18,6 +18,7 @@ pub(super) fn tell(
     tallies: &BTreeMap<&str, Tally>,
     placement: &Placement,
     told: Option<&str>,
+    scope: &Scope,
 ) {
     for (path, found) in &placement.cleared {
         output.step(
@@ -95,7 +96,7 @@ pub(super) fn tell(
             None => output.warn(&because.said),
         }
     }
-    warn_kept(output, manifest, placement);
+    warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -183,10 +184,10 @@ pub(super) fn copy_warning(why: Unlinked, data_dir: &str) -> Because {
     }
 }
 
-/// the lines a dry run prints for a placement it only planned: what each dataset would gain or
-/// have replaced, what would be removed, and every file that would be left alone. `-v` names
-/// each file.
-pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Preview) {
+/// the lines a dry run of `scope` prints for a placement it only planned: what each dataset
+/// would gain or have replaced, what would be removed, and every file that would be left alone.
+/// `-v` names each file.
+pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, preview: &Preview) {
     // sizes stay out: a file whose pin only a download can learn has no size yet
     let tell_files = |verb: &str, dataset: &str, files: &[String]| {
         if files.is_empty() {
@@ -239,7 +240,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, preview: &Previ
     }
     warn_adopted_removed(output, &placement.removed_adopted, "would remove");
     left_behind(output, manifest, placement.left_behind.as_ref());
-    warn_kept(output, manifest, placement);
+    warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -368,7 +369,9 @@ fn warn_retired(output: &Output, placement: &Placement) {
     }
 }
 
-fn warn_kept(output: &Output, manifest: &Manifest, placement: &Placement) {
+/// a warning for each file a sync of `scope` left alone, with the command that replaces it.
+fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Placement) {
+    let force = forcing(scope);
     // one warning for each entry in the way, however many files it keeps out
     let mut blocking: BTreeMap<&str, (&Blocker, u64)> = BTreeMap::new();
     for kept in &placement.kept {
@@ -377,10 +380,10 @@ fn warn_kept(output: &Output, manifest: &Manifest, placement: &Placement) {
         }
     }
     for (blocker, files) in blocking.into_values() {
-        let (said, help) = in_the_way(blocker, files);
+        let (said, help) = in_the_way(blocker, files, &force);
         match &blocker.dataset {
             Some(dataset) => output.warn_with(&said, &left_alone(manifest, dataset)),
-            None => output.warn_with(&said, help),
+            None => output.warn_with(&said, &help),
         }
     }
     for kept in &placement.kept {
@@ -388,31 +391,43 @@ fn warn_kept(output: &Output, manifest: &Manifest, placement: &Placement) {
             Reason::Blocked => continue,
             Reason::Changed => (
                 format!("{} has changed, so it stays", kept.path),
-                "`fetchloom sync --force` replaces it",
+                format!("`{force}` replaces it"),
             ),
             Reason::Shared => (
                 format!(
                     "{} was edited, and the file is shared with other projects, so they see the edit too. it stays",
                     kept.path
                 ),
-                "`fetchloom sync --force` puts the original back",
+                format!("`{force}` puts the original back"),
             ),
             Reason::Foreign => (
                 format!(
                     "{} is not a file fetchloom placed, and it differs from data.lock, so it stays",
                     kept.path
                 ),
-                "`fetchloom sync --force` replaces it",
+                format!("`{force}` replaces it"),
             ),
             Reason::Unneeded => (
                 format!(
                     "{} is no longer needed, but it has changed, so it stays",
                     kept.path
                 ),
-                "delete it if you do not need it",
+                "delete it if you do not need it".to_owned(),
             ),
         };
-        output.warn_with(&message, help);
+        output.warn_with(&message, &help);
+    }
+}
+
+/// the command that replaces what a sync of `scope` kept: with the names of a sync of named
+/// datasets, so it replaces nothing in the others.
+fn forcing(scope: &Scope) -> String {
+    match scope {
+        Scope::All => "fetchloom sync --force".to_owned(),
+        Scope::Only(names) => {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            format!("fetchloom sync --force {}", names.join(" "))
+        }
     }
 }
 
@@ -439,14 +454,15 @@ fn overwritten_what(reason: Reason) -> &'static str {
     }
 }
 
-/// what an entry in the way of `files` files is, and what replaces it.
-fn in_the_way(blocker: &Blocker, files: u64) -> (String, &'static str) {
+/// what an entry in the way of `files` files is, and what replaces it: `force`, the command that
+/// replaces what a sync kept.
+fn in_the_way(blocker: &Blocker, files: u64, force: &str) -> (String, String) {
     let path = &blocker.path;
     let what = entry_name(blocker.found);
     let force = if blocker.found == Entry::Link {
-        "`fetchloom sync --force` replaces the link itself, never what it points to"
+        format!("`{force}` replaces the link itself, never what it points to")
     } else {
-        "`fetchloom sync --force` replaces it"
+        format!("`{force}` replaces it")
     };
     if blocker.folder {
         let pinned = if files == 1 {
@@ -469,7 +485,7 @@ fn in_the_way(blocker: &Blocker, files: u64) -> (String, &'static str) {
             format!(
                 "{path} is a folder with files in it where data.lock places a file, so it stays, even with --force"
             ),
-            "move what it holds elsewhere, then sync again",
+            "move what it holds elsewhere, then sync again".to_owned(),
         )
     }
 }
