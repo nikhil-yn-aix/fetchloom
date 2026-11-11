@@ -170,8 +170,17 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
     )?;
-    settle(context, &project, &manifest, &lock, &cache, &mut planned)?;
-    if args.dry.dry_run {
+    let dry_run = args.dry.dry_run;
+    settle(
+        context,
+        &project,
+        &manifest,
+        &lock,
+        &cache,
+        &mut planned,
+        dry_run,
+    )?;
+    if dry_run {
         let report = report(&planned, Outcome::DryRun);
         tell_dry(context, &planned, &report);
         return Ok(report);
@@ -292,13 +301,16 @@ fn plan(
     })
 }
 
-/// moves from `planned.lacked` to `planned.taking` the files the data folder looks to hold, after
-/// one look at each, which the push takes into the cache once it may write.
+/// moves from `planned.lacked` to `planned.taking` the files the data folder holds, which the
+/// push takes into the cache once it may write. a `dry_run` counts only what the push would take:
+/// a file the project's state vouches for, unread, or one that hashes to its pin. a push counts
+/// any file the state does not say holds other bytes that has the pinned size, unread, since
+/// taking it reads and checks it.
 ///
 /// # Errors
 ///
 /// `offline.missing` with what to run first, when a file the mirror needs is nowhere on this
-/// machine or an archive's files are not known.
+/// machine or an archive's files are not known, and a stop.
 fn settle(
     context: &Context,
     project: &Project,
@@ -306,6 +318,7 @@ fn settle(
     lock: &Lock,
     cache: &Cache,
     planned: &mut Planned,
+    dry_run: bool,
 ) -> Result<(), Error> {
     if !planned.lacked.is_empty() {
         planned.folder = DataFolder::planned(project, manifest, lock, cache);
@@ -314,7 +327,12 @@ fn settle(
             .iter()
             .map(|at| wanted(&planned.needed[*at]))
             .collect();
-        let held = planned.folder.holds(context, &wanted);
+        let held = if dry_run {
+            planned.folder.holds(context, &wanted)
+        } else {
+            planned.folder.may_hold(context, &wanted)
+        };
+        context.stop.check()?;
         let (taking, lacked): (Vec<_>, Vec<_>) =
             planned.lacked.iter().zip(held).partition(|(_, held)| *held);
         planned.taking = taking.into_iter().map(|(at, _)| *at).collect();

@@ -295,11 +295,7 @@ impl Survey {
     /// `other_device` than the state's may keep times to a coarser step than the state's, so
     /// there the state vouches only for files older than it by the coarsest step.
     fn hash_racy(&mut self, root: &Path, written: u64, other_device: bool) {
-        let written = if other_device {
-            written.saturating_sub(COARSE)
-        } else {
-            written
-        };
+        let written = vouched_before(written, other_device);
         let mut racy = Vec::new();
         let mut missing = Vec::new();
         for (path, placed) in &self.state.files {
@@ -732,6 +728,18 @@ fn spelled_otherwise(root: &Path, path: &str, listings: &mut Listings) -> bool {
 /// the step of the coarsest clock a data folder may sit on: fat cuts a file's time down to two
 /// seconds.
 const COARSE: u64 = 2_000_000_000;
+
+/// the time before which the state, written at `written`, vouches for a file that still looks as
+/// it records: a file as new as the state may hold an edit made in the same tick of a coarse
+/// clock. a data folder on an `other_device` than the state's may keep times to a coarser step,
+/// so there the state vouches only for files older than it by the coarsest step.
+pub(crate) fn vouched_before(written: u64, other_device: bool) -> u64 {
+    if other_device {
+        written.saturating_sub(COARSE)
+    } else {
+        written
+    }
+}
 
 /// the files `state` records outside the data folder `data_dir`, as fetchloom placed them before
 /// `data_dir` changed, that are still plain files in real folders under `root`, in order. a path

@@ -95,7 +95,7 @@ push copies what this machine's cache holds. a file the cache lacks that the dat
          Ok every file squares and table need is on the mirror
 ```
 
-a file the mirror lacks and neither the cache nor the data folder holds stops push before anything is written, with `offline.missing`, exit 20, naming the files and what to run first. a file in the data folder with other bytes than its pin counts as missing, even with the pinned size; push never changes it. from a clone that never synced:
+a file the mirror lacks and neither the cache nor the data folder holds stops push before anything is written, with `offline.missing`, exit 20, naming the files and what to run first. a file in the data folder with other bytes than its pin counts as missing, even with the pinned size; push never changes it. push reads such a file once, as it copies it, after any [question](#data-you-may-not-share), so a file the state does not vouch for that turns out to hold other bytes stops it then, with the same error. from a clone that never synced:
 
 ```text
 error: this machine's cache lacks files the push needs, and push never downloads
@@ -127,7 +127,7 @@ error: the sources of iris and pets did not say who may read them, so pushing th
 
 ## dry run
 
-`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder when one look finds a file of the pinned size there, as `Would copy 1 file · 21 B from data into the cache`; only the push itself hashes it. a dry run of a project whose cache holds every file:
+`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder, as `Would copy 1 file · 21 B from data into the cache`, only when the push would take it. a file the project's state records with its pinned bytes, and that still looks as recorded, counts without being read, as sync trusts it; any other file there is read and hashed first, with nothing written. so a dry run in a copy whose `.fetchloom` came along reads no file of the data folder, one without it reads each such file once, and an edit of the pinned size, as one made through a hardlink `cp -a` kept, counts as missing in the dry run as in the push. a dry run of a project whose cache holds every file:
 
 ```text
 Would start a mirror in /mnt/lab/fetchloom

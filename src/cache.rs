@@ -31,7 +31,7 @@ pub(crate) use held::Access;
 pub(crate) use object::syncfs_reports_errors;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use object::{Batch, batch_in};
-pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed};
+pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed, holds_pinned};
 pub(crate) use partial::{
     Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
 };

@@ -26,7 +26,7 @@ command handlers order effects across modules. `Context` reads settings once and
 | [status.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/status.rs) | local comparison and summaries | `Status`, `run`, `brief` |
 | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | cache command reports and retained-project discovery | `Info`, `Collected`, `info`, `gc`, `verify`, `needed_with` |
 | [fetch.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch.rs), [fetch/again.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/again.rs) | bounded transfer scheduling and expired-link recovery | `Job`, `all`, `apart`, `listed_job`, `Again`, `Listings`, `recover` |
-| [fetch/data_folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/data_folder.rs) | pinned files the data folder holds, copied into the cache when it lacks them, before any mirror is asked | `DataFolder`, `found`, `planned`, `holds`, `take` |
+| [fetch/data_folder.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/fetch/data_folder.rs) | pinned files the data folder holds, copied into the cache when it lacks them, before any mirror is asked | `DataFolder`, `found`, `planned`, `holds`, `may_hold`, `take` |
 | [help.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/help.rs), [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) | help and argument errors | `show`, `answer` |
 | [logs.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/logs.rs) | debug events and trace-file lifetime | `Logs`, `start` |
 

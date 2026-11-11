@@ -9,8 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::cache::{Cache, Copied, Sealed};
+use crate::cache::{Cache, Copied, Sealed, holds_pinned};
 use crate::cli::Context;
+use crate::cli::sync::disk::{apart, vouched_before};
 use crate::digest::Sha256;
 use crate::error::Error;
 use crate::mirror::Wanted;
@@ -41,14 +42,50 @@ pub(in crate::cli) struct DataFolder {
     name: String,
     /// by object, each path that may hold it, in the order of the plan.
     paths: HashMap<Sha256, Vec<Place>>,
+    /// the time before which the project's state vouches for a file that still looks as it
+    /// records, as sync trusts it.
+    before: u64,
 }
 
-/// a path below the project folder, with `/` between folders, that may hold an object.
+/// a path below the project folder, with `/` between folders, that may hold an object, with what
+/// the project's state records of the file there.
 struct Place {
     path: String,
-    /// how the file looked when the project's state recorded other bytes there: while it still
-    /// looks so, it holds those, and is not read.
-    other: Option<Look>,
+    record: Option<Record>,
+}
+
+/// what the project's state recorded of a file: whether it held the pinned bytes, and how it
+/// looked then.
+#[derive(Clone, Copy)]
+struct Record {
+    pinned: bool,
+    look: Look,
+}
+
+/// what the state says of the file at a path, by how it looks now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Said {
+    /// it holds the pinned bytes, which counts without reading it.
+    Pinned,
+    /// it holds other bytes, so it is never read.
+    Other,
+    /// nothing, so only its bytes tell.
+    Nothing,
+}
+
+/// what `record` says of a file that looks as `now`: something only while the file looks
+/// exactly as recorded, and was recorded before `before`, as sync trusts a recorded file.
+fn said(record: Option<Record>, now: Look, before: u64) -> Said {
+    match record {
+        Some(record) if record.look == now && record.look.modified < before => {
+            if record.pinned {
+                Said::Pinned
+            } else {
+                Said::Other
+            }
+        }
+        _ => Said::Nothing,
+    }
 }
 
 impl DataFolder {
@@ -61,14 +98,14 @@ impl DataFolder {
     ) -> DataFolder {
         let found = at
             .into_iter()
-            .map(|(digest, path)| (digest, Place { path, other: None }));
+            .map(|(digest, path)| (digest, Place { path, record: None }));
         DataFolder::of(project, manifest, found)
     }
 
     /// every file data.lock places, laid out as `lock` plans it with what `cache` records its
-    /// archives unpacked to. a path the project's state records holding other bytes is read only
-    /// once its file no longer looks as recorded. a data folder that is a link, or a lock that
-    /// does not plan, gives none.
+    /// archives unpacked to, with what the project's state records of each, which vouches for a
+    /// file as sync trusts it. a data folder that is a link, or a lock that does not plan, gives
+    /// none.
     pub(in crate::cli) fn planned(
         project: &Project,
         manifest: &Manifest,
@@ -82,17 +119,21 @@ impl DataFolder {
                 return DataFolder::default();
             }
         };
-        let (state, _) = project.state();
+        let (state, written) = project.state();
         let places = planned.targets.into_iter().map(|target| {
-            let other = state
-                .files
-                .get(&target.path)
-                .filter(|placed| placed.sha256 != target.sha256)
-                .map(|placed| placed.look);
+            let record = state.files.get(&target.path).map(|placed| Record {
+                pinned: placed.sha256 == target.sha256,
+                look: placed.look,
+            });
             let path = target.path;
-            (target.sha256, Place { path, other })
+            (target.sha256, Place { path, record })
         });
-        DataFolder::of(project, manifest, places)
+        let mut data = DataFolder::of(project, manifest, places);
+        if !data.is_empty() && !state.files.is_empty() {
+            let other_device = apart(&data.folder, &project.own_folder());
+            data.before = vouched_before(written, other_device);
+        }
+        data
     }
 
     fn of(
@@ -115,6 +156,7 @@ impl DataFolder {
             folder,
             name: manifest.data_dir.clone(),
             paths,
+            before: 0,
         }
     }
 
@@ -123,17 +165,43 @@ impl DataFolder {
         self.paths.is_empty()
     }
 
-    /// which of `wanted` a file here looks to hold, after one look at each path's name: a plain
-    /// file of the pinned size in real folders, that the state does not record with other bytes.
-    /// only [`DataFolder::take`] reads the bytes.
+    /// which of `wanted` a file here holds, as a dry run tells it: a file the state vouches for
+    /// counts unread, and any other once it hashes to its pin, read as [`DataFolder::take`] reads
+    /// it but with nothing written. a stop asked meanwhile leaves the rest uncounted, so the
+    /// caller looks for it after.
     pub(in crate::cli) fn holds(&self, context: &Context, wanted: &[Wanted]) -> Vec<bool> {
+        self.counted(context, wanted, true)
+    }
+
+    /// which of `wanted` a file here may hold, by one look and no read: a file the state vouches
+    /// for, or one it says nothing of that has the pinned size. a run that then takes them reads
+    /// each, so this only spares it a question when nothing here can hold a file.
+    pub(in crate::cli) fn may_hold(&self, context: &Context, wanted: &[Wanted]) -> Vec<bool> {
+        self.counted(context, wanted, false)
+    }
+
+    /// which of `wanted` a file here holds by what the state says of it, hashing a file it says
+    /// nothing of when `read`, else counting it by its size.
+    fn counted(&self, context: &Context, wanted: &[Wanted], read: bool) -> Vec<bool> {
         if self.is_empty() {
             return vec![false; wanted.len()];
         }
         let placer = Placer::new(&self.folder);
         crate::place::run_all(wanted, context.threads.at_most(COPIES), |want| {
-            self.places(want)
-                .any(|path| readable(&placer, &path).is_some_and(|look| look.size == want.size))
+            self.places(want).any(|(place, path)| {
+                let Some(now) = readable(&placer, &path) else {
+                    return false;
+                };
+                match said(place.record, now, self.before) {
+                    Said::Pinned => true,
+                    Said::Other => false,
+                    Said::Nothing if now.size != want.size => false,
+                    Said::Nothing if !read => true,
+                    Said::Nothing => {
+                        holds_pinned(&path, &want.digest, want.size, &context.stop).unwrap_or(false)
+                    }
+                }
+            })
         })
     }
 
@@ -243,9 +311,11 @@ impl DataFolder {
         flush: bool,
         stop: &Stop,
     ) -> io::Result<Option<Sealed>> {
-        for path in self.places(want) {
-            // a link on the way may point anywhere, and fetchloom never places through one
-            if placer.check_parent(&path).is_err() {
+        for (place, path) in self.places(want) {
+            let Some(now) = readable(placer, &path) else {
+                continue;
+            };
+            if said(place.record, now, self.before) == Said::Other {
                 continue;
             }
             match cache.copy_in(&path, &want.digest, want.size, flush, stop)? {
@@ -261,24 +331,19 @@ impl DataFolder {
         Ok(None)
     }
 
-    /// the paths that may hold `want`, those the state records with other bytes and that still
-    /// look so left out.
-    fn places<'a>(&'a self, want: &Wanted) -> impl Iterator<Item = PathBuf> + 'a {
+    /// the places that may hold `want`, in the order of the plan, each with its path.
+    fn places<'a>(&'a self, want: &Wanted) -> impl Iterator<Item = (&'a Place, PathBuf)> + 'a {
         self.paths
             .get(&want.digest)
             .into_iter()
             .flatten()
-            .filter(|place| {
-                place
-                    .other
-                    .is_none_or(|other| look(&self.root.join(&place.path)) != Some(other))
-            })
-            .map(|place| self.root.join(&place.path))
+            .map(|place| (place, self.root.join(&place.path)))
     }
 }
 
 /// how the plain file at `path` looks, when every folder between the data folder `placer` is
-/// rooted at and it is a real one.
+/// rooted at and it is a real one: a link on the way may point anywhere, and fetchloom never
+/// places through one.
 fn readable(placer: &Placer, path: &Path) -> Option<Look> {
     placer.check_parent(path).ok()?;
     std::fs::symlink_metadata(path)
@@ -287,19 +352,16 @@ fn readable(placer: &Placer, path: &Path) -> Option<Look> {
         .map(|found| Look::of(&found))
 }
 
-/// how the file at `path` looks, when there is one.
-fn look(path: &Path) -> Option<Look> {
-    std::fs::symlink_metadata(path)
-        .ok()
-        .map(|found| Look::of(&found))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
+    use std::time::{Duration, SystemTime};
+
     use super::*;
     use crate::output::{Level, Style};
+    use crate::project::lock::{Locked, LockedFile};
+    use crate::project::state::{Placed, State, nanos};
 
     const PINNED: &[u8] = b"station,temperature\nlerwick,9.1\n";
     /// [`PINNED`] with one byte changed, as an edit that keeps the size leaves it.
@@ -423,13 +485,19 @@ mod tests {
         let (_folder, project, manifest, cache) = project();
         let path = "inputs/weather/weather.csv";
         let look = placed(&project, path, PINNED);
-        let place = |other| Place {
+        let place = |look| Place {
             path: path.to_owned(),
-            other: Some(other),
+            record: Some(Record {
+                pinned: false,
+                look,
+            }),
         };
-        let data = |other| {
-            let places = std::iter::once((wanted().digest, place(other)));
-            DataFolder::of(&project, &manifest, places)
+        let data = |look| {
+            let places = std::iter::once((wanted().digest, place(look)));
+            DataFolder {
+                before: u64::MAX,
+                ..DataFolder::of(&project, &manifest, places)
+            }
         };
         let context = context();
         let recorded = data(look);
@@ -468,18 +536,131 @@ mod tests {
         assert!(cache.find(&wanted().digest, None).is_none());
     }
 
-    /// one look says a file of the pinned size is there, as a dry run asks; only taking it reads
-    /// its bytes.
+    /// a file of the dataset `weather`: whether it holds an edit of its pinned bytes, when it was
+    /// last written, what the state records of it, the pinned bytes or others and how much
+    /// earlier than the file's time, and whether a dry run counts it.
+    struct Case {
+        name: &'static str,
+        edited: bool,
+        modified: SystemTime,
+        record: Option<(bool, Duration)>,
+        counts: bool,
+    }
+
+    /// the pinned bytes of `name`, or an edit of them of the same size.
+    fn bytes(name: &str, edited: bool) -> Vec<u8> {
+        format!("{name},9.{}\n", if edited { 2 } else { 1 }).into_bytes()
+    }
+
+    /// data.lock pinning `files` of the dataset `weather`.
+    fn weather(files: Vec<LockedFile>) -> Lock {
+        Lock {
+            datasets: vec![Locked {
+                name: "weather".to_owned(),
+                reference: "https://example.org/weather".to_owned(),
+                spec: "sha256:00".to_owned(),
+                extract: true,
+                resolved: "https://example.org/weather".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                access: crate::source::Access::Public,
+                timestamp: "2026-11-11T00:00:00Z".to_owned(),
+                files,
+            }],
+            derived: Vec::new(),
+        }
+    }
+
+    /// a dry run counts a file unread only where the project's state vouches for it: the state
+    /// records the pinned bytes at its path, and the file looks as recorded, from before the
+    /// state was written. any other file counts once it hashes to its pin, so an edit of the
+    /// pinned size never counts, and a file the state records with other bytes is never read.
     #[test]
-    fn holding_is_told_by_size_alone() {
-        let (_folder, project, manifest, _cache) = project();
-        let (edited, short) = ("inputs/weather/weather.csv", "inputs/weather/short.csv");
-        placed(&project, edited, EDITED);
-        placed(&project, short, b"station\n");
-        let context = context();
-        let held = |paths: &[&str]| found(&project, &manifest, paths).holds(&context, &[wanted()]);
-        assert_eq!(held(&[edited]), [true]);
-        assert_eq!(held(&[short]), [false]);
-        assert_eq!(held(&["inputs/weather/gone.csv"]), [false]);
+    fn a_file_counts_unread_only_where_the_state_vouches_for_it() {
+        let (_folder, project, _, cache) = project();
+        let manifest = Manifest::parse(
+            "[project]\ndata_dir = \"inputs\"\n\n[datasets.weather]\nref = \"https://example.org/weather\"\n",
+        )
+        .unwrap();
+        let written = SystemTime::UNIX_EPOCH + Duration::from_hours(500_000);
+        let before = written - Duration::from_secs(10);
+        let (now, earlier) = (Duration::ZERO, Duration::from_secs(5));
+        let case = |name, edited, modified, record, counts| Case {
+            name,
+            edited,
+            modified,
+            record,
+            counts,
+        };
+        let cases = [
+            // the state vouches, so its record stands, unread, though the file holds an edit
+            case("vouched", true, before, Some((true, now)), true),
+            case("moved", true, before, Some((true, earlier)), false),
+            case("unrecorded", true, before, None, false),
+            case("intact", false, before, None, true),
+            // as new as the state, so the same tick of a coarse clock could hide an edit
+            case("racy", true, written, Some((true, now)), false),
+            case("other", false, before, Some((false, now)), false),
+        ];
+        let (mut files, mut state) = (Vec::new(), State::default());
+        for case in &cases {
+            let path = format!("inputs/weather/{}.csv", case.name);
+            let file = project.root.join(&path);
+            fs::write(&file, bytes(case.name, case.edited)).unwrap();
+            let opened = fs::File::options().write(true).open(&file).unwrap();
+            opened.set_modified(case.modified).unwrap();
+            let look = Look::of(&fs::metadata(&file).unwrap());
+            let pin = bytes(case.name, false);
+            if let Some((pinned, shift)) = case.record {
+                let recorded = if pinned {
+                    pin.clone()
+                } else {
+                    b"other\n".to_vec()
+                };
+                let placed = Placed {
+                    dataset: "weather".to_owned(),
+                    sha256: crate::digest::sha256(&recorded),
+                    method: crate::place::Method::Copy,
+                    look: Look {
+                        modified: nanos(case.modified - shift),
+                        ..look
+                    },
+                    writable: false,
+                    checked: 0,
+                    adopted: false,
+                };
+                state.files.insert(path, placed);
+            }
+            files.push(LockedFile {
+                path: format!("{}.csv", case.name),
+                size: pin.len() as u64,
+                sha256: crate::digest::sha256(&pin),
+                md5: None,
+                url: format!("https://example.org/weather/{}.csv", case.name),
+                unpacks_to: None,
+            });
+        }
+        project.write_state(&state).unwrap();
+        let opened = fs::File::options()
+            .write(true)
+            .open(project.own_folder().join("state"));
+        opened.unwrap().set_modified(written).unwrap();
+        let lock = weather(files);
+        let wanted: Vec<Wanted> = lock.datasets[0]
+            .files
+            .iter()
+            .map(|file| Wanted {
+                digest: file.sha256,
+                size: file.size,
+                label: file.path.clone(),
+            })
+            .collect();
+        let counted =
+            DataFolder::planned(&project, &manifest, &lock, &cache).holds(&context(), &wanted);
+        let found: Vec<(&str, bool)> = cases.iter().map(|case| case.name).zip(counted).collect();
+        let expected: Vec<(&str, bool)> =
+            cases.iter().map(|case| (case.name, case.counts)).collect();
+        assert_eq!(found, expected);
     }
 }

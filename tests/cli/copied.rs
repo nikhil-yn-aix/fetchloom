@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use crate::build::{build, building_in, runs};
 use crate::export::sha256;
 use crate::project::{IRIS, PATH, added};
-use crate::support::{Result, Sandbox, Server, delete, file, json, text};
+use crate::support::{Result, Sandbox, Server, delete, edit, file, json, text};
 
 /// a recipe that makes `clean` by copying iris, so the data folder holds iris's bytes twice.
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
@@ -211,6 +211,56 @@ fn an_edit_of_the_same_size_is_never_taken() -> Result {
     assert_eq!(look(&placed)?, before);
     assert!(!object(&cache, IRIS).exists());
     assert!(!object(&cache, EDITED).exists());
+    Ok(())
+}
+
+/// `cp -a` keeps a hardlink between two names of one file, so an edit made in place through one
+/// name is the other's too, and neither holds the pinned bytes, though both have their size: the
+/// dry run promises no copy, and the push, as it, stops with what is missing and changes nothing.
+#[test]
+fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, true)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let (raw, made) = (
+        two.join("inputs").join("iris").join("iris.csv"),
+        two.join("inputs").join("clean").join("iris.csv"),
+    );
+    // a drive without hardlinks, as fat, gets the edit at both names instead
+    if sandbox.links()?.hardlink {
+        delete(&made)?;
+        fs::hard_link(&raw, &made)?;
+        edit(&raw, EDITED)?;
+    } else {
+        edit(&raw, EDITED)?;
+        edit(&made, EDITED)?;
+    }
+    let before = (look(&raw)?, look(&made)?);
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let push = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .arg("--to")
+            .arg(&mirror)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let missing =
+        "error: this machine's cache lacks files the push needs, and push never downloads";
+    let dry = push(&["--yes", "push", "--dry-run"])?;
+    let stderr = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains(missing), "{stderr}");
+    assert!(!stderr.contains("Would copy"), "{stderr}");
+    let pushed = push(&["--yes", "push"])?;
+    let stderr = text(&pushed.stderr)?;
+    assert_eq!(pushed.status.code(), Some(20), "{stderr}");
+    assert!(stderr.contains(missing), "{stderr}");
+    assert!(!stderr.contains("Copied"), "{stderr}");
+    assert!(!mirror.exists());
+    assert!(!object(&cache, IRIS).exists() && !object(&cache, EDITED).exists());
+    assert_eq!((look(&raw)?, look(&made)?), before);
     Ok(())
 }
 

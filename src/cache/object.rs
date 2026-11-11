@@ -108,26 +108,10 @@ impl Cache {
         flush: bool,
         stop: &Stop,
     ) -> io::Result<Copied> {
-        let found = match std::fs::symlink_metadata(source) {
-            Ok(found) => found,
-            Err(err) => return Ok(Copied::Unread(err)),
-        };
-        if !is_plain(&found) {
-            return Ok(Copied::NotPlain);
-        }
-        if found.len() != size {
-            return Ok(Copied::OtherSize);
-        }
-        let mut input = match partial::read_unfollowed(source) {
+        let mut input = match opened(source, size) {
             Ok(input) => input,
-            Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(Copied::NotPlain),
-            Err(err) => return Ok(Copied::Unread(err)),
+            Err(copied) => return Ok(copied),
         };
-        match input.metadata() {
-            Ok(opened) if opened.len() == size => {}
-            Ok(_) => return Ok(Copied::OtherSize),
-            Err(err) => return Ok(Copied::Unread(err)),
-        }
         let most = size.saturating_add(1);
         let mut object = self.new_object()?;
         #[cfg(target_os = "linux")]
@@ -181,6 +165,58 @@ impl Cache {
                 Err(err) => return Err(err),
             }
         }
+    }
+}
+
+/// `source` opened as [`Cache::copy_in`] reads it: a plain file of `size` bytes by its name and by
+/// its open handle, never followed through a link. anything else is what `copy_in` makes of it.
+fn opened(source: &Path, size: u64) -> Result<File, Copied> {
+    let found = std::fs::symlink_metadata(source).map_err(Copied::Unread)?;
+    if !is_plain(&found) {
+        return Err(Copied::NotPlain);
+    }
+    if found.len() != size {
+        return Err(Copied::OtherSize);
+    }
+    let input = match partial::read_unfollowed(source) {
+        Ok(input) => input,
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Err(Copied::NotPlain),
+        Err(err) => return Err(Copied::Unread(err)),
+    };
+    match input.metadata() {
+        Ok(found) if found.len() == size => Ok(input),
+        Ok(_) => Err(Copied::OtherSize),
+        Err(err) => Err(Copied::Unread(err)),
+    }
+}
+
+/// whether the file at `source`, which another program keeps, holds the bytes `digest` and
+/// `size` pin, found as [`Cache::copy_in`] finds it before it keeps a copy, but writing nothing:
+/// a link or a special file is never opened, a file of another size never read, and at most one
+/// byte past `size` is read, a block at a time. a file that cannot be read holds nothing.
+///
+/// # Errors
+///
+/// `Interrupted` when `stop` asks.
+pub(crate) fn holds_pinned(
+    source: &Path,
+    digest: &Sha256,
+    size: u64,
+    stop: &Stop,
+) -> io::Result<bool> {
+    let Ok(mut input) = opened(source, size) else {
+        return Ok(false);
+    };
+    let (mut hasher, mut read) = (Hasher::default(), 0_u64);
+    let ended = each_block(&mut input, size.saturating_add(1), stop, |block| {
+        hasher.update(block);
+        read += block.len() as u64;
+        Ok(())
+    });
+    match ended {
+        Ok(()) => Ok(read == size && hasher.sha256_so_far() == *digest),
+        Err(Fault::Source(_)) => Ok(false),
+        Err(Fault::Cache(err)) => Err(err),
     }
 }
 
