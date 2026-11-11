@@ -147,18 +147,18 @@ fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
     let server = Server::start("/files/dataset.zip", vec![file(&zip, "\"z1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    // on a clock as coarse as hfs+ or fat, files placed within the state's own second stay racy
-    // and are hashed again, so the state is written once more past that second
+    // a file as new as the state is hashed before it is trusted, as on a clock as coarse as fat's
+    // or a reflink placed within the state's own tick. dating the state back to the oldest file
+    // makes every file that new, so the settled sync below must hash them and still plan nothing
     let state = sandbox.work().join(".fetchloom").join("state");
-    let written = fs::metadata(&state)?.modified()?;
-    if written
-        .duration_since(std::time::UNIX_EPOCH)?
-        .subsec_nanos()
-        == 0
-    {
-        sandbox.wait_for_a_later_time(written)?;
-        fs::write(&state, fs::read(&state)?)?;
-    }
+    let oldest = modified_times(&sandbox.work().join("data"))?
+        .into_iter()
+        .min()
+        .ok_or("add placed files")?;
+    fs::File::options()
+        .write(true)
+        .open(&state)?
+        .set_modified(oldest)?;
     let moved = sandbox.folder("elsewhere")?.join("project");
     fs::rename(sandbox.work(), &moved)?;
     let cleaned = sandbox
@@ -183,4 +183,19 @@ fn a_moved_project_whose_cache_was_cleaned_still_matches() -> Result {
     assert_eq!(synced["work"]["requests"], 0, "{synced}");
     assert_eq!(server.requests().len(), 1, "only add downloaded");
     Ok(())
+}
+
+/// the modification time of every file below `folder`.
+fn modified_times(folder: &Path) -> std::io::Result<Vec<std::time::SystemTime>> {
+    let mut times = Vec::new();
+    for entry in fs::read_dir(folder)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            times.extend(modified_times(&entry.path())?);
+        } else if kind.is_file() {
+            times.push(entry.metadata()?.modified()?);
+        }
+    }
+    Ok(times)
 }

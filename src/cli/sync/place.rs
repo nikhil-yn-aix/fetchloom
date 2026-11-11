@@ -677,8 +677,9 @@ pub(crate) struct Seen {
 /// what a sync with nothing to do placed, found without reading what archives unpack to or
 /// planning: data.toml and data.lock are byte for byte as a sync that left every file they ask
 /// for in place left them, so the state records exactly those files, and each one still looks as
-/// recorded. anything else, or any doubt the survey raised, takes the long way. a dry run passes
-/// `make` false so a missing data folder is not created.
+/// recorded. files as new as the state that hashing found unchanged need only a state written
+/// again, which the caller does. anything else, or any doubt the survey raised, takes the long
+/// way. a dry run passes `make` false so a missing data folder is not created.
 pub(crate) fn untouched(
     project: &Project,
     manifest: &Manifest,
@@ -692,7 +693,6 @@ pub(crate) fn untouched(
         synced.complete && synced.manifest == seen.manifest && Some(synced.lock) == seen.lock
     });
     if !settled
-        || survey.needs_writing
         || !survey.edited.is_empty()
         || !survey.elsewhere.is_empty()
         || !survey.damaged.is_empty()

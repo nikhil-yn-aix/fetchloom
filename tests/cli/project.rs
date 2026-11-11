@@ -619,7 +619,14 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
             "add" => assert!(stderr.contains("iris is already in data.toml"), "{stderr}"),
             "path" => assert_eq!(
                 text(&output.stdout)?,
-                format!("{}\n", work.join(data_dir).join("iris").display())
+                format!(
+                    "{}\n",
+                    data_dir
+                        .split('/')
+                        .fold(work.clone(), |folder, part| folder.join(part))
+                        .join("iris")
+                        .display()
+                )
             ),
             _ => {}
         }

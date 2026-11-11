@@ -545,6 +545,13 @@ pub(super) async fn sync_all(
         Read::Settled(seen) => {
             if let Some(placement) = place::untouched(work.project, manifest, &survey, seen, true)?
             {
+                // files hashing found unchanged settle with a state written now; a project folder
+                // that takes no write fails no run that changed nothing
+                if survey.needs_writing
+                    && let Err(error) = work.project.write_state(&survey.state)
+                {
+                    tracing::debug!(error = %error, "could not settle the state");
+                }
                 // nothing is left to do, so a stop asked from here on, as by ctrl-c while the
                 // last lines print, leaves the sync done
                 work.context
