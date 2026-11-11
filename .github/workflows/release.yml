@@ -3,353 +3,23 @@ name: release
 on:
   push:
     tags: ['v*.*.*']
+  workflow_dispatch:
 
 permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
 
-env:
-  CARGO_TERM_COLOR: always
-  # links the C runtime into the windows binaries, for the C dependencies too, so they need no
-  # visual c++ redistributable.
-  # never set RUSTFLAGS or CARGO_ENCODED_RUSTFLAGS in this workflow: cargo then ignores every
-  # CARGO_TARGET_<triple>_RUSTFLAGS, so the windows binaries would quietly lose +crt-static and
-  # every binary its path remapping. add flags to the per-target variables instead
-  CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
-  CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_RUSTFLAGS: -C target-feature=+crt-static
-  # the oldest macos the binaries and wheels run on, the first that runs on apple silicon
-  MACOSX_DEPLOYMENT_TARGET: '11.0'
-  # keeps macos tar from adding ._ files that carry extended attributes
-  COPYFILE_DISABLE: '1'
-  # `fetchloom --version -v` names the commit a release was built from
-  FETCHLOOM_COMMIT: ${{ github.sha }}
-
 jobs:
   build:
-    name: ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            exe: .exe
-            python: python
-            scripts: Scripts
-            wheel-tags: ''
-          - os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            exe: .exe
-            python: python
-            scripts: Scripts
-            wheel-tags: ''
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            exe: ''
-            python: python3
-            scripts: bin
-            # the binaries are static, so the wheel runs on glibc systems too
-            wheel-tags: --compatibility manylinux2014 musllinux_1_2
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            exe: ''
-            python: python3
-            scripts: bin
-            wheel-tags: --compatibility manylinux2014 musllinux_1_2
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            exe: ''
-            python: python3
-            scripts: bin
-            wheel-tags: ''
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            exe: ''
-            python: python3
-            scripts: bin
-            wheel-tags: ''
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: read the version
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match version $version in Cargo.toml"
-            exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-          # the archives give every file the tag commit's time
-          echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
-      # installs the version rust-toolchain.toml pins
-      - run: rustup toolchain install
-      - run: rustup target add ${{ matrix.target }}
-      # rustc writes the paths of the source files it compiles into the binary, in panic messages
-      # among other places. naming the cargo home /cargo and the checkout /src keeps the runner's
-      # paths out of the release. the flags join the target's own, so windows keeps +crt-static,
-      # and the wheel build below sees the same flags
-      - name: remap the build paths
-        run: |
-          cargo_home=${CARGO_HOME:-$HOME/.cargo}
-          workspace=$GITHUB_WORKSPACE
-          if [ "$RUNNER_OS" = Windows ]; then
-            cargo_home=$(cygpath -w "$cargo_home")
-            workspace=$(cygpath -w "$workspace")
-          fi
-          # cargo splits these flags at whitespace
-          case "$cargo_home$workspace" in
-            *[[:space:]]*)
-              echo "::error::cannot remap $cargo_home or $workspace, which hold whitespace"
-              exit 1
-              ;;
-          esac
-          variable=CARGO_TARGET_$(echo "${{ matrix.target }}" | tr 'a-z-' 'A-Z_')_RUSTFLAGS
-          flags="$(printenv "$variable" || true) --remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$workspace=/src"
-          flags=${flags# }
-          echo "$variable=$flags"
-          echo "$variable=$flags" >> "$GITHUB_ENV"
-      # the cc crate builds zstd, liblzma, ring and mimalloc with musl-gcc for the musl target
-      - name: install the musl C compiler
-        if: runner.os == 'Linux'
-        run: .github/scripts/apt-install.sh musl-tools
-      - run: cargo build --locked --release --target ${{ matrix.target }}
-      - name: check that the binary runs
-        run: |
-          name=fetchloom
-          said=$("target/${{ matrix.target }}/release/$name${{ matrix.exe }}" --version)
-          echo "$name --version: $said"
-          if [ "$said" != "fetchloom $VERSION" ]; then
-            echo "::error::$name --version printed $said"
-            exit 1
-          fi
-      - name: check that the linux binary is static
-        if: runner.os == 'Linux'
-        run: |
-          name=fetchloom
-          said=$(ldd "target/${{ matrix.target }}/release/$name" 2>&1 || true)
-          echo "ldd $name: $said"
-          case "$said" in
-            *"statically linked"* | *"not a dynamic executable"*) ;;
-            *) echo "::error::$name links shared libraries"; exit 1 ;;
-          esac
-      - name: check that the macos binary links only system libraries
-        if: runner.os == 'macOS'
-        run: |
-          name=fetchloom
-          binary="target/${{ matrix.target }}/release/$name"
-          libraries=$(otool -L "$binary" | tail -n +2)
-          echo "otool -L $name:"
-          echo "$libraries"
-          if echo "$libraries" | grep -vqE '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
-            echo "::error::$name links libraries macos does not ship"
-            exit 1
-          fi
-          minimum=$(otool -l "$binary" | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "minos" { print $2; exit }')
-          echo "$name runs on macos $minimum and later"
-          if [ "$minimum" != "$MACOSX_DEPLOYMENT_TARGET" ]; then
-            echo "::error::$name needs macos $minimum, not $MACOSX_DEPLOYMENT_TARGET"
-            exit 1
-          fi
-      # reads the dlls fetchloom.exe imports straight from its import tables, so the check needs
-      # no visual studio tool and runs on the arm64 image too. a file it cannot read fails it, as
-      # does a list without kernel32.dll, which rust's standard library always imports
-      - name: check that the windows binary carries its C runtime
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $path = "target\${{ matrix.target }}\release\fetchloom.exe"
-          $bytes = [IO.File]::ReadAllBytes($path)
-          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
-          if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550) { throw 'fetchloom.exe is not a PE file' }
-          $sectionCount = [BitConverter]::ToUInt16($bytes, $pe + 6)
-          $optional = $pe + 24
-          if ([BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b) { throw 'fetchloom.exe is not a 64-bit PE file' }
-          $sections = $optional + [BitConverter]::ToUInt16($bytes, $pe + 20)
-          function Get-Offset([uint32]$Rva) {
-            for ($i = 0; $i -lt $sectionCount; $i++) {
-              $header = $sections + 40 * $i
-              $start = [BitConverter]::ToUInt32($bytes, $header + 12)
-              $size = [Math]::Max([BitConverter]::ToUInt32($bytes, $header + 8), [BitConverter]::ToUInt32($bytes, $header + 16))
-              if ($Rva -ge $start -and $Rva -lt $start + $size) {
-                return [int]($Rva - $start + [BitConverter]::ToUInt32($bytes, $header + 20))
-              }
-            }
-            throw "fetchloom.exe has no section holding address $Rva"
-          }
-          # data directory 1 lists the imported dlls in 20-byte entries with the name at 12, and
-          # directory 13 the delay-loaded ones in 32-byte entries with the name at 4. each list
-          # ends with an entry whose name is 0
-          $dlls = foreach ($directory in @(@(1, 20, 12), @(13, 32, 4))) {
-            $index, $entrySize, $nameAt = $directory
-            $rva = [BitConverter]::ToUInt32($bytes, $optional + 112 + 8 * $index)
-            if (-not $rva) { continue }
-            for ($entry = Get-Offset $rva; ; $entry += $entrySize) {
-              $name = [BitConverter]::ToUInt32($bytes, $entry + $nameAt)
-              if (-not $name) { break }
-              $at = Get-Offset $name
-              [Text.Encoding]::ASCII.GetString($bytes, $at, [Array]::IndexOf($bytes, [byte]0, $at) - $at)
-            }
-          }
-          $dlls
-          if (-not ($dlls -match '^kernel32\.dll$')) { throw 'could not read the dlls fetchloom.exe imports' }
-          if ($dlls -match 'vcruntime|msvcp|ucrtbase|api-ms-win-crt') { throw 'fetchloom.exe loads the C runtime from a DLL' }
-      # the same files pack into the same bytes: entries in a fixed order, every time set to the
-      # commit's, owners as numbers and, for gzip, a header that holds no name or time
-      - name: package the binary
-        run: |
-          name="fetchloom-$VERSION-${{ matrix.target }}"
-          mkdir -p ".release/$name" dist
-          cp "target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }}" \
-            LICENSE NOTICE README.md ".release/$name/"
-          cd .release
-          if [ "$RUNNER_OS" = macOS ]; then
-            stamp=$(date -u -r "$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
-          else
-            stamp=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y%m%d%H%M.%S)
-          fi
-          find "$name" -exec env TZ=UTC0 touch -t "$stamp" {} +
-          find "$name" | LC_ALL=C sort > files.txt
-          if [ "$RUNNER_OS" = Windows ]; then
-            # -mtc=off leaves out the ntfs creation and access times
-            7z a -tzip -bso0 -mtc=off "../dist/$name.zip" @files.txt
-          elif [ "$RUNNER_OS" = macOS ]; then
-            # bsdtar names the owner with --uid and --gid rather than gnu tar's --owner
-            tar --uid 0 --gid 0 --numeric-owner --no-xattrs --format ustar -n -T files.txt -cf - |
-              gzip -n > "../dist/$name.tar.gz"
-          else
-            tar --owner=0 --group=0 --numeric-owner --no-recursion -T files.txt -cf - |
-              gzip -n > "../dist/$name.tar.gz"
-          fi
-      - name: package the debian archive
-        if: runner.os == 'Linux'
-        run: |
-          case "${{ matrix.target }}" in
-            x86_64-*) arch=amd64 ;;
-            aarch64-*) arch=arm64 ;;
-          esac
-          root=.release/deb
-          install -Dm755 "target/${{ matrix.target }}/release/fetchloom" "$root/usr/bin/fetchloom"
-          # fl is a short name for fetchloom, a link so that it follows every upgrade
-          ln -s fetchloom "$root/usr/bin/fl"
-          install -Dm644 LICENSE "$root/usr/share/doc/fetchloom/copyright"
-          install -Dm644 NOTICE "$root/usr/share/doc/fetchloom/NOTICE"
-          mkdir -p "$root/DEBIAN"
-          cat > "$root/DEBIAN/control" <<EOF
-          Package: fetchloom
-          Version: $VERSION
-          Architecture: $arch
-          Maintainer: Nikhil Y N <nikhil-yn-aix@users.noreply.github.com>
-          Installed-Size: $(du -sk "$root/usr" | cut -f1)
-          Section: utils
-          Priority: optional
-          Homepage: https://github.com/nikhil-yn-aix/fetchloom
-          Description: put the exact data a project needs onto any machine
-           fetchloom pins research datasets by SHA-256 in data.lock and places
-           them in data/ from one shared cache.
-          EOF
-          deb="dist/fetchloom_${VERSION}_$arch.deb"
-          dpkg-deb --build --root-owner-group "$root" "$deb"
-          contents=$(dpkg-deb --contents "$deb")
-          echo "$contents"
-          case "$contents" in
-            *' ./usr/bin/fl -> fetchloom'*) ;;
-            *) echo "::error::the debian package lacks /usr/bin/fl as a link to fetchloom"; exit 1 ;;
-          esac
-          sudo dpkg -i "$deb"
-          said=$(/usr/bin/fetchloom --version)
-          short=$(/usr/bin/fl --version)
-          sudo dpkg -r fetchloom
-          if [ "$said" != "fetchloom $VERSION" ]; then
-            echo "::error::the debian package's fetchloom --version printed $said"
-            exit 1
-          fi
-          if [ "$short" != "fetchloom $VERSION" ]; then
-            echo "::error::the debian package's fl --version printed $short"
-            exit 1
-          fi
-          if [ -e /usr/bin/fl ] || [ -L /usr/bin/fl ]; then
-            echo "::error::removing the debian package left /usr/bin/fl behind"
-            exit 1
-          fi
-      - name: build the wheel
-        run: |
-          "${{ matrix.python }}" -m venv .release/maturin
-          # the x86_64 and arm64 linux, windows and macos wheels of maturin 1.16.0 on pypi
-          cat > .release/maturin.txt <<'EOF'
-          maturin==1.16.0 \
-            --hash=sha256:837db2f4d93d4899c3ac393fb3cc9eebf35b6002336e5d574f4a4fb6c49fe283 \
-            --hash=sha256:9d43a2adf51a2794e907a8f7dbad06eb114d5edb0909c73c1fa9040f15e584e9 \
-            --hash=sha256:e285ec9eb10243d45d10417178cb2eb76e0cbb184d0aa4378b503489fa12ee78 \
-            --hash=sha256:95f34ce53249fb7095ff4f2aff64d2562c511d6edf3e216c15dbffcd82b72b4f \
-            --hash=sha256:131fcc17ddb3ccc48aa183d2172ebf994c322b858e1b9694fb8744d783df66f6 \
-            --hash=sha256:2216d731c9324869d3bff72c0c73009bb6e640b3fa7d340174ae70dc874d1d9f
-          EOF
-          .release/maturin/${{ matrix.scripts }}/python -m pip install --quiet --disable-pip-version-check \
-            --require-hashes --only-binary :all: -r .release/maturin.txt
-          # reuses the binary built and checked above
-          .release/maturin/${{ matrix.scripts }}/maturin build --release --locked \
-            --target ${{ matrix.target }} --out dist ${{ matrix.wheel-tags }}
-          # maturin refuses console scripts beside an executable, so fl joins the built wheel here
-          .release/maturin/${{ matrix.scripts }}/python python/wheel_scripts.py dist/*.whl
-      - name: check the wheel
-        run: |
-          "${{ matrix.python }}" -m venv .release/check
-          check=.release/check/${{ matrix.scripts }}
-          "$check/python" -m pip install --quiet --disable-pip-version-check --no-index dist/*.whl
-          # fl and python -m fetchloom run the executable the wheel installs beside them
-          for name in fetchloom fl; do
-            said=$("$check/$name" --version)
-            echo "wheel $name --version: $said"
-            if [ "$said" != "fetchloom $VERSION" ]; then
-              echo "::error::the wheel's $name --version printed $said"
-              exit 1
-            fi
-          done
-          said=$("$check/python" -m fetchloom --version)
-          echo "wheel python -m fetchloom --version: $said"
-          if [ "$said" != "fetchloom $VERSION" ]; then
-            echo "::error::the wheel's python -m fetchloom --version printed $said"
-            exit 1
-          fi
-          mkdir -p .release/empty
-          "$check/python" - <<'EOF'
-          import fetchloom
-          try:
-              fetchloom.path("iris", project=".release/empty")
-          except fetchloom.Error as error:
-              assert error.kind == "project.invalid", f"unexpected error kind: {error.kind}"
-              print(f"fetchloom.path outside a project raised {error.kind}: {error.message}")
-          else:
-              raise SystemExit("fetchloom.path found a dataset outside a project")
-          EOF
-      - name: list the sizes
-        run: |
-          {
-            echo '| file | bytes |'
-            echo '|---|---|'
-            for file in target/${{ matrix.target }}/release/fetchloom${{ matrix.exe }} dist/*; do
-              echo "| $(basename "$file") | $(wc -c < "$file") |"
-            done
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ matrix.target }}
-          path: dist/*
-          if-no-files-found: error
+    uses: $/.github/workflows/artifacts.yml
 
   attest:
     needs: build
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -361,6 +31,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: packages-*
           path: dist
           merge-multiple: true
       - name: write SHA256SUMS
@@ -381,7 +52,7 @@ jobs:
   release:
     needs: attest
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write

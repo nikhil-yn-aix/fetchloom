@@ -437,7 +437,8 @@ class ProgramDiscovery(unittest.TestCase):
     def test_user_scripts_follow_the_interpreters_preferred_scheme(self):
         with patch.object(fetchloom.sysconfig, "get_preferred_scheme", return_value="custom_user") as preferred:
             with patch.object(fetchloom.sysconfig, "get_path", return_value="") as get_path:
-                with patch.object(fetchloom.shutil, "which", return_value="from-path"):
+                with patch.object(Path, "is_file", return_value=False), \
+                     patch.object(fetchloom.shutil, "which", return_value="from-path"):
                     self.assertEqual(fetchloom._program(), "from-path")
         preferred.assert_called_once_with("user")
         get_path.assert_any_call("scripts", "custom_user")

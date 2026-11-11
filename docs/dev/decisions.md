@@ -136,7 +136,7 @@ mutable URLs and OSF nodes cannot preserve an old listing through a filter edit.
 | fuzz parsers in their modules | parsers can remain private without a separate fuzzing API | [fuzzing](engineering/fuzzing.md) |
 | ship the same executable in wheels | published binary wheels will let pip users receive the same implementation without rust; current source installation still needs it | [releasing](engineering/releasing.md) |
 | test and release native arm64 linux and windows | those artifacts need the same behavioral gate as x86_64 | [CI](engineering/ci.md), [release targets](engineering/releasing.md#workflow) |
-| test macos on apple silicon and release it for x86_64 and arm64 | apfs clones files, ignores case and keeps unicode composition, so placement and status need their own gate; the intel build is tested only by its release smoke checks | [CI](engineering/ci.md), [release targets](engineering/releasing.md#workflow) |
+| test macos on apple silicon and release it for x86_64 and arm64 | apfs clones files, ignores case and keeps unicode composition, so placement and status need their own gate; the intel build runs its installed-artifact journey before merge as well as before release | [CI](engineering/ci.md), [release targets](engineering/releasing.md#workflow) |
 | keep reasons near the implementation and update docs with behavior | contributors can check the constraint before changing it | [style](style.md) |
 
 ## apache-2.0

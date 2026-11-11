@@ -1,5 +1,3 @@
-# keeps the pinned github actions current, once a month in one pull request. crates are updated
-# by hand, since each update needs the full gate and cargo deny.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -11,3 +9,13 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo-minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]

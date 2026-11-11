@@ -86,6 +86,16 @@ cargo test --locked -- --ignored
 
 on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest discover -s python` when python 3.10 or later is on PATH. helper tests use the standard library and mocked subprocess results; they do not need a package install or a live dataset. nine ignored rust tests need working DNS, HTTPS and access to public records at zenodo, figshare, dataverse, OSF, hugging face, kaggle, doi.org, s3 and google cloud storage. all but one construct clients without credentials; the kaggle competition test uses a kaggle key when one is found and skips without it. allow time for real network retries and service rate limits; an unavailable or changed upstream record can fail them. Cargo's `--offline` only disables dependency downloads; it does not make live tests offline. [live-source checks](ci.md#live-source-checks) run them weekly and on request, separately from the required CI result.
 
+### installed package checks
+
+[artifact CI](ci.md#installed-artifacts) tests the packages rather than borrowing a source-tree executable. `python/ci_journey.py --binary /absolute/path/to/fetchloom --version 0.1.0` runs the deterministic loopback journey locally; `--commit` also checks the build identity. `--work-root` chooses an existing scratch parent outside the checkout. the wheel and installer checks call that same journey after installing into isolated locations. their command-line help lists the required candidate archive and proof paths.
+
+`cargo package --locked` verifies the source distribution; CI then unpacks its `.crate`, runs `cargo install --path` on that unpacked tree, and checks the installed program. `python3 -m unittest discover -s python -p test_artifacts.py` tests the package-inventory and assertion logic without building Rust. no external dataset service is needed.
+
+### coverage and mutation pilots
+
+[scheduled deep checks](ci.md#scheduled-deep-checks) own weekly linux coverage, longer Bolero runs and external links. coverage includes CLI child processes and publishes LCOV/JSON plus a step summary, without a coverage quota. manual mutation dispatch names one Rust source file and tests at most ten listed mutations, always after an unmutated baseline. neither check replaces a focused regression assertion.
+
 ### code gates
 
 unsafe code is forbidden. configured warnings include missing public documentation, unreachable public items, clippy pedantic checks, unwraps, expects, panics, debug prints and unfinished-code macros. lint exceptions need reasons; clippy treats all warnings as errors. there is no enforced file-length or function-length limit.

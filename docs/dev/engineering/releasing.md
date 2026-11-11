@@ -10,24 +10,26 @@ no release has been published yet. use [source installation](../../user/getting-
 
 | job | permissions | work |
 |---|---|---|
-| `build`, six matrix entries | contents read | build with `--locked --release`, check version and linkage, package an archive, on linux a `.deb` checked to hold `/usr/bin/fl` as a link, installed, run as `fetchloom` and `fl` and removed, build a wheel and add `fl` to it, install it, exercise its executable, `fl` and python module |
+| `build`, reusable artifact workflow | contents read | run the same six-target builds, installed artifact journeys and exact inventory as [CI](ci.md#installed-artifacts), plus the source-package installation |
 | `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
 | runner | target | linkage |
 |---|---|---|
-| `windows-latest` | `x86_64-pc-windows-msvc` | static C runtime, checked by reading the dlls the executable imports, delay-loaded ones included, from its own import tables; the check fails when it cannot read them or finds no `kernel32.dll` |
+| `windows-2025` | `x86_64-pc-windows-msvc` | static C runtime, checked by reading the dlls the executable imports, delay-loaded ones included, from its own import tables; the check fails when it cannot read them or finds no `kernel32.dll` |
 | `windows-11-arm` | `aarch64-pc-windows-msvc` | same static C runtime check on native arm64; it needs no visual studio tool, so the arm64 image cannot skip it |
-| `ubuntu-latest` | `x86_64-unknown-linux-musl` | static musl binary, native dependencies built with musl-gcc; checked with ldd |
+| `ubuntu-24.04` | `x86_64-unknown-linux-musl` | static musl binary, native dependencies built with musl-gcc; checked with ldd |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | same static-musl checks on native arm64 |
 | `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |
-| `macos-latest` | `aarch64-apple-darwin` | same checks on native arm64 |
+| `macos-15` | `aarch64-apple-darwin` | same checks on native arm64 |
 
 `MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it.
 
-rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. a comment beside the windows flags in release.yml says so.
+rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. the per-target flags belong to artifacts.yml.
 
-build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel smoke tests run `fetchloom --version`, `fl --version` and `python -m fetchloom --version`, and verify that the python helper reports `project.invalid` outside a project.
+build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel tests run the [installed loopback journey](ci.md#installed-artifacts), including successful helper calls and structured errors, in fresh venvs at the documented Python endpoints.
+
+`artifacts.yml` has only contents-read permission and also accepts manual dispatch. dispatching `release.yml` runs that same builder as a dry run: attestation and draft creation are tag-only and are skipped. neither rehearsal publishes packages or receives publishing secrets. the fourteen candidate files and their check receipts remain run artifacts.
 
 [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
 
@@ -89,7 +91,7 @@ every wheel the release builds also has `fl`, a console script. maturin refuses 
 7. after the first release, rewrite the install text that still says no release exists: the [README](https://github.com/nikhil-yn-aix/fetchloom/blob/main/README.md#install), [getting started](../../user/getting-started.md#install), [macos](../../user/macos.md#install) and the [python helper](../../user/scripting.md#python-helper).
 8. update winget. the first version is submitted by hand from windows with `wingetcreate new` and the x86_64 and arm64 zip URLs, as a portable package `KairosLab.fetchloom` with the command `fetchloom`. later versions use `wingetcreate update KairosLab.fetchloom --version 0.1.1 --urls <x86_64 zip> <arm64 zip> --submit`. microsoft reviews each pull request.
 
-to exercise build jobs without a tag, temporarily add a branch trigger for `release-check` to a test branch of the workflow. `attest` and `release` remain tag-only. remove the test trigger and branch after the check.
+to rehearse without a tag, dispatch `release.yml` against the branch being checked. only its read-only artifact workflow runs; `attest` and `release` remain tag-only. no branch trigger, tag or publication is needed.
 
 ## installers
 

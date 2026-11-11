@@ -1,0 +1,130 @@
+"""artifact gates reject missing targets, unexecuted checks and wrong installed bytes."""
+
+import hashlib
+import io
+import json
+from pathlib import Path
+import tarfile
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+from check_archive import check_machine, unpack
+from check_artifacts import TARGETS, archive_name, inventory, stages
+from check_wheel import inspect_wheel
+from ci_journey import check_version
+
+VERSION = '0.1.0'
+COMMIT = 'a' * 40
+
+
+class InventoryTests(unittest.TestCase):
+    def make(self, root):
+        packages, proofs = root / 'dist', root / 'proofs'
+        packages.mkdir()
+        proofs.mkdir()
+        for target, metadata in TARGETS.items():
+            wheel = f'fetchloom-{VERSION}-py3-none-' + '.'.join(sorted(metadata['wheel'])) + '.whl'
+            names = [archive_name(target, VERSION), wheel]
+            if 'deb' in metadata:
+                names.append(f"fetchloom_{VERSION}_{metadata['deb']}.deb")
+            files = {}
+            for name in names:
+                data = name.encode()
+                (packages / name).write_bytes(data)
+                files[name] = hashlib.sha256(data).hexdigest()
+            checks = {name: {'ok': True, 'version': VERSION, 'commit': COMMIT,
+                             'binary_sha256': 'b' * 64, 'helper': name.startswith('wheel-'),
+                             'python': '3.10.11' if name == 'wheel-minimum' else '3.15.2'}
+                      for name in stages(target)}
+            folder = proofs / target
+            folder.mkdir()
+            (folder / 'verified.json').write_text(json.dumps({'target': target, 'version': VERSION,
+                 'commit': COMMIT, 'checks': checks, 'files': files}), encoding='utf-8')
+        (proofs / 'source-package.json').write_text(json.dumps({'ok': True, 'version': VERSION, 'commit': COMMIT}), encoding='utf-8')
+        return packages, proofs
+
+    def test_exact_six_target_set_is_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packages, proofs = self.make(Path(directory))
+            self.assertEqual(len(inventory(packages, proofs, VERSION, COMMIT)), 14)
+
+    def test_missing_target_check_asset_or_source_proof_is_rejected(self):
+        for change in ['target', 'check', 'asset', 'source', 'checksum', 'revision', 'helper']:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                packages, proofs = self.make(Path(directory))
+                proof = next(proofs.rglob('verified.json'))
+                document = json.loads(proof.read_text())
+                if change == 'target':
+                    proof.unlink()
+                elif change == 'check':
+                    document['checks'].pop('archive')
+                    proof.write_text(json.dumps(document))
+                elif change == 'asset':
+                    next(packages.iterdir()).unlink()
+                elif change == 'source':
+                    (proofs / 'source-package.json').unlink()
+                elif change == 'checksum':
+                    next(packages.iterdir()).write_bytes(b'wrong')
+                elif change == 'helper':
+                    document['checks']['wheel-current']['helper'] = False
+                    proof.write_text(json.dumps(document))
+                else:
+                    document['commit'] = 'c' * 40
+                    proof.write_text(json.dumps(document))
+                with self.assertRaises((AssertionError, KeyError)):
+                    inventory(packages, proofs, VERSION, COMMIT)
+
+
+class PackageContentTests(unittest.TestCase):
+    def test_tar_links_and_extra_entries_are_refused(self):
+        for link in [True, False]:
+            with self.subTest(link=link), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / 'bad.tar.gz'
+                with tarfile.open(path, 'w:gz') as archive:
+                    member = tarfile.TarInfo('../outside' if not link else 'fetchloom-0.1.0-x86_64-unknown-linux-musl/fetchloom')
+                    if link:
+                        member.type = tarfile.SYMTYPE
+                        member.linkname = '../outside'
+                    archive.addfile(member)
+                with self.assertRaises(AssertionError):
+                    unpack(path, 'x86_64-unknown-linux-musl', VERSION, root / 'unpacked')
+                self.assertFalse((root / 'outside').exists())
+
+    def test_machine_check_rejects_emulated_wrong_architecture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'fetchloom'
+            body = bytearray(64)
+            body[:6] = b'\x7fELF\x02\x01'
+            body[18:20] = (62).to_bytes(2, 'little')
+            binary.write_bytes(body)
+            check_machine(binary, 'x86_64-unknown-linux-musl')
+            with self.assertRaises(AssertionError):
+                check_machine(binary, 'aarch64-unknown-linux-musl')
+
+    def test_wheel_must_bundle_the_tested_binary_and_typed_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'fetchloom'
+            binary.write_bytes(b'checked binary')
+            for wrong in [False, True]:
+                wheel = root / 'package.whl'
+                with zipfile.ZipFile(wheel, 'w') as archive:
+                    archive.writestr('fetchloom-0.1.0.dist-info/METADATA', 'Name: fetchloom\nVersion: 0.1.0\nRequires-Python: >=3.10\n')
+                    archive.writestr('fetchloom/__init__.py', '')
+                    archive.writestr('fetchloom/py.typed', '')
+                    archive.writestr('fetchloom-0.1.0.data/scripts/fetchloom', b'other binary' if wrong else binary.read_bytes())
+                if wrong:
+                    with self.assertRaises(AssertionError):
+                        inspect_wheel(wheel, VERSION, binary)
+                else:
+                    inspect_wheel(wheel, VERSION, binary)
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_prefix_does_not_accept_another_version(self):
+        with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.01\n'):
+            with self.assertRaises(AssertionError):
+                check_version(Path('fetchloom'), VERSION)

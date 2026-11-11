@@ -1,12 +1,12 @@
 # CI
 
-CI checks native behavior and filesystem paths before merge; release packaging remains a separate workflow.
+CI checks native behavior, filesystem paths and installed release artifacts before merge.
 
 ## triggers and the required check
 
 [ci.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/ci.yml) runs on pushes to main, every pull request, merge groups and manual dispatch. every run is full: there are no path filters or docs-only skips. repository permission is read-only. newer PR commits cancel their predecessors; main and dispatched revisions have separate concurrency groups. matrices do not fail fast.
 
-the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-fs, snapshots, musl]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
+the one required check is `ci`, with `if: always()` and `needs: [quality, docs, test, windows, windows-fs, snapshots, artifacts]`. every prerequisite must report `success`; a failure, cancellation or skip fails the gate. require `ci` in branch protection, not individual platform names. no step may turn a failed test into success to get this check green.
 
 ## native tests
 
@@ -18,7 +18,7 @@ the one required check is `ci`, with `if: always()` and `needs: [quality, docs, 
 | `windows-11-arm` | native arm64 windows |
 | `macos-15` | native arm64 macos on APFS, python tests and HFS+ |
 
-all five install the toolchain pinned in rust-toolchain.toml and run clippy with warnings denied. linux x86_64 also runs `cargo clippy --release --locked -- -D warnings` and `RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps`. the mac still checks the intel release target with `cargo check --locked --release --target x86_64-apple-darwin` and deployment target 11.0: that is compilation, not intel execution. it also checks the debug executable's system-library linkage. these checks stay until artifact journeys replace them.
+all five install the toolchain pinned in rust-toolchain.toml and run clippy with warnings denied. linux x86_64 also runs `cargo clippy --release --locked -- -D warnings` and `RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps`. the mac checks the debug executable's system-library linkage. the intel cross-check is replaced by a native `macos-15-intel` artifact journey; intel does not repeat the source test suite.
 
 nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero properties. [.config/nextest.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.config/nextest.toml) sets four concurrent tests, one retry and `flaky-result = "fail"`. a test that passes only on retry still fails CI. a slow test is reported after 30 seconds; six periods terminate a hung test as failure. this is a hang guard, not a wall-clock performance assertion. `cargo test --locked --doc` runs doctests separately on every native runner.
 
@@ -57,11 +57,30 @@ one linux job has separately named checks. each check runs even after an earlier
 | PowerShell installer | PSScriptAnalyzer 1.25.0, warnings/errors except Write-Host progress on supported PowerShell 5.1+ |
 | benchmark harness logic | `python3 -m unittest discover -s bench`, using only the standard library |
 
-the benchmark itself never runs here. cargo-deny's three migration notices remain ignored with their existing reasons; duplicate versions warn. machete findings require inspection before removing dependencies. zizmor's offline mode does not audit remote action history. actions remain pinned to full commits with checkout credentials disabled; their monthly Dependabot updates have a seven-day cooldown. the existing scoped crates.io publishing token has a narrow zizmor exception until trusted publishing is configured. rust-cache 2.9.3 keeps dependency builds; PR runs restore but do not save caches.
+the benchmark itself never runs here. cargo-deny's three migration notices remain ignored with their existing reasons; duplicate versions warn. machete findings require inspection before removing dependencies. zizmor's offline mode does not audit remote action history. actions remain pinned to full commits with checkout credentials disabled; their monthly Dependabot updates have a seven-day cooldown. cargo minor/patch updates form a separate monthly group with the same cooldown; major updates remain separate, with no auto-merge. the existing scoped crates.io publishing token has a narrow zizmor exception until trusted publishing is configured. rust-cache 2.9.3 keeps dependency builds; PR runs restore but do not save caches.
 
-## musl checks
+## installed artifacts
 
-two required jobs retain the release-mode musl builds on ubuntu-24.04 and ubuntu-24.04-arm, with musl-tools and mimalloc, then check `--version`. this checks startup, not a release journey. all six target artifacts, installed wheels and installer journeys belong to the next CI slice; this gate does not pretend they already ran. [releasing](releasing.md) owns the current tag workflow and package inventory.
+[artifacts.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/artifacts.yml) is the same read-only builder called by CI and release. manual dispatch is a rehearsal: it uploads run artifacts only, with no publishing secrets or write permissions. the old version-only musl jobs are replaced, not duplicated. release tags start without restored build output.
+
+| runner | packaged target | wheel interpreters |
+|---|---|---|
+| `ubuntu-24.04` | `x86_64-unknown-linux-musl` | 3.15.2 and 3.10.22 |
+| `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | 3.15.2 |
+| `windows-2025` | `x86_64-pc-windows-msvc` | 3.15.2 and 3.10.11 |
+| `windows-11-arm` | `aarch64-pc-windows-msvc` | native 3.15.2 |
+| `macos-15-intel` | `x86_64-apple-darwin` | 3.15.2 |
+| `macos-15` | `aarch64-apple-darwin` | 3.15.2 |
+
+all six release archives are unpacked, checked for architecture, expected files and the build's executable hash, then run against a stdlib loopback server. [python/ci_journey.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_journey.py) checks downloaded bytes and SHA-256 pins, offline restoration from a shared cache, writable-copy edit preservation, checksum refusal without publication, and archive extraction. it checks the exact version and commit. macos also checks its default cache location, the no-hardlink decision for a recognized CloudStorage path, and loading bash/zsh completions. this folder-name test does not run a real cloud provider. static-musl, Windows CRT and macos system-library/deployment-target checks remain.
+
+each wheel is built once. its bundled executable must hash to the checked binary; fresh venvs install that wheel with `--no-index --no-deps`. the installed helper runs real successful `sync` and `path` calls and a structured failure outside the source checkout, with a decoy global executable on PATH. its selected executable, module path, typed marker and metadata are checked. Python 3.10 is exercised only on linux and Windows x64; there is no native Windows-arm 3.10 claim.
+
+installers consume the candidate archives and checksums from loopback through `FETCHLOOM_DOWNLOAD_URL`. linux and both macs run `install.sh`; Windows x64 runs `install.ps1` under both Windows PowerShell 5.1 and PowerShell 7. installations in paths with spaces run the same journey. reinstall, bad checksum, missing checksum entry, non-runnable payload and idempotent PATH updates are checked. Windows restores the raw user PATH and marker, including their registry types, in `finally`. both debs are installed, exercised through `/usr/bin/fetchloom`, then removed.
+
+linux x64 runs the printed `unrar` command, mac arm runs `unar`, and Windows x64 runs the printed absolute 7-Zip command in PowerShell, against a licensed solid-RAR fixture. spaces and an apostrophe in the filename must survive the emitted quoting. independently recorded extracted hashes, not a reconstruction of the expected command, decide success. reader versions are recorded in the job log.
+
+a separate linux job runs `cargo package --locked`, installs from the unpacked `.crate` and exercises that installed program. it uses the pinned toolchain, not an additional MSRV matrix. the final inventory requires all six named targets, all required check receipts, the source install, and exactly fourteen package files with matching hashes. release downloads only `packages-*`; reports cannot leak into published assets. [releasing](releasing.md) owns publication.
 
 every apt install in CI and release goes through `.github/scripts/apt-install.sh`, which retries and, when the runner's resolver cannot find Ubuntu's archive, asks public resolvers instead; apt verifies the signed package lists, so the resolver cannot change what installs. an outage of the archive itself still fails provisioning, and the required gate still does not waive that job.
 
@@ -73,8 +92,29 @@ the required docs job runs the existing python markdown file, heading and sideba
 
 pages remains the only deploying workflow. it builds the default branch and adds the signed apt repository from the latest published release before deploying the complete site. PR checks receive no apt key, pages-write or OIDC permission. [releasing](releasing.md#apt-repository) describes that publication boundary.
 
+## scheduled deep checks
+
+[deep.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/deep.yml) runs weekly on Tuesday and accepts manual dispatch. it has no publishing permissions or secrets. dispatch `check=coverage`, `fuzz` or `links` for one lane; `all` runs those three, not mutation testing. no deep job soft-fails, and none runs the benchmark lab.
+
+| check | bound and result |
+|---|---|
+| linux coverage | cargo-llvm-cov 0.9.1, the pinned Rust with llvm-tools-preview, and nextest 0.9.151; 45-minute job cap |
+| all eight [Bolero targets](fuzzing.md#targets) | cargo-bolero 0.13.5, nightly-2026-11-01, five minutes per target with one fuzz worker, 10-second input timeout and 64 KiB maximum input; each job has a 25-minute cap |
+| external documentation links | lychee 0.24.2, four concurrent requests, 20-second request timeout and one retry; 15-minute job cap |
+| manual mutation pilot | cargo-mutants 27.1.0; one existing `src/**/*.rs` file, at most ten explicitly listed mutants, two workers; 120-second test and 600-second build timeouts, 20-minute command and 30-minute job caps |
+
+coverage has a separate build cache and retains LCOV, JSON and JUnit for fourteen days. its step summary reports lines, functions and regions, with no percentage threshold. the check requires executed functions in this checkout's `src/main.rs`, so a report missing CLI subprocess profiles fails. compare reports only for the same configuration; there is no external uploader or automated historical comparison.
+
+fuzzing has separate nightly build caches. each target's log and crashes are retained for fourteen days, including on failure. corpus input is not restored or uploaded; each weekly run starts fresh. dependencies are fetched with the lockfile first, then the fuzz run is offline and checks that Cargo.lock stayed unchanged. an outer timeout also bounds compilation plus fuzzing; timeout or a crash remains a failure, never a no-crash success.
+
+mutation testing is manual only: dispatch `check=mutants` and `file=src/cli/sync/place.rs`, or another one-file scope. the exact first ten listed mutant names are saved before running; an anchored filter prevents the selection from widening. the unmutated baseline is mandatory, using the ordinary Cargo test runner and library tests. surviving mutants, baseline failures and timeouts stay red. scope, logs and outcomes upload for fourteen days. investigate a missed mutation before deciding whether it warrants a test; do not broaden to the whole crate to chase a score.
+
+external links stay outside PR correctness: an unavailable service can make the weekly check red without implying a product regression. its report is kept in the step summary and run artifacts. the required docs job still checks rendered local links offline.
+
 ## live-source checks
 
-[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) still runs the ignored public-service tests weekly on linux and windows, outside the required result. [mac-e2e.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/mac-e2e.yml) remains manually dispatched until its unique checks are moved into deterministic artifact and weekly live journeys. neither is replaced by this slice.
+[live.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/live.yml) runs the ignored public-service tests weekly on linux, Windows and macos, outside the required result. `--nocapture` keeps credential-dependent skips visible; their lines also appear in the step summary. no credentials are supplied by the workflow. logs are retained for fourteen days, and all jobs have a 45-minute timeout.
+
+macos additionally runs the small public Zenodo add/restore/get and catalog-search journey in `python/mac_live.py`. the standalone mac workflow is removed. its deterministic cache-location, shared-cache, CloudStorage-path, offline-auth and completion checks now belong to the [artifact journey](#installed-artifacts), so they no longer depend on service uptime. live failures need classification as service, configuration or product failures; they are not retried until green.
 
 related: [engineering loop](README.md), [building and testing](building-and-testing.md), [releasing](releasing.md), [placing](../architecture/placing.md).

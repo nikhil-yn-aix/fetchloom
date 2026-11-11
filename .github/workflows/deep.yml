@@ -1,0 +1,200 @@
+name: deep
+
+on:
+  schedule:
+    - cron: '41 3 * * 2'
+  workflow_dispatch:
+    inputs:
+      check:
+        description: which bounded check to run
+        type: choice
+        options: [all, coverage, fuzz, links, mutants]
+        default: all
+      file:
+        description: one Rust file for the manual mutation pilot
+        type: string
+        default: src/cli/sync/place.rs
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-${{ github.ref }}-${{ github.event_name }}-${{ inputs.check || 'all' }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+  INSTA_UPDATE: 'no'
+  INSTA_FORCE_PASS: '0'
+
+jobs:
+  coverage:
+    if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'coverage'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_LLVM_COV_TARGET_DIR: target/coverage
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install --component llvm-tools-preview
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-llvm-cov@0.9.1,cargo-nextest@0.9.151
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: coverage
+          workspaces: . -> target/coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo llvm-cov clean --workspace
+      - run: cargo build --locked --example recipe_step --target-dir target/coverage
+      - name: instrumented unit and CLI tests
+        run: cargo llvm-cov nextest --locked --profile ci --no-report
+      - name: retain coverage and summarize CLI profiles
+        if: always()
+        run: |
+          mkdir -p target/coverage-report
+          cargo llvm-cov report --lcov --output-path target/coverage-report/lcov.info
+          cargo llvm-cov report --json --summary-only --output-path target/coverage-report/coverage.json
+          python3 python/check_coverage.py target/coverage-report/coverage.json --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: linux-coverage-${{ github.run_attempt }}
+          path: |
+            target/coverage-report/
+            target/coverage/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  fuzz:
+    if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'fuzz'
+    name: fuzz ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: member-names
+            test: archive::names::tests::fuzz_member_names
+          - name: joined-input
+            test: archive::input::tests::joined_parts_read_and_seek_as_the_whole
+          - name: seven-zip
+            test: archive::sevenz::tests::fuzz_seven_zip
+          - name: lock-reader
+            test: project::lock::canonical::tests::fuzz_lock_reader
+          - name: manifest
+            test: project::manifest::tests::fuzz_manifest
+          - name: drive-pages
+            test: source::drive::folder::tests::fuzz_drive_pages
+          - name: response-headers
+            test: net::headers::tests::fuzz_response_headers
+          - name: object-listings
+            test: source::bucket::xml::tests::fuzz_object_listings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install nightly-2026-11-01 --profile minimal
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-bolero@0.13.5
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: fuzz-${{ matrix.name }}-nightly-2026-11-01
+          workspaces: . -> target/fuzz-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo +nightly-2026-11-01 fetch --locked
+      - name: five minutes of libFuzzer
+        env:
+          CARGO_NET_OFFLINE: 'true'
+          FUZZ_TARGET: ${{ matrix.test }}
+        shell: bash
+        run: |
+          mkdir -p target/fuzz-corpus target/fuzz-results/crashes
+          timeout --signal=TERM --kill-after=30s 18m cargo bolero test --toolchain nightly-2026-11-01 \
+            --target x86_64-unknown-linux-gnu --target-dir target/fuzz-build -T 5min --timeout 10s --jobs 1 --max-input-length 65536 \
+            --corpus-dir target/fuzz-corpus --crashes-dir target/fuzz-results/crashes \
+            "$FUZZ_TARGET" 2>&1 | tee target/fuzz-results/run.log
+          git diff --exit-code -- Cargo.lock
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fuzz-${{ matrix.name }}-${{ github.run_attempt }}
+          path: target/fuzz-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  links:
+    if: github.event_name == 'schedule' || inputs.check == 'all' || inputs.check == 'links'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: lychee@0.24.2
+      - name: check external documentation links
+        run: |
+          mkdir -p target/links
+          lychee --no-progress --max-concurrency 4 --timeout 20 --max-retries 1 \
+            --scheme http --scheme https --exclude-loopback \
+            --format markdown --output target/links/report.md \
+            README.md CONTRIBUTING.md llms.txt skills/fetchloom/SKILL.md 'docs/**/*.md'
+      - name: summarize links
+        if: always()
+        run: cat target/links/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: external-links-${{ github.run_attempt }}
+          path: target/links/report.md
+          if-no-files-found: warn
+          retention-days: 14
+
+  mutants:
+    if: github.event_name == 'workflow_dispatch' && inputs.check == 'mutants'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUST_TEST_THREADS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-mutants@27.1.0
+      - name: list and test at most ten mutations in one file
+        env:
+          MUTATION_FILE: ${{ inputs.file }}
+        shell: bash
+        run: |
+          mkdir -p target/ci-mutants
+          timeout --signal=TERM --kill-after=30s 20m python3 python/run_mutants.py "$MUTATION_FILE" \
+            2>&1 | tee target/ci-mutants/run.log
+      - name: summarize the mutation scope
+        if: always()
+        run: |
+          {
+            echo '## mutation pilot'
+            echo '```'
+            cat target/ci-mutants/selected.json
+            echo '```'
+            echo 'the baseline is required; surviving mutants and timeouts fail the check.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-pilot-${{ github.run_attempt }}
+          path: target/ci-mutants/
+          if-no-files-found: warn
+          retention-days: 14

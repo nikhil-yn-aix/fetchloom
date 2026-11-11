@@ -52,8 +52,8 @@ python3 -m unittest discover -s bench
 | [building and testing](building-and-testing.md) | toolchain, test layers, WSL and filesystem reproduction |
 | [running benchmarks](benchmarks.md) | linux lab setup, smoke runs, full comparisons and result records |
 | [profiling](profiling.md) | [reported-problem reproduction](profiling.md#reproduce-a-reported-problem), work counters, traces, CPU samples and memory |
-| [fuzzing](fuzzing.md) | parser targets and longer linux runs |
-| [CI](ci.md) | required platforms, filesystems, dependency policy, python tests and the documentation site |
+| [fuzzing](fuzzing.md) | parser targets, longer linux runs and the weekly eight-target matrix |
+| [CI](ci.md) | required platforms, filesystems, installed artifacts, weekly coverage and manual mutation pilots |
 | [releasing](releasing.md) | artifacts, installers, wheels and publication |
 | [versioning](versioning.md) | what a release may change and what stays stable |
 

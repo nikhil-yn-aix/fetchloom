@@ -2,18 +2,29 @@
 
 fetchloom supports the systems, terminals and source APIs listed below. [versioning](../../dev/engineering/versioning.md) covers what a new release may change.
 
-## systems
+## tested systems
 
-the system table describes configured release targets. source builds depend on their selected rust target and its runtime libraries.
+these hosted systems execute release-artifact journeys on every CI run. the runner labels select an image family, not a frozen OS patch. linux, Windows and apple-silicon macos also run the native unit and CLI suites; intel macos runs the packaged journey, not a second source suite.
 
-tier 1 means CI builds the program and runs its tests there. tier 2 means the release workflow builds binaries there, but CI does not run tests there.
+| runner | cpu | tests beyond the default disk |
+|---|---|---|
+| Ubuntu 24.04 | x86_64, arm64 | x86_64: btrfs, xfs and a chmod-refusing FAT mount |
+| Windows Server 2025 | x86_64 | ReFS, exFAT and FAT32 |
+| Windows 11 | arm64 | native executable and wheel |
+| macos 15 | apple silicon | HFS+ |
+| macos 15 | intel | native packaged executable, wheel and shell installer |
 
-| system | cpu | tier | needs |
-|---|---|---|---|
-| windows 10, 11, server 2016 or later | x86_64, arm64 | 1 | nothing else |
-| linux, any distribution | x86_64, arm64 | 1 | kernel 3.2 or later. the binary is static, so no glibc version matters, and a container without a certificate bundle still checks https against the mozilla roots fetchloom carries |
-| macos 11 or later | apple silicon | 1 | nothing else |
-| macos 11 or later | intel | 2 | nothing else |
+[CI](../../dev/engineering/ci.md#installed-artifacts) lists the exact runner labels and installer/interpreter checks. a simulated CloudStorage path tests fetchloom's placement decision, not a real cloud provider or network disk.
+
+## compatibility targets
+
+the configured release targets below retain their intended lower bounds. the newer hosted systems above do **not** verify those minimum OS versions. static linkage and a macos deployment target check cannot establish kernel or old-OS behavior; minimum-version machines still need the same artifact journey before those floors can be called tested. source builds depend on their selected rust target and its runtime libraries.
+
+| system | cpu | target requirements |
+|---|---|---|
+| windows 10, 11, server 2016 or later | x86_64, arm64 | no separate C runtime installation |
+| linux | x86_64, arm64 | kernel 3.2 or later; the binary is static, with no glibc dependency, and carries mozilla roots for HTTPS |
+| macos 11 or later | apple silicon, intel | only system libraries |
 
 other systems rust supports may build from source with `cargo install`, without promises.
 
@@ -71,7 +82,7 @@ shell completions: bash, zsh, fish, elvish, windows powershell 5.1 and powershel
 
 ## the python helper
 
-python 3.10 or later, on the systems above.
+python 3.10 or later. CI installs each of the six wheels on Python 3.15.2 and also checks Python 3.10 on linux x86_64 and Windows x86_64. native Windows-arm Python 3.10 is not tested.
 
 ## building from source
 
