@@ -1991,8 +1991,8 @@ fn a_sync_the_cache_disk_cannot_hold_asks_once_before_downloading() -> Result {
 }
 
 /// FAT32 holds no file of 4 GiB or more, so a sync refuses a pinned file that large before it
-/// asks or downloads anything, while a file one byte smaller, or exFAT, goes on to ask about the
-/// size.
+/// asks or downloads anything, even when the disk is short of room, since freeing space cannot
+/// help. a file one byte smaller, or exFAT, goes on to ask.
 #[test]
 fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2015,6 +2015,7 @@ fn a_pinned_file_fat32_cannot_hold_is_refused_before_anything_downloads() -> Res
             .command_in(&fresh, &["--json", "sync"])
             .env("FETCHLOOM_CACHE", &cache)
             .env("FETCHLOOM_TEST_FILESYSTEM", filesystem)
+            .env("FETCHLOOM_TEST_FREE", "1024")
             .output()?;
         let document = json(&output)?;
         let error = &document["errors"][0];

@@ -564,19 +564,33 @@ impl<'a> Loop<'a> {
     /// asks once, before anything downloads, when the disk holding the cache may lack room for
     /// all placing needs: the files and archives the cache lacks, and as much again for each
     /// archive whose files are not known yet, which unpacking adds at the least. each download
-    /// asks for its own part too, which this covers when they only together pass the room.
+    /// asks for its own part too, which this covers when they only together pass the room. a file
+    /// the disk cannot hold at all, as FAT32 holds none of 4 GiB, is refused first, since no room
+    /// would let it in.
     fn ask_room(&self, placing: &Placing<'_>) -> Result<(), Error> {
         if self.yes() || self.net.offline().enabled() {
             return Ok(());
         }
         let lacks = |file: &LockedFile| self.cache.find(&file.sha256, Some(file.size)).is_none();
         let missing = placing.missing_as_is(&self.cache, &HashSet::new())?;
+        let unknown = placing.unknown();
+        let large: Vec<(String, u64)> = missing
+            .iter()
+            .chain(&unknown)
+            .filter(|(_, file)| file.size > crate::space::FAT_LARGEST && lacks(file))
+            .map(|(dataset, file)| (format!("{dataset}/{}", file.path), file.size))
+            .collect();
+        crate::space::cache_holds(
+            self.cache.root(),
+            large.iter().map(|(label, size)| (label.as_str(), *size)),
+        )
+        .map_err(|error| self.as_left(error))?;
         let mut needed = missing
             .iter()
             .filter(|(_, file)| lacks(file))
             .map(|(_, file)| file.size)
             .fold(0, u64::saturating_add);
-        for (_, file) in placing.unknown() {
+        for (_, file) in &unknown {
             let download = if lacks(file) { file.size } else { 0 };
             needed = needed.saturating_add(download).saturating_add(file.size);
         }
