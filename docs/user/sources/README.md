@@ -28,7 +28,7 @@ a link to a folder or a site's page, which answers with a web page rather than a
 
 ## selection and access
 
-`--select` and `--exclude` match listed source paths before download. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions; some files must remain. patterns do not select members inside an archive.
+`--select` and `--exclude` match listed source paths before download. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions; some files must remain. patterns do not select members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom drop`](../commands/drop.md) writes one.
 
 listing-size limits apply before filtering. filters cannot bypass zenodo, figshare or dataverse access checks. a selected google docs entry is different: you can exclude it before fetching the remaining fixed files.
 

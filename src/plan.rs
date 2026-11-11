@@ -559,8 +559,9 @@ fn fix(first: &Target, second: &Target, patterns: Patterns) -> String {
 fn leave_out(what: &str, target: &Target, patterns: Patterns) -> String {
     match (target.locked.unpacks_to.is_some(), patterns) {
         (true, Patterns::InDataToml) => format!(
-            "set extract = false on datasets.{} in data.toml to keep its archives packed",
-            target.dataset
+            "leave {what} out with exclude in [datasets.{dataset}.members.\"{archive}\"] in data.toml, or set extract = false on datasets.{dataset} to keep its archives packed",
+            dataset = target.dataset,
+            archive = target.locked.path
         ),
         (true, Patterns::OnCommandLine) => "pass --no-extract to keep archives packed".to_owned(),
         (false, Patterns::InDataToml) => format!(
@@ -1015,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clash_with_an_archives_file_suggests_keeping_it_packed() {
+    fn a_clash_with_an_archives_file_suggests_leaving_it_out_or_keeping_it_packed() {
         let mut locked = lock(&[("a", &["notes.txt", "x.zip"])]);
         locked.datasets[0].files[1].unpacks_to = Some(digest::sha256(b"tree"));
         let members = vec![member("notes.txt")];
@@ -1029,7 +1030,12 @@ mod tests {
             "{}",
             err.message
         );
-        assert!(err.help.unwrap_or_default().contains("extract = false"));
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "leave one of them out with exclude in [datasets.a.members.\"x.zip\"] in data.toml, or set extract = false on datasets.a to keep its archives packed"
+            )
+        );
     }
 
     /// a dataset data.toml makes with a recipe places nothing from a source pin data.lock still

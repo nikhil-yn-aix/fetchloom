@@ -77,7 +77,7 @@ error: datasets test and train would both place data/splits/README
   help: give datasets.test or datasets.train another path in data.toml
 ```
 
-sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced.
+sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced. a clash with a file inside an archive, or two files of one archive that a disk ignoring case sees as one, is resolved by leaving one of them out with the archive's [members table](#files-inside-archives), or by keeping the archive packed with `extract = false`.
 
 each placed file belongs to one dataset, so `remove` and sync delete only that dataset's unchanged files from a shared folder and leave the other datasets' files and your own.
 
