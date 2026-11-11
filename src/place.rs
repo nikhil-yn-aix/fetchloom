@@ -1089,6 +1089,26 @@ fn copy_at(
             return Err(error);
         }
     }
+    closed_look(file, location)
+}
+
+/// how a copy looks once `file`, the handle that wrote it at `location`, is closed. windows
+/// stamps a written file's time when that handle closes, and fat keeps it coarser than an open
+/// handle shows, so there the copy is read by name after closing, as git does on windows.
+#[cfg(windows)]
+fn closed_look(file: File, location: &Location) -> io::Result<Metadata> {
+    drop(file);
+    location.metadata()
+}
+
+/// how a copy looks once `file`, the handle that wrote it, is closed: unix reports an open
+/// file's times as a later look by name does.
+#[cfg(not(windows))]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "windows reads the look only once the handle closed"
+)]
+fn closed_look(file: File, _: &Location) -> io::Result<Metadata> {
     file.metadata()
 }
 

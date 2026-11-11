@@ -302,6 +302,56 @@ fn a_copy_goes_only_into_the_file_that_claimed_the_name() {
     assert!(is_read_only(&copied));
 }
 
+/// windows stamps a written file's time when the handle that wrote it closes, and fat or exfat
+/// keep that time coarser than the open handle shows. so a copy must look as its folder lists
+/// it, even when the disk's clock ticks between the write and the close.
+#[cfg(windows)]
+#[test]
+fn a_copy_looks_as_its_folder_lists_it() {
+    let (folder, object) = cache(true);
+    let destination = folder.path().join("placed.csv");
+    let (staged, file) = stage_copy(
+        &object,
+        &destination,
+        false,
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
+    staged.publish().unwrap();
+    passed(folder.path(), file.metadata().unwrap().modified().unwrap());
+
+    let look = closed_look(file, &Location::standalone(&destination).unwrap()).unwrap();
+
+    let listed = fs::read_dir(folder.path())
+        .unwrap()
+        .map(Result::unwrap)
+        .find(|entry| entry.file_name() == "placed.csv")
+        .unwrap()
+        .metadata()
+        .unwrap();
+    assert_eq!(
+        (look.len(), look.modified().unwrap()),
+        (listed.len(), listed.modified().unwrap())
+    );
+}
+
+/// waits until a file written in `folder` gets a later time than `time`: a coarse clock, such
+/// as fat's two seconds, moves on only once a tick passes.
+#[cfg(windows)]
+fn passed(folder: &std::path::Path, time: std::time::SystemTime) {
+    let probe = folder.join("clock");
+    for _ in 0..1000 {
+        // a write that changes the length, which exfat needs before it stamps a time
+        fs::write(&probe, b"tick").unwrap();
+        if fs::metadata(&probe).unwrap().modified().unwrap() > time {
+            return fs::remove_file(&probe).unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the disk's clock never passed {time:?}");
+}
+
 #[cfg(windows)]
 #[test]
 fn a_writable_copy_needs_no_permission_change() {
