@@ -383,3 +383,67 @@ fn choices_need_a_merge_and_conflict_lines_in_git_order() -> Result {
     );
     Ok(())
 }
+
+/// both branches add a dataset of the same name, labels, each with its own files, and one more
+/// each. zdiff3 moves the lines both sides share, such as the table's first lines, out of each
+/// conflict, so the base fetchloom reads is rebuilt around them: labels needs a choice, as each
+/// side added it its own way, and alpha and beta merge by themselves, as with diff3.
+#[test]
+fn lock_reads_the_base_around_lines_zdiff3_moved_out_of_a_conflict() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folders = [
+        ("kappa", "x.txt", "base"),
+        ("ours-labels", "l.txt", "cat"),
+        ("their-labels", "l.txt", "wolf"),
+        ("alpha", "a.txt", "a"),
+        ("beta", "b.txt", "b"),
+    ];
+    for (folder, name, bytes) in folders {
+        fs::write(sandbox.folder(folder)?.join(name), bytes)?;
+    }
+    let add = |folder: &str, name: &str| -> Result {
+        succeeded(&run(
+            &sandbox,
+            &["add", &format!("../{folder}"), "--as", name],
+        )?)
+    };
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    add("kappa", "kappa")?;
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "kappa"])?;
+    ok(&sandbox, &["checkout", "-qb", "theirs"])?;
+    add("beta", "beta")?;
+    add("their-labels", "labels")?;
+    ok(&sandbox, &["commit", "-qam", "beta"])?;
+    ok(&sandbox, &["checkout", "-q", "main"])?;
+    add("alpha", "alpha")?;
+    add("ours-labels", "labels")?;
+    ok(&sandbox, &["commit", "-qam", "alpha"])?;
+    let merged = git(
+        &sandbox,
+        &sandbox.work(),
+        &["-c", "merge.conflictStyle=zdiff3", "merge", "-q", "theirs"],
+    )?
+    .ok_or("no git")?;
+    assert!(!merged.status.success());
+
+    let output = run(&sandbox, &["--json", "lock"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["details"],
+        serde_json::json!(["labels: each side added it its own way"]),
+        "{error}"
+    );
+    let merge = &document["result"]["merge"];
+    assert_eq!(merge["conflicts"], serde_json::json!(["labels"]));
+    assert_eq!(merge["from_ours"], serde_json::json!(["alpha"]));
+    assert_eq!(merge["from_theirs"], serde_json::json!(["beta"]));
+    succeeded(&run(&sandbox, &["lock", "--theirs", "labels"])?)?;
+    let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(lock.contains(&sha256(b"wolf")), "{lock}");
+    Ok(())
+}

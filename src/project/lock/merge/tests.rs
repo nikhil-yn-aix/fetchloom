@@ -52,7 +52,13 @@ fn lock(mut pins: Vec<Locked>) -> String {
 }
 
 fn sides(ours: String, theirs: String, base: Option<String>) -> Sides {
-    Sides { ours, theirs, base }
+    Sides {
+        ours,
+        theirs,
+        shows_base: base.is_some(),
+        base,
+        ..Sides::default()
+    }
 }
 
 /// merges the sides with `choices` in a project folder holding no lists.
@@ -145,6 +151,20 @@ fn a_removal_survives_with_a_base() {
     assert_eq!(names(&merged.lock.unwrap()), ["beta", "zeta"]);
     assert_eq!(merged.summary.removed, ["core"]);
     assert_eq!(merged.summary.from_theirs, ["beta"]);
+}
+
+/// a base git's conflict lines showed but fetchloom could not read leaves the conflict style
+/// alone: the style that shows a base is in use already, so the help names only git 2.45.
+#[test]
+fn a_base_shown_but_unread_names_no_conflict_style() {
+    let (mut manifest, mut locks) = two_additions(false);
+    manifest.shows_base = true;
+    locks.shows_base = true;
+    let error = merged(&manifest, &locks, &[]).unwrap_err();
+    assert_eq!(
+        error.details[2],
+        "no merge base fetchloom can read was found: git 2.45 or later lets fetchloom see what each side changed"
+    );
 }
 
 #[test]

@@ -264,7 +264,8 @@ pub(crate) fn merge(
     check_choices(choices, &decided, &manifests)?;
     let summary = summarize(&decided, &merged, records.as_deref());
     if !decided.conflicts.is_empty() {
-        return Err(undecided(&decided.conflicts, &summary));
+        let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
+        return Err(undecided(&decided.conflicts, &summary, shown));
     }
     let repinned = match (&locks, &records) {
         (Some(locks), Some(records)) => repinned(&locks.ours, records),
@@ -697,9 +698,19 @@ fn unreadable(file: &str, side: Side, error: &Error) -> Error {
     ))
 }
 
+/// whether `text` reads as `file`, data.toml or data.lock, as a merge base must to count.
+pub(crate) fn reads(file: &str, text: &str) -> bool {
+    if file == manifest::FILE {
+        Manifest::parse(text).is_ok() && manifest::tables(text).is_ok()
+    } else {
+        parse(text).is_ok()
+    }
+}
+
 /// the error that names each dataset in `conflicts` and why it needs a choice, with the merge as
-/// far as it got.
-fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary) -> Error {
+/// far as it got. `shown` says git's conflict lines showed a base, so the conflict style that
+/// shows one is in use already and the help names none.
+fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary, shown: bool) -> Error {
     let message = match conflicts.keys().collect::<Vec<_>>().as_slice() {
         [one] => format!("the merge needs a choice for {one}"),
         many => format!("the merge needs a choice for {} datasets", many.len()),
@@ -725,9 +736,11 @@ fn undecided(conflicts: &BTreeMap<String, Why>, summary: &Summary) -> Error {
         .values()
         .any(|why| matches!(why, Why::NoBase | Why::OneSided(_)))
     {
-        error = error.detail(
-            "no merge base was found: git 2.45 or later, or `git config merge.conflictStyle zdiff3` before merging, lets fetchloom see what each side changed",
-        );
+        error = error.detail(if shown {
+            "no merge base fetchloom can read was found: git 2.45 or later lets fetchloom see what each side changed"
+        } else {
+            "no merge base was found: git 2.45 or later, or `git config merge.conflictStyle zdiff3` before merging, lets fetchloom see what each side changed"
+        });
     }
     let error = error.help(
         "choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat",

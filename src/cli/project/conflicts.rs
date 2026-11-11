@@ -1,6 +1,7 @@
 //! `fetchloom lock` in a project where a git merge left both sides in data.toml or data.lock:
-//! both merged a dataset at a time, with the merge base from git's conflict lines or else from
-//! git's index, and nothing resolved or downloaded.
+//! both merged a dataset at a time, with the merge base from git's conflict lines, else from
+//! git's index, else from the conflict lines read around what zdiff3 moved out of them, and
+//! nothing resolved or downloaded.
 
 use super::{Changes, Report, committed, dry_run_done};
 use crate::cli::Context;
@@ -129,25 +130,32 @@ fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
     }))
 }
 
-/// the sides of data.toml and of data.lock, each with its merge base from git's index when its
-/// conflict lines do not show one. a file without conflict lines is the same on both sides.
+/// the sides of data.toml and of data.lock, each with its merge base: the one its conflict lines
+/// show when it reads, else git's index's, which is exact, else the one read around the lines
+/// zdiff3 moved out of the conflicts. a file without conflict lines is the same on both sides.
 fn sides(project: &Project, conflicted: &Conflicted) -> (Sides, Option<Sides>) {
     let git =
         std::env::var_os("PATH").and_then(|path| merge::git::find(Some(&path), &project.root));
     let based = |sides: Option<&Sides>, file: &str, text: &str| match sides {
         Some(sides) => {
             let mut sides = sides.clone();
-            if sides.base.is_none() {
+            if !sides
+                .base
+                .as_deref()
+                .is_some_and(|base| merge::reads(file, base))
+            {
+                let trimmed = sides.trimmed.take().filter(|base| merge::reads(file, base));
                 sides.base = git
                     .as_deref()
-                    .and_then(|git| merge::git::base(git, &project.root, file));
+                    .and_then(|git| merge::git::base(git, &project.root, file))
+                    .or(trimmed);
             }
             sides
         }
         None => Sides {
             ours: text.to_owned(),
             theirs: text.to_owned(),
-            base: None,
+            ..Sides::default()
         },
     };
     let manifest = based(

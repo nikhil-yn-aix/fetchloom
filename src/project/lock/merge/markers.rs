@@ -1,17 +1,33 @@
 //! the two sides git leaves in a file when a merge could not combine them: lines at the start of
 //! a line, `<<<<<<<` before our side, `|||||||` before the merge base in git's diff3 and zdiff3
 //! styles, `=======` before their side and `>>>>>>>` after it. the lines outside them are on
-//! both sides.
+//! both sides. zdiff3 also moves the lines both sides share at either end of a conflict out of
+//! it, though the base may never have had them, so a base read from its conflict lines may hold
+//! a table cut in two.
 
 use crate::error::{Error, Kind};
 
 /// a file as it is on each side of a merge, and as it was at the merge base when every conflict
 /// shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Sides {
     pub(crate) ours: String,
     pub(crate) theirs: String,
+    /// the lines outside the conflicts, with each conflict's base where the conflict was.
     pub(crate) base: Option<String>,
+    /// [`Sides::base`] without the lines outside the conflicts that start or end a table a
+    /// conflict cuts, the lines zdiff3 may have moved out of it: a second reading of the base,
+    /// for when the first does not read. none when it is the first.
+    pub(crate) trimmed: Option<String>,
+    /// whether every conflict showed git's merge base, as the diff3 and zdiff3 styles do.
+    pub(crate) shows_base: bool,
+}
+
+/// a stretch of a file with conflict lines, as the base sees it: lines outside every conflict, or
+/// what one conflict shows of the base.
+enum Part<'a> {
+    Outside(Vec<&'a str>),
+    Base(Vec<&'a str>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,9 +76,9 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
     let mut sides = Sides {
         ours: String::with_capacity(text.len()),
         theirs: String::with_capacity(text.len()),
-        base: None,
+        ..Sides::default()
     };
-    let mut base = String::new();
+    let mut parts: Vec<Part<'_>> = Vec::new();
     let (mut conflicts, mut based) = (0, 0);
     let mut inside: Option<Marker> = None;
     let mut last = 0;
@@ -71,6 +87,7 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
         inside = match (marker(bare(line)), inside) {
             (Some(Marker::Ours), None) => {
                 conflicts += 1;
+                parts.push(Part::Base(Vec::new()));
                 Some(Marker::Ours)
             }
             (Some(Marker::Base), Some(Marker::Ours)) => {
@@ -83,13 +100,20 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
             (None, None) => {
                 sides.ours.push_str(line);
                 sides.theirs.push_str(line);
-                base.push_str(line);
+                match parts.last_mut() {
+                    Some(Part::Outside(lines)) => lines.push(line),
+                    _ => parts.push(Part::Outside(vec![line])),
+                }
                 None
             }
             (None, Some(side)) => {
                 match side {
                     Marker::Ours => sides.ours.push_str(line),
-                    Marker::Base => base.push_str(line),
+                    Marker::Base => {
+                        if let Some(Part::Base(lines)) = parts.last_mut() {
+                            lines.push(line);
+                        }
+                    }
                     Marker::Theirs | Marker::End => sides.theirs.push_str(line),
                 }
                 Some(side)
@@ -102,8 +126,70 @@ pub(crate) fn split(text: &str, file: &str) -> Result<Option<Sides>, Error> {
     if conflicts == 0 {
         return Ok(None);
     }
-    sides.base = (based == conflicts).then_some(base);
+    sides.shows_base = based == conflicts;
+    if sides.shows_base {
+        let base = whole(&parts, &[]);
+        let trimmed = whole(&parts, &cut_tables(&parts));
+        sides.trimmed = (trimmed != base).then_some(trimmed);
+        sides.base = Some(base);
+    }
     Ok(Some(sides))
+}
+
+/// whether `line` starts a TOML table, as `[datasets.iris]` and `[[dataset]]` do.
+fn starts_table(line: &str) -> bool {
+    line.trim_start().starts_with('[')
+}
+
+/// for each outside stretch of `parts`, by its place, how many lines from its start and from its
+/// end belong to a table a conflict cuts: from the conflict before it to the first table that
+/// starts in it, and from the last table that starts in it, its first line included, to the
+/// conflict after it. a stretch with no table start belongs to its conflicts whole.
+fn cut_tables(parts: &[Part<'_>]) -> Vec<(usize, usize)> {
+    parts
+        .iter()
+        .enumerate()
+        .map(|(at, part)| {
+            let Part::Outside(lines) = part else {
+                return (0, 0);
+            };
+            let after_conflict = at > 0;
+            let before_conflict = at + 1 < parts.len();
+            let head = if after_conflict {
+                lines
+                    .iter()
+                    .position(|line| starts_table(line))
+                    .unwrap_or(lines.len())
+            } else {
+                0
+            };
+            let tail = if before_conflict {
+                lines
+                    .iter()
+                    .rposition(|line| starts_table(line))
+                    .map_or(lines.len(), |start| lines.len() - start)
+            } else {
+                0
+            };
+            (head, tail.min(lines.len() - head))
+        })
+        .collect()
+}
+
+/// the base `parts` give, each outside stretch without the lines `cut` names at its start and
+/// end, by its place in `parts`.
+fn whole(parts: &[Part<'_>], cut: &[(usize, usize)]) -> String {
+    let mut base = String::new();
+    for (at, part) in parts.iter().enumerate() {
+        let lines = match part {
+            Part::Outside(lines) | Part::Base(lines) => lines,
+        };
+        let (head, tail) = cut.get(at).copied().unwrap_or_default();
+        for line in &lines[head..lines.len() - tail] {
+            base.push_str(line);
+        }
+    }
+    base
 }
 
 fn out_of_order(file: &str, number: usize) -> Error {
@@ -141,7 +227,7 @@ mod tests {
             Sides {
                 ours: OURS.to_owned(),
                 theirs: THEIRS.to_owned(),
-                base: None,
+                ..Sides::default()
             }
         );
         let zdiff3 = sides(ZDIFF3);
@@ -169,6 +255,37 @@ mod tests {
             first(THEIRS.replace("[datasets.beta]", "=======").as_str()),
             Some(0)
         );
+    }
+
+    /// zdiff3 moved lines both sides added out of each conflict, as git 2.43 wrote them when both
+    /// branches added labels and one other dataset each: the base read around them leaves out
+    /// every table a conflict cuts, while the base read with them does not read.
+    #[test]
+    fn the_base_is_read_again_around_what_zdiff3_moved_out() {
+        let manifest = "<<<<<<< HEAD\n[datasets.alpha]\n||||||| 3507bb5\n=======\n[datasets.beta]\n>>>>>>> B\nref = \"local\"\n\n[datasets.kappa]\nref = \"local\"\n\n[datasets.labels]\nref = \"local\"\n";
+        let sides = split(manifest, "data.toml").unwrap().unwrap();
+        assert!(sides.shows_base);
+        assert_eq!(
+            sides.base.as_deref(),
+            Some(
+                "ref = \"local\"\n\n[datasets.kappa]\nref = \"local\"\n\n[datasets.labels]\nref = \"local\"\n"
+            )
+        );
+        assert_eq!(
+            sides.trimmed.as_deref(),
+            Some("[datasets.kappa]\nref = \"local\"\n\n[datasets.labels]\nref = \"local\"\n")
+        );
+        let lock = "version = 1\n\n[[dataset]]\n<<<<<<< HEAD\nname = \"alpha\"\nfiles = [\n  { path = \"a.txt\" },\n||||||| 3507bb5\n=======\nname = \"beta\"\nfiles = [\n  { path = \"b.txt\" },\n>>>>>>> B\n]\n\n[[dataset]]\nname = \"kappa\"\nfiles = [\n  { path = \"x.txt\" },\n]\n\n[[dataset]]\nname = \"labels\"\nref = \"local\"\n<<<<<<< HEAD\nfiles = [\n  { path = \"l.txt\", size = 4 },\n||||||| 3507bb5\n=======\nfiles = [\n  { path = \"l.txt\", size = 5 },\n>>>>>>> B\n]\n";
+        let sides = split(lock, "data.lock").unwrap().unwrap();
+        assert_eq!(
+            sides.trimmed.as_deref(),
+            Some(
+                "version = 1\n\n[[dataset]]\nname = \"kappa\"\nfiles = [\n  { path = \"x.txt\" },\n]\n\n"
+            )
+        );
+        // no table is cut here, so there is no second reading, and none without a base
+        assert_eq!(split(DIFF3, "data.toml").unwrap().unwrap().trimmed, None);
+        assert_eq!(split(MERGE, "data.toml").unwrap().unwrap().trimmed, None);
     }
 
     /// a base only some conflicts show is no base.
