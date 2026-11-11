@@ -24,7 +24,7 @@ a cancel you choose at a question keeps its exit code: q at the dataset list exi
 | kind | next step |
 |---|---|
 | `unconfirmed` | check the download size and pass `--yes` only if you approve; after a git merge, choose a side for each dataset named with `fetchloom lock --ours <name>` or `--theirs <name>`, which `--yes` never does |
-| `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock |
+| `lock.outdated` | run `fetchloom lock` deliberately and commit the updated lock. from `fetchloom build --check`, a recipe data.lock does not pin as building it now would make is outdated too: build it deliberately, then commit data.lock and data.lock.d |
 | `usage` | check arguments and [environment settings](environment.md) |
 | `reference.invalid`, `reference.unresolved`, `source.invalid` | check the reference and the source's supported access rules |
 | `reference.ambiguous` | choose a returned canonical reference and rerun; `--yes` never chooses |

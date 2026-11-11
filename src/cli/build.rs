@@ -20,7 +20,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::args;
-use super::project::{Run, committed, find, hold, ignore_data, known, register, sync_all};
+use super::project::{Run, committed, find, hold, ignore_data, known, locked, register, sync_all};
 use super::sync::place::{Placement, Seen};
 use super::sync::{Before, Loop, Scope, Upgrade, repinned};
 use super::{Context, fetch, open_cache};
@@ -108,6 +108,9 @@ enum Did {
     /// data.lock pins the files a rebuild of it made that differed from the ones pinned before,
     /// as `--accept` asked.
     Accepted,
+    /// `--check` could not run it, since data.lock's result of a recipe it reads is not in the
+    /// cache or on a mirror, as after that recipe's check made other files.
+    Skipped,
 }
 
 /// what `build --dry-run` found.
@@ -175,7 +178,12 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
             .await
             .map(|built| Report::Built(Box::new(built)));
     }
-    let mut building = Building::start(context, &project, &args.names).await?;
+    let current = args.check.then_some("build without --check");
+    let mut building = Building::start(context, &project, &args.names, current).await?;
+    if args.check {
+        building.check().await?;
+        return Ok(Report::Built(Box::new(building.report)));
+    }
     building.steps().await?;
     building
         .finish()
@@ -432,12 +440,11 @@ impl<'a> Building<'a> {
         context: &'a Context,
         project: &'a Project,
         names: &[String],
+        current: Option<&str>,
     ) -> Result<Building<'a>, Error> {
         let (text, manifest) = project.manifest()?;
         recipes_only(&manifest, names)?;
-        let old = project
-            .lock_and_text()?
-            .map(|(lock, text)| (lock, digest::sha256(text.as_bytes())));
+        let read = project.lock_and_text()?;
         let selected = selected(&manifest, names);
         let roots: Vec<&str> = selected.iter().map(String::as_str).collect();
         let closure: Vec<String> = recipe::closure(&manifest.datasets, &roots)
@@ -450,6 +457,10 @@ impl<'a> Building<'a> {
             .cloned()
             .collect();
         let scope = Scope::Only(closure.into_iter().collect());
+        if let Some(instead) = current {
+            pinned_as_asked(project, &manifest, read.as_ref(), instead, &scope)?;
+        }
+        let old = read.map(|(lock, text)| (lock, digest::sha256(text.as_bytes())));
         let work =
             Loop::new(context, project, Arc::new(context.net()), open_cache()?).within(scope);
         let (lock, before) = work
@@ -491,6 +502,111 @@ impl<'a> Building<'a> {
             }
         }
         Ok(())
+    }
+
+    /// runs every step again from the inputs data.lock pins and compares what each makes with
+    /// the result data.lock pins for it, going on past a step that differs and stopping at one
+    /// that fails. data.lock and the data folder stay as they are.
+    async fn check(&mut self) -> Result<(), Error> {
+        for name in self.recipes.clone() {
+            let done = self
+                .check_step(&name)
+                .await
+                .map_err(|error| self.kept(error))?;
+            self.report.steps.push(done);
+        }
+        if self
+            .report
+            .steps
+            .iter()
+            .any(|step| step.candidate.is_some())
+        {
+            let error = differs(&self.manifest, &self.report.steps);
+            return Err(self.kept(error));
+        }
+        let output = &self.context.output;
+        if self.recipes.is_empty() {
+            output.done(
+                "Ok",
+                "data.toml has no recipes, so there is nothing to check",
+            );
+        } else {
+            output.done("Ok", "every step made the files data.lock pins");
+        }
+        Ok(())
+    }
+
+    /// runs the step of the recipe `name` again from the inputs data.lock pins and compares what
+    /// it makes with its pin. a rebuild that matches enters the cache as the pinned result, and
+    /// one that differs is kept for `--accept`.
+    async fn check_step(&mut self, name: &str) -> Result<Done, Error> {
+        let output = &self.context.output;
+        let step = Step::read(&self.work.project.root, &self.manifest, &self.lock, name)?
+            .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
+        let key = keyed(&step)?;
+        let Some(pinned) = self.lock.result(name).filter(|pinned| pinned.key == key) else {
+            return Err(Error::new(
+                Kind::Outdated,
+                format!("data.lock is out of date: {name} changed since it was built"),
+            ));
+        };
+        let (tree, files) = (pinned.tree, pinned.files.clone());
+        for read in step.inputs.iter().filter(|read| read.made) {
+            let made = self
+                .lock
+                .result(&read.name)
+                .map(|result| result.files.clone())
+                .unwrap_or_default();
+            if !self.fetched(&read.name, &made).await? {
+                output.mark(
+                    "Skipped",
+                    &format!(
+                        "{name} · it reads {}'s result as data.lock pins it, which is not on this machine or a mirror",
+                        read.name
+                    ),
+                );
+                return Ok(done(Did::Skipped, name, key, tree, &files));
+            }
+        }
+        let sources: BTreeSet<&str> = step
+            .inputs
+            .iter()
+            .filter(|read| !read.made)
+            .map(|read| read.name.as_str())
+            .collect();
+        self.work
+            .ready(&self.manifest, &self.lock, &sources)
+            .await?;
+        output.step("Running", &format!("{name} · {}", self.command(name)));
+        let made = tokio::task::block_in_place(|| self.make(&step, key, Some(tree)))?;
+        let compared = compare(&files, &made.members);
+        let mut done = done(Did::Ran, name, key, tree, &files);
+        done.log = Some(log_shown(name));
+        done.seconds = Some(made.ran.took.as_secs_f64());
+        if made.tree == tree {
+            output.step(
+                "Checked",
+                &format!("{name} · {} data.lock", matched(&compared)),
+            );
+            forget(self.work.project, &[name.to_owned()])?;
+        } else {
+            output.mark(
+                "Differs",
+                &format!("{name} · {} data.lock", matched(&compared)),
+            );
+            self.keep(
+                name,
+                Candidate {
+                    key,
+                    tree: made.tree,
+                    pinned: tree,
+                    files: made.members,
+                },
+            )?;
+            done.candidate = Some(format!("sha256:{}", made.tree));
+        }
+        done.check = Some(compared);
+        Ok(done)
     }
 
     /// `error`, with what the build did so far beside it for `--json`.
@@ -893,6 +1009,33 @@ fn forget(project: &Project, names: &[String]) -> Result<(), Error> {
     project.write_state(&state)
 }
 
+/// fails with `lock.outdated` unless data.lock, `read`, pins every dataset of `scope` as data.toml
+/// asks: each fetched one for its entry and each recipe's result as building it now would make.
+/// `instead` is the other way out the help names, such as "build without --check".
+fn pinned_as_asked(
+    project: &Project,
+    manifest: &Manifest,
+    read: Option<&(Lock, String)>,
+    instead: &str,
+    scope: &Scope,
+) -> Result<(), Error> {
+    locked(
+        project,
+        manifest,
+        read.map(|(lock, _)| lock),
+        instead,
+        scope,
+    )
+    .map_err(|error| match error.kind {
+        // a build's own check compares with data.lock, so a recipe it does not pin is drift
+        Kind::BuildNeeded => Error {
+            kind: Kind::Outdated,
+            ..error
+        },
+        _ => error,
+    })
+}
+
 /// the key of `step`, once data.lock pins every dataset it reads and all its code is there.
 fn keyed(step: &Step) -> Result<Sha256, Error> {
     if let Some(key) = step.key() {
@@ -1189,6 +1332,12 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
         if lines.len() > LISTED {
             error = error.detail(format!("and {} more", lines.len() - LISTED));
         }
+    }
+    for step in steps.iter().filter(|step| step.action == Did::Skipped) {
+        error = error.detail(format!(
+            "{} was not checked: it reads a result data.lock pins that is not on this machine or a mirror",
+            step.name
+        ));
     }
     let (folders, them) = match names.as_slice() {
         [name] => (plan::folder(manifest, name), "it"),

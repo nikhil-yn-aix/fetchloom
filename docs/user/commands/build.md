@@ -24,6 +24,7 @@ error: iris is fetched, not built; `fetchloom sync` places it
 
 | option | effect |
 |---|---|
+| `--check` | run every step again from the inputs `data.lock` pins and compare what each makes with `data.lock`, file by file; `data.lock` and the data folder stay as they are. [check](#check) has the details |
 | `--accept` | pin the files a build kept because they differ from what `data.lock` pins for the same inputs, command and code, and place them; run nothing. [a rebuild that differs](#a-rebuild-that-differs) has the details |
 | `-n`, `--dry-run` | say what each step would run, what it reads and where its result goes; run nothing |
 
@@ -97,6 +98,34 @@ the results of the steps that finished before it stay in the cache by their key,
 
 a recipe whose key `data.lock` already pins, but whose files the cache lacks, as in a fresh clone, comes from a mirror that holds them, and runs again when none does. a step that makes the same files leaves the pin as it is; one that makes other files is not reproducible, as [a rebuild that differs](#a-rebuild-that-differs) describes.
 
+## check
+
+`fetchloom build --check` asks whether each step still makes what `data.lock` pins. it runs every step the named recipes need, each from the inputs `data.lock` pins, a recipe it reads as its pinned result rather than as its own check made it, so each step is checked on its own. it compares what each makes with the files `data.lock` and `data.lock.d` list, so it needs no pinned result on the machine, and reports every step, not only the first that differs. this output is from a project with `clean`, which keeps rows of a table, and `emb`, whose step writes random bytes:
+
+```text
+    Running clean · python3 clean.py <build>/in/raw <build>/out
+            kept 2 of 2 rows
+    Checked clean · 1 of 1 files match data.lock
+    Running emb · python3 embed.py <build>/in/raw <build>/out
+            embedded 3 rows
+    Differs emb · 0 of 1 files match data.lock
+error: emb differs from data.lock: 0 of 1 files match
+  changed vectors.bin
+  help: the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and data/emb are as they were. the rebuild is kept: `fetchloom build --accept emb` pins it
+```
+
+a check changes neither `data.lock` nor the data folder. every step that matches ends with `Ok every step made the files data.lock pins`, exit 0, and its files enter the cache as the pinned result, so a check on a fresh clone leaves the results there for `sync` to place. one that differs is kept as [a rebuild that differs](#a-rebuild-that-differs) describes, and the check ends with `build.differs`, exit 60, once every step ran. a step that fails stops the check, as it stops a build. a step that reads a recipe whose check made other files, and whose pinned result neither the cache nor a mirror holds, cannot be checked: it is `Skipped`, and the error says so.
+
+a check compares with `data.lock` as it is, so it runs nothing when `data.lock` does not pin every dataset the steps need as `data.toml` asks: a fetched dataset whose entry changed, or a recipe never built or changed since it was built, is `lock.outdated`, exit 1:
+
+```text
+error: data.lock is out of date: clean changed since it was built
+  clean: clean.py changed
+  help: run `fetchloom build clean`, then commit data.lock and data.lock.d
+```
+
+`--check` cannot be combined with `--accept` or `--dry-run`.
+
 ## a rebuild that differs
 
 a step that runs again for a key `data.lock` pins, and makes other files than the ones it pins, stops the build with `build.differs`, exit 60. `data.lock`, `data.lock.d` and the data folder stay as they were, and the error says which files differ. this output is from a project where `emb` writes random bytes with `python3 embed.py`, built again after its file left the cache:
@@ -159,16 +188,16 @@ when every step is up to date, the last line says so:
 | field | value |
 |---|---|
 | `name` | the recipe |
-| `action` | `ran`, `reused`, `fetched`, `up_to_date` or, with `--accept`, `accepted` |
+| `action` | `ran`, `reused`, `fetched`, `up_to_date`, with `--accept` `accepted`, and with `--check` `ran` or `skipped` |
 | `key` | the key of its result, `sha256:` and 64 hex digits |
 | `tree` | the tree of the files its result holds, `sha256:` and 64 hex digits; for a step that differs, the tree `data.lock` keeps |
 | `files`, `bytes` | how many files its result holds, and their size |
-| `check` | for a step that ran again for a key `data.lock` pins and made other files, `matching`, the count of files that match, and `changed`, `missing` and `extra`, every path of each; else null |
+| `check` | for a step checked, or one that ran again for a key `data.lock` pins and made other files, `matching`, the count of files that match, and `changed`, `missing` and `extra`, every path of each; else null |
 | `candidate` | the tree of the files a step that differs made, kept for `--accept`; else null |
 | `log` | `.fetchloom/builds/<name>.log` when it ran, else null |
 | `seconds` | how long it ran, else null |
 
-a failed build keeps the steps that finished before it in `result.steps`. with `--dry-run`, `result.dry_run` is `true` and each step record has:
+a failed build keeps the steps that finished before it in `result.steps`. a check reports every step it ran there, with `lock_changed` false and `placement` null. with `--dry-run`, `result.dry_run` is `true` and each step record has:
 
 | field | value |
 |---|---|

@@ -54,7 +54,7 @@ on disk: writes data.lock and may add files to the cache. after a git merge, it 
     pub(super) const BUILD: &str = "examples:
   fetchloom build --dry-run
   fetchloom build
-  fetchloom build clean --json
+  fetchloom build --check --json
   fetchloom build --accept clean
 
 on disk: runs each step that needs it in a folder of its own in the cache, writes data.lock and data.lock.d and places the results in data/. --dry-run writes nothing";
@@ -837,6 +837,12 @@ pub(crate) struct Build {
     /// all of them when none is named
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
+
+    /// run every step again from the inputs data.lock has, and compare what each makes with
+    /// data.lock file by file. data.lock and the data folder stay as they are, and the files
+    /// of a step that makes others are kept for --accept
+    #[arg(long, conflicts_with_all = ["dry_run", "accept"], help_heading = "options")]
+    pub(crate) check: bool,
 
     /// record in data.lock the files a build kept because they differ from the ones
     /// data.lock has for the same inputs, command and code. it runs nothing

@@ -1197,25 +1197,84 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     Ok(())
 }
 
-/// a project whose `clean` writes random bytes, built once, then built again after its
-/// result left the cache, so the rerun keeps a rebuild that differs from data.lock.
+/// a project whose `clean` writes random bytes, built once, then checked, which keeps a rebuild
+/// that differs from data.lock.
 fn kept_rebuild(sandbox: &Sandbox, server: &Server, recipe: &str) -> Result {
     with(sandbox, server, recipe)?;
     assert_eq!(build(sandbox, &["build"])?.status.code(), Some(0));
-    let pinned = fs::read(sandbox.work().join("data/clean/random.bin"))?;
-    crate::support::delete(&object(sandbox, &pinned))?;
-    let output = build(sandbox, &["build"])?;
+    let output = build(sandbox, &["build", "--check"])?;
     assert_eq!(output.status.code(), Some(60), "{}", text(&output.stderr)?);
     Ok(())
 }
 
-/// `--accept` pins the files a rebuild kept, without running anything, places them, and has
-/// nothing left to accept after.
+/// a check runs a step again from the inputs data.lock pins and compares what it makes, file by
+/// file, with the result data.lock pins, which a step that copies its input matches. data.lock
+/// and the data folder stay as they were.
 #[test]
-fn accept_pins_a_kept_rebuild_once() -> Result {
+fn check_reproduces_a_deterministic_step() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-    kept_rebuild(&sandbox, &server, &recipe(&["random"]))?;
+    with(&sandbox, &server, COPY)?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let pinned = pins(&sandbox.work())?;
+    let data = files(&sandbox.work().join("data"))?;
+    let output = build(&sandbox, &["--json", "build", "--check"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let result = &document["result"];
+    assert_eq!(result["lock_changed"], false);
+    assert_eq!(result["placement"], Value::Null);
+    let step = &result["steps"][0];
+    assert_eq!(step["action"], "ran");
+    assert_eq!(
+        step["check"],
+        serde_json::json!({"matching": 1, "changed": [], "missing": [], "extra": []})
+    );
+    assert_eq!(step["candidate"], Value::Null);
+    let told = text(&build(&sandbox, &["build", "--check"])?.stderr)?;
+    assert!(
+        told.contains("    Checked clean · 1 of 1 files match data.lock\n"),
+        "{told}"
+    );
+    assert_eq!(runs(&sandbox.work())?, 3, "each check runs the step");
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    Ok(())
+}
+
+/// a check of a step that is not reproducible fails with what differs and keeps the rebuild,
+/// leaving data.lock and the data folder as they were, and `--accept` then pins those files,
+/// without running anything, places them, and has nothing left to accept after.
+#[test]
+fn check_keeps_a_differing_rebuild_and_accept_pins_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["random"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let pinned = pins(&sandbox.work())?;
+    let data = files(&sandbox.work().join("data"))?;
+    let checked = build(&sandbox, &["--json", "build", "--check"])?;
+    assert_eq!(
+        checked.status.code(),
+        Some(60),
+        "{}",
+        text(&checked.stdout)?
+    );
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    let document = json(&checked)?;
+    let (kind, message, details, _, fix) = error(&document);
+    assert_eq!(kind, "build.differs");
+    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert_eq!(details, ["changed random.bin"]);
+    assert_eq!(fix, &Value::Null);
+    let kept = document["result"]["steps"][0]["candidate"].clone();
+    assert!(
+        kept.as_str()
+            .is_some_and(|tree| tree.starts_with("sha256:"))
+    );
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(status["result"]["candidates"], serde_json::json!(["clean"]));
     let placed = sandbox.work().join("data/clean/random.bin");
     let before = fs::read(&placed)?;
     let output = build(&sandbox, &["--json", "build", "--accept", "clean"])?;
@@ -1224,27 +1283,93 @@ fn accept_pins_a_kept_rebuild_once() -> Result {
     let document = json(&output)?;
     let step = &document["result"]["steps"][0];
     assert_eq!(step["action"], "accepted");
+    assert_eq!(step["tree"], kept);
     assert_eq!(document["result"]["lock_changed"], true);
-    let after = fs::read(&placed)?;
-    assert_ne!(after, before, "the data folder holds the accepted files");
-    let tree = format!("random.bin\t8\t{}\n", sha256(&after));
-    assert_eq!(step["tree"], format!("sha256:{}", sha256(tree.as_bytes())));
+    assert_ne!(
+        fs::read(&placed)?,
+        before,
+        "the data folder holds the accepted files"
+    );
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
-    assert!(lock.contains(&format!("tree = \"sha256:{}\"", sha256(tree.as_bytes()))));
+    assert!(lock.contains(&format!("tree = {kept}")), "{lock}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(status["result"]["candidates"], serde_json::json!([]));
     let again = build(&sandbox, &["--json", "build", "--accept", "clean"])?;
     assert_eq!(again.status.code(), Some(2), "{}", text(&again.stdout)?);
     let refused = json(&again)?;
-    let (kind, message, _, _, fix) = error(&refused);
+    let (kind, message, _, _, _) = error(&refused);
     assert_eq!(kind, "usage");
     assert_eq!(message, "there is no kept rebuild of clean to accept");
-    assert_eq!(fix, &Value::Null);
     let rebuilt = build(&sandbox, &["--json", "build"])?;
     assert_eq!(
         json(&rebuilt)?["result"]["steps"][0]["action"],
         "up_to_date"
     );
+    Ok(())
+}
+
+/// a check runs every step from the inputs data.lock pins, so a step after one that differs is
+/// checked against the result data.lock pins for what it reads, not the rebuild, and every step
+/// is reported.
+#[test]
+fn checks_report_every_step() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
+    with(&sandbox, &server, &format!("{}{tidy}", recipe(&["random"])))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let output = build(&sandbox, &["--json", "build", "--check"])?;
+    assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let steps = document["result"]["steps"].as_array().ok_or("no steps")?;
+    let names: Vec<&str> = steps
+        .iter()
+        .filter_map(|step| step["name"].as_str())
+        .collect();
+    assert_eq!(names, ["clean", "tidy"]);
+    assert_eq!(
+        steps[0]["check"]["changed"],
+        serde_json::json!(["random.bin"])
+    );
+    assert_eq!(steps[1]["check"]["matching"], 1);
+    assert_eq!(steps[1]["candidate"], Value::Null);
+    let (_, message, _, _, _) = error(&document);
+    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("runs"))?,
+        "random\ncopy\nrandom\ncopy\n"
+    );
+    Ok(())
+}
+
+/// a check compares with what data.lock pins, so a recipe never built, or changed since it was,
+/// is `lock.outdated`, exit 1, before any step runs.
+#[test]
+fn a_check_refuses_drift_before_running() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY_CODE)?;
+    fs::write(sandbox.work().join("clean.py"), "print(1)\n")?;
+    let output = build(&sandbox, &["--json", "build", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, _, _, _) = error(&document);
+    assert_eq!(kind, "lock.outdated");
+    assert_eq!(message, "data.lock is out of date: clean is not built yet");
+    assert_eq!(runs(&sandbox.work())?, 0);
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
+    let output = build(&sandbox, &["--json", "build", "--check"])?;
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let (kind, message, details, _, _) = error(&document);
+    assert_eq!(kind, "lock.outdated");
+    assert_eq!(
+        message,
+        "data.lock is out of date: clean changed since it was built"
+    );
+    assert_eq!(details, ["clean: clean.py changed"]);
+    assert_eq!(runs(&sandbox.work())?, 1);
     Ok(())
 }
 
