@@ -21,7 +21,7 @@ use crate::name;
 use crate::place::Placer;
 use crate::plan;
 use crate::project::lock::{self, Lock};
-use crate::project::manifest::Manifest;
+use crate::project::manifest::{Entry, Manifest};
 
 #[derive(Serialize)]
 pub(super) struct Report {
@@ -41,9 +41,12 @@ pub(super) struct Report {
     /// the recipes in `unlocked`: those data.lock pins no result of yet.
     #[serde(skip)]
     unbuilt: Vec<String>,
-    /// why each link of `no_link` is not written.
+    /// why each link of `no_link` is not written, but for imported files, which have none.
     #[serde(skip)]
     refused: Vec<String>,
+    /// the datasets imported from a folder, which no link holds, each with its number of files.
+    #[serde(skip)]
+    imported: Vec<(String, u64)>,
 }
 
 /// a file in the data folder, as data.lock and the cache pin it.
@@ -101,6 +104,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         if !text.is_empty() {
             output.answer(text.trim_end_matches('\n'));
         }
+        tell_imported(output, &report, args.format);
         return Ok(report);
     };
     match publish(path, &text, args.force) {
@@ -112,7 +116,39 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         Format::Links | Format::Aria2 => crate::units::count(count, "link", "links"),
     };
     output.done("Exported", &format!("{what} to {}", path.display()));
+    tell_imported(output, &report, args.format);
     Ok(report)
+}
+
+/// says once how many files a list of links leaves out because they were imported from a
+/// folder, which no link holds.
+fn tell_imported(output: &crate::output::Output, report: &Report, format: Format) {
+    if format == Format::Sha256 || report.imported.is_empty() {
+        return;
+    }
+    let files: u64 = report.imported.iter().map(|(_, files)| files).sum();
+    let names: Vec<&str> = report
+        .imported
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let datasets = match names.split_last() {
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => return,
+    };
+    let (they_were, them) = if files == 1 {
+        ("it was", "it")
+    } else {
+        ("they were", "them")
+    };
+    output.warn_with(
+        &format!(
+            "the list leaves out {} of {datasets}: {they_were} imported from a folder on this machine, so no link holds {them}",
+            crate::units::count(files, "file", "files")
+        ),
+        &format!("share {them} through a folder mirror, which `fetchloom push --to <folder>` fills"),
+    );
 }
 
 /// `error` with what export found, so `--json` still lists it.
@@ -143,6 +179,7 @@ fn inventory(
         stale: Vec::new(),
         unbuilt: Vec::new(),
         refused: Vec::new(),
+        imported: Vec::new(),
     };
     for (name, entry) in &manifest.datasets {
         if !wanted(name) {
@@ -191,8 +228,23 @@ fn inventory(
         .iter()
         .map(|(dataset, file)| format!("{}/{}", plan::folder(manifest, dataset), file.path))
         .collect();
+    sources(manifest, &lock, &mut report)?;
+    Ok(report)
+}
+
+/// adds to `report` each file `lock` pins for a dataset, with its link, or why it has none.
+fn sources(manifest: &Manifest, lock: &Lock, report: &mut Report) -> Result<(), Error> {
     for dataset in &lock.datasets {
         let folder = plan::subfolder(manifest, &dataset.name);
+        let imported = manifest
+            .datasets
+            .get(&dataset.name)
+            .is_some_and(Entry::is_import);
+        if imported {
+            report
+                .imported
+                .push((dataset.name.clone(), dataset.files.len() as u64));
+        }
         for file in &dataset.files {
             let shown = format!("{}/{}", dataset.name, file.path);
             let out = folder.map_or_else(
@@ -205,7 +257,10 @@ fn inventory(
             let url = match link(&file.url) {
                 Ok(url) => Some(url),
                 Err(reason) => {
-                    report.refused.push(format!("{shown}: {reason}"));
+                    // an import has no link by design, so its files are no fault of data.lock
+                    if !imported {
+                        report.refused.push(format!("{shown}: {reason}"));
+                    }
                     report.no_link.push(shown);
                     None
                 }
@@ -220,7 +275,7 @@ fn inventory(
             });
         }
     }
-    Ok(report)
+    Ok(())
 }
 
 /// `text`, a link data.lock gives a file, as export and list write it, or why it is not written:
@@ -285,7 +340,7 @@ fn complete(report: &Report, format: Format) -> Result<(), Error> {
             };
             Err(error.help("run `fetchloom sync` to unpack them here, then export again"))
         }
-        Format::Links | Format::Aria2 if !report.no_link.is_empty() => {
+        Format::Links | Format::Aria2 if !report.refused.is_empty() => {
             let error = match report.refused.as_slice() {
                 [one] => {
                     let (shown, reason) = one.split_once(": ").unwrap_or((one, ""));

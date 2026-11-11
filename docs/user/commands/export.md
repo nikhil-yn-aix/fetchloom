@@ -57,7 +57,14 @@ data/uci/iris.data: OK
 data/uci/iris.names: OK
 ```
 
-`links` and `aria2` name the files `data.lock` pins as downloaded, so an archive is one file and its members have no link: fetchloom never makes one up. the same project as an aria2 input file, which aria2c 1.37 downloaded and checked; a file whose bytes differ from its `checksum=` line fails with exit 32:
+`links` and `aria2` name the files `data.lock` pins as downloaded, so an archive is one file and its members have no link: fetchloom never makes one up. files [imported](add.md#files-on-this-machine) from a folder on this machine have no link either, since no source holds them, so the two forms list the other files and say once on stderr how many they leave out, from a real run:
+
+```text
+warning: the list leaves out 2 files of flowers: they were imported from a folder on this machine, so no link holds them
+  help: share them through a folder mirror, which `fetchloom push --to <folder>` fills
+```
+
+the zenodo and UCI project above as an aria2 input file, which aria2c 1.37 downloaded and checked; a file whose bytes differ from its `checksum=` line fails with exit 32:
 
 ```sh
 $ fetchloom export --format aria2
@@ -90,6 +97,7 @@ a text form is complete or not written: `export` stops before writing anything w
 | a [recipe](../recipes.md) `data.lock` pins no result of yet | all forms stop with `build.needed`, exit 60: run `fetchloom build` first | `unlocked` |
 | the files inside an archive this machine never unpacked, as in a fresh clone | `sha256` stops with `offline.missing`, exit 20: `fetchloom sync` unpacks it; `links` and `aria2` need no unpacking | `not_unpacked` |
 | a link that holds a login, a secret such as `token=`, a space or a control character | `links` and `aria2` stop with `project.invalid`, exit 50; fetchloom never pins such a link, so `data.lock` was changed by hand or by someone else | `no_link` |
+| a link for a file imported from a folder on this machine, which has none | `links` and `aria2` leave the file out and say how many they left out | `no_link` |
 
 the refusal names the archive, from a clone whose cache never unpacked it:
 
@@ -103,7 +111,7 @@ a refused link is never shown, in the error or in JSON.
 
 ## JSON
 
-`result` has `file`, the absolute path `-o` wrote or null; `placed`, a record for each file in the data folder with `dataset`, `path` from the project's folder, `size`, `sha256` and `unpacked_from`, the archive's path in its dataset or null; `sources`, a record for each file downloaded with `dataset`, `path` in the dataset, `size`, `sha256` and `url`, null when the link is not written; and the arrays `unlocked` (dataset names), `not_unpacked` (archive paths from the project's folder) and `no_link` (`<dataset>/<path>`). records are sorted by path, and `placed` holds only what is known. [JSON output](../reference/json-output.md) has the envelope.
+`result` has `file`, the absolute path `-o` wrote or null; `placed`, a record for each file in the data folder with `dataset`, `path` from the project's folder, `size`, `sha256` and `unpacked_from`, the archive's path in its dataset or null; `sources`, a record for each file `data.lock` pins as downloaded or imported, with `dataset`, `path` in the dataset, `size`, `sha256` and `url`, null for an imported file or a link that is not written; and the arrays `unlocked` (dataset names), `not_unpacked` (archive paths from the project's folder) and `no_link` (`<dataset>/<path>`). records are sorted by path, and `placed` holds only what is known. [JSON output](../reference/json-output.md) has the envelope.
 
 ## exit codes
 

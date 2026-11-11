@@ -247,6 +247,59 @@ fn a_dataset_not_pinned_yet_stops_text_and_is_named_in_json() -> Result {
     Ok(())
 }
 
+/// files imported from a folder have no link, since no source holds them. the links and aria2
+/// forms list the rest and say once how many files they leave out and why, and `--json` names
+/// those files under `no_link`.
+#[test]
+fn imported_files_are_left_out_of_links_once_and_named_in_json() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (routes, _) = server()?;
+    added(&sandbox, &routes, &["iris.csv"])?;
+    let folder = sandbox.folder("flowers")?;
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        fs::write(folder.join(name), name)?;
+    }
+    let imported = sandbox.run(&["add", "../flowers"])?;
+    assert_eq!(
+        imported.status.code(),
+        Some(0),
+        "{}",
+        text(&imported.stderr)?
+    );
+    let url = &routes.url;
+    let left_out = "warning: the list leaves out 3 files of flowers: they were imported from a folder on this machine, so no link holds them\n  help: share them through a folder mirror, which `fetchloom push --to <folder>` fills\n";
+    for (format, expected) in [
+        ("links", format!("{url}/iris.csv {}\n", sha256(IRIS))),
+        (
+            "aria2",
+            format!(
+                "{url}/iris.csv\n  out=iris/iris.csv\n  checksum=sha-256={}\n",
+                sha256(IRIS)
+            ),
+        ),
+    ] {
+        let output = sandbox.run(&["export", "--format", format])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        assert_eq!(text(&output.stdout)?, expected, "{format}");
+        let stderr = text(&output.stderr)?;
+        assert!(stderr.starts_with(left_out), "{format}: {stderr}");
+        assert_eq!(stderr.matches("warning:").count(), 1, "{format}: {stderr}");
+    }
+    let written = sandbox.run(&["--json", "export", "--format", "links", "-o", "links.txt"])?;
+    assert_eq!(written.status.code(), Some(0), "{}", text(&written.stderr)?);
+    let document = json(&written)?;
+    assert_eq!(
+        document["result"]["no_link"],
+        serde_json::json!(["flowers/a.txt", "flowers/b.txt", "flowers/c.txt"])
+    );
+    assert_eq!(document["warnings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("links.txt"))?,
+        format!("{url}/iris.csv {}\n", sha256(IRIS))
+    );
+    Ok(())
+}
+
 /// fetchloom never pins a link with a login or a secret, so one in data.lock was written by hand
 /// or by someone else. export writes no such link, and never shows its secret.
 #[test]
