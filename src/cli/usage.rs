@@ -9,6 +9,7 @@ use clap::{ArgMatches, CommandFactory};
 
 use super::{Context, args, finish, level};
 use crate::error::{Error, Kind};
+use crate::name;
 use crate::net;
 use crate::output::{ColorChoice, Level, Output, Style};
 
@@ -200,9 +201,12 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     } else if let Some(meant) = (err.kind() == ErrorKind::InvalidSubcommand)
         .then(|| named(ContextKind::InvalidSubcommand))
         .flatten()
-        .and_then(|command| match parent {
-            Some(parent) => habit(&format!("{parent} {command}")),
-            None => habit(&command),
+        .and_then(|command| {
+            let command = command.to_lowercase();
+            match parent {
+                Some(parent) => habit(&format!("{parent} {command}")),
+                None => habit(&command),
+            }
         })
     {
         meant.to_owned()
@@ -240,28 +244,43 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
 /// to the one meant.
 fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
     let raw = |kind| typed(err, kind).into_iter().next();
-    let named = |kind| context_value(err, kind);
-    if let Some(command) = named(ContextKind::SuggestedSubcommand) {
-        let instead = match parent {
-            Some(parent) => format!("fetchloom {parent} {command}"),
-            None => format!("fetchloom {command}"),
-        };
-        let typed = raw(ContextKind::InvalidSubcommand)?;
-        return Some(super::meant(&[&typed], &[&command], instead));
+    if err.kind() == ErrorKind::InvalidSubcommand {
+        return command_meant(&raw(ContextKind::InvalidSubcommand)?, parent);
     }
-    if err.kind() == ErrorKind::InvalidSubcommand && parent.is_none() {
-        let typed = raw(ContextKind::InvalidSubcommand)?;
-        let nested = nested(&typed)?;
-        let meant: Vec<&str> = nested.split(' ').collect();
-        return Some(super::meant(
-            &[&typed],
-            &meant,
-            format!("fetchloom {nested}"),
-        ));
-    }
-    let option = named(ContextKind::SuggestedArg)?;
+    let option = context_value(err, ContextKind::SuggestedArg)?;
     let typed = raw(ContextKind::InvalidArg)?;
     Some(super::meant(&[&typed], &[&option], option.clone()))
+}
+
+/// the command whose name is nearest to `typed` in spelling, ignoring case, among those of
+/// `parent`, or the whole command when `typed` names one a level down, as `verify` does
+/// `cache verify`.
+fn command_meant(typed: &str, parent: Option<&str>) -> Option<String> {
+    let root = args::Args::command();
+    let holder = parent.map_or(Some(&root), |parent| {
+        parent
+            .split(' ')
+            .try_fold(&root, |command, name| command.find_subcommand(name))
+    })?;
+    let lower = typed.to_lowercase();
+    let names = holder
+        .get_subcommands()
+        .filter(|command| !command.is_hide_set())
+        .map(clap::Command::get_name);
+    if let Some(best) = name::closest(&lower, names) {
+        let instead = match parent {
+            Some(parent) => format!("fetchloom {parent} {best}"),
+            None => format!("fetchloom {best}"),
+        };
+        return Some(super::meant(&[typed], &[best], instead));
+    }
+    let nested = nested(&lower).filter(|_| parent.is_none())?;
+    let meant: Vec<&str> = nested.split(' ').collect();
+    Some(super::meant(
+        &[typed],
+        &meant,
+        format!("fetchloom {nested}"),
+    ))
 }
 
 /// an argument as a person types it: `--as <name>` is `--as`, and `--verbose...` is `--verbose`.
@@ -433,6 +452,42 @@ mod tests {
             assert!(!shown.contains("AUDIT_CANARY"), "{arguments:?}: {shown}");
             assert!(shown.contains("token=***"), "{arguments:?}: {shown}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn command_typos_find_the_command_by_its_spelling() -> Result<(), Box<dyn std::error::Error>> {
+        for (arguments, meant) in [
+            (&["fetchloom", "seach", "iris"][..], "fetchloom search"),
+            (&["fetchloom", "sarch"], "fetchloom search"),
+            (&["fetchloom", "serach"], "fetchloom search"),
+            (&["fetchloom", "saerch"], "fetchloom search"),
+            (&["fetchloom", "Search", "iris"], "fetchloom search"),
+            (&["fetchloom", "SEARCH"], "fetchloom search"),
+            (&["fetchloom", "stauts"], "fetchloom status"),
+            (&["fetchloom", "settigns"], "fetchloom settings"),
+            (&["fetchloom", "auht"], "fetchloom auth"),
+            (&["fetchloom", "pth"], "fetchloom path"),
+            (&["fetchloom", "ad", "iris"], "fetchloom add"),
+            (&["fetchloom", "Add"], "fetchloom add"),
+            (&["fetchloom", "snyc"], "fetchloom sync"),
+            (&["fetchloom", "cache", "gx"], "fetchloom cache gc"),
+            (&["fetchloom", "VERIFY"], "fetchloom cache verify"),
+        ] {
+            assert_eq!(
+                problem(arguments)?.help.as_deref(),
+                Some(format!("did you mean `{meant}`?").as_str()),
+                "{arguments:?}"
+            );
+        }
+        assert_eq!(
+            problem(&["fetchloom", "Install"])?.help.as_deref(),
+            Some("`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/")
+        );
+        assert_eq!(
+            problem(&["fetchloom", "banana"])?.help.as_deref(),
+            Some("`fetchloom --help` lists commands and options")
+        );
         Ok(())
     }
 

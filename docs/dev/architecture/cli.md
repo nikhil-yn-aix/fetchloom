@@ -79,7 +79,7 @@ plain-word `add` and `get` call `search::pick` before source resolution. an inte
 
 every command has one name. a name people bring from other tools, such as `install` or `auth status`, is a usage error whose help names the command meant; `habit` in [usage.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/usage.rs) holds them.
 
-a guess at a mistyped command, option, dataset name, path or help topic goes through `meant` in [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs), which repeats the person's own command line with only the mistyped words changed, so a flag such as `--dry-run` stays in what they paste. a line holding a secret is never repeated, and the help then names the command alone.
+a guess at a mistyped command, option, dataset name, path or help topic goes through `meant` in [cli.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli.rs), which repeats the person's own command line with only the mistyped words changed, so a flag such as `--dry-run` stays in what they paste. a line holding a secret is never repeated, and the help then names the command alone. `command_meant` in usage.rs picks a mistyped command with `name::closest`, ignoring case, rather than taking clap's suggestion, which gave `cache` for `seach`.
 
 ### adding an option
 

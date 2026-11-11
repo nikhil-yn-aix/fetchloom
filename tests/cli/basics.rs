@@ -581,6 +581,32 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     Ok(())
 }
 
+/// a mistyped command keeps the words after it, so the suggestion runs what the person meant.
+#[test]
+fn a_command_typo_keeps_the_words_after_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (typed, meant) in [
+        (
+            &["seach", "iris", "--limit", "5"][..],
+            "fetchloom search iris --limit 5",
+        ),
+        (
+            &["-q", "Search", "iris", "--source", "hf"],
+            "fetchloom -q search iris --source hf",
+        ),
+        (&["ad", "iris", "--dry-run"], "fetchloom add iris --dry-run"),
+    ] {
+        let output = sandbox.run(typed)?;
+        assert_eq!(output.status.code(), Some(2), "{typed:?}");
+        let said = text(&output.stderr)?;
+        assert!(
+            said.contains(&format!("help: did you mean `{meant}`?")),
+            "{typed:?}: {said}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn a_nested_command_typo_keeps_its_parent_in_the_suggestion() -> Result {
     let sandbox = Sandbox::new()?;

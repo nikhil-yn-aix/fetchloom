@@ -66,7 +66,7 @@ project commands find the nearest `data.toml` at or above the working directory,
 
 ## typos
 
-a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close to what you typed, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. a line holding a secret, such as a link with a token, is never repeated, so then the suggestion names the command and the corrected word alone.
+a command, option, dataset name, path in a dataset or help topic that fetchloom does not know is a usage error, exit 2. when a known one is close to what you typed, the help suggests your whole command line with only that word changed, so `fetchloom remove --dry-run irs` suggests `fetchloom remove --dry-run iris`, still a dry run. close means at most one change for every three letters, and at least one: a letter added, dropped, changed or swapped with its neighbour. a command is matched in any case, so `fetchloom Serach iris` suggests `fetchloom search iris`. a line holding a secret, such as a link with a token, is never repeated, so then the suggestion names the command and the corrected word alone.
 
 ## output
 
