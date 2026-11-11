@@ -38,6 +38,26 @@ fn pets(sandbox: &Sandbox) -> Result<Server> {
     Ok(server)
 }
 
+/// a folder of plain files imported as the dataset tree: keep.txt, three files in sub and two
+/// recordings in flac.
+fn tree(sandbox: &Sandbox) -> Result<PathBuf> {
+    let folder = sandbox.folder("tree")?;
+    for (path, bytes) in [
+        ("keep.txt", &b"keep\n"[..]),
+        ("sub/s1.txt", b"s1\n"),
+        ("sub/s2.txt", b"s2\n"),
+        ("sub/s3.txt", b"s3\n"),
+        ("flac/a.flac", b"a\n"),
+        ("flac/b.flac", b"b\n"),
+    ] {
+        let file = folder.join(path);
+        fs::create_dir_all(file.parent().ok_or("no parent")?)?;
+        fs::write(file, bytes)?;
+    }
+    ok(&sandbox.run(&["add", "../tree"])?)?;
+    Ok(sandbox.work().join("data").join("tree"))
+}
+
 /// a folder imported as the dataset set: notes beside train.zip and test.zip, which both hold
 /// images/x.png.
 fn set(sandbox: &Sandbox) -> Result<PathBuf> {
@@ -458,5 +478,99 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
         document["warnings"]
     );
     assert_eq!(fs::read(folder.join("mine/cat_001.png"))?, b"cat");
+    Ok(())
+}
+
+/// a folder of files the source lists leaves as one pattern, which stays the same however the
+/// paths overlap, and each file keeps its own record. files named one by one, as a shell expands
+/// `flac/*.flac`, stay one pattern each, so files added to the folder later are not left out.
+#[test]
+fn a_folder_of_listed_files_leaves_as_one_pattern() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = tree(&sandbox)?;
+    let work = sandbox.work();
+    for arguments in [
+        ["data/tree/sub/s2.txt", "data/tree/sub"],
+        ["data/tree/sub", "data/tree/sub/s2.txt"],
+    ] {
+        let output = sandbox.run(&[&["--json", "drop", "--dry-run"][..], &arguments].concat())?;
+        ok(&output)?;
+        let record = |name: &str| json!({"path": format!("data/tree/sub/{name}"), "dataset": "tree", "archive": null, "pattern": "sub/**"});
+        assert_eq!(
+            json(&output)?["result"]["dropped"],
+            json!([record("s1.txt"), record("s2.txt"), record("s3.txt")]),
+            "{arguments:?}"
+        );
+    }
+    ok(&sandbox.run(&["drop", "data/tree/sub"])?)?;
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.tree]\nref = \"local\"\nexclude = [\"sub/**\"]\n"
+    );
+    assert!(!folder.join("sub/s1.txt").exists());
+    assert_eq!(fs::read(folder.join("keep.txt"))?, b"keep\n");
+    assert!(!fs::read_to_string(work.join("data.lock"))?.contains("sub/"));
+    ok(&sandbox.run(&["sync", "--locked"])?)?;
+
+    ok(&sandbox.run(&["drop", "data/tree/flac/a.flac", "data/tree/flac/b.flac"])?)?;
+    assert_eq!(
+        fs::read_to_string(work.join("data.toml"))?,
+        "[datasets.tree]\nref = \"local\"\nexclude = [\n  \"sub/**\",\n  \"flac/a.flac\",\n  \"flac/b.flac\",\n]\n"
+    );
+    Ok(())
+}
+
+/// a dataset downloaded from a listing, here a bucket, leaves a folder as one pattern too, and
+/// neither the drop nor a locked sync after it asks the server anything.
+#[cfg(debug_assertions)]
+#[test]
+fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
+    use crate::buckets::{md5, s3_listing, s3_page};
+    let sandbox = Sandbox::new()?;
+    let base = "/s3.amazonaws.com/openneuro.org/";
+    let objects: [(&str, &[u8]); 4] = [
+        ("ds000001/README", b"a tiny dataset\n"),
+        ("ds000001/sub-01/anat.tsv", b"anat\n"),
+        ("ds000001/sub-01/func.tsv", b"func\n"),
+        ("ds000001/sub-02/anat.tsv", b"other anat\n"),
+    ];
+    let mut routes = vec![(s3_listing(base, "ds000001/", None), s3_page(&objects, None))];
+    for (key, body) in objects {
+        routes.push((
+            format!("{base}{key}"),
+            file(body, &format!("\"{}\"", md5(body))),
+        ));
+    }
+    let routes = crate::support::Routes::start(routes)?;
+    let run = |arguments: &[&str]| {
+        sandbox
+            .command(arguments)
+            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .output()
+    };
+    ok(&run(&["add", "s3://openneuro.org/ds000001/"])?)?;
+    let asked = routes.requests().len();
+    let work = sandbox.work();
+    let output = run(&["drop", "data/ds000001/sub-01"])?;
+    ok(&output)?;
+    assert_eq!(
+        text(&output.stderr)?,
+        "   Excluded 2 files of ds000001 in data.toml and data.lock\n    Removed 2 files no dataset needs\n"
+    );
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.ends_with("\nexclude = [\"sub-01/**\"]\n"),
+        "{manifest}"
+    );
+    let folder = work.join("data").join("ds000001");
+    assert!(!folder.join("sub-01").join("anat.tsv").exists());
+    assert_eq!(
+        fs::read(folder.join("sub-02").join("anat.tsv"))?,
+        b"other anat\n"
+    );
+    let locked = run(&["--json", "sync", "--locked"])?;
+    ok(&locked)?;
+    assert_eq!(json(&locked)?["work"]["requests"], 0);
+    assert_eq!(routes.requests().len(), asked);
     Ok(())
 }

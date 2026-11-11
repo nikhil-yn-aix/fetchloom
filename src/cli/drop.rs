@@ -74,6 +74,19 @@ struct Edit<'a> {
     left: Vec<Left>,
 }
 
+/// how much work planning did: a step for each planned file it took and each listed path it
+/// compared with a pattern.
+#[derive(Default)]
+struct Pace {
+    steps: usize,
+}
+
+impl Pace {
+    fn step(&mut self) {
+        self.steps += 1;
+    }
+}
+
 pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> {
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
@@ -99,9 +112,9 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
     // a dataset with `place = false` is planned where its files would land, so they drop too
     let planned = plan::inputs(&manifest, &lock, &cache)?;
     let asked = asked(&manifest, &lock, &cache, &planned, &paths)?;
-    let edits = edits(&manifest, &lock, &cache, &asked)?;
+    let edits = edits(&manifest, &lock, &cache, &asked, &mut Pace::default())?;
     refuse_what_breaks(&manifest, &lock, &planned, &cache, &edits)?;
-    let (updated, new_lock) = written(&text, &lock, &edits)?;
+    let (updated, new_lock) = written(&text, &manifest, &lock, &edits)?;
     let new_manifest = Manifest::parse(&updated)?;
     let lock_changed = edits.values().any(|edit| !edit.leaving.is_empty());
     let mut dropped: Vec<Left> = edits.values().flat_map(|edit| edit.left.clone()).collect();
@@ -387,41 +400,58 @@ fn edits<'a>(
     lock: &'a Lock,
     cache: &Cache,
     asked: &[Asked<'_, 'a>],
+    pace: &mut Pace,
 ) -> Result<BTreeMap<&'a str, Edit<'a>>, Error> {
     let mut archives: HashMap<(&str, &str), Inside> = HashMap::new();
     let mut edits: BTreeMap<&'a str, Edit<'a>> = BTreeMap::new();
     let mut seen: HashSet<&str> = HashSet::new();
-    for request in asked {
-        let mut by_origin: BTreeMap<(&'a str, &'a str), Vec<(&Target<'a>, &'a LockedFile)>> =
+    // a folder claims its files before a path inside it does, so overlapping paths still fold
+    let mut ordered: Vec<&Asked<'_, 'a>> = asked.iter().collect();
+    ordered.sort_by_key(|request| request.path.matches('/').count());
+    for request in ordered {
+        // the files a dataset's source lists are matched against its whole list once for each
+        // path, and the files inside an archive against what that archive keeps
+        let mut listed: BTreeMap<&'a str, Vec<(&Target<'a>, &'a LockedFile)>> = BTreeMap::new();
+        let mut packed: BTreeMap<(&'a str, &'a str), Vec<(&Target<'a>, &'a LockedFile)>> =
             BTreeMap::new();
         // `asked` refuses a recipe's files, so each target comes from a file a source lists
-        let listed = request
+        for (target, file) in request
             .targets
             .iter()
-            .filter_map(|target| Some((*target, target.file()?)));
-        for (target, file) in listed {
-            if seen.insert(target.path.as_str()) {
-                by_origin
+            .filter_map(|target| Some((*target, target.file()?)))
+        {
+            pace.step();
+            if !seen.insert(target.path.as_str()) {
+                continue;
+            }
+            if file.unpacks_to.is_none() {
+                listed
+                    .entry(target.dataset)
+                    .or_default()
+                    .push((target, file));
+            } else {
+                packed
                     .entry((target.dataset, file.path.as_str()))
                     .or_default()
                     .push((target, file));
             }
         }
-        for ((dataset, origin), targets) in by_origin {
+        for (dataset, targets) in listed {
             let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
             let edit = edits.entry(dataset).or_default();
-            if targets[0].1.unpacks_to.is_none() {
-                let chosen: Vec<(&str, &str)> = targets
-                    .iter()
-                    .map(|(target, file)| (target.path.as_str(), file.path.as_str()))
-                    .collect();
-                let listed = locked.files.iter().map(|file| file.path.as_str());
-                let patterns = written_for(request, &chosen, listed);
-                record(edit, dataset, None, &chosen, &patterns);
-                edit.leaving
-                    .extend(targets.iter().map(|(_, file)| file.path.as_str()));
-                continue;
-            }
+            let chosen: Vec<(&str, &str)> = targets
+                .iter()
+                .map(|(target, file)| (target.path.as_str(), file.path.as_str()))
+                .collect();
+            let all = locked.files.iter().map(|file| file.path.as_str());
+            let patterns = written_for(request, &chosen, all, pace);
+            record(edit, dataset, None, &chosen, &patterns);
+            edit.leaving
+                .extend(targets.iter().map(|(_, file)| file.path.as_str()));
+        }
+        for ((dataset, origin), targets) in packed {
+            let locked = lock.get(dataset).ok_or_else(|| missing_pin(dataset))?;
+            let edit = edits.entry(dataset).or_default();
             let inside: &Inside = match archives.entry((dataset, origin)) {
                 std::collections::hash_map::Entry::Occupied(found) => found.into_mut(),
                 std::collections::hash_map::Entry::Vacant(slot) => {
@@ -436,7 +466,7 @@ fn edits<'a>(
                 })
                 .collect();
             let kept = inside.values().map(String::as_str);
-            let patterns = written_for(request, &chosen, kept);
+            let patterns = written_for(request, &chosen, kept, pace);
             record(edit, dataset, Some(origin), &chosen, &patterns);
             edit.members
                 .entry(origin)
@@ -499,6 +529,7 @@ fn written_for<'c>(
     request: &Asked,
     chosen: &[(&'c str, &'c str)],
     all: impl Iterator<Item = &'c str>,
+    pace: &mut Pace,
 ) -> Vec<(Vec<&'c str>, String)> {
     if request.folder
         && let Some(prefix) = shared_prefix(&request.path, chosen)
@@ -506,7 +537,14 @@ fn written_for<'c>(
         let pattern = format!("{}/**", glob::escape(&prefix));
         let wanted: HashSet<&str> = chosen.iter().map(|(_, origin)| *origin).collect();
         if let Ok(glob) = Glob::new(&pattern) {
-            let matched: HashSet<&str> = all.filter(|path| glob.matches(path)).collect();
+            let mut matched: HashSet<&str> = HashSet::new();
+            for path in all {
+                pace.step();
+                // every path the pattern matches starts with its folder, so the rest skip the match
+                if path.starts_with(prefix.as_str()) && glob.matches(path) {
+                    matched.insert(path);
+                }
+            }
             if matched == wanted {
                 return vec![(chosen.iter().map(|(placed, _)| *placed).collect(), pattern)];
             }
@@ -576,20 +614,26 @@ fn whole_archives<'a>(
     archives: &HashMap<(&str, &str), Inside>,
 ) {
     let dataset = locked.name.as_str();
+    let mut left_of: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for left in &edit.left {
+        if let Some(archive) = left.archive.as_deref() {
+            left_of
+                .entry(archive)
+                .or_default()
+                .insert(left.path.as_str());
+        }
+    }
     let whole: Vec<&str> = edit
         .members
         .keys()
         .copied()
         .filter(|archive| {
-            let left: HashSet<&str> = edit
-                .left
-                .iter()
-                .filter(|left| left.archive.as_deref() == Some(*archive))
-                .map(|left| left.path.as_str())
-                .collect();
-            archives
-                .get(&(dataset, *archive))
-                .is_some_and(|inside| inside.keys().all(|placed| left.contains(placed.as_str())))
+            let left = left_of.get(archive);
+            archives.get(&(dataset, *archive)).is_some_and(|inside| {
+                inside
+                    .keys()
+                    .all(|placed| left.is_some_and(|left| left.contains(placed.as_str())))
+            })
         })
         .collect();
     for archive in whole {
@@ -690,30 +734,43 @@ fn moves_alone(archive: &Archive<'_>, cache: &Cache) -> bool {
     })
 }
 
-/// data.toml's and data.lock's new content once `edits` are written.
-fn written(text: &str, lock: &Lock, edits: &BTreeMap<&str, Edit>) -> Result<(String, Lock), Error> {
+/// data.toml's and data.lock's new content once `edits` are written. `manifest` is data.toml as
+/// `text` holds it.
+fn written(
+    text: &str,
+    manifest: &Manifest,
+    lock: &Lock,
+    edits: &BTreeMap<&str, Edit>,
+) -> Result<(String, Lock), Error> {
     let mut updated = text.to_owned();
     for (dataset, edit) in edits {
         for (archive, patterns) in &edit.members {
             let patterns: Vec<String> = patterns.iter().cloned().collect();
             updated = manifest::with_exclusions(&updated, dataset, Some(archive), &patterns)?;
         }
+        let tables = manifest
+            .datasets
+            .get(*dataset)
+            .and_then(|entry| entry.source())
+            .map(|source| &source.members);
         for archive in &edit.leaving {
-            updated = manifest::without_members(&updated, dataset, archive)?;
+            if tables.is_some_and(|tables| tables.contains_key(*archive)) {
+                updated = manifest::without_members(&updated, dataset, archive)?;
+            }
         }
         if !edit.exclude.is_empty() {
             let patterns: Vec<String> = edit.exclude.iter().cloned().collect();
             updated = manifest::with_exclusions(&updated, dataset, None, &patterns)?;
         }
     }
-    let manifest = Manifest::parse(&updated)?;
+    let new_manifest = Manifest::parse(&updated)?;
     let now = lock::timestamp(std::time::SystemTime::now());
     let mut new_lock = lock.clone();
     for locked in &mut new_lock.datasets {
         let Some(edit) = edits.get(locked.name.as_str()) else {
             continue;
         };
-        let Some(source) = manifest
+        let Some(source) = new_manifest
             .datasets
             .get(&locked.name)
             .and_then(|entry| entry.source())
@@ -765,6 +822,63 @@ fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, verb: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// data.toml and data.lock of the import tiny, `folders` folders of `each` files, with an
+    /// empty cache in a folder of its own.
+    fn tiny(folders: usize, each: usize) -> (Manifest, Lock, tempfile::TempDir, Cache) {
+        let manifest = Manifest::parse("[datasets.tiny]\nref = \"local\"\n").unwrap();
+        let source = manifest.datasets["tiny"].source().unwrap();
+        let files = (0..folders * each)
+            .map(|n| {
+                let path = format!("d{:03}/f{n:05}.txt", n / each);
+                LockedFile {
+                    sha256: crate::digest::sha256(path.as_bytes()),
+                    path,
+                    size: 1,
+                    md5: None,
+                    url: String::new(),
+                    unpacks_to: None,
+                }
+            })
+            .collect();
+        let lock = Lock {
+            datasets: vec![Locked {
+                name: "tiny".to_owned(),
+                reference: "local".to_owned(),
+                spec: lock::spec(source),
+                extract: source.extract,
+                resolved: "local".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                access: crate::source::Access::Unknown,
+                timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                files,
+            }],
+            derived: Vec::new(),
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        (manifest, lock, folder, cache)
+    }
+
+    /// a folder of listed files is one pattern, found by reading the dataset's list once for
+    /// the folder, not once for each of its files.
+    #[test]
+    fn a_folder_reads_its_dataset_list_once() {
+        let (manifest, lock, _folder, cache) = tiny(10, 100);
+        let planned = plan::inputs(&manifest, &lock, &cache).unwrap();
+        let paths = ["data/tiny/d003".to_owned(), "data/tiny/d007".to_owned()];
+        let asked = asked(&manifest, &lock, &cache, &planned, &paths).unwrap();
+        let mut pace = Pace::default();
+        let edits = edits(&manifest, &lock, &cache, &asked, &mut pace).unwrap();
+        assert_eq!(
+            edits["tiny"].exclude,
+            BTreeSet::from(["d003/**".to_owned(), "d007/**".to_owned()])
+        );
+        assert_eq!(edits["tiny"].left.len(), 200);
+        assert!(pace.steps <= 2 * (1_000 + 100), "{}", pace.steps);
+    }
 
     #[test]
     fn a_path_is_read_from_the_current_folder_inside_the_data_folder() {
