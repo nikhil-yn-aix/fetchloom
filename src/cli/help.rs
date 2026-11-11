@@ -105,6 +105,12 @@ const ENVIRONMENT: &str = "fetchloom environment
   FETCHLOOM_BUILDING   set by fetchloom build for its steps: the project
                        a fetchloom inside a step may not lock
 
+  HTTPS_PROXY, HTTP_PROXY, ALL_PROXY
+                       the proxy for https links, for http links, or for both
+                       when those two are unset, as http://proxy.lab:8080;
+                       lowercase names work too
+  NO_PROXY             hosts reached without the proxy, separated by commas
+
   NO_COLOR, CLICOLOR, CLICOLOR_FORCE, TERM=dumb   color, as most tools read them
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
@@ -412,6 +418,17 @@ mod tests {
     fn the_environment_topic_names_every_variable_the_docs_do() {
         let docs = include_str!("../../docs/user/reference/environment.md");
         assert_eq!(variables(ENVIRONMENT), variables(docs));
+    }
+
+    /// a person whose download fails behind a company proxy looks here for where the proxy is
+    /// set, so the topic and the docs page both name the proxy variables.
+    #[test]
+    fn the_environment_topic_names_the_proxy_variables() {
+        let docs = include_str!("../../docs/user/reference/environment.md");
+        for name in ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"] {
+            assert!(ENVIRONMENT.contains(name), "{name}");
+            assert!(docs.contains(&format!("`{name}`")), "{name}");
+        }
     }
 
     #[test]

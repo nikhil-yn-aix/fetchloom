@@ -46,7 +46,7 @@ scripts and agents write `fetchloom`. `fl` is a short name the installers give a
 - [data.lock](docs/user/reference/data-lock.md): lock fields, extract and access, recipe results, split archives' parts, source records and hash encodings
 - [JSON output](docs/user/reference/json-output.md): schema, command results, serialization and stdout failures, partial cache failures and work counters
 - [exit codes](docs/user/reference/exit-codes.md): stable error kinds and recovery decisions
-- [environment](docs/user/reference/environment.md): runtime settings, credentials and color behavior
+- [environment](docs/user/reference/environment.md): runtime settings, proxies, credentials and color behavior
 - [compatibility](docs/user/reference/compatibility.md): configured platform targets, the program each system uses for a `.rar` fetchloom leaves packed, terminals and build requirements
 - [cache folder](docs/user/reference/cache-folder.md): shared cache layout, durable records, URL fingerprints and unreadable change-mark errors
 - [project folder](docs/user/reference/project-folder.md): finding the project inside its git repository, owner records, placement state and metadata publication
