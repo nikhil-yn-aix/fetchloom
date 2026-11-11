@@ -6,6 +6,7 @@ use crate::support::{Result, Routes, Sandbox, Server, file, json, partial_files,
 
 const IRIS: &[u8] =
     b"sepal_length,sepal_width,petal_length,petal_width,species\n5.1,3.5,1.4,0.2,setosa\n";
+const PENGUINS: &[u8] = b"species,island,bill_length_mm\nAdelie,Torgersen,39.1\n";
 const WINE: &[u8] = b"fixed_acidity,volatile_acidity,quality\n7.4,0.7,5\n";
 const NOTES: &[u8] = b"measured on the gaspe peninsula\n";
 
@@ -172,21 +173,31 @@ fn an_unused_empty_file_is_not_reported_as_needed() -> Result {
 
 /// `fetchloom cache` tells where the cache's space goes: what the registered projects need and
 /// how much of it is linked into their folders too, which deleting the cache would not free,
-/// and what no project needs, which gc frees once it is a day old, except what a folder outside
-/// the cache links, as one `get` made does. a file younger than a day, as every one here is,
-/// waits for its day.
+/// what no project needs, which gc frees once it is a day old, except what a folder outside the
+/// cache links, as one `get` made does, and the files of their own projects hold, as `copy =
+/// true` places them. a file younger than a day, as every one here is, waits for its day.
 #[test]
 fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
     let sandbox = Sandbox::new()?;
     let routes = Routes::start(vec![
         ("/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/penguins.csv".to_owned(), file(PENGUINS, "\"p1\"")),
         ("/wine.csv".to_owned(), file(WINE, "\"w1\"")),
         ("/notes.txt".to_owned(), file(NOTES, "\"n1\"")),
     ])?;
     let url = |name: &str| format!("{}/{name}", routes.url);
+    sandbox.allow(&routes.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{}\"\n\n[datasets.penguins]\nref = \"{}\"\ncopy = true\n",
+            url("iris.csv"),
+            url("penguins.csv")
+        ),
+    )?;
     let downloads = sandbox.folder("downloads")?;
     for (folder, args) in [
-        (sandbox.work(), vec!["add".to_owned(), url("iris.csv")]),
+        (sandbox.work(), vec!["sync".to_owned()]),
         (sandbox.work(), vec!["add".to_owned(), url("wine.csv")]),
         (sandbox.work(), vec!["remove".to_owned(), "wine".to_owned()]),
         (downloads, vec!["get".to_owned(), url("notes.txt")]),
@@ -196,23 +207,89 @@ fn the_report_counts_linked_copied_and_freeable_bytes() -> Result {
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     }
     let links = sandbox.links()?;
-    // read-only files are links to the cache's copy where the drive makes them, and gc frees
-    // nothing of a file a folder outside the cache links
-    let linked = if links.hardlinks_read_only() {
-        IRIS.len()
+    // read-only files are links to the cache's copy where the drive makes them, else files of
+    // their own, and gc frees nothing of a file a folder outside the cache links
+    let (linked, copies) = if links.hardlinks_read_only() {
+        (IRIS.len(), PENGUINS.len())
     } else {
-        0
+        (0, IRIS.len() + PENGUINS.len())
     };
     let report = json(&sandbox.run(&["--json", "cache"])?)?;
     let result = &report["result"];
-    assert_eq!(result["needed"], IRIS.len(), "{report}");
+    assert_eq!(result["needed"], IRIS.len() + PENGUINS.len(), "{report}");
     assert_eq!(result["linked"], linked, "{report}");
     assert_eq!(result["unneeded"], WINE.len() + NOTES.len(), "{report}");
     assert_eq!(result["freeable"], 0, "{report}");
+    assert_eq!(result["copies"], copies, "{report}");
+    assert_eq!(result["unlinked_copies"], 0, "{report}");
     assert_eq!(result["inputs_only"], serde_json::Value::Null, "{report}");
     let story = text(&sandbox.run(&["cache"])?.stderr)?;
     if links.hardlinks_read_only() && !links.reflink {
         sandbox.filters().bind(|| insta::assert_snapshot!(story));
+    }
+    Ok(())
+}
+
+/// a project copied with its cache by a tool that keeps no hardlinks, as `rsync -a` without -H
+/// copies, holds files of their own where it had links to the cache, and the copied cache's
+/// files are no longer linked. the report counts them as copies that were linked when placed.
+#[test]
+fn a_project_copied_without_hardlinks_is_reported() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlinks_read_only() {
+        // its files were never linked, so a copy breaks no link
+        return Ok(());
+    }
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let copy = sandbox.folder("copy")?;
+    let (project, cache) = (copy.join("work"), copy.join("cache"));
+    copy_apart(&sandbox.work(), &project)?;
+    copy_apart(&sandbox.cache(), &cache)?;
+    let in_copy = |args: &[&str]| {
+        sandbox
+            .command_in(&project, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = in_copy(&["sync", "--offline"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let report = json(&in_copy(&["--json", "cache"])?)?;
+    let result = &report["result"];
+    assert_eq!(result["linked"], 0, "{report}");
+    assert_eq!(result["copies"], IRIS.len(), "{report}");
+    assert_eq!(result["unlinked_copies"], IRIS.len(), "{report}");
+    let story = text(&in_copy(&["cache"])?.stderr)?;
+    assert!(
+        story.contains(
+            "Copies 81 B in 1 project are separate copies of cached files; all of it was linked \
+             when placed"
+        ),
+        "{story}"
+    );
+    assert!(story.contains("run `fetchloom sync` there"), "{story}");
+    Ok(())
+}
+
+/// copies the folder `from` to `to` as `rsync -a` without -H does: every file a new one with the
+/// same bytes, modification time and read-only flag, so files that were one file under two
+/// names become two.
+fn copy_apart(from: &std::path::Path, to: &std::path::Path) -> Result {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let path = entry?.path();
+        let target = to.join(path.file_name().ok_or("an entry has no name")?);
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            copy_apart(&path, &target)?;
+        } else if metadata.is_file() {
+            let mut copied = fs::File::create_new(&target)?;
+            std::io::copy(&mut fs::File::open(&path)?, &mut copied)?;
+            copied.set_modified(metadata.modified()?)?;
+            drop(copied);
+            fs::set_permissions(&target, metadata.permissions())?;
+        }
     }
     Ok(())
 }

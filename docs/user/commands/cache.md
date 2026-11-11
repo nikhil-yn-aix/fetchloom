@@ -22,20 +22,35 @@ fetchloom cache verify [options]
 
 `fetchloom cache` reports the cache path, the bytes it holds and the projects using it. it prints the bare path on stdout only when stdout is not a terminal or quiet mode hides the story; at a terminal the story already shows it. JSON returns it in `result.path`.
 
-it also says where the space goes. stderr from a test on a drive that makes hardlinks, with the sandbox folder shortened to `/home/me`: a project needs `iris.csv`, a dataset removed from it left `wine.csv`, and `get` linked `notes.txt` into a folder of its own:
+it also says where the space goes. stderr from a test on a drive that makes hardlinks, with the sandbox folder shortened to `/home/me`: a project needs `iris.csv` and `penguins.csv`, the second with `copy = true`, a dataset removed from it left `wine.csv`, and `get` linked `notes.txt` into a folder of its own:
 
 ```text
-      Cache /home/me/cache · 3 files · 162 B
+      Cache /home/me/cache · 4 files · 214 B
     Used by /home/me/work
-     Needed 81 B by 1 project · all of it is linked outside the cache too, so deleting it would free nothing
+     Needed 133 B by 1 project · 81 B of it is linked outside the cache too, so deleting it would free nothing
    Unneeded 81 B · gc frees 49 B once it is a day old; 32 B of it is linked outside the cache too, so deleting it would free nothing
+     Copies 52 B in 1 project are separate copies of cached files
   hint: `fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now
 ```
 
 - `Needed` is what the registered projects' data.lock files need. a file placed as a hardlink is a second name for the cached file, so those bytes are on the disk once, and deleting the cache's copy would free nothing of them. files placed as clones or copies are files of their own, so they add nothing to `linked`; [placement](../concepts.md#placement) says which a drive gets.
 - `Unneeded` is what no registered project needs, and when [gc](#gc) frees it: now, once it is a day old, or never while a folder outside the cache links it too, as one `get` made does. gc removes such a file from the cache, but its bytes stay with the other name. when nothing is unneeded, the report ends with `Ok every cached file is needed by a project`.
+- `Copies` is what the registered projects hold as files of their own beside the cached files: files placed as copies or clones, as `copy = true` places them, and files placed as hardlinks that lost their link, as [below](#copies-and-backups). a clone shares its blocks with the cache's copy until either changes, so it can take far less room than it counts for, and the line says how much of it is clones. a file counts only while its size and modification time are as placed, since an edited file is your own, and only while the cache still holds its bytes, since otherwise the file is their only copy.
 
-the sizes are estimates in payload bytes, what the files hold, as gc counts them. `du` counts the whole blocks a file takes, often 4 KiB each, and the cache's folders, so it can show a little more. JSON adds `result.needed`, `linked`, `unneeded` and `freeable`, what `cache gc` frees now, so a script promises `freeable` rather than `bytes`. `result.inputs_only` is null for now; it is meant for the raw input only builds read, once recipes tell their inputs apart.
+the sizes are estimates in payload bytes, what the files hold, as gc counts them. `du` counts the whole blocks a file takes, often 4 KiB each, and the cache's folders, so it can show a little more. JSON adds `result.needed`, `linked`, `unneeded` and `freeable`, what `cache gc` frees now, so a script promises `freeable` rather than `bytes`, and `copies` and `unlinked_copies`, the part of `copies` that lost its link. `result.inputs_only` is null for now; it is meant for the raw input only builds read, once recipes tell their inputs apart. the report reads each registered project's record of what it placed and looks once at each placed file, so a project on a slow network drive slows it.
+
+### copies and backups
+
+a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a project together with its cache, or `cp -a` copies a project alone, holds a file of its own for every file that was linked to the cache, so its bytes take room twice. `status` and `sync` there find nothing wrong, since every file still holds its pinned bytes. `fetchloom cache` counts them. the end of its stderr in a run on linux, after `rsync -a` copied a project and its cache, holding one 3.0 MiB file, and `fetchloom sync` ran in the copy with `FETCHLOOM_CACHE` naming the copied cache:
+
+```text
+     Needed 3.0 MiB by 2 projects
+     Copies 3.0 MiB in 1 project are separate copies of cached files; all of it was linked when placed, as `rsync -a` without -H or `cp -a` leaves it
+         Ok every cached file is needed by a project
+  hint: to link those files to the cache again, delete their project's data folder, if it holds nothing else you need, and run `fetchloom sync` there
+```
+
+in that run `du -sh` showed `3.3M` for the original project and cache and `6.3M` for the copy; deleting the copy's `data/` and running `fetchloom sync` there brought the copy back to `3.3M`. `rsync -aH` keeps the links; [backups and copies](../hpc.md#backups-and-copies) has more.
 
 byte totals exclude indexes and partial downloads. downloads a run stopped before they finished keep their bytes under `partial/`, so a later run can continue them; `fetchloom cache` names how many there are and what they hold in an `Unfinished` line, and JSON reports them as `result.unfinished_downloads` and `result.unfinished_bytes`. what they hold is the space they take on the disk: a download split into parts writes each part where it belongs, so until it finishes its file can be far longer than what the disk holds for it. a full disk under the cache names what they hold too, in the error. [cache folder](../reference/cache-folder.md) gives default locations and record formats; `FETCHLOOM_CACHE` overrides the root.
 

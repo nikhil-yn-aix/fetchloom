@@ -40,7 +40,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     if let Some(failure) = scan.unreadable.first() {
         return Err(failure.error("cannot inspect"));
     }
-    let usage = Usage::measure(&scan, &needed, SystemTime::now());
+    let usage = Usage::measure(&scan, &needed, &projects, SystemTime::now(), &context.stop)?;
     let output = &context.output;
     output.step(
         "Cache",
@@ -80,7 +80,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
 }
 
 /// where the cache's space goes: what the `projects` registered need, what no project needs and
-/// what gc frees of it.
+/// what gc frees of it, and the copies of cached files projects hold.
 fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     if usage.objects == 0 {
         output.done("Ok", "the cache has no data files");
@@ -89,14 +89,21 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize) {
     if projects > 0 {
         output.step("Needed", &needed_line(usage, projects));
     }
-    let Some(unneeded) = unneeded_line(usage) else {
+    let unneeded = unneeded_line(usage);
+    if let Some(line) = &unneeded {
+        output.step("Unneeded", line);
+    }
+    if let Some(line) = copies_line(usage) {
+        output.step("Copies", &line);
+    }
+    if unneeded.is_none() {
         output.done("Ok", "every cached file is needed by a project");
-        return;
-    };
-    output.step("Unneeded", &unneeded);
-    // gc frees nothing of what folders outside the cache link
-    if usage.unneeded == 0 || usage.freeable + usage.young > 0 {
+    } else if usage.unneeded == 0 || usage.freeable + usage.young > 0 {
+        // gc frees nothing of what folders outside the cache link
         output.hint("`fetchloom cache gc` frees what no project needs once it is a day old; `fetchloom cache gc --now` frees it now");
+    }
+    if usage.unlinked_copies > 0 {
+        output.hint("to link those files to the cache again, delete their project's data folder, if it holds nothing else you need, and run `fetchloom sync` there");
     }
 }
 
@@ -152,12 +159,45 @@ fn unneeded_line(usage: &Usage) -> Option<String> {
 
 /// says that `linked` bytes of `whole` have a name outside the cache too.
 fn linked_part(linked: u64, whole: u64) -> String {
-    let what = if linked == whole {
+    format!(
+        "{} is linked outside the cache too, so deleting it would free nothing",
+        of_it(linked, whole)
+    )
+}
+
+/// `part` of `whole` in words: all of it, or how much of it.
+fn of_it(part: u64, whole: u64) -> String {
+    if part == whole {
         "all of it".to_owned()
     } else {
-        format!("{} of it", units::size(linked))
-    };
-    format!("{what} is linked outside the cache too, so deleting it would free nothing")
+        format!("{} of it", units::size(part))
+    }
+}
+
+/// the files projects hold that are copies of cached files, if any: those placed as copies or
+/// clones, and those whose link to the cache a copy of their project broke.
+fn copies_line(usage: &Usage) -> Option<String> {
+    if usage.copies == 0 {
+        return None;
+    }
+    let mut parts = vec![format!(
+        "{} in {} are separate copies of cached files",
+        units::size(usage.copies),
+        units::count(usage.copied_projects, "project", "projects")
+    )];
+    if usage.unlinked_copies > 0 {
+        parts.push(format!(
+            "{} was linked when placed, as `rsync -a` without -H or `cp -a` leaves it",
+            of_it(usage.unlinked_copies, usage.copies)
+        ));
+    }
+    if usage.cloned > 0 {
+        parts.push(format!(
+            "{} was placed as clones, which share their blocks with the cache's copy until either changes",
+            of_it(usage.cloned, usage.copies)
+        ));
+    }
+    Some(parts.join("; "))
 }
 
 /// what `cache gc` freed, or with `--dry-run` would free, as `--json` prints it.
@@ -532,8 +572,12 @@ fn remind_at(output: &Output, root: &Path, stop: &Stop) {
     let Ok(scan) = cache.scan_objects(stop) else {
         return;
     };
-    // what `fetchloom cache` says gc frees now, so the two never disagree
-    let freeable = Usage::measure(&scan, &needed, now).freeable;
+    // what `fetchloom cache` says gc frees now, so the two never disagree. the reminder tells
+    // nothing of copies, so it reads no project's files
+    let Ok(usage) = Usage::measure(&scan, &needed, &[], now, stop) else {
+        return;
+    };
+    let freeable = usage.freeable;
     if freeable >= REMIND_FROM {
         output.hint(&format!(
             "the cache holds {} no project needs; `fetchloom cache gc` frees it",
@@ -840,5 +884,38 @@ mod tests {
             None,
             "all of it is needed"
         );
+    }
+
+    /// copies say how much of them was linked when placed, and how much is clones.
+    #[test]
+    fn the_copies_line_names_what_was_linked_and_what_is_cloned() {
+        for ((copies, unlinked_copies, cloned), said) in [
+            (
+                (1024, 0, 0),
+                "1.0 KiB in 1 project are separate copies of cached files",
+            ),
+            (
+                (1024, 1024, 0),
+                "1.0 KiB in 1 project are separate copies of cached files; all of it was linked \
+                 when placed, as `rsync -a` without -H or `cp -a` leaves it",
+            ),
+            (
+                (3072, 1024, 2048),
+                "3.0 KiB in 1 project are separate copies of cached files; 1.0 KiB of it was \
+                 linked when placed, as `rsync -a` without -H or `cp -a` leaves it; 2.0 KiB of \
+                 it was placed as clones, which share their blocks with the cache's copy until \
+                 either changes",
+            ),
+        ] {
+            let usage = Usage {
+                copies,
+                unlinked_copies,
+                cloned,
+                copied_projects: 1,
+                ..Usage::default()
+            };
+            assert_eq!(copies_line(&usage).as_deref(), Some(said));
+        }
+        assert_eq!(copies_line(&Usage::default()), None);
     }
 }
