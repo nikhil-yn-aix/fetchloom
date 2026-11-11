@@ -246,34 +246,49 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         }
         cache.pretending()
     } else {
-        super::hold_cache(
-            super::open_unheld()?,
-            Access::Exclusive,
-            &context.stop,
-            &|| {
-                context.output.step(
-                    "Waiting",
-                    "for other fetchloom runs to finish with the cache",
-                );
-            },
-        )?
+        hold(context)?
     };
     let found = needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
+    let freed = sweep(context, &cache, &found, now)?;
+    if dry_run {
+        return Ok(tell_dry_gc(context, freed, cache.pretended()));
+    }
+    tell_swept(context, freed, found.projects.len())
+}
+
+/// the cache, held alone for gc once no other run uses it.
+fn hold(context: &Context) -> Result<Cache, Error> {
+    super::hold_cache(
+        super::open_unheld()?,
+        Access::Exclusive,
+        &context.stop,
+        &|| {
+            context.output.step(
+                "Waiting",
+                "for other fetchloom runs to finish with the cache",
+            );
+        },
+    )
+}
+
+/// frees what `found` does not need from `cache` once it is a day old, or at once when `now`.
+fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<Freed, Error> {
     let grace = if now {
         std::time::Duration::ZERO
     } else {
         crate::cache::GRACE
     };
-    let freed = cache.sweep_with_stop(
+    cache.sweep_with_stop(
         &found.needed,
         &found.stale_projects,
         SystemTime::now(),
         grace,
         &context.stop,
-    )?;
-    if dry_run {
-        return Ok(tell_dry_gc(context, freed, cache.pretended()));
-    }
+    )
+}
+
+/// tells what a sweep `freed`, keeping the files `projects` registered projects need.
+fn tell_swept(context: &Context, freed: Freed, projects: usize) -> Result<Collected, Error> {
     let output = &context.output;
     for failure in &freed.not_removed {
         warn_failure(output, "could not read or remove", failure);
@@ -315,7 +330,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
         "Cleaned",
         &format!(
             "the cache, keeping files needed by {}",
-            units::count(found.projects.len() as u64, "project", "projects")
+            units::count(projects as u64, "project", "projects")
         ),
     );
     if let Some(kept) = &kept {
