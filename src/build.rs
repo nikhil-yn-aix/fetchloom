@@ -17,7 +17,7 @@ use crate::cache::Cache;
 /// when dropped, so a step fetchloom saw end leaves nothing behind.
 pub(crate) struct Staging {
     folder: PathBuf,
-    _lock: Option<File>,
+    lock: Option<File>,
 }
 
 impl Staging {
@@ -28,10 +28,7 @@ impl Staging {
     /// the cache's `tmp` folder cannot be written.
     pub(crate) fn new(cache: &Cache) -> io::Result<Staging> {
         let (folder, lock) = cache.build_folder()?;
-        let staging = Staging {
-            folder,
-            _lock: lock,
-        };
+        let staging = Staging { folder, lock };
         std::fs::create_dir(staging.folder.join("in"))?;
         std::fs::create_dir(staging.out())?;
         Ok(staging)
@@ -54,6 +51,9 @@ impl Staging {
 
 impl Drop for Staging {
     fn drop(&mut self) {
+        // windows keeps an open file's name on disks without posix deletes, such as fat and exfat,
+        // so the folder could not go while its lock is open
+        drop(self.lock.take());
         if let Err(err) = crate::cache::clear_tree(&self.folder) {
             tracing::debug!(%err, folder = %self.folder.display(), "could not clear a build's folder, which the next build sweeps");
         }
