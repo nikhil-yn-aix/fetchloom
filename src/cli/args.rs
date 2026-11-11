@@ -57,6 +57,8 @@ on disk: writes data.lock and may add files to the cache. after a git merge, it 
   fetchloom build --check --json
   fetchloom build --accept clean
 
+to write a recipe in data.toml, see `fetchloom help recipes`
+
 on disk: runs each step that needs it in a folder of its own in the cache, writes data.lock and data.lock.d and places the results in data/. --dry-run writes nothing";
 
     pub(super) const STATUS: &str = "examples:
@@ -163,8 +165,8 @@ on disk: removes the saved key. asks first when other tools read it too";
 
     pub(super) const HELP: &str = "examples:
   fetchloom help concepts
+  fetchloom help recipes
   fetchloom help exit-codes
-  fetchloom help add
   fetchloom help cache gc
 
 on disk: nothing";

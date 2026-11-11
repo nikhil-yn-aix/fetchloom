@@ -4,7 +4,7 @@ a recipe makes a dataset from other datasets with a command of yours, such as a 
 
 ## declare a recipe
 
-a recipe is a dataset with `from` and `run` instead of `ref`:
+a recipe is a dataset with `from` and `run` instead of `ref`, as `fetchloom help recipes` shows at the terminal:
 
 ```toml
 [datasets.iris]

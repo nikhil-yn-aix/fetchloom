@@ -391,7 +391,7 @@ fn help_concepts_explains_the_ideas_with_the_analogy() -> Result {
     }
     // under --json a text topic is one document like every other answer, with no ANSI even when
     // color is forced
-    for topic in ["concepts", "environment", "exit-codes"] {
+    for topic in ["concepts", "environment", "exit-codes", "recipes"] {
         let json = sandbox
             .command(&["--json", "help", topic])
             .env("CLICOLOR_FORCE", "1")

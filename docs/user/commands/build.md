@@ -1,6 +1,6 @@
 # build
 
-`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` says what the build would do with each step, shows the command of each that would run, and runs nothing.
+`build` runs the [recipes](../recipes.md) in `data.toml`: each step makes a dataset from other datasets, and `build` pins what it made in `data.lock` and places it in the data folder like any dataset. a step is your project's code, so no other command runs one; `--dry-run` says what the build would do with each step, shows the command of each that would run, and runs nothing. `fetchloom help recipes` shows how to write a recipe, and `build --help` points at it.
 
 ```sh
 fetchloom build --dry-run

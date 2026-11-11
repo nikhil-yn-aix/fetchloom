@@ -149,11 +149,46 @@ present, the command to run next.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/exit-codes.html";
 
+/// `fetchloom help recipes`: how to write a recipe in data.toml, with an example to copy. the
+/// docs page has the details; a test reads the example as data.toml.
+const RECIPES: &str = "fetchloom recipes
+
+a recipe makes a dataset from others with a command of yours, such as a
+script that cleans a raw table. write it in data.toml with from and run in
+place of ref:
+
+  [datasets.iris]
+  ref = \"hf:datasets/scikit-learn/iris\"
+  select = \"Iris.csv\"
+
+  [datasets.clean]
+  from = [\"iris\"]
+  run = [\"python3\", \"clean.py\", \"{iris}\", \"{out}\"]
+  code = [\"clean.py\"]
+
+from names the datasets it reads. run is the program and its words, which no
+shell reads: {iris} stands for a folder holding a copy of iris's files, and
+{out} for the folder the step writes its result in. code lists the files of
+the project the result depends on, such as the script, and
+env = { NAME = \"value\" } sets variables for the step alone.
+
+only `fetchloom build` runs a step, as you, with your files and keys, so read
+the commands of a project you cloned with `fetchloom build --dry-run` first.
+the build records what the step wrote, each file with its SHA-256, in
+data.lock, keeps the file list in data.lock.d and places the files in
+data/clean like any dataset: commit both.
+`fetchloom status` says when a recipe changed since its build.
+
+place = false on iris keeps raw data that only recipes read out of data/.
+
+more: https://nikhil-yn-aix.github.io/fetchloom/user/recipes.html";
+
 /// help topics that are not commands, each with its text.
-const TOPICS: [(&str, &str); 3] = [
+const TOPICS: [(&str, &str); 4] = [
     ("concepts", CONCEPTS),
     ("environment", ENVIRONMENT),
     ("exit-codes", EXIT_CODES),
+    ("recipes", RECIPES),
 ];
 
 fn topic_text(topic: &[String]) -> Option<&'static str> {
@@ -358,7 +393,7 @@ fn unknown(topic: &[String]) -> Error {
     );
     match name::closest(&asked, topics.iter().map(String::as_str)) {
         Some(best) => error.help(format!("did you mean `fetchloom help {best}`?")),
-        None => error.help("`fetchloom help concepts` explains the ideas, `fetchloom help environment` and `fetchloom help exit-codes` list settings and codes, and `fetchloom --help` lists the commands"),
+        None => error.help("`fetchloom help concepts` explains the ideas and `fetchloom help recipes` how to write a recipe, `fetchloom help environment` and `fetchloom help exit-codes` list settings and codes, and `fetchloom --help` lists the commands"),
     }
 }
 
@@ -489,6 +524,33 @@ mod tests {
         assert!(
             flat.contains("and data.lock.d once it is there: each recipe's result and each big dataset keep their file lists in it."),
             "{CONCEPTS}"
+        );
+    }
+
+    /// `help recipes` shows a data.toml with a recipe, which fetchloom reads as written, and
+    /// `build --help` points at it.
+    #[test]
+    fn the_recipes_topic_shows_a_recipe_that_reads() {
+        let recipes = super::topic_text(&["recipes".to_owned()]).unwrap_or_default();
+        let example = recipes
+            .lines()
+            .skip_while(|line| !line.starts_with("  [datasets."))
+            .take_while(|line| line.is_empty() || line.starts_with("  "))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let manifest = crate::project::manifest::Manifest::parse(&example).unwrap();
+        let recipe = manifest.datasets["clean"].recipe().unwrap();
+        assert_eq!(recipe.from, ["iris"]);
+        assert!(manifest.datasets["iris"].source().is_some(), "{example}");
+        let command = args::Args::command();
+        let build = command.find_subcommand("build").unwrap();
+        let after = build.get_after_help().map(ToString::to_string);
+        assert!(
+            after
+                .unwrap_or_default()
+                .contains("`fetchloom help recipes`"),
+            "build --help points at the topic"
         );
     }
 }
