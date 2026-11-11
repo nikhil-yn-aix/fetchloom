@@ -10,6 +10,7 @@ mod cache;
 mod caps;
 mod completions;
 mod concurrent;
+mod copied;
 mod docs;
 mod drop;
 mod dry_run;

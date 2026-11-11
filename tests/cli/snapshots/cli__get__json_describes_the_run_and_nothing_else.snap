@@ -45,6 +45,8 @@ expression: pretty
   "work": {
     "bytes_down": 81,
     "copies": "[varies]",
+    "data_folder_bytes": 0,
+    "data_folder_objects": 0,
     "downloads_skipped": 0,
     "elapsed_ms": "[varies]",
     "hardlinks": "[varies]",

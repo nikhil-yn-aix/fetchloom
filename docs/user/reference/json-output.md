@@ -121,7 +121,7 @@ for `push`, the counts say what it would write, and `changes` has `copy`, a `{pa
 
 for `cache gc`, `removed_objects`, `removed_bytes`, `kept_objects`, `kept_bytes`, `removed_leftovers` and `removed_leftover_bytes` count what gc would remove and keep, `inputs` with `--inputs` counts the raw input it would free, and `not_removed` lists failures for paths it could not inspect. `changes.remove` lists the path of each object, raw input among them, unpack record, leftover and project registration gc would delete, under the cache folder as `FETCHLOOM_CACHE` gives it, so a relative cache gives relative paths. a gc dry run returns `ok` even when `not_removed` is not empty.
 
-the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks`, `copies` and `placed_from_cache` stay 0.
+the work counters still count metadata requests a dry run makes to resolve changed entries. `objects_written`, `reflinks`, `hardlinks`, `copies`, `placed_from_cache`, `data_folder_objects` and `data_folder_bytes` stay 0.
 
 ## search candidates
 
@@ -148,11 +148,12 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `bytes_down` | body bytes read, including metadata and unsuccessful attempts; excludes headers and the saved resume prefix |
 | `retries` | scheduled retry waits |
 | `resumes` | accepted nonzero range starts |
-| `objects_written` | new objects counted after successful downloads, archive unpacking and the files a recipe's step wrote |
+| `objects_written` | new objects counted after successful downloads, copies from a mirror or the data folder, archive unpacking and the files a recipe's step wrote |
 | `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
 | `mirror_objects`, `mirror_bytes` | pinned files a [mirror](../mirrors.md) gave this run, now in the cache, and their bytes. a file the cache already held is never asked for |
-| `placed_from_cache` | placements by `add`, `sync`, `path` and `get` from objects the run did not write to the cache itself; the other placements took bytes the run downloaded or unpacked. file times do not decide it, so it holds on filesystems that keep times in whole seconds and on file servers with their own clocks |
+| `data_folder_objects`, `data_folder_bytes` | pinned files the cache lacked that this run copied in from the project's data folder, at paths data.lock places them at, each after its bytes hashed to its pin, and their bytes, as [moving a project](../commands/cache.md#moving-a-project-to-another-machine) describes. a mirror is asked only for what the data folder did not give |
+| `placed_from_cache` | placements by `add`, `sync`, `path` and `get` from objects the run did not write to the cache itself; the other placements took bytes the run downloaded, unpacked or copied in from a mirror or the data folder. file times do not decide it, so it holds on filesystems that keep times in whole seconds and on file servers with their own clocks |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 
 `-v` ends with the same counters in words, and, when a run placed files from the cache, how many came from it and how many it downloaded, as in `8 from the cache, 0 downloaded`. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.

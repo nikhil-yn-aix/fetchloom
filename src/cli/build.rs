@@ -21,6 +21,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use super::args;
+use super::fetch::data_folder::DataFolder;
 use super::project::{Run, committed, find, hold, ignore_data, known, locked, register, sync_all};
 use super::sync::disk::Survey;
 use super::sync::place::{Placement, Seen};
@@ -937,22 +938,25 @@ impl<'a> Building<'a> {
         Ok(())
     }
 
-    /// asks the mirrors for the files of `files`, the result data.lock pins for `name`, that the
-    /// cache lacks, and says whether the cache holds all of them now.
+    /// takes the files of `files`, the result data.lock pins for `name`, that the cache lacks
+    /// from the data folder where it holds their pinned bytes, else asks the mirrors for them, and
+    /// says whether the cache holds all of them now.
     async fn fetched(&self, name: &str, files: &[Member]) -> Result<bool, Error> {
         let cache = &self.work.cache;
-        fetch::mirrors::fill(self.context, &self.work.net, cache, || {
-            files
-                .iter()
-                .filter(|file| cache.find(&file.sha256, Some(file.size)).is_none())
-                .map(|file| crate::mirror::Wanted {
-                    digest: file.sha256,
-                    size: file.size,
-                    label: format!("{name}/{}", file.path),
-                })
-                .collect()
-        })
-        .await?;
+        let lacked: Vec<crate::mirror::Wanted> = files
+            .iter()
+            .filter(|file| cache.find(&file.sha256, Some(file.size)).is_none())
+            .map(|file| crate::mirror::Wanted {
+                digest: file.sha256,
+                size: file.size,
+                label: format!("{name}/{}", file.path),
+            })
+            .collect();
+        if lacked.is_empty() {
+            return Ok(true);
+        }
+        let folder = DataFolder::planned(self.work.project, &self.manifest, &self.lock, cache);
+        fetch::mirrors::fill(self.context, &self.work.net, cache, &folder, || lacked).await?;
         Ok(whole(cache, files))
     }
 

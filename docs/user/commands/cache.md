@@ -55,6 +55,20 @@ a project copied without keeping hardlinks, as `rsync -a` without `-H` copies a 
 
 in that run `du -sh` showed `3.3M` for the original project and cache and `6.3M` for the copy; deleting the copy's `data/` and running `fetchloom sync` there brought the copy back to `3.3M`. `rsync -aH` keeps the links; [backups and copies](../hpc.md#backups-and-copies) has more.
 
+### moving a project to another machine
+
+a project copied with its data folder to a cache that never held its files, as `rsync -a` copies it to another machine or cluster, needs no download for what that folder holds. a command that needs a pinned file the cache lacks takes it from the data folder before it asks a mirror or the source: from a file at a path data.lock places it at, whether or not `.fetchloom` came along. the cache gets a clone where the disk makes one, else a copy, never a link, and keeps it only when its bytes hash to the pin, so the file stays as it is. `build`, `build --check` and a `sync` that must place a file at another path then work there with `--offline` too. a file edited since it was placed holds other bytes, so it is never taken, and the command goes on as it would without it: to a mirror, the source, or with `--offline` an `offline.missing` error. the files inside an archive come back this way only once the cache or a mirror lists what the archive holds. stderr from a real run of `fetchloom --offline build --check` in such a copy, with an empty cache:
+
+```text
+      Needs up to 63 B on the disk holding the cache, which has 326.2 GiB free
+     Copied 1 file · 21 B from data into the cache
+    Running squares · cp -R <build>/in/table/. <build>/out
+    Checked squares · 1 of 1 files match data.lock
+         Ok every step made the files data.lock pins
+```
+
+with `--json`, `work.data_folder_objects` and `work.data_folder_bytes` count those files. the copy's files stay files of their own beside the cache's, as above.
+
 ## gc
 
 1. read registered project locks to find needed objects and unpacked members. a file inside an archive that the project's [members table](../reference/data-toml.md#files-inside-archives) leaves out is not needed, and its absence no longer keeps the packed archive; a data.toml that does not read keeps every file. a [recipe](../recipes.md)'s pinned result is needed with its files and the record of its files under `builds/`, and so is every file of a dataset with `place = false`, which builds read. the files of a [kept rebuild](build.md#a-rebuild-that-differs) a project's state records are needed too.

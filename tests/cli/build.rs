@@ -694,8 +694,14 @@ fn object(sandbox: &Sandbox, bytes: &[u8]) -> PathBuf {
         .join(&hex[2..])
 }
 
-/// a result data.lock pins for the key building it now would make, whose files the cache lost,
-/// comes from a mirror rather than from running its step again.
+/// where sync places `file` of `dataset` in the work folder's data folder, which a run takes a
+/// file's bytes from when the cache lacks them.
+fn placed(sandbox: &Sandbox, dataset: &str, file: &str) -> PathBuf {
+    sandbox.work().join("data").join(dataset).join(file)
+}
+
+/// a result data.lock pins for the key building it now would make, whose files the cache and
+/// the data folder lost, comes from a mirror rather than from running its step again.
 #[test]
 fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     let sandbox = Sandbox::new()?;
@@ -705,6 +711,7 @@ fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     let mirror = sandbox.folder("mirror")?;
     mirror_holding(&mirror, &[b"made"])?;
     crate::support::delete(&object(&sandbox, b"made"))?;
+    crate::support::delete(&placed(&sandbox, "clean", "clean.csv"))?;
     let lock = fs::read(sandbox.work().join("data.lock"))?;
     let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
         .env("FETCHLOOM_MIRRORS", &mirror)
@@ -719,9 +726,9 @@ fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     Ok(())
 }
 
-/// a step a build runs again for a pin whose files the cache lost, which makes the same files,
-/// leaves data.lock as it is, and the build says the result matches it rather than that it
-/// pinned it.
+/// a step a build runs again for a pin whose files the cache and the data folder lost, which
+/// makes the same files, leaves data.lock as it is, and the build says the result matches it
+/// rather than that it pinned it.
 #[test]
 fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -729,6 +736,7 @@ fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
     with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     crate::support::delete(&object(&sandbox, b"made"))?;
+    crate::support::delete(&placed(&sandbox, "clean", "clean.csv"))?;
     let lock = fs::read(sandbox.work().join("data.lock"))?;
     let output = build(&sandbox, &["build"])?;
     let told = text(&output.stderr)?;
@@ -921,8 +929,8 @@ fn a_members_table_keeps_a_file_from_the_step() -> Result {
     Ok(())
 }
 
-/// a build on a machine whose cache lacks an imported input says how to import it there, since
-/// no link fetches it and the copy in the data folder is no input.
+/// a build on a machine whose cache lacks an imported input, and whose data folder lacks it
+/// too, says how to bring it there, since no link fetches it.
 #[test]
 fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -938,6 +946,7 @@ fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
             "{plain}\n[datasets.clean]\nfrom = [\"set\"]\nrun = [\"recipe-step\", \"copy\", \"{{set}}\", \"{{out}}\"]\n"
         ),
     )?;
+    crate::support::delete(&sandbox.work().join("data").join("set").join("labels.csv"))?;
     let elsewhere = sandbox.folder("another cache")?;
     let output = building_in(&sandbox, &sandbox.work(), &["--json", "build"])?
         .env("FETCHLOOM_CACHE", &elsewhere)
@@ -952,7 +961,7 @@ fn an_import_the_cache_lacks_names_the_add_that_brings_it() -> Result {
     );
     assert_eq!(
         help,
-        "run `fetchloom add <folder> --as set` where they are: a build takes its inputs from the cache, never from data/set"
+        "copy them to data/set and build again, or run `fetchloom add <folder> --as set` where they are"
     );
     assert_eq!(runs(&sandbox.work())?, 0);
     Ok(())
@@ -1428,6 +1437,8 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     with(&sandbox, &server, &recipe(&["random"]))?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    // a machine whose cache never held the result, nor its data folder
+    crate::support::delete(&placed(&sandbox, "clean", "random.bin"))?;
     let lock = fs::read(sandbox.work().join("data.lock"))?;
     let data = files(&sandbox.work().join("data"))?;
     let elsewhere = sandbox.folder("another cache")?;
@@ -1637,8 +1648,8 @@ fn checks_report_every_step() -> Result {
 }
 
 /// a check runs a step from the result data.lock pins for each recipe it reads, never from a
-/// rebuild: where that result is in no cache or mirror, as on a fresh machine after the check of
-/// the recipe made other files, the step is skipped, and the error says so.
+/// rebuild: where that result is in no cache, data folder or mirror, as on a fresh machine after
+/// the check of the recipe made other files, the step is skipped, and the error says so.
 #[test]
 fn a_check_skips_a_step_whose_pinned_input_is_nowhere() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1646,6 +1657,10 @@ fn a_check_skips_a_step_whose_pinned_input_is_nowhere() -> Result {
     let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
     with(&sandbox, &server, &format!("{}{tidy}", recipe(&["random"])))?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    // tidy copies clean, so the data folder holds clean's result twice
+    for dataset in ["clean", "tidy"] {
+        crate::support::delete(&placed(&sandbox, dataset, "random.bin"))?;
+    }
     let elsewhere = sandbox.folder("another cache")?;
     let output = building_in(&sandbox, &sandbox.work(), &["--json", "build", "--check"])?
         .env("FETCHLOOM_CACHE", &elsewhere)
@@ -1770,6 +1785,8 @@ fn prepare_fetches_inputs_so_an_offline_build_makes_no_requests() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     with(&sandbox, &server, COPY)?;
+    // a machine whose cache never held iris, nor its data folder
+    crate::support::delete(&placed(&sandbox, "iris", "iris.csv"))?;
     let elsewhere = sandbox.folder("another cache")?;
     let there = |args: &[&str]| -> Result<std::process::Output> {
         Ok(building_in(&sandbox, &sandbox.work(), args)?
@@ -1809,6 +1826,8 @@ fn prepare_check_fetches_what_a_check_reads() -> Result {
     with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     crate::support::delete(&object(&sandbox, IRIS))?;
+    // an edit sync keeps, so placing needs no bytes of iris and the data folder gives none
+    crate::support::edit(&placed(&sandbox, "iris", "iris.csv"), b"edited by hand\n")?;
     let prepared = build(&sandbox, &["--json", "build", "--prepare"])?;
     assert_eq!(
         prepared.status.code(),

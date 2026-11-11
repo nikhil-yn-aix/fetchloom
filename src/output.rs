@@ -626,6 +626,11 @@ impl Output {
                 "file from a mirror",
                 "files from mirrors",
             ),
+            (
+                counts.data_folder_objects,
+                "file from the data folder",
+                "files from the data folder",
+            ),
             (counts.reflinks, "reflink", "reflinks"),
             (counts.hardlinks, "hardlink", "hardlinks"),
             (counts.copies, "copy", "copies"),

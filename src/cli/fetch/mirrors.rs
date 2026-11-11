@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 use super::Job;
+use super::data_folder::DataFolder;
 use crate::cache::Cache;
 use crate::cli::Context;
 use crate::digest::Sha256;
@@ -326,10 +327,11 @@ pub(in crate::cli) fn pinned(jobs: &[Job], cache: &Cache) -> Vec<Wanted> {
         .collect()
 }
 
-/// puts into the cache what the mirrors hold of the files `wanted` lists, asking each in order
-/// for the files the ones before it lacked. a damaged copy is told and left, so a later mirror or
-/// the source gives the file. `wanted` runs only when there is a mirror to ask, since listing what
-/// the cache lacks looks at every file.
+/// puts into the cache what the data folder and then the mirrors hold of the files `wanted`
+/// lists: the data folder's files where data.lock places them, then each mirror in order for the
+/// files the ones before it lacked. a damaged copy on a mirror is told and left, so a later mirror
+/// or the source gives the file. `wanted` runs only when the data folder or a mirror may hold
+/// something, since listing what the cache lacks looks at every file.
 ///
 /// # Errors
 ///
@@ -339,17 +341,19 @@ pub(in crate::cli) async fn fill(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
+    folder: &DataFolder,
     wanted: impl FnOnce() -> Vec<Wanted>,
 ) -> Result<(), Error> {
     let mirrored = &context.mirrors;
-    if mirrored.mirrors.list.is_empty() {
+    if mirrored.mirrors.list.is_empty() && folder.is_empty() {
         return Ok(());
     }
     let mut seen = HashSet::new();
-    let mut wanted: Vec<Wanted> = wanted()
+    let wanted: Vec<Wanted> = wanted()
         .into_iter()
         .filter(|want| seen.insert(want.digest))
         .collect();
+    let mut wanted = tokio::task::block_in_place(|| folder.take(context, cache, wanted))?;
     for (index, location) in mirrored.mirrors.list.iter().enumerate() {
         let ask: Vec<Wanted> = wanted
             .iter()
@@ -706,7 +710,8 @@ mod tests {
     use crate::output::{Level, Output, Style};
     use crate::source::recorded::block_on;
 
-    /// listing what the cache lacks looks at every file, so a run without a mirror never does.
+    /// listing what the cache lacks looks at every file, so a run without a mirror, and with no
+    /// file in the data folder that may hold one, never does.
     #[test]
     fn a_run_without_a_mirror_lists_nothing_to_ask_for() {
         let context = Context::new(Output::new(
@@ -725,7 +730,7 @@ mod tests {
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let net = Arc::new(context.net());
         let listed = AtomicBool::new(false);
-        block_on(fill(&context, &net, &cache, || {
+        block_on(fill(&context, &net, &cache, &DataFolder::default(), || {
             listed.store(true, Ordering::Relaxed);
             Vec::new()
         }))

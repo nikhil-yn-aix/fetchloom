@@ -2,7 +2,7 @@
 
 a mirror is a folder or a web server that holds pinned files under their SHA-256, so a lab disk, a usb drive or a company server can give a project's files instead of their sources.
 
-data.lock names every file by its SHA-256, so any copy with that hash is the same file. fetchloom looks in the cache first, then asks each mirror in the order given, then the file's source. every file a mirror gives is checked against its pin before the cache keeps it, so a mirror can withhold a file but never change one.
+data.lock names every file by its SHA-256, so any copy with that hash is the same file. fetchloom looks in the cache first, then in the project's data folder, at the paths data.lock places the file at, as [moving a project](commands/cache.md#moving-a-project-to-another-machine) describes, then asks each mirror in the order given, then the file's source. every file a mirror gives is checked against its pin before the cache keeps it, so a mirror can withhold a file but never change one.
 
 ## naming mirrors
 

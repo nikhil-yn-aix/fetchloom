@@ -32,7 +32,7 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, retaining unchanged entries. a dataset pinned for the first time gets a `Pinned` line of its own, with what it resolved to, its title, file count and size, so an entry whose id has a typo and pins an unrelated record stands out.
-3. reuse unchanged local files and cached objects, copy what the cache lacks from the [mirrors](../mirrors.md) you named, and download the rest when online. in [mirror-only mode](../mirrors.md#mirror-only-mode) a file no mirror holds fails the run before any download. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
+3. reuse unchanged local files and cached objects, copy what the cache lacks from another file in the data folder that holds its pinned bytes, as [already in place](#already-in-place) describes, then from the [mirrors](../mirrors.md) you named, and download the rest when online. in [mirror-only mode](../mirrors.md#mirror-only-mode) a file no mirror holds fails the run before any download. a file fetchloom did not place that already holds the pinned bytes is adopted, as [already in place](#already-in-place) describes.
 4. check downloads against locked sizes and hashes, then place files and remove unchanged managed files no longer needed.
 5. save project state and register the project with the cache.
 6. in a git repository, add the data folder to `.gitignore` if needed, as `add` does, so a repository started after the first `add` stops listing `data/`.
@@ -79,6 +79,16 @@ a file someone put at a pinned path before fetchloom placed it, such as one down
 ```
 
 a file in a dataset with `copy = true`, a file with another name, and a file whose bytes the cache does not hold stay as they are, and the line says so: `so it stays as it is`. `remove` later deletes an adopted file as it deletes the files sync placed, and warns that it was already there. a dry run lists adoptions under `Would adopt`, and a file whose hash only its download can tell under `Would check`.
+
+a file sync must place whose bytes the cache lacks comes from another file that holds them in place, kept or adopted, at a path data.lock places them at too, as when two datasets hold one file, or a recipe copies one, in a project [moved to another machine](cache.md#moving-a-project-to-another-machine). the cache gets a clone or a copy of that file, never a link, and keeps it only when it hashes to the pin, so nothing is downloaded and a recipe's result needs no build. stderr from a real run in such a project, after `data/squares/table.csv` was deleted:
+
+```text
+     Copied 1 file · 21 B from data into the cache
+     Placed data/squares · 1 file linked to the cache
+warning: put back data/squares/table.csv, which was deleted or moved, since data.lock pins it
+  help: to leave a file out for good, run `fetchloom drop data/squares/table.csv`; keep files of your own in a folder outside data/
+     Synced 2 datasets into data
+```
 
 ## folders left behind
 
@@ -132,7 +142,7 @@ if cache registration fails, sync still succeeds with a warning that gc may not 
 
 ## recipe results
 
-sync places a [recipe](../recipes.md)'s pinned result from the cache or a [mirror](../mirrors.md) like any dataset, and never runs its step. on a machine where neither holds it, as in a fresh clone, a sync of every dataset places the rest and leaves the result out with a warning naming the build that makes it, and so does any other command that syncs every dataset, such as `add`. what an older pin of the result placed retires as any file no dataset needs does, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`, and the next sync looks again. stderr in a fresh clone, from a run on this machine:
+sync places a [recipe](../recipes.md)'s pinned result from the cache, another file in the data folder or a [mirror](../mirrors.md) like any dataset, and never runs its step. on a machine where none holds it, as in a fresh clone, a sync of every dataset places the rest and leaves the result out with a warning naming the build that makes it, and so does any other command that syncs every dataset, such as `add`. what an older pin of the result placed retires as any file no dataset needs does, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`, and the next sync looks again. stderr in a fresh clone, from a run on this machine:
 
 ```text
 warning: clean's pinned result is not on this machine or a mirror, so it is left out
@@ -187,7 +197,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 
 ## exit codes
 
-0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder, and a [recipe](../recipes.md) data.lock does not pin as built now exits 60 with `build.needed`. a recipe's pinned result neither the cache nor a mirror holds exits 60 with `build.needed` under `--locked` or when the sync names the recipe, as [recipe results](#recipe-results) says. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder, and a [recipe](../recipes.md) data.lock does not pin as built now exits 60 with `build.needed`. a recipe's pinned result neither the cache, the data folder nor a mirror holds exits 60 with `build.needed` under `--locked` or when the sync names the recipe, as [recipe results](#recipe-results) says. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

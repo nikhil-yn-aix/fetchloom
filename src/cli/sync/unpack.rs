@@ -486,7 +486,8 @@ impl Loop<'_> {
             })
         };
         // before any link is read, so one that cannot be followed stops no mirror
-        super::fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+        let folder = super::fetch::data_folder::DataFolder::default();
+        super::fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
             lacking()
                 .map(|(dataset, file)| crate::mirror::Wanted {
                     digest: file.sha256,

@@ -3,6 +3,7 @@
 //! the next run.
 
 mod again;
+pub(super) mod data_folder;
 pub(super) mod mirrors;
 
 use std::collections::{HashMap, VecDeque};

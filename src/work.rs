@@ -26,6 +26,10 @@ pub(crate) struct Work {
     /// pinned files a mirror gave, which the cache now holds, and their bytes.
     pub(crate) mirror_objects: AtomicU64,
     pub(crate) mirror_bytes: AtomicU64,
+    /// pinned files the cache lacked that the project's data folder held, now in the cache, and
+    /// their bytes.
+    pub(crate) data_folder_objects: AtomicU64,
+    pub(crate) data_folder_bytes: AtomicU64,
     /// the objects the run wrote to the cache, by the first 8 bytes of each digest, so placing
     /// tells them from objects the cache held already. no clock can: a filesystem that keeps
     /// whole seconds, or a file server with its own clock, dates an object the run wrote before
@@ -51,6 +55,8 @@ pub(crate) struct Counts {
     pub(crate) placed_from_cache: u64,
     pub(crate) mirror_objects: u64,
     pub(crate) mirror_bytes: u64,
+    pub(crate) data_folder_objects: u64,
+    pub(crate) data_folder_bytes: u64,
 }
 
 impl Work {
@@ -95,6 +101,8 @@ impl Work {
             placed_from_cache: read(&self.placed_from_cache),
             mirror_objects: read(&self.mirror_objects),
             mirror_bytes: read(&self.mirror_bytes),
+            data_folder_objects: read(&self.data_folder_objects),
+            data_folder_bytes: read(&self.data_folder_bytes),
         }
     }
 }

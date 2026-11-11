@@ -1,0 +1,158 @@
+//! a project copied with its data folder to a machine whose cache never held its files: what the
+//! data folder holds at the paths data.lock places is taken back into the cache, after a check of
+//! its bytes, so build and sync need no request and no source.
+
+use std::fs;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use crate::build::{build, building_in, runs};
+use crate::export::sha256;
+use crate::project::{IRIS, PATH, added};
+use crate::support::{Result, Sandbox, Server, delete, file, json, text};
+
+/// a recipe that makes `clean` by copying iris, so the data folder holds iris's bytes twice.
+const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
+
+/// a project in the work folder whose data folder is `inputs`, with iris added from `server`
+/// and, with `recipe`, [`CLEAN`] built from it: one object at two paths.
+fn project(sandbox: &Sandbox, server: &Server, recipe: bool) -> Result {
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(&manifest, "[project]\ndata_dir = \"inputs\"\n")?;
+    added(sandbox, server)?;
+    if recipe {
+        let written = fs::read_to_string(&manifest)?;
+        fs::write(&manifest, format!("{written}{CLEAN}"))?;
+        let built = build(sandbox, &["build"])?;
+        assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    }
+    Ok(())
+}
+
+/// the work folder copied to `name` as `cp -a` copies it, data folder, data.lock.d and
+/// `.fetchloom` included, with an empty cache of its own: the project on another machine.
+fn copied(sandbox: &Sandbox, name: &str) -> Result<(PathBuf, PathBuf)> {
+    let folder = sandbox.folder(name)?;
+    copy_tree(&sandbox.work(), &folder)?;
+    Ok((folder, sandbox.folder(&format!("{name} cache"))?))
+}
+
+/// copies every file below `from` into `to`, keeping each file's modification time and
+/// read-only flag.
+fn copy_tree(from: &Path, to: &Path) -> Result {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+            continue;
+        }
+        let found = fs::metadata(entry.path())?;
+        fs::File::create(&target)?.write_all(&fs::read(entry.path())?)?;
+        fs::File::options()
+            .write(true)
+            .open(&target)?
+            .set_modified(found.modified()?)?;
+        fs::set_permissions(&target, found.permissions())?;
+    }
+    Ok(())
+}
+
+/// where a cache or a mirror keeps the object holding `bytes`, below `root`.
+fn object(root: &Path, bytes: &[u8]) -> PathBuf {
+    let hex = sha256(bytes);
+    root.join("objects").join(&hex[..2]).join(&hex[2..])
+}
+
+/// the file at `path` is no other name of the object `cache` keeps, so an edit of one never
+/// reaches the other.
+fn unlinked(path: &Path, cache: &Path) -> Result {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let (file, kept) = (fs::metadata(path)?, fs::metadata(object(cache, IRIS))?);
+        assert_eq!(file.nlink(), 1, "{}", path.display());
+        assert_ne!(file.ino(), kept.ino(), "{}", path.display());
+    }
+    #[cfg(not(unix))]
+    let _ = (path, cache);
+    Ok(())
+}
+
+/// a check runs every step from the inputs data.lock pins, which the data folder holds.
+#[test]
+fn an_offline_check_of_a_copied_project_reads_its_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, true)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let ran = runs(&two)?;
+    let output = building_in(&sandbox, &two, &["--offline", "build", "--check"])?
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let said = format!(
+        "Copied 1 file · {} B from inputs into the cache",
+        IRIS.len()
+    );
+    assert!(stderr.contains(&said), "{stderr}");
+    assert_eq!(runs(&two)?, ran + 1);
+    Ok(())
+}
+
+/// a recipe never built here runs offline on what the data folder holds of its input.
+#[test]
+fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, false)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let manifest = two.join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{written}{CLEAN}"))?;
+    let output = building_in(&sandbox, &two, &["--offline", "build"])?
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(runs(&two)?, 1);
+    assert_eq!(
+        fs::read(two.join("inputs").join("clean").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
+/// a file the cache lacks whose bytes the data folder holds at another path is placed from
+/// there, before any mirror is asked, so a result needs no build.
+#[test]
+fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, true)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let made = two.join("inputs").join("clean").join("iris.csv");
+    delete(&made)?;
+    let mirror = sandbox.folder("mirror")?;
+    fs::write(mirror.join("fetchloom-mirror"), "fetchloom mirror 1\n")?;
+    let mirrored = object(&mirror, IRIS);
+    fs::create_dir_all(mirrored.parent().ok_or("a fan folder")?)?;
+    fs::write(&mirrored, IRIS)?;
+    let run = |args: &[&str]| -> Result<serde_json::Value> {
+        let output = sandbox
+            .command_in(&two, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        json(&output)
+    };
+    let synced = run(&["--json", "--offline", "sync"])?;
+    assert_eq!(synced["result"]["placement"]["placed"], 1, "{synced}");
+    assert_eq!(synced["work"]["data_folder_objects"], 1, "{synced}");
+    assert_eq!(synced["work"]["mirror_objects"], 0, "{synced}");
+    assert_eq!(fs::read(&made)?, IRIS);
+    unlinked(&two.join("inputs").join("iris").join("iris.csv"), &cache)?;
+    Ok(())
+}

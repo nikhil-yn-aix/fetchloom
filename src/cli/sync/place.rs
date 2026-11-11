@@ -435,6 +435,31 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
+    /// the files already at their places with the bytes data.lock pins there, by the state or by
+    /// hashing, whose bytes a file placing places or replaces needs too: where the cache can take
+    /// those bytes from when it lacks them. a file of a dataset the run leaves alone is left out.
+    pub(crate) fn holding(&self) -> Vec<(Sha256, String)> {
+        let needed: HashSet<Sha256> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(_, action)| needs_bytes(action))
+            .map(|(target, _)| target.sha256)
+            .collect();
+        if needed.is_empty() {
+            return Vec::new();
+        }
+        self.targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(target, action)| {
+                matches!(action, Action::Keep | Action::Vouch(_) | Action::Adopt(_))
+                    && needed.contains(&target.sha256)
+            })
+            .map(|(target, _)| (target.sha256, target.path.clone()))
+            .collect()
+    }
+
     /// the recipes in scope whose result placing needs bytes of that `holds` says the cache
     /// lacks, by name. nothing downloads a result; only a build makes it again. bytes a fetched
     /// file this placing needs holds too come with its download.
@@ -2333,6 +2358,82 @@ mod tests {
         let found = untouched(&project, &manifest, &survey, &seen, false).unwrap();
 
         assert!(found.is_none(), "a settled sync would leave the copy");
+    }
+
+    /// the cache takes an object's bytes only from a file placing found holding them, kept,
+    /// vouched for or adopted, and only for an object a file it places or replaces needs: never
+    /// from a file it replaces or keeps as edited.
+    #[test]
+    fn only_files_holding_their_pins_lend_bytes_to_files_that_need_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project {
+            root: dir.path().join("project"),
+        };
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather\"\n").unwrap();
+        let file = |bytes: &[u8]| LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: crate::digest::sha256(bytes),
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let (shared, other) = (file(b"lerwick,9.1\n"), file(b"wick,8.4\n"));
+        let look = Look {
+            size: shared.size,
+            modified: 0,
+        };
+        let cases = [
+            ("kept", &shared, Action::Keep),
+            ("adopted", &shared, Action::Adopt(look)),
+            ("vouched", &shared, Action::Vouch(look)),
+            ("placed", &shared, Action::Place),
+            ("replaced", &shared, Action::Replace),
+            ("edited", &shared, Action::Leave(Reason::Changed)),
+            ("other", &other, Action::Keep),
+        ];
+        let mut placing = Placing {
+            project: &project,
+            manifest: &manifest,
+            targets: cases
+                .iter()
+                .map(|(name, file, _)| Target {
+                    dataset: "weather",
+                    path: format!("data/weather/{name}.csv"),
+                    sha256: file.sha256,
+                    size: file.size,
+                    copy: false,
+                    holder: crate::plan::Holder::File(file),
+                })
+                .collect(),
+            unknown: Vec::new(),
+            actions: cases.into_iter().map(|(_, _, action)| action).collect(),
+            survey: surveyed(&project),
+            scope: Scope::All,
+            unbuilt: Vec::new(),
+        };
+        let holding: Vec<String> = placing
+            .holding()
+            .into_iter()
+            .inspect(|(digest, _)| assert_eq!(*digest, shared.sha256))
+            .map(|(_, path)| path)
+            .collect();
+        assert_eq!(
+            holding,
+            [
+                "data/weather/kept.csv",
+                "data/weather/adopted.csv",
+                "data/weather/vouched.csv"
+            ]
+        );
+        for action in &mut placing.actions[3..5] {
+            *action = Action::Keep;
+        }
+        assert!(
+            placing.holding().is_empty(),
+            "nothing needs bytes, so no file lends any"
+        );
     }
 
     #[test]

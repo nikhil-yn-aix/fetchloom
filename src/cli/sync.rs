@@ -18,6 +18,7 @@ use self::disk::Survey;
 use self::draft::Draft;
 use self::place::{Download, Placement, Placing, Preview};
 use super::Context;
+use super::fetch::data_folder::DataFolder;
 use super::fetch::{self, Again, Job};
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -206,7 +207,8 @@ impl<'a> Loop<'a> {
                 survey,
             )?;
         }
-        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
+        let folder = DataFolder::found(self.project, manifest, placing.holding());
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
             placing.wanted(&self.cache)
         })
         .await
@@ -278,10 +280,10 @@ impl<'a> Loop<'a> {
         );
     }
 
-    /// puts in the cache every file the fetched datasets `names` of `lock` hold, whatever the data
-    /// folder holds, as a build's private copy of them needs: from the mirrors first, else from
-    /// their sources, an archive unpacked again when a file it holds is missing. nothing in the
-    /// project changes.
+    /// puts in the cache every file the fetched datasets `names` of `lock` hold, as a build's
+    /// private copy of them needs: from the data folder where it holds a file's pinned bytes,
+    /// else from the mirrors, else from their sources, an archive unpacked again when a file it
+    /// holds is missing. nothing in the project changes.
     pub(super) async fn ready(
         &self,
         manifest: &Manifest,
@@ -318,8 +320,13 @@ impl<'a> Loop<'a> {
                 .filter(|target| self.cache.find(&target.sha256, Some(target.size)).is_none())
                 .collect()
         };
-        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
-            lacking()
+        let lacked = lacking();
+        if lacked.is_empty() {
+            return Ok(());
+        }
+        let folder = DataFolder::planned(self.project, manifest, lock, &self.cache);
+        fetch::mirrors::fill(self.context, &self.net, &self.cache, &folder, || {
+            lacked
                 .into_iter()
                 .map(|target| crate::mirror::Wanted {
                     digest: target.sha256,
@@ -337,7 +344,7 @@ impl<'a> Loop<'a> {
             .filter(|(_, file)| seen.insert(file.sha256))
             .partition(|(_, file)| file.unpacks_to.is_some());
         let unpacking = archives::of(&sources, unpacking);
-        // no link fetches an import, and its copy in data/ is no input
+        // no link fetches an import, and the data folder held none of its pinned bytes
         let imported = unpacking.iter().flat_map(|(dataset, archive)| {
             archive.files().into_iter().map(move |file| (dataset, file))
         });
@@ -349,7 +356,7 @@ impl<'a> Loop<'a> {
         {
             let folder = plan::folder(manifest, dataset);
             return Err(local::imported_elsewhere(dataset, &folder).help(format!(
-                "run `fetchloom add <folder> --as {dataset}` where they are: a build takes its inputs from the cache, never from {folder}"
+                "copy them to {folder} and build again, or run `fetchloom add <folder> --as {dataset}` where they are"
             )));
         }
         self.download_prepared(manifest, &sources, &files).await?;
@@ -864,9 +871,13 @@ impl<'a> Loop<'a> {
         if jobs.is_empty() {
             return Ok(Vec::new());
         }
-        fetch::mirrors::fill(self.context, &self.net, &self.cache, || {
-            fetch::mirrors::pinned(&jobs, &self.cache)
-        })
+        fetch::mirrors::fill(
+            self.context,
+            &self.net,
+            &self.cache,
+            &DataFolder::default(),
+            || fetch::mirrors::pinned(&jobs, &self.cache),
+        )
         .await
         .map_err(|error| self.as_left(error))?;
         self.refuse_offline(&jobs)?;

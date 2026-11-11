@@ -84,7 +84,7 @@ error: flowers was imported from files, and this machine's cache does not hold t
   help: copy them to data/flowers and run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
 
-files copied to `data/flowers` by hand are adopted when they hold the pinned bytes. `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset: the paths and sizes are compared with data.lock first, then the bytes as they are copied, and other files stop it with `local.io`, exit 50, naming the first difference, with data.toml and data.lock as they were. matching files change neither file:
+files copied to `data/flowers` by hand are adopted when they hold the pinned bytes, and a build takes them into the cache from there. `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset: the paths and sizes are compared with data.lock first, then the bytes as they are copied, and other files stop it with `local.io`, exit 50, naming the first difference, with data.toml and data.lock as they were. matching files change neither file:
 
 ```text
    Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
