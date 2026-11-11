@@ -142,7 +142,12 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         project.sweep_lists(&new_lock);
     }
     let placement = placing.remove_only(&context.output).map_err(|error| {
-        error.detail("data.toml was updated; after fixing the error, `fetchloom sync` removes the files it leaves out")
+        let written = if lock_changed {
+            "data.toml and data.lock were"
+        } else {
+            "data.toml was"
+        };
+        error.detail(format!("{written} updated; after fixing the error, `fetchloom sync` removes the files they leave out"))
     })?;
     let changed = if lock_changed {
         committed(&project)
