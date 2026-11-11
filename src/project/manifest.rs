@@ -347,7 +347,9 @@ fn shorthand(folder: &str) -> bool {
             .any(|after| after.starts_with(|c: char| c.is_ascii_alphabetic() || "_{".contains(c)))
 }
 
-/// data.toml's text with one more dataset, or a new file holding just that dataset.
+/// data.toml's text with one more dataset, or a new file holding just that dataset. it goes
+/// before the dataset whose name follows its own, so two people adding different datasets rarely
+/// change the same lines.
 pub(crate) fn with_dataset(
     text: &str,
     name: &str,
@@ -357,22 +359,6 @@ pub(crate) fn with_dataset(
     extract: bool,
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
-    let blank_line_first = !document.as_table().is_empty();
-    let datasets = document.entry("datasets").or_insert_with(|| {
-        let mut table = Table::new();
-        table.set_implicit(true);
-        Item::Table(table)
-    });
-    let Some(datasets) = datasets.as_table_mut() else {
-        let reference = crate::net::mask_query(reference);
-        return Err(Error::new(
-            Kind::ProjectInvalid,
-            "data.toml writes its datasets inline, so fetchloom cannot add to them",
-        )
-        .help(format!(
-            "add [datasets.{name}] with ref = \"{reference}\" by hand"
-        )));
-    };
     let mut table = Table::new();
     table.insert("ref", toml_edit::value(reference));
     for (key, patterns) in [("select", select), ("exclude", exclude)] {
@@ -383,11 +369,156 @@ pub(crate) fn with_dataset(
     if !extract {
         table.insert("extract", toml_edit::value(false));
     }
-    if blank_line_first {
-        table.decor_mut().set_prefix("\n");
+    if !put(&mut document, name, table) {
+        let reference = crate::net::mask_query(reference);
+        return Err(Error::new(
+            Kind::ProjectInvalid,
+            "data.toml writes its datasets inline, so fetchloom cannot add to them",
+        )
+        .help(format!(
+            "add [datasets.{name}] with ref = \"{reference}\" by hand"
+        )));
     }
-    datasets.insert(name, Item::Table(table));
     Ok(document.to_string())
+}
+
+/// puts `table` among the datasets as `name`, before the dataset whose name follows it, or after
+/// them all, with the comments touching its header. false when the datasets are written inline,
+/// where no table can go.
+fn put(document: &mut DocumentMut, name: &str, mut table: Table) -> bool {
+    let blank_line_first = !document.as_table().is_empty();
+    let datasets = document.entry("datasets").or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    let Some(datasets) = datasets.as_table_mut() else {
+        return false;
+    };
+    let touching = split_note(prefix(&table)).1.to_owned();
+    let next = successor(datasets, name);
+    let above = if blank_line_first { "\n" } else { "" };
+    table.decor_mut().set_prefix(format!("{above}{touching}"));
+    table.set_position(None);
+    datasets.insert(name, Item::Table(table));
+    if let Some(next) = next {
+        insert_before(document, name, &next, &touching);
+    }
+    true
+}
+
+/// the dataset table whose name follows `name` most closely. none when `name` comes last or the
+/// others are written inline.
+fn successor(datasets: &Table, name: &str) -> Option<String> {
+    datasets
+        .iter()
+        .filter(|(other, item)| {
+            *other > name
+                && item
+                    .as_table()
+                    .is_some_and(|table| !table.is_dotted() && table.position().is_some())
+        })
+        .map(|(other, _)| other)
+        .min()
+        .map(str::to_owned)
+}
+
+/// moves the dataset `name`, just put last, to just before the dataset `next`, with `touching`,
+/// its own comments, above its header. a note a blank line above `next`, such as one at the top
+/// of the file, then stays above both.
+fn insert_before(document: &mut DocumentMut, name: &str, next: &str, touching: &str) {
+    let Some(following) = document
+        .get("datasets")
+        .and_then(|datasets| datasets.get(next))
+        .and_then(Item::as_table)
+    else {
+        return;
+    };
+    let Some(position) = following.position() else {
+        return;
+    };
+    let (note, theirs) = split_note(prefix(following));
+    let first = document.iter().all(|(_, item)| !item.is_value())
+        && first_position(document.as_table()).is_none_or(|first| first >= position);
+    let above = if note.is_empty() && !first {
+        "\n"
+    } else {
+        note
+    };
+    let added = format!("{above}{touching}");
+    let kept = format!("\n{theirs}");
+    shift_positions(document.as_table_mut(), position);
+    let Some(datasets) = document.get_mut("datasets").and_then(Item::as_table_mut) else {
+        return;
+    };
+    if let Some(following) = datasets.get_mut(next).and_then(Item::as_table_mut) {
+        following.decor_mut().set_prefix(kept);
+    }
+    if let Some(table) = datasets.get_mut(name).and_then(Item::as_table_mut) {
+        table.set_position(Some(position));
+        table.decor_mut().set_prefix(added);
+    }
+}
+
+/// the comments and blank lines above a table's header.
+fn prefix(table: &Table) -> &str {
+    table
+        .decor()
+        .prefix()
+        .and_then(|prefix| prefix.as_str())
+        .unwrap_or_default()
+}
+
+/// `prefix` split after its last blank line: a note that stands apart, such as one at the top of
+/// the file, and the comments touching the header below it.
+fn split_note(prefix: &str) -> (&str, &str) {
+    let mut end = 0;
+    let mut at = 0;
+    for line in prefix.split_inclusive('\n') {
+        at += line.len();
+        if line.trim().is_empty() {
+            end = at;
+        }
+    }
+    prefix.split_at(end)
+}
+
+/// the earliest place of any table written with a header below `table`.
+fn first_position(table: &Table) -> Option<isize> {
+    let mut first: Option<isize> = None;
+    for (_, item) in table {
+        let tables: Vec<&Table> = match item {
+            Item::Table(table) => vec![table],
+            Item::ArrayOfTables(array) => array.iter().collect(),
+            _ => Vec::new(),
+        };
+        for table in tables {
+            let own = table
+                .position()
+                .filter(|_| !table.is_implicit() && !table.is_dotted());
+            for position in own.into_iter().chain(first_position(table)) {
+                first = Some(first.map_or(position, |first| first.min(position)));
+            }
+        }
+    }
+    first
+}
+
+/// moves every table at `from` or after it one place later, making room for one more there.
+fn shift_positions(table: &mut Table, from: isize) {
+    let mut shift = |table: &mut Table| {
+        if let Some(position) = table.position().filter(|position| *position >= from) {
+            table.set_position(Some(position + 1));
+        }
+        shift_positions(table, from);
+    };
+    for (_, item) in table.iter_mut() {
+        match item {
+            Item::Table(table) => shift(table),
+            Item::ArrayOfTables(array) => array.iter_mut().for_each(&mut shift),
+            _ => {}
+        }
+    }
 }
 
 /// data.toml's text without one dataset. comments touching its header go with it, and comments
@@ -733,11 +864,48 @@ mod tests {
         let added = with_dataset(text, "a", "zenodo:1", &["*.csv".to_owned()], &[], true).unwrap();
         assert_eq!(
             added,
-            "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.b]\nref = \"zenodo:2\"\n\n[datasets.a]\nref = \"zenodo:1\"\nselect = [\"*.csv\"]\n"
+            "# my data\n[project]\ndata_dir = \"data\" # here\n\n[datasets.a]\nref = \"zenodo:1\"\nselect = [\"*.csv\"]\n\n[datasets.b]\nref = \"zenodo:2\"\n"
         );
         assert_eq!(parse(&added).datasets.len(), 2);
         let fresh = with_dataset("", "iris", "zenodo:3608990", &[], &[], true).unwrap();
         assert_eq!(fresh, "[datasets.iris]\nref = \"zenodo:3608990\"\n");
+    }
+
+    /// a new dataset goes before the one whose name follows it, so two people adding different
+    /// datasets rarely change the same lines of data.toml.
+    #[test]
+    fn add_inserts_in_sorted_order() {
+        let add = |text: &str, name: &str| {
+            with_dataset(text, name, &format!("zenodo:{name}"), &[], &[], true).unwrap()
+        };
+        let three = "[datasets.alpha]\nref = \"zenodo:alpha\"\n\n[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.delta]\nref = \"zenodo:delta\"\n";
+        assert_eq!(
+            add(three, "beta"),
+            "[datasets.alpha]\nref = \"zenodo:alpha\"\n\n[datasets.beta]\nref = \"zenodo:beta\"\n\n[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.delta]\nref = \"zenodo:delta\"\n"
+        );
+        assert_eq!(
+            add(three, "echo"),
+            format!("{three}\n[datasets.echo]\nref = \"zenodo:echo\"\n"),
+            "the last name still goes last"
+        );
+        assert_eq!(
+            add("[datasets.core]\nref = \"zenodo:core\"\n", "alpha"),
+            "[datasets.alpha]\nref = \"zenodo:alpha\"\n\n[datasets.core]\nref = \"zenodo:core\"\n"
+        );
+        // a note at the top stays there, and a comment on a dataset stays on it
+        assert_eq!(
+            add(
+                "# inputs\n\n# the core set\n[datasets.core]\nref = \"zenodo:core\"\n",
+                "alpha"
+            ),
+            "# inputs\n\n[datasets.alpha]\nref = \"zenodo:alpha\"\n\n# the core set\n[datasets.core]\nref = \"zenodo:core\"\n"
+        );
+        let after_project =
+            "[datasets.core]\nref = \"zenodo:core\"\n\n[project]\ndata_dir = \"in\"\n";
+        assert_eq!(
+            add(after_project, "delta"),
+            "[datasets.core]\nref = \"zenodo:core\"\n\n[datasets.delta]\nref = \"zenodo:delta\"\n\n[project]\ndata_dir = \"in\"\n"
+        );
     }
 
     #[test]

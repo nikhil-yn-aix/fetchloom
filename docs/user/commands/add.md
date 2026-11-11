@@ -30,7 +30,7 @@ fetchloom add [options] <link>
 1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
 2. resolve the reference, filter its listed files and choose a dataset name.
 3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
-4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache.
+4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache. the entry goes before the dataset whose name follows its own, as `data.lock` keeps them in name order, so two people adding different datasets rarely change the same lines.
 5. in a git repository, add the data folder to `.gitignore` if needed.
 
 run in a folder below a project's folder, `add` works on that project. a person at a terminal sees `using the project in <folder>` once, and the folder the dataset's files are in is given from where you stand, such as `../data/iris`. the search stops at a git repository, so inside a repository with no `data.toml` of its own, `add` starts a project in the current folder even when a folder above the repository holds one; [finding the project](../reference/project-folder.md#finding-the-project) says why.
