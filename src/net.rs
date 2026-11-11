@@ -265,7 +265,9 @@ enum Lane {
 }
 
 impl Wire {
+    /// the clients, once the proxy settings are known to name proxies.
     fn new(typed: &address::Typed, offline: bool, connect: Duration) -> Result<Wire, Error> {
+        let proxies = address::Proxies::read(&|name| std::env::var_os(name))?;
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cookies = Arc::new(reqwest::cookie::Jar::default());
@@ -276,7 +278,7 @@ impl Wire {
             typed: typed.clone(),
             offline,
             connect,
-            proxies: address::Proxies::from_system(),
+            proxies,
         })
     }
 

@@ -4,7 +4,9 @@
 //! or link-local addresses, so a cloned project, a hostile server or a tampered lock cannot reach
 //! into a local network.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -13,6 +15,7 @@ use hyper_util::client::proxy::matcher::Matcher;
 use url::{Host, Url};
 
 use super::Shown;
+use crate::error::Error;
 
 /// the hosts a person typed, the origins a person allowed, and the proxies this machine sends
 /// requests through.
@@ -205,6 +208,76 @@ pub(crate) struct Proxies {
     test_lookup: Option<TestLookup>,
 }
 
+/// the proxy variables, each pair in the order the proxy matcher reads it: the lowercase name
+/// counts only when the uppercase one is unset.
+const VARIABLES: [[&str; 2]; 3] = [
+    ["HTTPS_PROXY", "https_proxy"],
+    ["HTTP_PROXY", "http_proxy"],
+    ["ALL_PROXY", "all_proxy"],
+];
+
+/// the proxy each set variable names. a value the matcher cannot read, which it would pass over
+/// as if the variable were unset, is refused, since a person who set it relies on the proxy and
+/// requests would go around it. an empty value names no proxy.
+///
+/// # Errors
+///
+/// `usage`, naming the first variable whose value is no proxy address.
+fn named(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Vec<(&'static str, http::Uri)>, Error> {
+    let mut named = Vec::new();
+    for pair in VARIABLES {
+        let Some((name, value)) = pair
+            .into_iter()
+            .find_map(|name| var(name).map(|value| (name, value)))
+        else {
+            continue;
+        };
+        if value.is_empty() {
+            continue;
+        }
+        match value.to_str().and_then(proxy_address) {
+            Some(uri) => named.push((name, uri)),
+            None => return Err(not_proxy(name, &value.to_string_lossy())),
+        }
+    }
+    Ok(named)
+}
+
+/// the proxy `value` names, as the matcher reads a proxy variable: an http, https or socks
+/// address, or a host and port alone. none when the matcher cannot read it.
+fn proxy_address(value: &str) -> Option<http::Uri> {
+    let matcher = Matcher::builder().all(value.to_owned()).build();
+    let intercept = matcher.intercept(&http::Uri::from_static("http://example.org/"))?;
+    Some(intercept.uri().clone())
+}
+
+/// the refusal of `value`, the setting of `name` that is no proxy address.
+fn not_proxy(name: &str, value: &str) -> Error {
+    Error::new(
+        crate::error::Kind::Usage,
+        format!(
+            "{name} is \"{}\", which is not a proxy address",
+            without_login(value).escape_debug()
+        ),
+    )
+    .help(format!(
+        "set {name} to a proxy, such as http://proxy.example.org:8080, or unset {name} to connect without one. `fetchloom help environment` lists the proxy settings"
+    ))
+}
+
+/// a proxy setting as messages show it: whatever comes before an `@` is a login, which `***`
+/// stands for, whether or not the rest is an address.
+fn without_login(value: &str) -> Cow<'_, str> {
+    let Some(at) = value.rfind('@') else {
+        return Cow::Borrowed(value);
+    };
+    let start = value.find("://").map_or(0, |scheme| scheme + 3);
+    if start > at {
+        return Cow::Borrowed(value);
+    }
+    Cow::Owned(format!("{}***{}", &value[..start], &value[at..]))
+}
+
 #[cfg(test)]
 pub(super) type LookupFuture =
     std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>;
@@ -234,14 +307,20 @@ fn shown_proxy(matcher: &Matcher, url: &Url) -> Option<String> {
 mod proxy_tests;
 
 impl Proxies {
-    /// the proxies in the environment and, where reqwest reads them, the system settings.
-    pub(crate) fn from_system() -> Proxies {
-        Proxies {
+    /// the proxies in the environment `var` reads and, where reqwest reads them, the system
+    /// settings.
+    ///
+    /// # Errors
+    ///
+    /// `usage` for a proxy variable whose value is no proxy address.
+    pub(crate) fn read(var: &dyn Fn(&str) -> Option<OsString>) -> Result<Proxies, Error> {
+        named(var)?;
+        Ok(Proxies {
             matcher: Matcher::from_system(),
             looked_up: Mutex::default(),
             #[cfg(test)]
             test_lookup: None,
-        }
+        })
     }
 
     /// checks `url` before it is sent, when a proxy will carry it. the proxy resolves the name

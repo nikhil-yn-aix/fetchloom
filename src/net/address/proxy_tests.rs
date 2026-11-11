@@ -43,3 +43,79 @@ fn a_proxy_is_shown_without_its_login() {
     );
     assert_eq!(shown_proxy(&Matcher::builder().build(), &url), None);
 }
+
+/// the environment a test gives: each variable `pairs` names, and no other.
+fn env(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+    let pairs = pairs.to_vec();
+    move |name| {
+        pairs
+            .iter()
+            .find(|(set, _)| *set == name)
+            .map(|(_, value)| OsString::from(value))
+    }
+}
+
+/// a value the proxy matcher cannot read would send every request around the proxy, as if the
+/// variable were unset, so it is refused, naming the variable and never a login it holds.
+#[test]
+fn a_proxy_setting_that_names_no_proxy_is_refused() {
+    for (variable, value) in [
+        ("HTTPS_PROXY", "htp:/proxy:80"),
+        ("https_proxy", "ftp://proxy.lab:21"),
+        ("HTTP_PROXY", " http://proxy.lab:8080"),
+        ("http_proxy", "http://"),
+        ("ALL_PROXY", "proxy lab"),
+        ("all_proxy", "htp://name:secret@proxy.lab:80"),
+    ] {
+        let error = named(&env(&[(variable, value)])).unwrap_err();
+        assert_eq!(error.kind, crate::error::Kind::Usage, "{variable}={value}");
+        assert!(
+            error.message.starts_with(&format!("{variable} is \"")),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("secret"), "{}", error.message);
+        let help = error.help.as_deref().unwrap_or_default();
+        assert!(help.contains(&format!("unset {variable}")), "{help}");
+    }
+}
+
+/// what the matcher reads is accepted and an empty value is no proxy. of a pair, the variable
+/// the matcher reads is the one checked: the uppercase name when it is set.
+#[test]
+fn a_readable_proxy_setting_is_named_by_its_variable() {
+    for value in [
+        "http://proxy.lab:8080",
+        "proxy.lab:3128",
+        "127.0.0.1:18849",
+        "https://proxy.lab",
+        "socks5://proxy.lab:1080",
+        "http://name:secret@proxy.lab:8080",
+    ] {
+        let found = named(&env(&[("HTTPS_PROXY", value)])).unwrap();
+        assert_eq!(found.len(), 1, "{value}");
+    }
+    assert_eq!(named(&env(&[("HTTPS_PROXY", "")])).unwrap(), Vec::new());
+    assert_eq!(named(&env(&[])).unwrap(), Vec::new());
+    let both = named(&env(&[
+        ("HTTPS_PROXY", "http://upper.lab:1"),
+        ("https_proxy", "htp:/lower"),
+    ]))
+    .unwrap();
+    assert_eq!(
+        both,
+        [("HTTPS_PROXY", http::Uri::from_static("http://upper.lab:1/"))]
+    );
+}
+
+#[test]
+fn a_login_in_a_proxy_setting_is_never_shown() {
+    for (value, shown) in [
+        ("htp://name:secret@proxy:80", "htp://***@proxy:80"),
+        ("name:secret@proxy:80", "***@proxy:80"),
+        ("htp:/proxy:80", "htp:/proxy:80"),
+        ("http://a@b@proxy", "http://***@proxy"),
+    ] {
+        assert_eq!(without_login(value), shown);
+    }
+}

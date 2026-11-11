@@ -145,3 +145,45 @@ fn a_proxy_that_wants_a_login_is_named_and_asked_once() -> Result {
     }
     Ok(())
 }
+
+/// a proxy setting fetchloom cannot read is refused before any request, naming the variable.
+/// passing over it, as the HTTP stack would, sends every request around the proxy, and a login
+/// in it is never shown.
+#[test]
+fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    for (variable, value, shown) in [
+        ("HTTP_PROXY", "htp:/proxy:80", "htp:/proxy:80"),
+        (
+            "all_proxy",
+            "htp://name:secret@proxy:80",
+            "htp://***@proxy:80",
+        ),
+    ] {
+        let output = sandbox
+            .command(&["--json", "get", &server.url])
+            .env(variable, value)
+            .env("NO_PROXY", "")
+            .env("no_proxy", "")
+            .output()?;
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "usage", "{error}");
+        assert_eq!(
+            error["message"],
+            format!("{variable} is \"{shown}\", which is not a proxy address")
+        );
+        assert_eq!(
+            error["help"],
+            format!(
+                "set {variable} to a proxy, such as http://proxy.example.org:8080, or unset {variable} to connect without one. `fetchloom help environment` lists the proxy settings"
+            )
+        );
+    }
+    assert!(
+        server.requests().is_empty(),
+        "nothing went around the proxy"
+    );
+    Ok(())
+}
