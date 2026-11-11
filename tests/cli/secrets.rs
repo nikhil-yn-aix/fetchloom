@@ -916,3 +916,35 @@ fn userinfo_links_are_rejected_without_leaking_or_making_a_request() -> Result {
     }
     Ok(())
 }
+
+/// `FETCHLOOM_OFFLINE` takes `true` as `FETCHLOOM_MIRRORS_ONLY` does, and a value it cannot read
+/// stops a command before any request, where it used to go online without a word. help and
+/// version still answer.
+#[test]
+fn the_offline_variable_never_lets_a_run_go_online_by_mistake() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    for (value, code, kind) in [
+        ("true", 20, "offline.missing"),
+        ("yes", 2, "usage"),
+        ("2", 2, "usage"),
+    ] {
+        let output = sandbox
+            .command(&["--json", "get", &server.url])
+            .env("FETCHLOOM_OFFLINE", value)
+            .output()?;
+        assert_eq!(output.status.code(), Some(code), "{value}");
+        let document = json(&output)?;
+        assert_eq!(document["errors"][0]["kind"], kind, "{value}");
+        assert_eq!(document["work"]["requests"], 0, "{value}");
+    }
+    assert_eq!(server.requests(), Vec::<String>::new());
+    for asked in [&["--version"][..], &["help"]] {
+        let output = sandbox
+            .command(asked)
+            .env("FETCHLOOM_OFFLINE", "yes")
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "{asked:?}");
+    }
+    Ok(())
+}

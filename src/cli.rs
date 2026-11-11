@@ -266,6 +266,25 @@ fn rate_wait(host: &str, quota: Option<u64>, window: Option<Duration>, wait: Dur
     )
 }
 
+/// whether `FETCHLOOM_OFFLINE`, as `value` holds it, asks for offline mode: `true` or `1`, and
+/// `false`, `0`, unset or empty for no, as the settings read a switch. any other value fails
+/// rather than letting a run meant to be offline go online.
+fn offline(value: Option<std::ffi::OsString>) -> Result<bool, Error> {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return Ok(false);
+    };
+    let text = value.to_string_lossy();
+    match text.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Ok(true),
+        "false" | "0" => Ok(false),
+        _ => Err(Error::new(
+            Kind::Usage,
+            format!("FETCHLOOM_OFFLINE is \"{text}\", which is not true or false"),
+        )
+        .help("set FETCHLOOM_OFFLINE to true to work offline, or unset it to work online")),
+    }
+}
+
 /// when large downloads split, by `FETCHLOOM_SPLIT`: `0` never, `1` from the first answer, and
 /// otherwise once one stream proves slow. splitting from the start lost in the lab on lan and
 /// home, while it won on far, where one stream is slow.
@@ -458,10 +477,6 @@ pub(crate) fn run() -> ExitCode {
     if let Some(refused) = &logs.refused {
         context.output.warn(refused);
     }
-    context.offline = net::Offline::from_settings(
-        global.offline,
-        var("FETCHLOOM_OFFLINE").is_some_and(|value| value == "1"),
-    );
     context.yes = global.yes;
     context.split = splits(var("FETCHLOOM_SPLIT"));
     context.building = var("FETCHLOOM_BUILDING")
@@ -512,6 +527,12 @@ pub(crate) fn run() -> ExitCode {
     let Some(command) = args.command else {
         return execute(context, None, started);
     };
+    match offline(var("FETCHLOOM_OFFLINE")) {
+        Ok(environment) => {
+            context.offline = net::Offline::from_settings(global.offline, environment);
+        }
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
     let file = match File::read(&var) {
         Ok(file) => file,
         Err(error) => return finish::<()>(&context, name, Err(error), started),
@@ -1427,6 +1448,33 @@ mod tests {
                 "'a'\"'\"'b'"
             }
         );
+    }
+
+    /// `FETCHLOOM_OFFLINE` reads true and false as `FETCHLOOM_MIRRORS_ONLY` does, and a value it
+    /// cannot read is a usage error naming it, never a run that goes online.
+    #[test]
+    fn the_offline_variable_takes_true_or_false_and_refuses_the_rest() {
+        let read = |value: Option<&str>| offline(value.map(std::ffi::OsString::from));
+        for (value, expected) in [
+            (None, false),
+            (Some(""), false),
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some(" TRUE "), true),
+            (Some("0"), false),
+            (Some("false"), false),
+            (Some("False"), false),
+        ] {
+            assert_eq!(read(value).ok(), Some(expected), "{value:?}");
+        }
+        for value in ["yes", "2", "on", "1.0"] {
+            let error = read(Some(value)).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{value}");
+            assert_eq!(
+                error.to_string(),
+                format!("FETCHLOOM_OFFLINE is \"{value}\", which is not true or false")
+            );
+        }
     }
 
     #[test]
