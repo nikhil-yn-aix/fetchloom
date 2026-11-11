@@ -165,7 +165,7 @@ warning: clean's pinned result is not on this machine or a mirror, so it is left
          Ok nothing to place in data until clean is built
 ```
 
-`sync clean`, which names the recipe, and `sync --locked` stop instead with `build.needed`, exit 60, before anything is placed.
+`sync clean`, which names the recipe, stops instead with `build.needed`, exit 60, before anything is placed. `sync --locked` places every other file first, from the cache, a mirror or its source, so a source that changed a pinned file still fails it with `integrity.mismatch`, exit 30. it then stops with `build.needed`, exit 60, without the warning, and its JSON `result` keeps what it placed, with the recipes in `result.placement.unbuilt`.
 
 a recipe data.lock pins no result of yet has nothing to place: a sync of every dataset warns `clean is not built yet` with the build as help and exits 0, while `sync clean` stops with `build.needed`, exit 60.
 

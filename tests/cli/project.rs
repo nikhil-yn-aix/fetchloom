@@ -2428,3 +2428,63 @@ fn a_size_the_pinned_bytes_do_not_have_stops_until_data_lock_is_restored() -> Re
     assert_eq!(server.requests().len(), 1, "only the add downloaded");
     Ok(())
 }
+
+/// a fresh clone of a project with a recipe, on an empty cache, as a CI runner has it, the files
+/// a clone has: data.toml, data.lock, data.lock.d and the recipe's code.
+fn fresh_with_recipe(sandbox: &Sandbox, name: &str) -> Result<std::path::PathBuf> {
+    let folder = clone(sandbox, name)?;
+    fs::copy(sandbox.work().join("clean.py"), folder.join("clean.py"))?;
+    fs::create_dir_all(folder.join("data.lock.d"))?;
+    for part in fs::read_dir(sandbox.work().join("data.lock.d"))? {
+        let part = part?;
+        fs::copy(
+            part.path(),
+            folder.join("data.lock.d").join(part.file_name()),
+        )?;
+    }
+    Ok(folder)
+}
+
+/// a locked sync on a fresh runner: data.lock pins clean's result, which only a build makes
+/// here, beside iris, which its source serves. the sync places iris before it stops with
+/// build.needed, and its JSON keeps what it placed, so a job that checks its sources still
+/// checks them: a source that changed iris fails with the mismatch instead.
+#[test]
+fn a_locked_sync_places_what_sources_serve_before_it_stops_for_a_build() -> Result {
+    let sandbox = Sandbox::new()?;
+    let changed: &[u8] = b"sepal_length,species\n9.9,changed\n";
+    let server = Server::start(
+        PATH,
+        vec![
+            file(IRIS, "\"v1\""),
+            file(IRIS, "\"v1\""),
+            file(changed, "\"v2\""),
+        ],
+    )?;
+    crate::build::with_recipe(&sandbox, &server)?;
+    crate::build::pin_clean(&sandbox, crate::build::CODE, &[])?;
+    let runner = fresh_with_recipe(&sandbox, "runner")?;
+    let output = sandbox
+        .command_in(&runner, &["--json", "sync", "--locked", "--yes"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("runner-cache")?)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(60), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "build.needed", "{document}");
+    assert_eq!(document["result"]["placement"]["placed"], 1, "{document}");
+    assert_eq!(
+        document["result"]["placement"]["unbuilt"],
+        serde_json::json!(["clean"]),
+        "{document}"
+    );
+    assert_eq!(fs::read(runner.join("data/iris/iris.csv"))?, IRIS);
+    let drifted = fresh_with_recipe(&sandbox, "drifted")?;
+    let output = sandbox
+        .command_in(&drifted, &["--json", "sync", "--locked", "--yes"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("drifted-cache")?)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(30), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "integrity.mismatch");
+    Ok(())
+}

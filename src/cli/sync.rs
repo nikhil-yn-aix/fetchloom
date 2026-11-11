@@ -116,8 +116,9 @@ pub(super) struct Loop<'a> {
     /// whether a person said yes to going on though the cache's disk may lack room, which says
     /// yes to the size of every download in the run as well.
     roomy: AtomicBool,
-    /// whether a pinned result found nowhere stops a run of every dataset, as `sync --locked`
-    /// asks, rather than being left out with a warning.
+    /// whether a pinned result found nowhere ends a run of every dataset with `build.needed`, as
+    /// `sync --locked` asks, once the rest is in place, rather than being left out with a
+    /// warning.
     stops_on_unbuilt: bool,
 }
 
@@ -144,8 +145,9 @@ impl<'a> Loop<'a> {
         }
     }
 
-    /// a pinned result that neither the cache nor a mirror holds stops the run, when `stop` says
-    /// so, even where a run of every dataset would leave it out.
+    /// a pinned result that neither the cache nor a mirror holds ends the run with
+    /// `build.needed`, when `stop` says so, even where a run of every dataset would leave it out
+    /// with a warning. the caller turns what the placement left out into that error.
     pub(super) fn stopping_on_unbuilt(mut self, stop: bool) -> Self {
         self.stops_on_unbuilt = stop;
         self
@@ -247,8 +249,9 @@ impl<'a> Loop<'a> {
     }
 
     /// what becomes of the results `placing` needs bytes of that `holds` says the cache lacks:
-    /// a run of every dataset leaves them out with a warning and places the rest, while a run
-    /// that names them, or `sync --locked`, stops with the build that makes them.
+    /// a run of every dataset leaves them out and places the rest, with a warning, or for `sync
+    /// --locked` without one, since it ends with the build that makes them once the rest is in
+    /// place. a run that names them stops with that build before anything.
     fn settle_unbuilt(
         &self,
         placing: &mut Placing<'_>,
@@ -258,8 +261,12 @@ impl<'a> Loop<'a> {
         if unbuilt.is_empty() {
             return Ok(());
         }
-        if self.stops_on_unbuilt || self.scope != Scope::All {
+        if self.scope != Scope::All {
             return Err(unbuilt_here(&unbuilt));
+        }
+        if self.stops_on_unbuilt {
+            placing.leave_out(&unbuilt);
+            return Ok(());
         }
         let (said, them) = match unbuilt.as_slice() {
             [name] => (

@@ -232,22 +232,47 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
     .await?;
     // a project that became a git repository after its add gets its ignore rule now
     ignore_data(&work, &manifest)?;
-    tell_synced(
-        context,
-        &project,
-        &manifest,
-        &work.scope,
-        lock_changed,
-        &placement,
-        args.verify,
-    );
-    Ok(Report {
-        selected: Some(work.scope.clone()),
-        project: project.root,
-        datasets: pins,
-        lock_changed,
-        placement: Some(placement),
-        ..Report::default()
+    // a locked run places what the sources serve before it stops for the results only a
+    // build makes, so a job still checks every source
+    let stops = args.locked && !placement.unbuilt.is_empty();
+    if !stops {
+        tell_synced(
+            context,
+            &project,
+            &manifest,
+            &work.scope,
+            lock_changed,
+            &placement,
+            args.verify,
+        );
+    }
+    unbuilt_locked(
+        stops,
+        Report {
+            selected: Some(work.scope.clone()),
+            project: project.root,
+            datasets: pins,
+            lock_changed,
+            placement: Some(placement),
+            ..Report::default()
+        },
+    )
+}
+
+/// `report`, or when the run `stops` for the recipes whose pinned results its placement left
+/// out, the `build.needed` error for them, which keeps it.
+fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
+    let unbuilt = report
+        .placement
+        .as_ref()
+        .map_or(&[][..], |placement| &placement.unbuilt);
+    if !stops || unbuilt.is_empty() {
+        return Ok(report);
+    }
+    let error = engine::unbuilt_here(unbuilt);
+    Err(match serde_json::to_value(&report) {
+        Ok(value) => error.with_result(value),
+        Err(_) => error,
     })
 }
 
@@ -502,17 +527,23 @@ async fn preview_sync(
     .await?;
     preview_ignore(&work, manifest)?;
     let nothing = !outcome.lock_changed && outcome.placed.changes_nothing();
-    dry_run_done(
-        &context.output,
-        nothing
-            .then(|| in_place(&work.scope, args.verify))
-            .as_deref(),
-    );
+    let stops = args.locked && !outcome.placed.placement.unbuilt.is_empty();
+    if !stops {
+        dry_run_done(
+            &context.output,
+            nothing
+                .then(|| in_place(&work.scope, args.verify))
+                .as_deref(),
+        );
+    }
     let pins = outcome.pins.clone();
-    Ok(Report {
-        selected: Some(work.scope.clone()),
-        ..Report::dry(project.root.clone(), pins, outcome)
-    })
+    unbuilt_locked(
+        stops,
+        Report {
+            selected: Some(work.scope.clone()),
+            ..Report::dry(project.root.clone(), pins, outcome)
+        },
+    )
 }
 
 pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, Error> {

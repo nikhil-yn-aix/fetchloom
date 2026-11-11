@@ -72,10 +72,17 @@ it hashes every placed file, downloads again any whose bytes differ from `data.l
 
 ## recipes
 
-in a project with [recipes](recipes.md), `fetchloom sync --locked` places each pinned result from the cache or a mirror, and fails with `build.needed`, exit 60, when a recipe changed since it was built or neither holds its result, as on a fresh runner. a job that builds runs the repository's code, so give it only branches you trust. `--locked` makes the build fail with `lock.outdated`, exit 1, before anything is fetched or run, rather than build what `data.lock` does not pin as `data.toml` asks, and it never writes `data.lock`:
+in a project with [recipes](recipes.md), `fetchloom sync --locked` places each pinned result from the cache or a mirror, and fails with `build.needed`, exit 60, when a recipe changed since it was built or neither holds its result, as on a fresh runner. there it places every other file first, so a source that changed a pinned file fails the job with `integrity.mismatch`, exit 30, as without recipes, and `result.placement.unbuilt` names the recipes it left out. a job that builds runs the repository's code, so give it only branches you trust. `--locked` makes the build fail with `lock.outdated`, exit 1, before anything is fetched or run, rather than build what `data.lock` does not pin as `data.toml` asks, and it never writes `data.lock`:
 
 ```sh
 fetchloom build --locked --json
+```
+
+`build` places only the results it builds and the datasets those recipes are made from. a job that also reads the project's other datasets runs `fetchloom sync --locked` after the build, which places the rest and finds the results in the cache:
+
+```sh
+fetchloom build --locked --json
+fetchloom sync --locked --json
 ```
 
 a job that builds commits nothing: commit `data.lock` and `data.lock.d` from the machine you built on, so a runner places the same results. a step that fails exits 60 with `build.failed`, and the last lines of its output are in `errors[0].details`.
