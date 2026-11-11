@@ -99,7 +99,7 @@ a file already at the path stays as it is unless `--force` asks to replace it:
 |---|---|---|
 | holds what the link serves | `Ok`, exit 0, untouched | the same |
 | holds other bytes | `local.not_empty`, exit 50, untouched | replaced |
-| is a link to nothing, or a special file such as a pipe | `local.not_empty`, exit 50, untouched | replaced |
+| is a link to nothing, or a special file such as a pipe | `local.not_empty`, exit 50, untouched; the error names where a link to nothing points | replaced |
 
 a file that still holds what the link served last time, while the link serves other bytes now, is refused the same way, and the error says its source changed it since. a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
 
@@ -187,4 +187,5 @@ in [mirror-only mode](../mirrors.md#mirror-only-mode) `get` is refused before an
 | `hf:datasets/scikit-learn/iris@main has no file iris.csv` | the link names a file its site lists under another name, often in other case | write the name the help gives in the link |
 | `-o writes one file, and <link> has <n> files` | `-o` writes exactly one file | keep one with `--select`, or put them all in a folder with `--dir` |
 | `data.csv already exists and holds other bytes than the link serves now` | `-o` never replaces a file without being asked | choose another name with `-o`, or add `--force` |
+| `--force replaces only the file -o names, so it cannot go with --dir` | `--force` replaces the one file `-o` writes, and get never replaces the files of a `--dir` folder | leave out `--force` and give `--dir` an empty folder, or write one file with `-o <file> --force` |
 | `data.csv already exists, and its bytes are not the ones --sha256 names` | the hash or the file is not the one you meant | check the hash; if it is right, choose another name with `-o`, or add `--force` |

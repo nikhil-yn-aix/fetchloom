@@ -594,6 +594,42 @@ fn output_refusing_a_file_the_source_changed_says_so() -> Result {
     Ok(())
 }
 
+/// a link to nothing at the `-o` path is named as what it is, and stays until `--force` replaces
+/// the link itself.
+#[cfg(unix)]
+#[test]
+fn output_names_a_link_to_nothing_in_its_way() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let placed = sandbox.work().join("data.csv");
+    std::os::unix::fs::symlink("nowhere.csv", &placed)?;
+    let refused = sandbox.run(&["--json", "get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(
+        refused.status.code(),
+        Some(50),
+        "{}",
+        text(&refused.stdout)?
+    );
+    let error = &json(&refused)?["errors"][0];
+    assert_eq!(error["kind"], "local.not_empty");
+    assert_eq!(
+        error["message"],
+        "data.csv already exists and is a link to nowhere.csv, which does not exist"
+    );
+    assert_eq!(
+        error["help"],
+        "add --force to replace the link, or choose another name with -o"
+    );
+    let forced = sandbox.run(&["get", &server.url, "-o", "data.csv", "--force"])?;
+    assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+    assert_eq!(fs::read(&placed)?, IRIS);
+    assert!(
+        !sandbox.work().join("nowhere.csv").exists(),
+        "the link was replaced, not followed"
+    );
+    Ok(())
+}
+
 #[test]
 fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     let sandbox = Sandbox::new()?;

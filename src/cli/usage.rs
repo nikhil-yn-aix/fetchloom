@@ -92,6 +92,22 @@ fn typed(err: &clap::Error, kind: ContextKind) -> Vec<String> {
     }
 }
 
+/// options that cannot go together for a reason one sentence gives better than clap's words, as
+/// the message and the help: --force replaces the one file -o names, and get never replaces the
+/// files of a --dir folder.
+fn explained(err: &clap::Error) -> Option<(&'static str, &'static str)> {
+    if err.kind() != ErrorKind::ArgumentConflict {
+        return None;
+    }
+    let arg = context_value(err, ContextKind::InvalidArg)?;
+    let prior = context_value(err, ContextKind::PriorArg)?;
+    let pair = [bare(&arg), bare(&prior)];
+    (pair.contains(&"--force") && pair.contains(&"--dir")).then_some((
+        "--force replaces only the file -o names, so it cannot go with --dir",
+        "leave out --force and give --dir an empty folder, or write one file with -o <file> --force",
+    ))
+}
+
 /// the error line, in fetchloom's words where clap's are stiff.
 fn message(err: &clap::Error) -> String {
     let named = |kind| context_value(err, kind);
@@ -144,6 +160,9 @@ fn habit(command: &str) -> Option<&'static str> {
 }
 
 fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
+    if let Some((message, help)) = explained(err) {
+        return Error::new(Kind::Usage, message).help(help);
+    }
     let named = |kind| context_value(err, kind);
     let message = message(err);
     // a missing or wrong value is easiest to fix next to the usage line
@@ -463,6 +482,30 @@ mod tests {
             status.help.as_deref(),
             Some("`fetchloom auth` alone lists each account and whether it is signed in")
         );
+        Ok(())
+    }
+
+    /// --force replaces the one file -o names, so with --dir it says that, in either order,
+    /// rather than only that the two cannot go together.
+    #[test]
+    fn force_with_a_folder_says_what_force_replaces() -> Result<(), Box<dyn std::error::Error>> {
+        for arguments in [
+            &["fetchloom", "get", "zenodo:1", "--dir", "a", "--force"][..],
+            &["fetchloom", "get", "zenodo:1", "--force", "--dir", "a"],
+        ] {
+            let error = problem(arguments)?;
+            assert_eq!(error.kind, Kind::Usage);
+            assert_eq!(
+                error.message,
+                "--force replaces only the file -o names, so it cannot go with --dir"
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "leave out --force and give --dir an empty folder, or write one file with -o <file> --force"
+                )
+            );
+        }
         Ok(())
     }
 

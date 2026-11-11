@@ -105,7 +105,9 @@ enum Existing {
     Missing,
     /// a file, or a link to one, by the hash of its bytes.
     Holds(Sha256),
-    /// a link that leads nowhere, or a special file such as a pipe.
+    /// a link that leads nowhere, by where it points.
+    Dangling(PathBuf),
+    /// a special file such as a pipe.
     Other,
 }
 
@@ -171,7 +173,7 @@ fn existing(path: &Path) -> Result<Existing, Error> {
             .map_err(|err| unreadable(&err)),
         Ok(_) => Ok(Existing::Other),
         Err(err) if err.kind() == io::ErrorKind::NotFound => match fs::symlink_metadata(path) {
-            Ok(_) => Ok(Existing::Other),
+            Ok(_) => Ok(Existing::Dangling(fs::read_link(path).unwrap_or_default())),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Existing::Missing),
             Err(err) => Err(unreadable(&err)),
         },
@@ -666,17 +668,23 @@ fn refused(shown: &str, existing: &Existing, wanted: Wanted, digest: &Sha256) ->
         ))
         .help("check the hash first. if it is right, choose another name with -o, or add --force to replace the file");
     }
-    let what = match existing {
-        Existing::Other => "is no file fetchloom can read".to_owned(),
+    let (what, it) = match existing {
+        Existing::Dangling(target) => (
+            format!("is a link to {}, which does not exist", target.display()),
+            "the link",
+        ),
+        Existing::Other => ("is a special file, such as a pipe".to_owned(), "it"),
         Existing::Missing | Existing::Holds(_) => {
-            format!("holds other bytes than {}", wanted.said())
+            (format!("holds other bytes than {}", wanted.said()), "it")
         }
     };
     Error::new(
         Kind::LocalNotEmpty,
         format!("{shown} already exists and {what}"),
     )
-    .help("add --force to replace it, or choose another name with -o")
+    .help(format!(
+        "add --force to replace {it}, or choose another name with -o"
+    ))
 }
 
 fn unwritten(shown: &str, err: &io::Error) -> Error {
@@ -931,6 +939,16 @@ mod tests {
             (Existing::Holds(wanted), true, Step::Keep),
             (Existing::Holds(other), false, Step::Refuse),
             (Existing::Holds(other), true, Step::Replace),
+            (
+                Existing::Dangling(PathBuf::from("nowhere")),
+                false,
+                Step::Refuse,
+            ),
+            (
+                Existing::Dangling(PathBuf::from("nowhere")),
+                true,
+                Step::Replace,
+            ),
             (Existing::Other, false, Step::Refuse),
             (Existing::Other, true, Step::Replace),
         ] {
