@@ -167,6 +167,7 @@ projects keep their `data.toml`, `data.lock` and `data/`; delete them with the p
 | try data without a project | [`get`](commands/get.md) |
 | see missing or edited files | [`status`](commands/status.md) |
 | use another site, such as kaggle or hugging face | [sources](sources/README.md) |
+| move a download step from curl, gdown, kaggle or pooch | [other tools](other-tools.md) |
 | work without internet | [offline](concepts.md#offline) |
 | keep data between sessions of a hosted notebook or a container | [notebooks and containers](notebooks.md) |
 | change files in `data/` | [writable copies](concepts.md#placement) |

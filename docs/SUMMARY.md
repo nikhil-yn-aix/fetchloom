@@ -7,6 +7,7 @@
 - [user guide](user/README.md)
   - [getting started](user/getting-started.md)
   - [concepts](user/concepts.md)
+  - [other tools](user/other-tools.md)
   - [recipes](user/recipes.md)
   - [commands](user/commands/README.md)
     - [add](user/commands/add.md)
