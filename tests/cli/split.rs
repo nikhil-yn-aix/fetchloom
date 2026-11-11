@@ -93,7 +93,7 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
         if child.try_wait()?.is_some() {
             return Err("the first download ended before its split checkpoint".into());
         }
-        Ok(!server.parts().is_empty() && saved_ranges(&sandbox))
+        Ok(!server.parts().is_empty() && kept(&sandbox).is_some())
     });
     let ended = child.try_wait()?;
     child.kill()?;
@@ -103,6 +103,7 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
         ended.is_none() && !server.parts().is_empty(),
         "the first run ended or never split before the kill"
     );
+    let (prefix, ranges) = kept(&sandbox).ok_or("the killed run's record lost its ranges")?;
 
     server.pace(0);
     let before = server.requests().len();
@@ -110,19 +111,32 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let work = &json(&output)?["work"];
     assert_eq!(work["resumes"], 1, "{work}");
-    let asked = &server.requests()[before];
-    let from = asked
-        .lines()
-        .find_map(|line| line.strip_prefix("range: bytes=")?.strip_suffix('-'))
-        .and_then(|start| start.parse::<u64>().ok())
-        .ok_or_else(|| format!("the second run did not continue: {asked}"))?;
-    assert!(asked.contains("if-range: \"v1\""), "{asked}");
-    let down = work["bytes_down"].as_u64().unwrap_or(LARGE);
-    assert!(
-        from > 0 && down < LARGE - from,
-        "the second run continued from {from} and downloaded {down} bytes, so the ranges past it \
-         came again"
+    let requests = &server.requests()[before..];
+    assert_eq!(
+        asked(&requests[0]),
+        Some((prefix, None)),
+        "the second run did not continue from the prefix kept: {}",
+        requests[0]
     );
+    assert!(requests[0].contains("if-range: \"v1\""), "{}", requests[0]);
+    // bytes_down cannot show this: the first answer runs on into the first range kept until it
+    // is dropped, and the chunk read then can be larger than that range
+    let parts: Vec<_> = requests[1..]
+        .iter()
+        .map(|head| asked(head).unwrap_or((0, None)))
+        .collect();
+    for (start, end) in ranges {
+        assert!(
+            parts
+                .iter()
+                .all(|&(from, to)| from >= end || to.is_some_and(|to| to <= start)),
+            "bytes {start} to {end} were kept, and asked for again: {parts:?}"
+        );
+        assert!(
+            end == LARGE || parts.iter().any(|&(from, _)| from == end),
+            "the second run did not skip the bytes {start} to {end} it kept: {parts:?}"
+        );
+    }
     assert_eq!(
         fs::read(sandbox.work().join("large").join("large.bin"))?,
         body
@@ -130,27 +144,47 @@ fn a_download_killed_while_split_continues_from_what_it_kept() -> Result {
     Ok(())
 }
 
-/// the on-disk receipt must prove there is work beyond the prefix for the next run to reuse.
-fn saved_ranges(sandbox: &Sandbox) -> bool {
-    partial_files(&sandbox.cache())
+/// the prefix and the ranges past it that the download's record on disk keeps, ranges that touch
+/// joined. none unless it keeps both.
+fn kept(sandbox: &Sandbox) -> Option<(u64, Vec<(u64, u64)>)> {
+    let record = partial_files(&sandbox.cache())
         .into_iter()
         .filter(|path| {
             path.extension()
                 .is_some_and(|extension| extension == "json")
         })
         .filter_map(|path| fs::read(path).ok())
-        .filter_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .any(|record| {
-            let received = record["received"].as_u64().unwrap_or_default();
-            received > 0
-                && record["ranges"].as_array().is_some_and(|ranges| {
-                    ranges.iter().any(|range| {
-                        let start = range["start"].as_u64().unwrap_or_default();
-                        let end = range["end"].as_u64().unwrap_or_default();
-                        start > received && end > start
-                    })
-                })
-        })
+        .find_map(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())?;
+    let prefix = record["received"].as_u64().filter(|&prefix| prefix > 0)?;
+    let mut ranges: Vec<(u64, u64)> = record["ranges"]
+        .as_array()?
+        .iter()
+        .filter_map(|range| Some((range["start"].as_u64()?, range["end"].as_u64()?)))
+        .filter(|&(start, end)| start > prefix && end > start)
+        .collect();
+    ranges.sort_unstable();
+    let mut joined: Vec<(u64, u64)> = Vec::new();
+    for (start, end) in ranges {
+        match joined.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => joined.push((start, end)),
+        }
+    }
+    (!joined.is_empty()).then_some((prefix, joined))
+}
+
+/// the bytes a request's `Range` asks for: where they start, and where they end unless they run
+/// to the end of the file.
+fn asked(head: &str) -> Option<(u64, Option<u64>)> {
+    let range = head
+        .lines()
+        .find_map(|line| line.strip_prefix("range: bytes="))?;
+    let (start, end) = range.trim().split_once('-')?;
+    let end = match end {
+        "" => None,
+        end => Some(end.parse::<u64>().ok()?.checked_add(1)?),
+    };
+    Some((start.parse().ok()?, end))
 }
 
 #[test]
