@@ -224,7 +224,6 @@ impl Terminate {
             if terminate.recv().await.is_none() {
                 return;
             }
-            // asked first, so the step's end reads as the stop it is
             stop.ask();
             output.stopping();
             step::end_running();
@@ -634,14 +633,13 @@ impl<'a> Building<'a> {
                 format!("data.lock is out of date: {name} changed since it was built"),
             ));
         };
-        let (tree, files) = (pinned.tree, pinned.files.clone());
+        let (tree, files) = (pinned.tree, &pinned.files);
         for read in step.inputs.iter().filter(|read| read.made) {
             let made = self
                 .lock
                 .result(&read.name)
-                .map(|result| result.files.clone())
-                .unwrap_or_default();
-            if !self.fetched(&read.name, &made).await? {
+                .map_or(&[][..], |result| result.files.as_slice());
+            if !self.fetched(&read.name, made).await? {
                 output.mark(
                     "Skipped",
                     &format!(
@@ -649,7 +647,7 @@ impl<'a> Building<'a> {
                         read.name
                     ),
                 );
-                return Ok(done(Did::Skipped, name, key, tree, &files));
+                return Ok(done(Did::Skipped, name, key, tree, files));
             }
         }
         let sources: BTreeSet<&str> = step
@@ -663,8 +661,8 @@ impl<'a> Building<'a> {
             .await?;
         output.step("Running", &format!("{name} · {}", self.command(name)));
         let made = tokio::task::block_in_place(|| self.make(&step, key, Some(tree)))?;
-        let compared = compare(&files, &made.members);
-        let mut done = done(Did::Ran, name, key, tree, &files);
+        let compared = compare(files, &made.members);
+        let mut done = done(Did::Ran, name, key, tree, files);
         done.log = Some(log_shown(name));
         done.seconds = Some(made.ran.took.as_secs_f64());
         if made.tree == tree {
@@ -708,17 +706,17 @@ impl<'a> Building<'a> {
             let pinned = self
                 .lock
                 .result(&name)
-                .filter(|pinned| Some(pinned.key) == key)
-                .map(|pinned| (pinned.key, pinned.tree, pinned.files.clone()));
+                .filter(|pinned| Some(pinned.key) == key);
             if !check
                 && !after
-                && let Some((key, tree, files)) = &pinned
+                && let Some(pinned) = pinned
             {
+                let (key, tree, files) = (pinned.key, pinned.tree, &pinned.files);
                 if whole(&self.work.cache, files) {
                     output.step("Up to date", &name);
                     self.report
                         .steps
-                        .push(done(Did::UpToDate, &name, *key, *tree, files));
+                        .push(done(Did::UpToDate, &name, key, tree, files));
                     continue;
                 }
                 if self.fetched(&name, files).await? {
@@ -728,7 +726,7 @@ impl<'a> Building<'a> {
                     );
                     self.report
                         .steps
-                        .push(done(Did::Fetched, &name, *key, *tree, files));
+                        .push(done(Did::Fetched, &name, key, tree, files));
                     continue;
                 }
             }
@@ -736,8 +734,7 @@ impl<'a> Building<'a> {
                 if !running.contains(&read.name)
                     && let Some(result) = self.lock.result(&read.name)
                 {
-                    let files = result.files.clone();
-                    self.fetched(&read.name, &files).await?;
+                    self.fetched(&read.name, &result.files).await?;
                 }
             }
             let sources: BTreeSet<&str> = step
@@ -753,8 +750,8 @@ impl<'a> Building<'a> {
                 "Prepared",
                 &format!("{name} · what it reads is on this machine"),
             );
-            let (tree, files) = match &pinned {
-                Some((_, tree, files)) => (Some(*tree), files.as_slice()),
+            let (tree, files) = match pinned {
+                Some(pinned) => (Some(pinned.tree), pinned.files.as_slice()),
                 None => (None, &[][..]),
             };
             self.report.steps.push(Done {
@@ -808,25 +805,21 @@ impl<'a> Building<'a> {
         let step = Step::read(&project.root, &self.manifest, &self.lock, name)?
             .ok_or_else(|| Error::new(Kind::ProjectInvalid, format!("{name} is no recipe")))?;
         let key = keyed(&step)?;
-        let pinned = self
-            .lock
-            .result(name)
-            .filter(|pinned| pinned.key == key)
-            .map(|pinned| (pinned.tree, pinned.files.clone()));
-        if let Some((tree, files)) = &pinned {
-            if whole(&self.work.cache, files) {
+        let pinned = self.lock.result(name).filter(|pinned| pinned.key == key);
+        if let Some(pinned) = pinned {
+            if whole(&self.work.cache, &pinned.files) {
                 output.step("Up to date", name);
-                return Ok(done(Did::UpToDate, name, key, *tree, files));
+                return Ok(done(Did::UpToDate, name, key, pinned.tree, &pinned.files));
             }
-            if self.fetched(name, files).await? {
+            if self.fetched(name, &pinned.files).await? {
                 output.step(
                     "Fetched",
-                    &format!("{name} · {} as data.lock pins it", sized(files)),
+                    &format!("{name} · {} as data.lock pins it", sized(&pinned.files)),
                 );
-                return Ok(done(Did::Fetched, name, key, *tree, files));
+                return Ok(done(Did::Fetched, name, key, pinned.tree, &pinned.files));
             }
         }
-        let expected = pinned.map(|(tree, _)| tree);
+        let expected = pinned.map(|pinned| pinned.tree);
         let _hold = tokio::task::block_in_place(|| {
             self.work.cache.hold_key(&key, &self.context.stop, || {
                 output.step("Waiting", &format!("for another fetchloom building {name}"));
@@ -1548,14 +1541,16 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
             step.name
         ));
     }
-    let (folders, them) = match names.as_slice() {
-        [name] => (plan::folder(manifest, name), "it"),
-        _ => ("the data folder".to_owned(), "them"),
-    };
-    error.help(format!(
-        "the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and {folders} are as they were. the rebuild is kept: `fetchloom build --accept {}` pins {them}",
-        names.join(" ")
-    ))
+    let accept = format!("`fetchloom build --accept {}`", names.join(" "));
+    error.help(match names.as_slice() {
+        [name] => format!(
+            "the step is not reproducible, as one that uses the time or an unseeded random number is; data.lock and {} are as they were. the rebuild is kept: {accept} pins it",
+            plan::folder(manifest, name)
+        ),
+        _ => format!(
+            "the steps are not reproducible, as ones that use the time or an unseeded random number are; data.lock and the data folder are as they were. the rebuilds are kept: {accept} pins them"
+        ),
+    })
 }
 
 #[cfg(test)]

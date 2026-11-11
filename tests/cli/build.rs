@@ -1449,7 +1449,12 @@ fn checks_report_every_step() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     let tidy = "\n[datasets.tidy]\nfrom = [\"clean\"]\nrun = [\"recipe-step\", \"copy\", \"{clean}\", \"{out}\"]\n";
-    with(&sandbox, &server, &format!("{}{tidy}", recipe(&["random"])))?;
+    let noise = "\n[datasets.noise]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"random\", \"{iris}\", \"{out}\"]\n";
+    with(
+        &sandbox,
+        &server,
+        &format!("{}{tidy}{noise}", recipe(&["random"])),
+    )?;
     assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
     let output = build(&sandbox, &["--json", "build", "--check"])?;
     assert_eq!(output.status.code(), Some(60), "{}", text(&output.stdout)?);
@@ -1459,18 +1464,34 @@ fn checks_report_every_step() -> Result {
         .iter()
         .filter_map(|step| step["name"].as_str())
         .collect();
-    assert_eq!(names, ["clean", "tidy"]);
+    assert_eq!(names, ["clean", "noise", "tidy"]);
+    for differing in [&steps[0], &steps[1]] {
+        assert_eq!(
+            differing["check"]["changed"],
+            serde_json::json!(["random.bin"])
+        );
+    }
+    assert_eq!(steps[2]["check"]["matching"], 1);
+    assert_eq!(steps[2]["candidate"], Value::Null);
+    let (_, message, details, help, _) = error(&document);
+    assert_eq!(message, "clean and noise differ from data.lock");
     assert_eq!(
-        steps[0]["check"]["changed"],
-        serde_json::json!(["random.bin"])
+        details,
+        [
+            "clean: 0 of 1 files match data.lock",
+            "changed random.bin",
+            "noise: 0 of 1 files match data.lock",
+            "changed random.bin"
+        ]
     );
-    assert_eq!(steps[1]["check"]["matching"], 1);
-    assert_eq!(steps[1]["candidate"], Value::Null);
-    let (_, message, _, _, _) = error(&document);
-    assert_eq!(message, "clean differs from data.lock: 0 of 1 files match");
+    assert!(
+        help.contains("the rebuilds are kept: `fetchloom build --accept clean noise` pins them"),
+        "{help}"
+    );
+    let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
-        fs::read_to_string(sandbox.work().join("runs"))?,
-        "random\ncopy\nrandom\ncopy\n"
+        status["result"]["candidates"],
+        serde_json::json!(["clean", "noise"])
     );
     Ok(())
 }
