@@ -24,7 +24,7 @@ nextest 0.9.151 runs the ordinary unit and CLI tests, including the short Bolero
 
 `INSTA_UPDATE=no` forbids snapshot updates. insta 1.49.0 records the snapshot paths each run references through `INSTA_SNAPSHOT_REFERENCES_FILE`; the runner converts them to repository-relative reports. the `snapshots` job checks their union against every tracked `.snap` file and rejects unused, unknown or pending snapshots. it needs all native and filesystem jobs: a reflink-only snapshot is legitimately unused on ext4, but must be exercised on a cloning filesystem. this check adds no second test run. review snapshots locally as [building and testing](building-and-testing.md#update-snapshots) describes; CI never accepts them.
 
-`cargo test` still works locally. the recipe step is built before CI starts tests; a test reuses it without invoking cargo. a local cargo test still asks cargo to refresh it once, so edits to the example are not hidden by a stale executable. test executable and fixture paths prefer Cargo's runtime paths, so an archived build can run from a different checkout directory. no test changes the process environment.
+`cargo test` still works locally. the recipe step is built before CI starts tests; a test reuses it without invoking cargo. a local cargo test still asks cargo to refresh it once, so edits to the example are not hidden by a stale executable. test executable and fixture paths prefer Cargo's runtime paths, so an archived build can run from a different checkout directory. new fixture readers use `support::workspace()` rather than a compile-time manifest path, which still names the producer's checkout. no test changes the process environment.
 
 ## selected-test proof and reports
 
@@ -52,7 +52,7 @@ one linux job has separately named checks. each check runs even after an earlier
 | advisories, licenses, duplicate crates and sources | cargo-deny 0.20.2 with deny.toml |
 | workflow security and malformed workflow input | zizmor 1.32.0, offline with strict collection |
 | unused dependencies | cargo-machete 0.9.2 with metadata, followed by a Cargo.lock cleanliness check |
-| spelling | typos 1.52.2, excluding raw fixtures, snapshots, generated benchmark results and lockfiles |
+| spelling | typos 1.52.0, excluding raw fixtures, snapshots, generated benchmark results and lockfiles |
 | shell installer | ShellCheck 0.11.0 with `-s dash` |
 | PowerShell installer | PSScriptAnalyzer 1.25.0, warnings/errors except Write-Host progress on supported PowerShell 5.1+ |
 | benchmark harness logic | `python3 -m unittest discover -s bench`, using only the standard library |
