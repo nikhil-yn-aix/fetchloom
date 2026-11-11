@@ -142,7 +142,7 @@ the build places the result and retires what the add placed of raw, unchanged fi
          Ok pinned clean's result in data.lock
 ```
 
-`status` and `list` say raw is not placed, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them:
+to leave a bad sample of raw out of what clean reads, run [`fetchloom drop`](commands/drop.md#raw-data-only-recipes-read) with the path the file would have in the data folder, as for any dataset. `status` and `list` say raw is not placed, `fetchloom path raw` refuses it with exit 2, and `fetchloom cache` counts its bytes as read only by builds; `cache gc` keeps them, since the next build reads them:
 
 ```text
  Not placed raw · place = false in data.toml

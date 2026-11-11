@@ -96,8 +96,9 @@ pub(super) async fn run(context: &Context, args: Drop) -> Result<Report, Error> 
         .iter()
         .map(|path| in_data_folder(&project.root, &here, &manifest.data_dir, path))
         .collect::<Result<Vec<_>, _>>()?;
-    let planned = plan::from_cache(&manifest, &lock, &cache)?;
-    let asked = asked(&manifest, &planned, &paths)?;
+    // a dataset with `place = false` is planned where its files would land, so they drop too
+    let planned = plan::inputs(&manifest, &lock, &cache)?;
+    let asked = asked(&manifest, &lock, &cache, &planned, &paths)?;
     let edits = edits(&manifest, &lock, &cache, &asked)?;
     refuse_what_breaks(&manifest, &lock, &planned, &cache, &edits)?;
     let (updated, new_lock) = written(&text, &lock, &edits)?;
@@ -208,10 +209,12 @@ fn in_data_folder(root: &Path, here: &Path, data_dir: &str, arg: &Path) -> Resul
 ///
 /// # Errors
 ///
-/// `usage` for a path that names no file data.lock places: a file of a recipe's result, one an
-/// archive this machine never unpacked may hold, or any other.
+/// `usage` for a path that names no planned file: a file of a recipe's result, one an archive
+/// this machine never unpacked may hold, one a pattern leaves out already, or any other.
 fn asked<'p, 'a>(
     manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
     planned: &'p Plan<'a>,
     paths: &[String],
 ) -> Result<Vec<Asked<'p, 'a>>, Error> {
@@ -225,7 +228,7 @@ fn asked<'p, 'a>(
     for path in paths {
         let found = named(&sorted, path);
         if found.targets.is_empty() {
-            return Err(unplanned(manifest, planned, path));
+            return Err(unplanned(manifest, lock, cache, planned, path));
         }
         if let Some(made) = found.targets.iter().find(|target| {
             manifest
@@ -275,8 +278,8 @@ fn made_by_recipe(path: &str, dataset: &str) -> Error {
     .help("choose its files inside the recipe's step instead")
 }
 
-/// why `path`, in the data folder, names no file data.lock places.
-fn unplanned(manifest: &Manifest, planned: &Plan, path: &str) -> Error {
+/// why `path`, in the data folder, names no planned file.
+fn unplanned(manifest: &Manifest, lock: &Lock, cache: &Cache, planned: &Plan, path: &str) -> Error {
     let within = |dataset: &str| {
         let folder = name::fold(&plan::folder(manifest, dataset));
         let path = name::fold(path);
@@ -300,11 +303,74 @@ fn unplanned(manifest: &Manifest, planned: &Plan, path: &str) -> Error {
             "run `fetchloom sync` first, so fetchloom knows what {archive} holds"
         ));
     }
-    Error::new(
-        Kind::Usage,
-        format!("{path} is not a file data.lock places"),
+    if let Some(by) = left_out(manifest, lock, cache, path) {
+        return Error::new(Kind::Usage, format!("{path} is left out already, {by}"))
+            .help("to bring it back, delete that pattern from data.toml and run `fetchloom sync`");
+    }
+    let owners: Vec<&str> = manifest
+        .datasets
+        .keys()
+        .filter(|name| within(name))
+        .map(String::as_str)
+        .collect();
+    let owners = match owners.split_last() {
+        None => "any dataset".to_owned(),
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+    };
+    Error::new(Kind::Usage, format!("{path} names no file of {owners}")).help(
+        "check the path; a file of your own needs no drop: delete it yourself if you do not need it",
     )
-    .help("it may be left out already; otherwise delete it yourself if you do not need it")
+}
+
+/// the pattern in data.toml that leaves out the file at `path`, in the data folder, as a few
+/// words naming it: an exclude or select of a members table, for a file an archive holds, or the
+/// dataset's own exclude, for a file its source lists.
+fn left_out(manifest: &Manifest, lock: &Lock, cache: &Cache, path: &str) -> Option<String> {
+    let asked = name::fold(path);
+    for locked in &lock.datasets {
+        let name = &locked.name;
+        let Some(source) = manifest.datasets.get(name).and_then(|entry| entry.source()) else {
+            continue;
+        };
+        let folder = plan::folder(manifest, name);
+        let pinned = archives::pinned(&locked.files);
+        let alone = pinned.len() == 1;
+        for archive in pinned.iter().filter_map(|pinned| match pinned {
+            Pinned::Archive(archive) => Some(archive),
+            Pinned::File(_) => None,
+        }) {
+            let (Some(filter), Some(members)) = (
+                source.members.get(&archive.file.path),
+                archive.recorded(cache),
+            ) else {
+                continue;
+            };
+            let found = members
+                .iter()
+                .zip(plan::unpacked_paths(archive.path(), alone, &members))
+                .find(|(_, placed)| name::fold(&format!("{folder}/{placed}")) == asked);
+            if let Some((member, _)) = found.filter(|(member, _)| !filter.keeps(&member.path)) {
+                let table = format!("members.\"{}\" of datasets.{name}", archive.file.path);
+                return Some(match filter.exclude.matching(&member.path) {
+                    Some(glob) => format!("by exclude \"{}\" in {table}", glob.as_str()),
+                    None => format!("since select in {table} does not keep it"),
+                });
+            }
+        }
+        if !asked.starts_with(&format!("{}/", name::fold(&folder))) {
+            continue;
+        }
+        let relative: Vec<&str> = path.split('/').skip(folder.split('/').count()).collect();
+        let relative = relative.join("/");
+        if let Some(glob) = source.exclude.iter().find(|glob| glob.matches(&relative)) {
+            return Some(format!(
+                "by exclude \"{}\" in datasets.{name}",
+                glob.as_str()
+            ));
+        }
+    }
+    None
 }
 
 /// the last part of a path, its file name.

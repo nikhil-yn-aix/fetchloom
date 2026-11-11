@@ -104,7 +104,7 @@ ref = "hf:datasets/scikit-learn/iris"
 place = false
 ```
 
-data.lock pins the dataset as before, since `place` changes where its files go, not what is pinned, and a recipe's key leaves it out too. no command places its files: once it is pinned, a sync downloads nothing for it, `build` reads it from the cache, fetching what the cache lacks, and `path` refuses it with `usage`, exit 2. setting it on a placed dataset makes the next sync remove what it placed there, unchanged files only, and say so once:
+data.lock pins the dataset as before, since `place` changes where its files go, not what is pinned, and a recipe's key leaves it out too. no command places its files: once it is pinned, a sync downloads nothing for it, `build` reads it from the cache, fetching what the cache lacks, `path` refuses it with `usage`, exit 2, and [`drop`](../commands/drop.md#raw-data-only-recipes-read) takes its files by the paths they would have in the data folder. setting it on a placed dataset makes the next sync remove what it placed there, unchanged files only, and say so once:
 
 ```text
     Retired data/raw · 1 file, since raw has place = false

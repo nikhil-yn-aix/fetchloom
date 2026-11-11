@@ -192,6 +192,12 @@ fn drop_of_a_listed_file_keeps_the_lock_current() -> Result {
         text(&status.stderr)?,
         "         Ok everything matches data.lock by size and time\n"
     );
+    let again = sandbox.run(&["--json", "drop", "data/set/notes [v1].md"])?;
+    assert_eq!(again.status.code(), Some(2));
+    assert_eq!(
+        json(&again)?["errors"][0]["message"],
+        "data/set/notes [v1].md is left out already, by exclude \"notes [[]v1].md\" in datasets.set"
+    );
     Ok(())
 }
 
@@ -303,7 +309,7 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
         (
             &["drop", "data/pets/notes.txt"],
             2,
-            "data/pets/notes.txt is not a file data.lock places",
+            "data/pets/notes.txt names no file of pets",
         ),
         (
             &["drop", "data/pets"],
@@ -354,6 +360,59 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
         "{}",
         text(&unknown.stderr)?
     );
+    Ok(())
+}
+
+/// a file of a dataset with `place = false`, raw data only recipes read, is dropped by the path
+/// it would have in the data folder, as for any dataset. a file left out already says so, naming
+/// the pattern, and a path that names no file says neither.
+#[test]
+fn drop_leaves_out_a_file_of_a_dataset_kept_out_of_the_data_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    let work = sandbox.work();
+    crate::recipes::unplace(&work, "pets")?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let lock = fs::read(work.join("data.lock"))?;
+    let output = sandbox.run(&["--json", "drop", "data/pets/images/dog_010_corrupt.png"])?;
+    ok(&output)?;
+    assert_eq!(
+        json(&output)?["result"]["dropped"],
+        json!([{"path": "data/pets/images/dog_010_corrupt.png", "dataset": "pets", "archive": "pets.zip", "pattern": "pets-v1/images/dog_010_corrupt.png"}])
+    );
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.ends_with("[datasets.pets.members.\"pets.zip\"]\nexclude = [\"pets-v1/images/dog_010_corrupt.png\"]\n"),
+        "{manifest}"
+    );
+    assert_eq!(fs::read(work.join("data.lock"))?, lock);
+    let keep = "check the path; a file of your own needs no drop: delete it yourself if you do not need it";
+    for (path, message, help) in [
+        (
+            "data/pets/images/dog_010_corrupt.png",
+            "data/pets/images/dog_010_corrupt.png is left out already, by exclude \"pets-v1/images/dog_010_corrupt.png\" in members.\"pets.zip\" of datasets.pets",
+            "to bring it back, delete that pattern from data.toml and run `fetchloom sync`",
+        ),
+        (
+            "data/pets/images/fish.png",
+            "data/pets/images/fish.png names no file of pets",
+            keep,
+        ),
+        (
+            "data/fish.png",
+            "data/fish.png names no file of any dataset",
+            keep,
+        ),
+    ] {
+        let output = sandbox.run(&["--json", "drop", path])?;
+        assert_eq!(output.status.code(), Some(2), "{path}");
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(
+            (&error["message"], &error["help"]),
+            (&json!(message), &json!(help))
+        );
+    }
+    assert_eq!(fs::read_to_string(work.join("data.toml"))?, manifest);
     Ok(())
 }
 
