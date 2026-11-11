@@ -983,6 +983,49 @@ fn two_builds_of_one_key_run_it_once() -> Result {
     Ok(())
 }
 
+/// a lab's shared cache often lets its group write the files fetchloom makes. a result recorded
+/// there is still one only its owner may change, so a clone building the same key reuses it.
+#[cfg(unix)]
+#[test]
+fn a_result_recorded_under_a_group_umask_is_reused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, COPY)?;
+    let other = crate::project::clone(&sandbox, "other")?;
+    for folder in [sandbox.work(), other.clone()] {
+        let output = with_umask(&building_in(&sandbox, &folder, &["build"])?, "002").output()?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    }
+    assert_eq!(runs(&sandbox.work())?, 1);
+    assert_eq!(runs(&other)?, 0, "the clone reused the result");
+    Ok(())
+}
+
+/// `command`, run by `sh` with the file mode creation mask `mask`.
+#[cfg(unix)]
+fn with_umask(command: &Command, mask: &str) -> Command {
+    let mut shell = Command::new("sh");
+    shell
+        .arg("-c")
+        .arg(format!("umask {mask} && exec \"$0\" \"$@\""))
+        .arg(command.get_program())
+        .args(command.get_args());
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => {
+                shell.env(name, value);
+            }
+            None => {
+                shell.env_remove(name);
+            }
+        }
+    }
+    if let Some(folder) = command.get_current_dir() {
+        shell.current_dir(folder);
+    }
+    shell
+}
+
 /// a step's log is for its owner alone, and keeps only the latest 16 MiB of its output.
 #[cfg(unix)]
 #[test]

@@ -489,27 +489,43 @@ impl Cache {
 
     /// replaces `path` in one step, so a reader sees the old file or the new one, never half of one.
     fn write_atomically(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.replace_file(path, bytes, true)
+        self.replace_file(path, bytes, true, false)
+    }
+
+    /// [`write_atomically`](Self::write_atomically) for a record no one but this user may write,
+    /// even where the umask or the folder's ACL would let the group write the files made in it.
+    fn write_private(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.replace_file(path, bytes, true, true)
     }
 
     /// replaces `path` in one step without flushing it first. for records whose loss after a power
     /// cut costs only a download or a resume, and which read as absent when torn. dropping their
     /// flushes halved fetching 1,000 files of 100 KiB from a server on the same machine.
     pub(crate) fn write_hint(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
-        self.replace_file(path, bytes, false)
+        self.replace_file(path, bytes, false, false)
     }
 
-    fn replace_file(&self, path: &Path, bytes: &[u8], durable: bool) -> io::Result<()> {
+    fn replace_file(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        durable: bool,
+        private: bool,
+    ) -> io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o644);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
         let (temporary, file) = loop {
             let temporary = self
                 .root
                 .join("tmp")
                 .join(format!("{:016x}.tmp", fastrand::u64(..)));
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-            {
+            match options.open(&temporary) {
                 Ok(file) => break (temporary, file),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(self.explained(&self.root.join("tmp"), err)),

@@ -92,7 +92,7 @@ fetchloom sync                  # on the login node
 fetchloom --offline build       # in the job
 ```
 
-a job that ends before its build does leaves `data.lock` and the data folder as they were, and the next build clears what the step left in the cache's `tmp` folder. two jobs that build one recipe from the same inputs into one cache run its step once: the second waits for the first and takes its result. a step that submits jobs of its own must wait for them to finish, since fetchloom takes in `{out}` as the step leaves it.
+a job that ends before its build does leaves `data.lock` and the data folder as they were, and the next build clears what the step left in the cache's `tmp` folder. two of your jobs that build one recipe from the same inputs into one cache run its step once: the second waits for the first and takes its result. in [one cache for a whole lab](#one-cache-for-a-whole-lab), another person's build waits too, then runs the step itself, since a build reuses only results its own user recorded. a step that submits jobs of its own must wait for them to finish, since fetchloom takes in `{out}` as the step leaves it.
 
 ## backups and copies
 

@@ -78,13 +78,14 @@ impl Cache {
         let text = unpacked::tree(members);
         let tree = digest::sha256(text.as_bytes());
         let folder = self.key_folder(key)?;
-        self.write_atomically(&folder.join(tree.hex()), text.as_bytes())?;
+        self.write_private(&folder.join(tree.hex()), text.as_bytes())?;
         Ok(tree)
     }
 
     /// the results of `key` this machine holds whole, newest first: each record whose bytes hash
-    /// to its name, that this user wrote, and whose every object is here. a record another user
-    /// of a shared cache wrote could pair a key with any files, so it is never used.
+    /// to its name, that this user wrote and no one else may write, and whose every object is
+    /// here. a record another user of a shared cache wrote, or could rewrite and rename to its new
+    /// hash, could pair a key with any files, so it is never used.
     pub(crate) fn results(&self, key: &Sha256) -> Vec<Built> {
         let folder = self.root.join("builds").join(key.hex());
         let Ok(entries) = fs::read_dir(&folder) else {
@@ -101,14 +102,15 @@ impl Cache {
         built
     }
 
-    /// the result recorded at `path` as `tree`, when it is whole and this user's.
+    /// the result recorded at `path` as `tree`, when it is whole and this user's alone.
     fn result_in(&self, path: &Path, tree: Sha256) -> Option<Built> {
         let file = partial::read_unfollowed(path).ok()?;
         let metadata = file.metadata().ok()?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            if metadata.uid() != rustix::process::geteuid().as_raw() {
+            if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o022 != 0
+            {
                 return None;
             }
         }
@@ -298,6 +300,26 @@ mod tests {
             .join(tree.hex());
         crate::cache::tests::rewrite(&record, b"a.csv\t1\t00\n");
         assert_eq!(cache.results(&other), Vec::<Built>::new());
+    }
+
+    /// a record others may write is never used: in a shared cache, someone could change its bytes
+    /// and rename it to their hash, pairing the key with files of their choosing.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_others_may_write_is_not_used() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = cache();
+        let key = digest::sha256(b"key");
+        let tree = cache
+            .record_result(&key, &[member(&cache, "a.csv", b"a")])
+            .unwrap();
+        let record = cache.root().join("builds").join(key.hex()).join(tree.hex());
+        for mode in [0o664, 0o646] {
+            fs::set_permissions(&record, fs::Permissions::from_mode(mode)).unwrap();
+            assert_eq!(cache.results(&key), Vec::<Built>::new(), "{mode:o}");
+        }
+        fs::set_permissions(&record, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(cache.results(&key).len(), 1);
     }
 
     /// a second build of a key waits for the first and says so once, and the hold lets go when

@@ -55,7 +55,7 @@ a build takes the project's hold for its whole run, relocks the sources of the c
 | data.lock pins | the cache holds | action |
 |---|---|---|
 | this key | every file of its pin | `Up to date` |
-| another key or none | a whole record of this key, written by this user on unix | `Reused`: the newest record is pinned |
+| another key or none | a whole record of this key, on unix written by this user and writable by no one else | `Reused`: the newest record is pinned |
 | this key | not every file | run; the same tree keeps the pin, another is `build.differs` and nothing enters the cache |
 | another key or none | no whole record | run, and pin what it made |
 
