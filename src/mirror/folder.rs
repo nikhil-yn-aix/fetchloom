@@ -175,6 +175,120 @@ pub(crate) fn read_tree(root: &Path, tree: &Sha256, stop: &Stop) -> io::Result<T
     }
 }
 
+/// a copy on a folder mirror as it was when it hashed to its name: its size and when it was last
+/// written, so a later look can tell that it is still that copy. its number is left out, since a
+/// network disk may give a file a new one, as push finds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Seen {
+    size: u64,
+    modified: Option<SystemTime>,
+}
+
+impl Seen {
+    fn of(found: &fs::Metadata) -> Seen {
+        Seen {
+            size: found.len(),
+            modified: found.modified().ok(),
+        }
+    }
+}
+
+/// what a folder mirror holds of one wanted file, read whole and hashed now.
+#[derive(Debug)]
+pub(crate) enum Held {
+    /// a copy whose bytes hash to its name, as it was then.
+    Verified(Seen),
+    /// nothing at the file's place.
+    Absent,
+    /// a copy of another size or with other bytes, a link or a special file in its place, or a
+    /// copy that changed while it was read.
+    Damaged,
+    Unreadable(io::Error),
+}
+
+/// what the folder mirror at `root` holds of each of `wanted`, a few at once within `threads`, in
+/// order. each copy is opened without following a link, as a reader opens it, and read whole and
+/// hashed, from its disk where the system allows, as push reads back what it writes. `read`
+/// hears how many bytes of `wanted` each look settles, as it goes.
+///
+/// # Errors
+///
+/// `Interrupted` when `stop` asks.
+pub(crate) fn check_all(
+    root: &Path,
+    wanted: &[Wanted],
+    threads: Threads,
+    read: &(dyn Fn(u64) + Sync),
+    stop: &Stop,
+) -> io::Result<Vec<Held>> {
+    let held = crate::place::run_all(wanted, threads.at_most(COPIES), |want| {
+        let mut settled = 0;
+        let held = check(
+            &place(root, "objects", &want.digest),
+            want,
+            stop,
+            &mut |bytes| {
+                settled += bytes;
+                read(bytes);
+            },
+        );
+        read(want.size.saturating_sub(settled));
+        held
+    });
+    if stop.is_asked() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "stopped at your request",
+        ));
+    }
+    Ok(held)
+}
+
+/// what the copy at `path` is of `want`, read as [`check_all`] reads it, telling `read` each
+/// block's size.
+fn check(path: &Path, want: &Wanted, stop: &Stop, read: &mut dyn FnMut(u64)) -> Held {
+    match fs::symlink_metadata(path) {
+        Ok(found) if is_plain(&found) && found.len() == want.size => {}
+        Ok(_) => return Held::Damaged,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
+        Err(err) => return Held::Unreadable(err),
+    }
+    let mut file = match read_unfollowed(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Held::Absent,
+        // a link or a special file put in its place since the look
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Held::Damaged,
+        Err(err) => return Held::Unreadable(err),
+    };
+    let before = match file.metadata() {
+        Ok(found) if found.len() == want.size => Seen::of(&found),
+        Ok(_) => return Held::Damaged,
+        Err(err) => return Held::Unreadable(err),
+    };
+    past_memory(&file);
+    let sum = hashed(&mut file, want.size.saturating_add(1), stop, |block| {
+        read(block.len() as u64);
+        true
+    });
+    match sum {
+        Ok((size, digest)) if size == want.size && digest == want.digest => {}
+        Ok(_) => return Held::Damaged,
+        Err(err) => return Held::Unreadable(err),
+    }
+    match file.metadata() {
+        Ok(found) if Seen::of(&found) == before => Held::Verified(before),
+        Ok(_) => Held::Damaged,
+        Err(err) => Held::Unreadable(err),
+    }
+}
+
+/// whether the copy of `digest` on the folder mirror at `root` is still the one `seen` describes:
+/// a plain file there of the same size, last written at the same time. one look, no read.
+pub(crate) fn still(root: &Path, digest: &Sha256, seen: &Seen) -> bool {
+    fs::symlink_metadata(place(root, "objects", digest))
+        .is_ok_and(|found| is_plain(&found) && Seen::of(&found) == *seen)
+}
+
 /// the folder a push writes files in before they take their names.
 const TMP: &str = "tmp";
 
@@ -921,21 +1035,27 @@ fn copy_hashed(
     }
 }
 
-/// what `file` holds on its disk, at most `most` bytes, read again from its start and hashed. on
-/// linux its pages are dropped from memory first, and macos is asked to keep none of what is
-/// read, so the bytes come from the disk where the system allows; a network disk may still
-/// answer from memory.
+/// what `file` holds on its disk, at most `most` bytes, read again from its start and hashed, as
+/// [`past_memory`] reads it.
 fn read_back(file: &mut File, most: u64, stop: &Stop) -> io::Result<(u64, Sha256)> {
-    #[cfg(target_os = "linux")]
-    if let Err(err) = rustix::fs::fadvise(&*file, 0, None, rustix::fs::Advice::DontNeed) {
-        tracing::debug!(%err, "could not drop a pushed file from memory");
-    }
-    #[cfg(target_os = "macos")]
-    if let Err(err) = rustix::fs::fcntl_nocache(&*file, true) {
-        tracing::debug!(%err, "could not read a pushed file past memory");
-    }
+    past_memory(file);
     file.seek(SeekFrom::Start(0))?;
     hashed(file, most, stop, |_| true)
+}
+
+/// asks that `file` be read from its disk: on linux its pages are dropped from memory first, and
+/// macos is asked to keep none of what is read. a network disk may still answer from memory.
+fn past_memory(file: &File) {
+    #[cfg(target_os = "linux")]
+    if let Err(err) = rustix::fs::fadvise(file, 0, None, rustix::fs::Advice::DontNeed) {
+        tracing::debug!(%err, "could not drop a mirror's file from memory");
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(err) = rustix::fs::fcntl_nocache(file, true) {
+        tracing::debug!(%err, "could not read a mirror's file past memory");
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = file;
 }
 
 /// reads at most `most` bytes of `source` a block at a time, handing each block to `each` until
@@ -1189,6 +1309,63 @@ pub(crate) mod tests {
             folder: OBJECTS,
             digest: crate::digest::sha256(bytes),
             size: bytes.len() as u64,
+        }
+    }
+
+    /// a copy is held only as a plain file whose bytes hash to its name, and only while a later
+    /// look finds it as it was then. every byte wanted is told as settled, read or not.
+    #[test]
+    fn each_copy_is_hashed_whole_and_looked_at_again() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("mirror");
+        mirror(&root, &[b"held"]);
+        let copy = |bytes: &[u8]| place(&root, "objects", &crate::digest::sha256(bytes));
+        for (bytes, there) in [(&b"same"[..], &b"SAME"[..]), (b"short", b"longer")] {
+            fs::create_dir_all(copy(bytes).parent().unwrap()).unwrap();
+            fs::write(copy(bytes), there).unwrap();
+        }
+        let wants = [
+            wanted(b"held"),
+            wanted(b"same"),
+            wanted(b"short"),
+            wanted(b"absent"),
+        ];
+        let told = std::sync::atomic::AtomicU64::new(0);
+        let read = |bytes| {
+            told.fetch_add(bytes, Ordering::Relaxed);
+        };
+        let held = check_all(&root, &wants, Threads::default(), &read, &Stop::default()).unwrap();
+        let Held::Verified(seen) = held[0] else {
+            panic!("{held:?}");
+        };
+        assert!(matches!(
+            held[1..],
+            [Held::Damaged, Held::Damaged, Held::Absent]
+        ));
+        assert_eq!(told.into_inner(), 4 + 4 + 5 + 6);
+        let digest = crate::digest::sha256(b"held");
+        assert!(still(&root, &digest, &seen));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .open(copy(b"held"))
+            .unwrap();
+        file.set_modified(SystemTime::now() - Duration::from_hours(1))
+            .unwrap();
+        assert!(!still(&root, &digest, &seen), "written since");
+        #[cfg(unix)]
+        {
+            let elsewhere = folder.path().join("held");
+            fs::write(&elsewhere, b"held").unwrap();
+            fs::remove_file(copy(b"held")).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, copy(b"held")).unwrap();
+            let held = check_all(
+                &root,
+                &wants[..1],
+                Threads::default(),
+                &|_| {},
+                &Stop::default(),
+            );
+            assert!(matches!(held.unwrap()[..], [Held::Damaged]));
         }
     }
 

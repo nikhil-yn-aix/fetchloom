@@ -114,9 +114,9 @@ on disk: `cache` reports usage. `cache gc` deletes unused cached files; `cache v
   fetchloom cache gc
   fetchloom cache gc --now
   fetchloom cache gc --now --dry-run
-  fetchloom cache gc --json
+  fetchloom cache gc --inputs --dry-run --mirror /mnt/lab/fetchloom
 
-on disk: deletes cached files no project needs once they are a day old, or at once with --now. data/ stays as it is. --dry-run deletes nothing";
+on disk: deletes cached files no project needs once they are a day old, or at once with --now. --inputs also deletes the cache's copy of raw data only built recipes read, once a folder mirror's copy of it hashes right, after a yes. data/ stays as it is. --dry-run deletes nothing";
 
     pub(super) const VERIFY: &str = "examples:
   fetchloom cache verify
@@ -608,6 +608,11 @@ pub(crate) struct Gc {
     /// today. downloads still running keep what they have so far
     #[arg(long, help_heading = "options")]
     pub(crate) now: bool,
+
+    /// also free raw data that only built recipes read, where a folder mirror
+    /// holds a copy that hashes right now; asks first
+    #[arg(long, help_heading = "options")]
+    pub(crate) inputs: bool,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,

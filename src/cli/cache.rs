@@ -1,6 +1,8 @@
 //! `fetchloom cache`: where the cache is and what it holds. `cache gc` frees what no project needs,
 //! and `cache verify` hashes every object again.
 
+mod inputs;
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
@@ -11,6 +13,7 @@ use serde::Serialize;
 
 use super::{Context, open_cache};
 use crate::cache::{Access, Cache, Checked, Failure, Freed, Needed, Supply, Usage, Use};
+use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::Output;
 use crate::project::Project;
@@ -228,6 +231,9 @@ pub(super) struct Collected {
     /// with `--dry-run`, every path gc would remove.
     #[serde(skip_serializing_if = "Option::is_none")]
     changes: Option<Removals>,
+    /// with `--inputs`, the raw input it freed, or would free, and what it kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inputs: Option<inputs::Inputs>,
 }
 
 #[derive(Serialize)]
@@ -235,14 +241,23 @@ struct Removals {
     remove: Vec<PathBuf>,
 }
 
-/// frees what no project needs. a dry run sweeps a cache that records each removal instead of
-/// making it, so it decides exactly as a real sweep does. it takes no lock and so never waits,
-/// while a real sweep waits until no other run uses the cache.
-pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collected, Error> {
+/// frees what no project needs, and with `inputs` the raw input only builds read that a folder
+/// mirror holds. a dry run sweeps a cache that records each removal instead of making it, so it
+/// decides exactly as a real sweep does. it takes no lock and so never waits, while a real sweep
+/// waits until no other run uses the cache.
+pub(super) fn gc(
+    context: &Context,
+    now: bool,
+    inputs: bool,
+    dry_run: bool,
+) -> Result<Collected, Error> {
+    if inputs {
+        return inputs::gc(context, now, dry_run);
+    }
     let cache = if dry_run {
         let cache = super::peek_cache()?;
         if !cache.root().exists() {
-            return Ok(tell_dry_gc(context, Freed::default(), Vec::new()));
+            return Ok(tell_dry_gc(context, Freed::default(), Vec::new(), None));
         }
         cache.pretending()
     } else {
@@ -251,9 +266,9 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     let found = needed_with(&cache, None, &context.stop, true, Uses::Untold)?;
     let freed = sweep(context, &cache, &found, now)?;
     if dry_run {
-        return Ok(tell_dry_gc(context, freed, cache.pretended()));
+        return Ok(tell_dry_gc(context, freed, cache.pretended(), None));
     }
-    tell_swept(context, freed, found.projects.len())
+    tell_swept(context, freed, found.projects.len(), None)
 }
 
 /// the cache, held alone for gc once no other run uses it.
@@ -287,15 +302,28 @@ fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<F
     )
 }
 
-/// tells what a sweep `freed`, keeping the files `projects` registered projects need.
-fn tell_swept(context: &Context, freed: Freed, projects: usize) -> Result<Collected, Error> {
+/// tells what a sweep `freed`, keeping the files `projects` registered projects need, after
+/// what `cache gc --inputs` freed of them, `inputs`, when it ran.
+fn tell_swept(
+    context: &Context,
+    freed: Freed,
+    projects: usize,
+    inputs: Option<inputs::Inputs>,
+) -> Result<Collected, Error> {
     let output = &context.output;
     for failure in &freed.not_removed {
         warn_failure(output, "could not read or remove", failure);
     }
     tell_forgotten(output, &freed.forgotten);
     let kept = kept(&freed);
-    if freed.removed_objects == 0 && freed.removed_leftovers == 0 && freed.not_removed.is_empty() {
+    let freed_inputs = inputs
+        .as_ref()
+        .is_some_and(|inputs| inputs.freed_objects > 0);
+    if freed.removed_objects == 0
+        && freed.removed_leftovers == 0
+        && freed.not_removed.is_empty()
+        && !freed_inputs
+    {
         match &kept {
             Some(kept) => {
                 output.done("Ok", "nothing to free yet");
@@ -304,17 +332,11 @@ fn tell_swept(context: &Context, freed: Freed, projects: usize) -> Result<Collec
             None => output.done("Ok", "nothing to free"),
         }
         hint_forgotten(output, &freed);
-        return Ok(collected(freed));
+        return Ok(collected(freed, inputs));
     }
     tell_removed(output, "Removed", "Removed", &freed);
     if !freed.not_removed.is_empty() {
-        let result = serde_json::to_value(&freed).map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("cannot format the cache result: {err}"),
-            )
-        })?;
-        return Err(with_failures(
+        let error = with_failures(
             Error::new(
                 Kind::LocalIo,
                 format!(
@@ -323,21 +345,33 @@ fn tell_swept(context: &Context, freed: Freed, projects: usize) -> Result<Collec
                 ),
             ),
             &freed.not_removed,
-        )
-        .with_result(result));
+        );
+        let result = serde_json::to_value(collected(freed, inputs)).map_err(|err| {
+            Error::new(
+                Kind::LocalIo,
+                format!("cannot format the cache result: {err}"),
+            )
+        })?;
+        return Err(error.with_result(result));
     }
-    output.done(
-        "Cleaned",
-        &format!(
-            "the cache, keeping files needed by {}",
-            units::count(projects as u64, "project", "projects")
-        ),
-    );
+    let needs = if projects == 1 { "needs" } else { "need" };
+    let projects = units::count(projects as u64, "project", "projects");
+    if freed_inputs {
+        output.done(
+            "Cleaned",
+            &format!("the cache, keeping the rest of what {projects} {needs}"),
+        );
+    } else {
+        output.done(
+            "Cleaned",
+            &format!("the cache, keeping files needed by {projects}"),
+        );
+    }
     if let Some(kept) = &kept {
         output.hint(kept);
     }
     hint_forgotten(output, &freed);
-    Ok(collected(freed))
+    Ok(collected(freed, inputs))
 }
 
 /// the lines for the objects and the leftovers a sweep removed, or would remove, under `objects`
@@ -365,11 +399,12 @@ fn tell_removed(output: &Output, objects: &str, leftovers: &str, freed: &Freed) 
     }
 }
 
-fn collected(freed: Freed) -> Collected {
+fn collected(freed: Freed, inputs: Option<inputs::Inputs>) -> Collected {
     Collected {
         freed,
         dry_run: false,
         changes: None,
+        inputs,
     }
 }
 
@@ -402,8 +437,14 @@ fn kept(freed: &Freed) -> Option<String> {
     })
 }
 
-/// says what a sweep that only pretended would have freed, naming each path with `-v`.
-fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collected {
+/// says what a sweep that only pretended would have freed, naming each path with `-v`, after
+/// what `cache gc --inputs` would free, `inputs`, when it ran.
+fn tell_dry_gc(
+    context: &Context,
+    freed: Freed,
+    remove: Vec<PathBuf>,
+    inputs: Option<inputs::Inputs>,
+) -> Collected {
     let output = &context.output;
     for failure in &freed.not_removed {
         warn_failure(
@@ -422,8 +463,11 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
     for path in &remove {
         output.detail(&path.display().to_string());
     }
+    let freeing_inputs = inputs
+        .as_ref()
+        .is_some_and(|inputs| inputs.freed_objects > 0);
     let nothing = match (
-        freed.removed_objects == 0 && freed.removed_leftovers == 0,
+        freed.removed_objects == 0 && freed.removed_leftovers == 0 && !freeing_inputs,
         freed.kept_objects > 0,
     ) {
         (false, _) => None,
@@ -438,6 +482,7 @@ fn tell_dry_gc(context: &Context, freed: Freed, remove: Vec<PathBuf>) -> Collect
         freed,
         dry_run: true,
         changes: Some(Removals { remove }),
+        inputs,
     }
 }
 
@@ -641,6 +686,8 @@ pub(super) fn needed_by_all(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Uses {
     Told,
+    /// told, with the datasets `cache gc --inputs` may free.
+    Grouped,
     Untold,
 }
 
@@ -651,6 +698,25 @@ struct Found {
     projects: Vec<PathBuf>,
     stale_projects: Vec<PathBuf>,
     complete: bool,
+    /// with [`Uses::Grouped`], each dataset with `place = false` that recipes read.
+    groups: Vec<Group>,
+}
+
+/// a dataset with `place = false` that recipes read, in one registered project, with the objects
+/// its files are as gc keeps them: what `cache gc --inputs` may free.
+#[derive(Debug)]
+struct Group {
+    project: PathBuf,
+    name: String,
+    /// how the project uses it, as [`Readers::use_of`] tells: an input once every recipe reading
+    /// it is built.
+    used: Use,
+    /// the recipes that read it.
+    readers: Vec<String>,
+    /// of those, the ones not built as data.lock pins them.
+    unbuilt: Vec<String>,
+    /// the objects its files are, each once.
+    objects: Vec<Sha256>,
 }
 
 /// every object a registered project's data.lock, or `current`, needs, following each archive to
@@ -665,13 +731,15 @@ fn needed_with(
     collect_stale: bool,
     uses: Uses,
 ) -> Result<Found, Error> {
+    let told = uses != Uses::Untold;
     let mut needed = Needed {
-        told: uses == Uses::Told,
+        told,
         ..Needed::default()
     };
     let mut projects = Vec::new();
     let mut stale_projects = Vec::new();
     let mut complete = true;
+    let mut groups = Vec::new();
     for root in cache.registered_projects(stop)? {
         stop.check()?;
         let project = Project { root };
@@ -716,9 +784,10 @@ fn needed_with(
         if let Some(lock) = &lock {
             let read = kept.as_ref().map(|manifest| Read {
                 manifest,
-                root: (uses == Uses::Told).then_some(project.root.as_path()),
+                root: told.then_some(project.root.as_path()),
             });
-            add_with_stop(&mut needed, cache, lock, read, stop)?;
+            let grouping = (uses == Uses::Grouped).then_some(&mut groups);
+            add_with_stop(&mut needed, cache, lock, read, grouping, stop)?;
         }
         // a rebuild kept for `fetchloom build --accept` is in no lock, only in the state
         let (state, _) = project.state();
@@ -729,13 +798,14 @@ fn needed_with(
         projects.push(project.root);
     }
     if let Some(lock) = current {
-        add_with_stop(&mut needed, cache, lock, None, stop)?;
+        add_with_stop(&mut needed, cache, lock, None, None, stop)?;
     }
     Ok(Found {
         needed,
         projects,
         stale_projects,
         complete,
+        groups,
     })
 }
 
@@ -752,12 +822,14 @@ struct Read<'a> {
 /// unpacked it or lost such a file, since unpacking again is the only way back. without data.toml,
 /// every file is kept. a recipe's pinned result needs its files, which only a build makes again,
 /// and its record. with the project's folder, each object is noted with how the project uses it,
-/// as [`Readers::use_of`] tells; otherwise as placed or, for a result, as its output.
+/// as [`Readers::use_of`] tells; otherwise as placed or, for a result, as its output. `groups`,
+/// when given, gets each dataset with `place = false` that recipes read, with its objects.
 fn add_with_stop(
     needed: &mut Needed,
     cache: &Cache,
     lock: &Lock,
     read: Option<Read<'_>>,
+    mut groups: Option<&mut Vec<Group>>,
     stop: &Stop,
 ) -> Result<(), Error> {
     let mut readers = read.and_then(|read| {
@@ -770,10 +842,15 @@ fn add_with_stop(
             Some(readers) => readers.use_of(&result.name, true, stop)?,
             None => Use::Output,
         };
+        let mut group = match (&mut readers, &groups) {
+            (Some(readers), Some(_)) => readers.group(&result.name, used, stop)?,
+            _ => None,
+        };
         for file in &result.files {
             stop.check()?;
-            needed.add(file.sha256, used);
+            note(needed, &mut group, file.sha256, used);
         }
+        gather(&mut groups, group);
     }
     for dataset in &lock.datasets {
         let filters = read
@@ -784,18 +861,22 @@ fn add_with_stop(
             Some(readers) => readers.use_of(&dataset.name, false, stop)?,
             None => Use::Placed,
         };
+        let mut group = match (&mut readers, &groups) {
+            (Some(readers), Some(_)) => readers.group(&dataset.name, used, stop)?,
+            _ => None,
+        };
         for pinned in archives::pinned(&dataset.files) {
             stop.check()?;
             let archive = match pinned {
                 Pinned::File(file) => {
-                    needed.add(file.sha256, used);
+                    note(needed, &mut group, file.sha256, used);
                     continue;
                 }
                 Pinned::Archive(archive) => archive,
             };
             let Some(members) = archive.recorded(cache) else {
                 for file in archive.files() {
-                    needed.add(file.sha256, used);
+                    note(needed, &mut group, file.sha256, used);
                 }
                 continue;
             };
@@ -807,17 +888,36 @@ fn add_with_stop(
                 .filter(|member| filter.is_none_or(|filter| filter.keeps(&member.path)))
             {
                 stop.check()?;
-                needed.add(member.sha256, used);
+                note(needed, &mut group, member.sha256, used);
                 whole &= cache.contains_for_gc(&member.sha256, member.size, stop)?;
             }
             if !whole {
                 for file in archive.files() {
-                    needed.add(file.sha256, used);
+                    note(needed, &mut group, file.sha256, used);
                 }
             }
         }
+        gather(&mut groups, group);
     }
     stop.check()
+}
+
+/// notes that the dataset being added needs the object `digest`, as `used`, and lists it in
+/// `group` too when that dataset is one `cache gc --inputs` may free.
+fn note(needed: &mut Needed, group: &mut Option<Group>, digest: Sha256, used: Use) {
+    needed.add(digest, used);
+    if let Some(group) = group {
+        group.objects.push(digest);
+    }
+}
+
+/// adds `group`, when there is one, to `groups`, when they are asked for, with each object once.
+fn gather(groups: &mut Option<&mut Vec<Group>>, group: Option<Group>) {
+    if let (Some(groups), Some(mut group)) = (groups, group) {
+        group.objects.sort_unstable();
+        group.objects.dedup();
+        groups.push(group);
+    }
 }
 
 /// the recipes that read each dataset of one project, from its data.toml and data.lock, which
@@ -879,6 +979,36 @@ impl<'a> Readers<'a> {
         } else {
             Use::Placed
         })
+    }
+
+    /// the dataset `name`, used as `used`, as `cache gc --inputs` sees it, with no objects yet,
+    /// when it has `place = false` and recipes read it. none for any other.
+    fn group(&mut self, name: &str, used: Use, stop: &Stop) -> Result<Option<Group>, Error> {
+        let Some(readers) = self.by_input.get(name).cloned() else {
+            return Ok(None);
+        };
+        if self
+            .manifest
+            .datasets
+            .get(name)
+            .is_none_or(|entry| entry.place)
+        {
+            return Ok(None);
+        }
+        let mut unbuilt = Vec::new();
+        for reader in &readers {
+            if !self.built(reader, stop)? {
+                unbuilt.push((*reader).to_owned());
+            }
+        }
+        Ok(Some(Group {
+            project: self.root.to_path_buf(),
+            name: name.to_owned(),
+            used,
+            readers: readers.iter().map(|reader| (*reader).to_owned()).collect(),
+            unbuilt,
+            objects: Vec::new(),
+        }))
     }
 
     /// whether data.lock pins a result of the recipe `name` as building it now would make, and
@@ -1005,7 +1135,7 @@ mod tests {
             part("scans.zip.002", &second, None),
         ];
         let mut whole = Needed::default();
-        add_with_stop(&mut whole, &cache, &lock, None, &Stop::default()).unwrap();
+        add_with_stop(&mut whole, &cache, &lock, None, None, &Stop::default()).unwrap();
         assert!(whole.objects.contains(&inside.digest));
         assert!(whole.unpacked.contains(&key), "its record");
         for part in [&first, &second] {
@@ -1016,7 +1146,7 @@ mod tests {
         }
         cache.drop_object(&inside.digest).unwrap();
         let mut missing = Needed::default();
-        add_with_stop(&mut missing, &cache, &lock, None, &Stop::default()).unwrap();
+        add_with_stop(&mut missing, &cache, &lock, None, None, &Stop::default()).unwrap();
         for part in [&first, &second] {
             assert!(
                 missing.objects.contains(&part.digest),
@@ -1031,7 +1161,7 @@ mod tests {
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let (lock, [archive, _, second]) = unpacked_archive(&cache);
         let mut whole = Needed::default();
-        add_with_stop(&mut whole, &cache, &lock, None, &Stop::default()).unwrap();
+        add_with_stop(&mut whole, &cache, &lock, None, None, &Stop::default()).unwrap();
         assert!(whole.objects.contains(&second.digest));
         assert!(
             !whole.objects.contains(&archive.digest),
@@ -1040,7 +1170,7 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut missing = Needed::default();
-        add_with_stop(&mut missing, &cache, &lock, None, &Stop::default()).unwrap();
+        add_with_stop(&mut missing, &cache, &lock, None, None, &Stop::default()).unwrap();
         assert!(
             missing.objects.contains(&archive.digest),
             "unpacking it again is the only way back to b.txt"
@@ -1063,7 +1193,7 @@ mod tests {
             manifest: &manifest,
             root: None,
         });
-        add_with_stop(&mut kept, &cache, &lock, read, &Stop::default()).unwrap();
+        add_with_stop(&mut kept, &cache, &lock, read, None, &Stop::default()).unwrap();
         assert!(kept.objects.contains(&first.digest));
         assert!(
             !kept.objects.contains(&second.digest),
@@ -1072,25 +1202,25 @@ mod tests {
 
         cache.drop_object(&second.digest).unwrap();
         let mut freed = Needed::default();
-        add_with_stop(&mut freed, &cache, &lock, read, &Stop::default()).unwrap();
+        add_with_stop(&mut freed, &cache, &lock, read, None, &Stop::default()).unwrap();
         assert!(
             !freed.objects.contains(&archive.digest),
             "a.txt, the only file the project places, is cached"
         );
         let mut unread = Needed::default();
-        add_with_stop(&mut unread, &cache, &lock, None, &Stop::default()).unwrap();
+        add_with_stop(&mut unread, &cache, &lock, None, None, &Stop::default()).unwrap();
         assert!(unread.objects.contains(&archive.digest));
     }
 
     /// what gc frees of what no project needs: now, once a day old, or nothing, for what a folder
     /// outside the cache links too.
     /// raw, a csv file, and clean, a recipe made from it.
-    const RAW_AND_CLEAN: &str = "[datasets.raw]\nref = \"https://example.org/raw.csv\"\nplace = false\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n";
+    pub(super) const RAW_AND_CLEAN: &str = "[datasets.raw]\nref = \"https://example.org/raw.csv\"\nplace = false\n\n[datasets.clean]\nfrom = [\"raw\"]\nrun = [\"t\", \"{raw}\", \"{out}\"]\n";
 
     /// data.toml `text`, with each of `sources` pinned to one file in `cache`, and each of
     /// `results`, in the order they are made, pinned as building it now would make one file in
     /// `cache`. it gives each dataset's file by name.
-    fn pinned(
+    pub(super) fn pinned(
         root: &Path,
         cache: &Cache,
         text: &str,
@@ -1162,7 +1292,7 @@ mod tests {
             manifest,
             root: Some(root),
         });
-        add_with_stop(&mut needed, cache, lock, read, &Stop::default()).unwrap();
+        add_with_stop(&mut needed, cache, lock, read, None, &Stop::default()).unwrap();
         needed
     }
 

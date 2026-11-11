@@ -151,10 +151,14 @@ the sources of iris and pets did not say who may read them. anyone who can read 
 
 push copies the project's files alone, never the rest of a cache other projects share, and it asks first about data whose source wanted an account or accepted terms, or did not say who may read it. it writes folders only: a web mirror or a bucket gets a folder mirror through a copying tool such as rclone. a push replaces a copy of another size it finds; a copy of the right size with other bytes, which `sync` warns about, goes once someone deletes it and pushes again.
 
+## freeing raw data a mirror holds
+
+with the raw data recipes read on a folder mirror, as `fetchloom push --inputs <recipe>` puts it there, [`fetchloom cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) frees this machine's copy of it and keeps the results. it counts a folder mirror from `--mirror` or the `mirrors` setting alone, never a web mirror, and only a copy it reads whole and finds to hash to its name in the same run. a build that reads that data again takes it from the mirror, or from its source.
+
 ## privacy
 
 a mirror is asked only for files the cache lacks, by their SHA-256 alone: no project name, path or link goes with the request. still, a web mirror learns which hashes you ask for, and the hash of a public file names its dataset; whoever runs a folder mirror's file server can see the same in its logs.
 
 ## a mirror is not an archive
 
-a mirror keeps bytes, not their licences, versions, retention or access rules: anyone who can read it can take what was pushed there. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. to preserve data, deposit it where it gets a DOI.
+a mirror keeps bytes, not their licences, versions, retention or access rules: anyone who can read it can take what was pushed there. it is a convenience for a lab or a machine without a network, and it may lose files at any time; the pins in data.lock still say what each file must be. so `cache gc --inputs` names the mirror it relies on before it frees anything: once that mirror and the source have lost a file, no build can make its result again. to preserve data, deposit it where it gets a DOI.

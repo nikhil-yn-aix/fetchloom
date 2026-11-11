@@ -17,6 +17,7 @@ mod export;
 mod get;
 mod hints;
 mod import;
+mod inputs;
 mod layout;
 mod merge;
 mod mirrors;

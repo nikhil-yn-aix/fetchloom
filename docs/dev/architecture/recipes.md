@@ -24,7 +24,7 @@ a recipe makes a dataset from other datasets with a command a person writes in `
 | [examples/recipe_step.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/examples/recipe_step.rs) | the step program the cli tests put in recipes |
 | [cli/sync.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync.rs) | `tell_stale`, the warning sync and path give for a recipe not built yet or changed since its build, and `Loop::ready`, which fetches what a step reads |
 | [cli/status.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/status.rs) | `unbuilt_here`: pinned results nothing on this machine holds, with the inputs the cache lacks |
-| [cli/cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | `Readers`: which objects of a project only builds read, for `fetchloom cache` and a later `cache gc --inputs` |
+| [cli/cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/cache.rs) | `Readers`: which objects of a project only builds read, for `fetchloom cache` and `cache gc --inputs` |
 
 a dataset is fetched or made, so the manifest hands every caller an `Origin` to match on. code that only makes sense for a source, such as resolving a reference, drafting a pin or the spec hash, takes a `Source`, so the compiler finds each place a recipe must be left out. relocking asks nothing for a recipe, keeps its `Derived` pin while `data.toml` has the recipe and drops it with the recipe.
 

@@ -107,4 +107,6 @@ $ fetchloom cache gc --now
     Cleaned the cache, keeping files needed by 1 project
 ```
 
+raw data that only built recipes read, kept out of the data folder with `place = false`, stays in the cache for builds; once a folder mirror holds it, `fetchloom cache gc --inputs` frees the cache's copy too, as [raw input a mirror holds](commands/cache.md#raw-input-a-mirror-holds) shows.
+
 [cache](commands/cache.md) says how gc decides what a project needs.

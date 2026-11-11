@@ -263,6 +263,15 @@ impl Cache {
         Ok(())
     }
 
+    /// removes the object `digest`, which a project needs though only its builds read it, once
+    /// `cache gc --inputs` found a copy elsewhere, recording a refused removal in `not_removed`.
+    /// says whether it went. a folder swapped for a link since the cache opened stops the
+    /// removal, as it stops a sweep's.
+    pub(crate) fn free_input(&self, digest: &Sha256, not_removed: &mut Vec<Failure>) -> bool {
+        let path = self.object_path(digest);
+        removed(&path, self.remove_inside(&path), not_removed)
+    }
+
     /// checks an archive member without letting a large writable object delay cancellation.
     pub(crate) fn contains_for_gc(
         &self,

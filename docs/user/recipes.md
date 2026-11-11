@@ -159,3 +159,12 @@ a teammate's sync of the same commit places clean from their cache or a mirror a
 ```
 
 their `fetchloom build clean` fetches raw into the cache, runs the step and places clean, still placing nothing of raw. a plain [`fetchloom push`](commands/push.md) sends clean and leaves raw off the mirror, as a sync would; `push --inputs clean` sends raw too, for a teammate who must rebuild. the examples are stderr from one run against a server on this machine.
+
+raw stays in the cache, since a build that runs clean again reads it. to free the disk it takes, put it on a folder [mirror](mirrors.md), then free the cache's copy, naming that mirror:
+
+```sh
+fetchloom push --inputs clean --to /mnt/lab/fetchloom
+fetchloom cache gc --inputs --mirror /mnt/lab/fetchloom
+```
+
+[`cache gc --inputs`](commands/cache.md#raw-input-a-mirror-holds) reads each copy on the mirror, says what it would free and what that costs, and asks first. clean's result stays, so the project still syncs and `fetchloom build` finds clean up to date; a build that runs clean again, as after a change to clean.py, takes raw from the mirror, or from its source.

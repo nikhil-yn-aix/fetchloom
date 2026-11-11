@@ -97,7 +97,7 @@ error: this machine's cache lacks files the push needs, and push never downloads
 
 push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds either: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60. a result data.lock pins is pushed by the files data.lock lists for it, which the cache holds once a build made them. a file of one that the cache lacks is named with the build that makes it, such as `fetchloom build clean`, and the JSON `fix` is null, since a build runs the project's code.
 
-`fetchloom push --inputs clean` sends `clean`'s result with every dataset it is made from, so a reviewer whose sources are gone can rebuild it from the mirror and check it against data.lock.
+`fetchloom push --inputs clean` sends `clean`'s result with every dataset it is made from, so a reviewer whose sources are gone can rebuild it from the mirror and check it against data.lock. with that raw data on the mirror, [`cache gc --inputs`](cache.md#raw-input-a-mirror-holds) can free this machine's copy of it.
 
 ## data you may not share
 

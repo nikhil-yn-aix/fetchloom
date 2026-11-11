@@ -13,13 +13,13 @@ use crate::project::{IRIS, PATH};
 use crate::support::{Result, Sandbox, Server, delete, file, json, text};
 
 /// a recipe that makes `clean` from iris: the file clean.csv, holding `done`.
-const WRITE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\n";
+pub(crate) const WRITE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\n";
 
 /// [`WRITE`], with clean.py as its code.
 const WRITE_CODE: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{iris}\", \"{out}\"]\ncode = [\"clean.py\"]\n";
 
 /// sets `place = false` on the dataset `name` in the data.toml of the project at `folder`.
-fn unplace(folder: &Path, name: &str) -> Result {
+pub(crate) fn unplace(folder: &Path, name: &str) -> Result {
     let manifest = folder.join("data.toml");
     let table = format!("[datasets.{name}]\n");
     let text = fs::read_to_string(&manifest)?;
@@ -55,7 +55,7 @@ fn warned(output: &std::process::Output, warning: &str) -> Result<usize> {
 }
 
 /// the cached object holding `bytes`, in the cache at `cache`.
-fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
+pub(crate) fn object(cache: &Path, bytes: &[u8]) -> PathBuf {
     let hex = sha256(bytes);
     cache.join("objects").join(&hex[..2]).join(&hex[2..])
 }

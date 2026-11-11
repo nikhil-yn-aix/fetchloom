@@ -18,7 +18,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`drop`](drop.md) | leave files out of their dataset for good, as patterns in data.toml, and delete them from data/ | take bad samples, or a part you do not use, out of a dataset |
 | [`get`](get.md) | fetch once without project files: one link, a list, or one file at a path you name | inspect a source before adding it, download a list of links, or put one file where a script reads it |
 | [`cache`](cache.md) | report cache location, sizes and projects | find where shared bytes live |
-| [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
+| [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now`; with `--inputs`, also raw data only builds read that a folder mirror holds | clean up the cache |
 | [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
 | [`settings`](settings.md) | show each setting, its value and where it came from | check what a run will use, and why |
 | [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
@@ -30,7 +30,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 
 ## global options
 
-every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from.
+every command takes `-q`, `-v`, `--json`, `--offline`, `--yes`, `--color`, `-C <dir>` and `--mirror <url>`. `add`, `remove`, `sync`, `lock`, `build`, `push` and `cache gc` also take `-n`, `--dry-run`. `add` and `get` also take `--select <glob>`, `--exclude <glob>` and `--no-extract`. `add` takes `--as <name>` to name the dataset, and `get` takes `-o <file>` to write one file, `--force` to replace one already there, `-d <folder>` to choose its folder, `-i <file>` to read links from a list, and `--sha256 <hex>` to check a single file. `push` takes `--to <folder>` to name its mirror, and `--inputs` to add what its recipes are made from; `cache gc` takes `--inputs` to free the raw data only builds read where a folder mirror holds it.
 
 | option | effect |
 |---|---|

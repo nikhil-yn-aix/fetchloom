@@ -7,10 +7,9 @@ pending work covers the features planned for 0.1.0, remaining performance costs 
 each line goes when its feature lands, in the same change that documents it in the [user guide](../user/README.md).
 
 1. job objects that end everything a recipe's step started on windows, as its process group does on linux and macos.
-2. `cache gc --inputs` frees inputs that a verified mirror holds.
-3. the [other tools](../user/other-tools.md) guide says what carries over from dvc, git-lfs and datalad, and what does not.
+2. the [other tools](../user/other-tools.md) guide says what carries over from dvc, git-lfs and datalad, and what does not.
 
-deferred until a need shows: a data root on another disk, a link mode for build inputs, finding results across projects, a cache budget, STS and `credential_process` for S3, signed google cloud storage, azure and FTP, split archives beyond plain byte splits, adopting the hugging face cache and relinking copies to the cache.
+deferred until a need shows: a data root on another disk, a link mode for build inputs, finding results across projects, a cache budget, STS and `credential_process` for S3, signed google cloud storage, azure and FTP, split archives beyond plain byte splits, adopting the hugging face cache, relinking copies to the cache, and letting `cache gc --inputs` free raw input whose source lists its pinned hash, with no mirror.
 
 ## measurement work
 

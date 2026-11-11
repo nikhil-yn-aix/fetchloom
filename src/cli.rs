@@ -698,7 +698,7 @@ fn dispatch(context: &Arc<Context>, command: args::Command, started: Instant) ->
         args::Command::Cache(args::Cache {
             action: Some(args::CacheAction::Gc(gc)),
         }) => {
-            let outcome = cache::gc(context, gc.now, gc.dry.dry_run);
+            let outcome = cache::gc(context, gc.now, gc.inputs, gc.dry.dry_run);
             finish(context, name, outcome, started)
         }
         args::Command::Cache(args::Cache {

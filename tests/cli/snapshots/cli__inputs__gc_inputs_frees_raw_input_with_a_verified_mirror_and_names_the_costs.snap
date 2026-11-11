@@ -1,0 +1,9 @@
+---
+source: tests/cli/inputs.rs
+expression: stderr
+---
+    Checked 1 file · 32 B on [sandbox]/lab/mirror in [time]
+      Freed iris · 1 file, 32 B of raw input that only builds read
+            [sandbox]/lab/mirror holds a copy of it, hashed in this run
+      Costs rerunning clean fetches these 32 B back from [sandbox]/lab/mirror or iris's source
+    Cleaned the cache, keeping the rest of what 1 project needs
