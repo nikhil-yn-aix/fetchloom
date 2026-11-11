@@ -44,6 +44,8 @@ the linux release ships `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-m
 
 ## filesystem runs
 
+each filesystem run skips the test modules that the `DISKLESS` value in ci.yml names, whose tests never touch a disk: parsers, sources, the network and output. `--skip` matches any part of a test's path, so a new module that touches the disk needs a name that contains none of them.
+
 windows creates 4096 MB expandable VHDX images with diskpart and assigns R, X and Y. it points `TMP` and `TEMP` at a folder on each volume and runs `cargo test --locked --no-fail-fast`. runner admin access permits diskpart; normal contributor tests should not require admin access.
 
 linux installs btrfs and xfs utilities, creates 4G images, mounts them with loop devices and makes each mount writable by the runner. `TMPDIR` routes test-created folders there. every filesystem result is collected and any failure fails the job. it then mounts a 64 MB fat image as root with `umask=000`, where every user may write but only root may change permissions, and runs `place::tests::a_writable_copy_works_where_the_mount_refuses_chmod` with `FETCHLOOM_TEST_NOOP_CHMOD` naming that mount; without the variable the test returns at once. arm64 linux and windows runners run the ordinary full tests, not these extra mount loops.
