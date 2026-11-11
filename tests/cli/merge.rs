@@ -11,6 +11,13 @@ use crate::support::{Result, Routes, Sandbox, Server, file, json, text};
 /// git in `folder`, as a person with a name runs it, without the machine's git settings. none
 /// when git is not installed.
 fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Option<Output>> {
+    let home = sandbox.folder("home")?;
+    // git refuses a repository on a disk that records no owner, as FAT does, unless the person
+    // trusts it; fetchloom's git, run with this home too, then reads the base as theirs does
+    let config = home.join(".gitconfig");
+    if !config.exists() {
+        fs::write(&config, "[safe]\n\tdirectory = *\n")?;
+    }
     let mut command = Command::new("git");
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("GIT_") {
@@ -31,7 +38,7 @@ fn git(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result<Option<Output>
         .args(identity)
         .args(args)
         .current_dir(folder)
-        .env("HOME", sandbox.folder("home")?)
+        .env("HOME", home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .output();
     match output {

@@ -138,6 +138,8 @@ mod tests {
                 "commit.gpgsign=false",
                 "-c",
                 "init.defaultBranch=main",
+                "-c",
+                "safe.directory=*",
             ])
             .args(arguments)
             .current_dir(folder)
@@ -149,6 +151,19 @@ mod tests {
             .unwrap();
         // a merge that conflicts fails, as it should here
         assert!(status.success() || arguments[0] == "merge", "{arguments:?}");
+    }
+
+    /// whether git, with the settings of the machine running the tests, works in `folder`. it
+    /// refuses a repository on a disk that records no owner, as FAT does, unless told to trust it.
+    fn trusted(git: &Path, folder: &Path) -> bool {
+        Command::new(git)
+            .arg("-C")
+            .arg(folder)
+            .args(["rev-parse", "--git-dir"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 
     #[test]
@@ -216,6 +231,11 @@ mod tests {
         git_in(&git, at, &["add", "."]);
         git_in(&git, at, &["commit", "-qm", "ours"]);
         git_in(&git, at, &["merge", "-q", "theirs"]);
+        if !trusted(&git, at) {
+            // fetchloom never overrides git's ownership check, so git gives it nothing
+            assert_eq!(base(&git, &root, "data.toml"), None);
+            return;
+        }
         assert_eq!(
             base(&git, &root, "data.toml").as_deref(),
             Some(""),
