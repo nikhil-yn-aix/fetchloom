@@ -99,7 +99,7 @@ class HelperOptions(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "conflict.kept")
         self.assertEqual(raised.exception.details, ["data/iris/iris.csv"])
         self.assertEqual(raised.exception.message, "1 file in the data folder differs from data.lock")
-        self.assertEqual(raised.exception.help, "save any changes you need, then run `fetchloom sync --force`")
+        self.assertEqual(raised.exception.help, "save any changes you need, then run `fetchloom -C p sync --force`")
 
     def test_strict_help_forces_only_the_named_datasets(self):
         kept = {"project": "p", "placement": {"kept": [{"path": "data/iris/iris.csv", "reason": "changed"}]}}
@@ -109,11 +109,47 @@ class HelperOptions(unittest.TestCase):
         with patch.object(fetchloom, "_program", return_value="fetchloom"):
             with patch.object(fetchloom.subprocess, "run", return_value=response):
                 with self.assertRaises(fetchloom.Error) as raised:
-                    fetchloom.sync("p", names=["iris", "flowers"], strict=True)
+                    fetchloom.sync(names=["iris", "flowers"], strict=True)
         self.assertEqual(
             raised.exception.help,
-            "save any changes you need, then run `fetchloom sync --force iris flowers`",
+            "save any changes you need, then run `fetchloom sync --force -- iris flowers`",
         )
+
+    @unittest.skipUnless(os.name == "posix", "runs the suggested command in a posix shell")
+    def test_strict_help_forces_the_project_it_synced(self):
+        # a notebook in project A syncs project B: the command it is told to run must change B
+        root = "/work/haz B's $data"
+        kept = {"project": root, "placement": {"kept": [{"path": "data/plain/plain.csv", "reason": "foreign"}]}}
+        response = subprocess.CompletedProcess(
+            [], 0, json.dumps({"status": "ok", "result": kept, "warnings": []}), ""
+        )
+        for project, words in [
+            ("../haz B's $data", ["-C", root, "sync", "--force", "--", "plain", "iris"]),
+            (".", ["sync", "--force", "--", "plain", "iris"]),
+        ]:
+            with self.subTest(project=project):
+                with patch.object(fetchloom, "_program", return_value="fetchloom"):
+                    with patch.object(fetchloom.subprocess, "run", return_value=response):
+                        with self.assertRaises(fetchloom.Error) as raised:
+                            fetchloom.sync(project, names=["plain", "iris"], strict=True)
+                command = raised.exception.help.split("`")[1]
+                # a stand-in fetchloom prints each word the shell hands it
+                shell = subprocess.run(
+                    ["sh", "-c", "fetchloom() { printf '%s\\0' \"$@\"; }; " + command],
+                    capture_output=True, check=True,
+                )
+                self.assertEqual(shell.stdout.decode().split("\0")[:-1], words)
+
+    def test_suggested_words_are_quoted_as_fetchloom_quotes_them(self):
+        for word, posix, windows in [
+            ("plain", "plain", "plain"),
+            ("my project", '"my project"', '"my project"'),
+            ("ada's project", "'ada'\"'\"'s project'", "'ada''s project'"),
+            ("", '""', '""'),
+        ]:
+            with self.subTest(word=word):
+                self.assertEqual(fetchloom._shell_word(word, windows=False), posix)
+                self.assertEqual(fetchloom._shell_word(word, windows=True), windows)
 
     def test_strict_names_several_files_in_the_plural(self):
         files = [{"path": f"data/iris/{name}", "reason": "changed"} for name in ["a.csv", "b.csv"]]

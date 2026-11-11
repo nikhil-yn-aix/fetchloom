@@ -141,7 +141,10 @@ def sync(
     kept = [file["path"] for file in placement.get("kept", [])]
     if strict and kept:
         files = "1 file in the data folder differs" if len(kept) == 1 else f"{len(kept)} files in the data folder differ"
-        force = " ".join(["fetchloom sync --force", *named])
+        # a person may run it from another folder, such as a notebook's own project
+        words = ["fetchloom"] if os.fspath(project) == "." else ["fetchloom", "-C", result["project"]]
+        words += ["sync", "--force", *(["--", *named] if named else [])]
+        force = " ".join(_shell_word(word) for word in words)
         raise Error(
             "conflict.kept",
             f"{files} from data.lock",
@@ -200,6 +203,16 @@ def get(
 def _local(path: str | os.PathLike[str]) -> str:
     # pandas expands ~ in the paths it is given, and no shell does it for a python call
     return os.path.expanduser(os.fspath(path))
+
+
+def _shell_word(word: str, windows: bool = sys.platform == "win32") -> str:
+    """``word`` quoted as fetchloom quotes the commands it suggests, so a shell reads it as typed."""
+    if word and all(c.isascii() and (c.isalnum() or c in "-_./:@%+=,~") for c in word):
+        return word
+    if any(c in word for c in "'\"$`\\"):
+        quoted = word.replace("'", "''") if windows else word.replace("'", "'\"'\"'")
+        return f"'{quoted}'"
+    return f'"{word}"'
 
 
 def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> list[str]:
