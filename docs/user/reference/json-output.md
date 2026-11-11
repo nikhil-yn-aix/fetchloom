@@ -159,6 +159,6 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `placed_from_cache` | placements by `add`, `sync`, `path` and `get` from objects the run did not write to the cache itself; the other placements took bytes the run downloaded, unpacked or copied in from a mirror or the data folder. file times do not decide it, so it holds on filesystems that keep times in whole seconds and on file servers with their own clocks |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 
-`-v` ends with the same counters in words, and, when a run placed files from the cache, how many came from it and how many it downloaded, as in `8 from the cache, 0 downloaded`. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.
+`-v` ends with the same counters in words, as in `1 request · 47.7 MiB down · 1 hardlink · 1 placed from the cache · 2.0 s in all`. `1 file written to the cache` counts a write during the run, so a one-off `get -o` that moved its file out of the cache afterwards still shows it. there are no phase timings or bytes-written counters. cache verification reports directory and metadata read failures in `result.unreadable` rather than claiming those paths were verified.
 
 a killed process may leave no valid JSON. treat a missing or invalid document as a failure. [scripting](../scripting.md) shows checks for exit codes, schema versions and preserved conflicts.

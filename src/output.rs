@@ -649,55 +649,7 @@ impl Output {
 
     /// the counters at the end of a run, for `-v`.
     pub(crate) fn summary(&self, counts: Counts, elapsed: Duration) {
-        let parts = [
-            (counts.requests, "request", "requests"),
-            (counts.retries, "retry", "retries"),
-            (counts.resumes, "resume", "resumes"),
-            (
-                counts.objects_written,
-                "new file in the cache",
-                "new files in the cache",
-            ),
-            (
-                counts.downloads_skipped,
-                "download skipped",
-                "downloads skipped",
-            ),
-            (
-                counts.mirror_objects,
-                "file from a mirror",
-                "files from mirrors",
-            ),
-            (
-                counts.data_folder_objects,
-                "file from the data folder",
-                "files from the data folder",
-            ),
-            (counts.reflinks, "reflink", "reflinks"),
-            (counts.hardlinks, "hardlink", "hardlinks"),
-            (counts.copies, "copy", "copies"),
-        ];
-        let mut text: Vec<String> = parts
-            .iter()
-            .filter(|(n, _, _)| *n > 0)
-            .map(|(n, one, many)| units::count(*n, one, many))
-            .collect();
-        if counts.placed_from_cache > 0 {
-            let placed = counts.reflinks + counts.hardlinks + counts.copies;
-            text.push(format!(
-                "{} from the cache, {} downloaded",
-                counts.placed_from_cache,
-                placed.saturating_sub(counts.placed_from_cache)
-            ));
-        }
-        if counts.bytes_down > 0 {
-            text.insert(
-                1.min(text.len()),
-                format!("{} down", units::size(counts.bytes_down)),
-            );
-        }
-        text.push(format!("{} in all", units::duration(elapsed)));
-        self.detail(&text.join(" · "));
+        self.detail(&work_line(counts, elapsed));
     }
 
     /// prints the `--json` document for a run, whatever its outcome.
@@ -842,6 +794,57 @@ impl Output {
             None => write(),
         }
     }
+}
+
+/// the counters of a run in words, as `-v` ends with them.
+fn work_line(counts: Counts, elapsed: Duration) -> String {
+    let parts = [
+        (counts.requests, "request", "requests"),
+        (counts.retries, "retry", "retries"),
+        (counts.resumes, "resume", "resumes"),
+        (
+            counts.objects_written,
+            "file written to the cache",
+            "files written to the cache",
+        ),
+        (
+            counts.downloads_skipped,
+            "download skipped",
+            "downloads skipped",
+        ),
+        (
+            counts.mirror_objects,
+            "file from a mirror",
+            "files from mirrors",
+        ),
+        (
+            counts.data_folder_objects,
+            "file from the data folder",
+            "files from the data folder",
+        ),
+        (counts.reflinks, "reflink", "reflinks"),
+        (counts.hardlinks, "hardlink", "hardlinks"),
+        (counts.copies, "copy", "copies"),
+    ];
+    let mut text: Vec<String> = parts
+        .iter()
+        .filter(|(n, _, _)| *n > 0)
+        .map(|(n, one, many)| units::count(*n, one, many))
+        .collect();
+    if counts.placed_from_cache > 0 {
+        text.push(format!(
+            "{} placed from the cache",
+            counts.placed_from_cache
+        ));
+    }
+    if counts.bytes_down > 0 {
+        text.insert(
+            1.min(text.len()),
+            format!("{} down", units::size(counts.bytes_down)),
+        );
+    }
+    text.push(format!("{} in all", units::duration(elapsed)));
+    text.join(" · ")
 }
 
 /// `text` as the terminal can draw it: the few symbols fetchloom uses become ascii where the
@@ -1372,10 +1375,12 @@ fn plain(text: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::time::Duration;
 
     use anstyle::Style as Paint;
 
     use super::{Level, Output, Style, accented, masked, plain, subject, write_answer};
+    use crate::work::Counts;
 
     #[test]
     fn answer_writes_and_flushes_propagate_failures_except_broken_pipes() {
@@ -1695,6 +1700,36 @@ mod tests {
         assert_eq!(
             super::fix("run `fetchloom lock` and commit data.lock", false),
             Some("fetchloom lock")
+        );
+    }
+
+    /// the `-v` counters say what each counts: a placement from bytes the cache held before is
+    /// not a download that did not happen, and a file the run wrote to the cache, as a one-off
+    /// `get -o` does before moving it out, is not said to be in it still.
+    #[test]
+    fn work_counters_say_what_happened_in_the_run() {
+        let second = Duration::from_secs(2);
+        let reused = Counts {
+            requests: 1,
+            bytes_down: 50_000_000,
+            hardlinks: 1,
+            placed_from_cache: 1,
+            ..Counts::default()
+        };
+        assert_eq!(
+            super::work_line(reused, second),
+            "1 request · 47.7 MiB down · 1 hardlink · 1 placed from the cache · 2.0 s in all"
+        );
+        let one_off = Counts {
+            requests: 1,
+            bytes_down: 4551,
+            objects_written: 1,
+            copies: 1,
+            ..Counts::default()
+        };
+        assert_eq!(
+            super::work_line(one_off, second),
+            "1 request · 4.4 KiB down · 1 file written to the cache · 1 copy · 2.0 s in all"
         );
     }
 

@@ -2328,10 +2328,7 @@ fn the_counters_tell_files_placed_from_the_cache() -> Result {
             assert_eq!(report["work"]["requests"], 0, "{report}");
         } else {
             let stderr = text(&synced.stderr)?;
-            assert!(
-                stderr.contains("1 from the cache, 0 downloaded"),
-                "{stderr}"
-            );
+            assert!(stderr.contains("1 placed from the cache"), "{stderr}");
         }
     }
     Ok(())

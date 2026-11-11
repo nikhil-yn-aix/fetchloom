@@ -1322,7 +1322,10 @@ fn verbose_counters_name_new_files_in_the_cache() -> Result {
     let output = sandbox.run(&["-v", "get", &server.url])?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains(" · 1 new file in the cache · "), "{stderr}");
+    assert!(
+        stderr.contains(" · 1 file written to the cache · "),
+        "{stderr}"
+    );
     assert!(!stderr.contains("new object"), "{stderr}");
     Ok(())
 }
