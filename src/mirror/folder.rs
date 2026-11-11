@@ -477,7 +477,7 @@ impl Target {
     /// folder as holding files but no mirror.
     fn keep_marker(&self) -> io::Result<()> {
         #[cfg(all(test, target_os = "linux"))]
-        if let Some(folder) = tests::unflushable(tests::Flush::Marker, &self.root) {
+        if let Some(folder) = tests::failing(tests::Failing::MarkerFlush, &self.root) {
             return flush(&folder);
         }
         crate::project::sync_directory(&self.root)
@@ -836,8 +836,9 @@ fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
 /// its number is not the written file's: a network disk that forgot a file's number gives it a
 /// new one, as smb mounted with `noserverino` and sshfs without `use_ino` do. the account that
 /// owns the file written must own it, so no other account can change the bytes once named, and
-/// its size must be the item's; then it is flushed on its own handle, since only bytes on the
-/// disk may take a name. `read_unfollowed` opens only plain files.
+/// its size must be the item's; then it is made read-only like every pushed file and flushed on
+/// its own handle, since only bytes on the disk may take a name. `read_unfollowed` opens only
+/// plain files.
 ///
 /// # Errors
 ///
@@ -845,15 +846,31 @@ fn settle(file: &File, batch: Option<&Batch>) -> io::Result<()> {
 /// put there, or the flush's error.
 #[cfg(unix)]
 fn renumbered(file: &File, found: Identity, written: &Written<'_>) -> Result<(), Fault> {
-    let size = file.metadata().map_err(Fault::Mirror)?.len();
-    if found.owner != written.identity.owner || size != written.item.size {
+    let held = file.metadata().map_err(Fault::Mirror)?;
+    if found.owner != written.identity.owner || held.len() != written.item.size {
         return Err(Fault::Replaced);
     }
+    read_only(file, held.permissions(), &written.temp.path);
     #[cfg(all(test, target_os = "linux"))]
-    if let Some(handle) = tests::unflushable(tests::Flush::Renumbered, &written.temp.path) {
+    if let Some(handle) = tests::failing(tests::Failing::RenumberedFlush, &written.temp.path) {
         return flush(&handle).map_err(Fault::Mirror);
     }
     flush(file).map_err(Fault::Mirror)
+}
+
+/// makes `file`, at `path`, read-only through its own handle, from its `permissions`. a disk that
+/// refuses, as some network disks refuse a change of mode, leaves it as it was: its bytes are
+/// checked all the same, so it still takes its name.
+#[cfg(unix)]
+fn read_only(file: &File, mut permissions: fs::Permissions, path: &Path) {
+    permissions.set_readonly(true);
+    #[cfg(all(test, target_os = "linux"))]
+    let refusing = tests::failing(tests::Failing::ReadOnly, path);
+    #[cfg(all(test, target_os = "linux"))]
+    let file = refusing.as_ref().unwrap_or(file);
+    if let Err(err) = file.set_permissions(permissions) {
+        tracing::debug!(%err, file = %path.display(), "could not make a pushed file read-only");
+    }
 }
 
 /// which file `file` is, so a file opened again by its name can be told to be the one written.
@@ -989,7 +1006,7 @@ pub(crate) mod tests {
         static BETWEEN: Cell<Between> = const { Cell::new(Between::Nothing) };
         /// which of a push's flushes fails, as a disk whose write-back failed makes it fail.
         #[cfg(target_os = "linux")]
-        static FAILING: Cell<Option<Flush>> = const { Cell::new(None) };
+        static FAILING: Cell<Option<Failing>> = const { Cell::new(None) };
     }
 
     /// what a test makes happen between a push writing its files and naming them.
@@ -1047,23 +1064,25 @@ pub(crate) mod tests {
         false
     }
 
-    /// a flush a push makes, which a test can make fail.
+    /// a step of a push that a test can make fail.
     #[cfg(target_os = "linux")]
     #[derive(Clone, Copy, PartialEq, Eq)]
-    pub(super) enum Flush {
-        /// the new mirror's top folder, once the marker has its name.
-        Marker,
+    pub(super) enum Failing {
+        /// the flush of a new mirror's top folder, once the marker has its name.
+        MarkerFlush,
         /// the one flush of a batch of files.
-        Batch,
-        /// a file that came back with a new number, flushed again before it is read back.
-        Renumbered,
+        BatchFlush,
+        /// the flush of a file that came back with a new number, before it is read back.
+        RenumberedFlush,
+        /// making a file that came back with a new number read-only.
+        ReadOnly,
     }
 
-    /// a handle on `path` that every flush fails on, when a test makes `flush` fail: fsync and
-    /// syncfs refuse an `O_PATH` handle, which is a real flush error without a failing disk.
+    /// a handle on `path` that `step` fails on, when a test makes it fail: fsync, syncfs and
+    /// fchmod refuse an `O_PATH` handle, which is a real error without a failing disk.
     #[cfg(target_os = "linux")]
-    pub(super) fn unflushable(flush: Flush, path: &Path) -> Option<File> {
-        (FAILING.get() == Some(flush)).then(|| {
+    pub(super) fn failing(step: Failing, path: &Path) -> Option<File> {
+        (FAILING.get() == Some(step)).then(|| {
             let handle = rustix::fs::open(
                 path,
                 rustix::fs::OFlags::PATH | rustix::fs::OFlags::CLOEXEC,
@@ -1077,7 +1096,7 @@ pub(crate) mod tests {
     /// a batch whose flush fails, when a test asks.
     #[cfg(target_os = "linux")]
     pub(super) fn failing_batch(root: &Path) -> Option<Batch> {
-        unflushable(Flush::Batch, &root.join(TMP)).map(crate::cache::Batch::with_file_for_test)
+        failing(Failing::BatchFlush, &root.join(TMP)).map(crate::cache::Batch::with_file_for_test)
     }
 
     /// changes the file a push wrote before it is read back, when a test asks.
@@ -1353,7 +1372,7 @@ pub(crate) mod tests {
     fn a_failed_batch_flush_names_nothing() {
         let folder = tempfile::tempdir().unwrap();
         let contents = many();
-        FAILING.set(Some(Flush::Batch));
+        FAILING.set(Some(Failing::BatchFlush));
         let (target, put) = put_all(folder.path(), &contents);
         FAILING.set(None);
         assert!(matches!(put, Err(Failed::Flush(_))), "{put:?}");
@@ -1386,29 +1405,58 @@ pub(crate) mod tests {
     }
 
     /// what pushing one file gives when `between` happens between writing it and reading it
-    /// back, and whether it took its name.
-    fn one_put(between: Between) -> (Result<Vec<Put>, Failed>, bool) {
+    /// back, and, when it took its name with its bytes, whether it is read-only there.
+    fn one_put(between: Between) -> (Result<Vec<Put>, Failed>, Option<bool>) {
         let folder = tempfile::tempdir().unwrap();
         let contents = vec![b"pinned bytes".to_vec()];
         BETWEEN.set(between);
         let (target, put) = put_all(folder.path(), &contents);
         BETWEEN.set(Between::Nothing);
         let name = place(&target.root, OBJECTS, &crate::digest::sha256(&contents[0]));
-        let named = fs::read(name).is_ok_and(|bytes| bytes == contents[0]);
+        let named = fs::read(&name)
+            .is_ok_and(|bytes| bytes == contents[0])
+            .then(|| fs::metadata(&name).unwrap().permissions().readonly());
         (put, named)
+    }
+
+    /// what `run` logs at debug level and above, as a person running with `-vv` reads it.
+    #[cfg(target_os = "linux")]
+    fn logged<T>(run: impl FnOnce() -> T) -> (T, String) {
+        #[derive(Clone, Default)]
+        struct Lines(Arc<Mutex<Vec<u8>>>);
+        impl Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, run);
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        (value, text)
     }
 
     /// a file that comes back under its temporary name with a new number, as a disk that forgot
     /// its number shows it, still takes its name: it is the same account's, of the same size, and
-    /// is flushed again on its own handle and read back. windows never renumbers a file, so there
-    /// any new file in its place is refused.
+    /// is made read-only like every pushed file, flushed again on its own handle and read back.
+    /// windows never renumbers a file, so there any new file in its place was put there by
+    /// something else.
     #[test]
     fn a_file_renumbered_before_its_read_back_still_takes_its_name() {
         let (put, named) = one_put(Between::Renumber);
         #[cfg(unix)]
         {
             assert_eq!(put.unwrap(), vec![Put::Copied]);
-            assert!(named);
+            assert_eq!(named, Some(true), "named, and read-only");
         }
         #[cfg(not(unix))]
         {
@@ -1416,8 +1464,24 @@ pub(crate) mod tests {
                 matches!(put, Err(Failed::File(0, Fault::Replaced))),
                 "{put:?}"
             );
-            assert!(!named);
+            assert_eq!(named, None);
         }
+    }
+
+    /// a renumbered file the disk will not make read-only still takes its name, since its bytes
+    /// are checked, and the refusal shows with `-vv`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_renumbered_file_the_disk_will_not_make_read_only_is_named_anyway() {
+        FAILING.set(Some(Failing::ReadOnly));
+        let ((put, named), logs) = logged(|| one_put(Between::Renumber));
+        FAILING.set(None);
+        assert_eq!(put.unwrap(), vec![Put::Copied]);
+        assert_eq!(named, Some(false), "named, keeping its mode");
+        assert!(
+            logs.contains("could not make a pushed file read-only"),
+            "{logs}"
+        );
     }
 
     /// a file swapped for other bytes of the same size before its read-back never takes a name.
@@ -1428,7 +1492,7 @@ pub(crate) mod tests {
             matches!(put, Err(Failed::File(0, Fault::ReadBack))),
             "{put:?}"
         );
-        assert!(!named);
+        assert_eq!(named, None);
     }
 
     /// another account's file in a pushed file's place never takes its name, even with the same
@@ -1441,7 +1505,7 @@ pub(crate) mod tests {
             matches!(put, Err(Failed::File(0, Fault::Replaced))),
             "{put:?}"
         );
-        assert!(!named);
+        assert_eq!(named, None);
     }
 
     /// a file of another size in a pushed file's place never takes its name, and is refused
@@ -1449,7 +1513,7 @@ pub(crate) mod tests {
     #[test]
     fn a_file_of_another_size_in_its_place_is_refused_unflushed() {
         #[cfg(target_os = "linux")]
-        FAILING.set(Some(Flush::Renumbered));
+        FAILING.set(Some(Failing::RenumberedFlush));
         let (put, named) = one_put(Between::Grow);
         #[cfg(target_os = "linux")]
         FAILING.set(None);
@@ -1457,7 +1521,7 @@ pub(crate) mod tests {
             matches!(put, Err(Failed::File(0, Fault::Replaced))),
             "{put:?}"
         );
-        assert!(!named);
+        assert_eq!(named, None);
     }
 
     /// a renumbered file takes its name only once flushed again: a flush that fails stops the
@@ -1465,7 +1529,7 @@ pub(crate) mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_renumbered_file_that_cannot_be_flushed_never_takes_a_name() {
-        FAILING.set(Some(Flush::Renumbered));
+        FAILING.set(Some(Failing::RenumberedFlush));
         let (put, named) = one_put(Between::Renumber);
         FAILING.set(None);
         let badf = Some(rustix::io::Errno::BADF.raw_os_error());
@@ -1473,7 +1537,7 @@ pub(crate) mod tests {
             matches!(&put, Err(Failed::File(0, Fault::Mirror(err))) if err.raw_os_error() == badf),
             "{put:?}"
         );
-        assert!(!named);
+        assert_eq!(named, None);
     }
 
     /// a new mirror's marker is on the disk, its name in the top folder too, before any file is
@@ -1483,7 +1547,7 @@ pub(crate) mod tests {
     fn a_marker_that_cannot_be_flushed_stops_the_push_before_any_file() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("mirror");
-        FAILING.set(Some(Flush::Marker));
+        FAILING.set(Some(Failing::MarkerFlush));
         let opened = Target::open(&root, Arc::default());
         FAILING.set(None);
         let Err(Refused::Failed(err)) = opened else {
