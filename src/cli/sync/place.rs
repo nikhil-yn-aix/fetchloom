@@ -52,6 +52,9 @@ pub(crate) struct Placement {
     /// files fetchloom placed that were gone, deleted or moved by someone, and that it placed
     /// again since data.lock still pins them. `placed` counts them.
     pub(crate) put_back: Vec<String>,
+    /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
+    /// a mirror holds them and only `fetchloom build` makes them.
+    pub(crate) unbuilt: Vec<String>,
     /// exclude patterns of datasets in the run that name files inside an archive, which they
     /// leave where they are.
     #[serde(skip)]
@@ -212,6 +215,7 @@ impl Preview {
         let placement = &self.placement;
         placement.placed + placement.replaced + placement.removed == 0
             && placement.kept.is_empty()
+            && placement.unbuilt.is_empty()
             && self.changes.download.is_empty()
             && self.changes.unpack.is_empty()
             && self
@@ -285,6 +289,8 @@ pub(crate) struct Placing<'a> {
     survey: Survey,
     /// the datasets this placing works on.
     scope: Scope,
+    /// the recipes whose results it leaves out, as [`Placing::leave_out`] says.
+    unbuilt: Vec<String>,
 }
 
 impl<'a> Placing<'a> {
@@ -357,6 +363,7 @@ impl<'a> Placing<'a> {
             actions,
             survey,
             scope: scope.clone(),
+            unbuilt: Vec::new(),
         })
     }
 
@@ -426,22 +433,50 @@ impl<'a> Placing<'a> {
     }
 
     /// the recipes in scope whose result placing needs bytes of that `holds` says the cache
-    /// lacks, by name. nothing downloads a result; only a build makes it again.
+    /// lacks, by name. nothing downloads a result; only a build makes it again. bytes a fetched
+    /// file this placing needs holds too come with its download.
     pub(crate) fn unbuilt(&self, holds: impl Fn(&Sha256, u64) -> bool) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .targets
-            .iter()
-            .zip(&self.actions)
-            .filter(|(target, action)| {
+        let needed = || {
+            self.targets
+                .iter()
+                .zip(&self.actions)
+                .filter(|(_, action)| needs_bytes(action))
+                .map(|(target, _)| target)
+        };
+        let fetched: HashSet<Sha256> = needed()
+            .filter(|target| target.holder != plan::Holder::Result)
+            .map(|target| target.sha256)
+            .collect();
+        let mut names: Vec<String> = needed()
+            .filter(|target| {
                 target.holder == plan::Holder::Result
-                    && needs_bytes(action)
+                    && !fetched.contains(&target.sha256)
                     && !holds(&target.sha256, target.size)
             })
-            .map(|(target, _)| target.dataset.to_owned())
+            .map(|target| target.dataset.to_owned())
             .collect();
         names.sort();
         names.dedup();
         names
+    }
+
+    /// leaves out the results of the recipes `names`, which [`Placing::unbuilt`] found nowhere:
+    /// their files already in place stay, the rest wait for a build, and what an older pin
+    /// placed where those go leaves as any file no dataset needs does. the run then counts as
+    /// incomplete.
+    pub(crate) fn leave_out(&mut self, names: &[String]) {
+        let (targets, actions) = std::mem::take(&mut self.targets)
+            .into_iter()
+            .zip(std::mem::take(&mut self.actions))
+            .filter(|(target, action)| {
+                !(target.holder == plan::Holder::Result
+                    && needs_bytes(action)
+                    && names.iter().any(|name| name == target.dataset))
+            })
+            .unzip();
+        self.targets = targets;
+        self.actions = actions;
+        self.unbuilt.extend_from_slice(names);
     }
 
     /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
@@ -491,6 +526,7 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
+        preview.placement.unbuilt.clone_from(&self.unbuilt);
         preview.placement.notice(
             self.manifest,
             &self.targets,
@@ -646,9 +682,13 @@ impl<'a> Placing<'a> {
             mut survey,
             unknown,
             scope,
+            unbuilt,
         } = self;
         let data_dir = project.data_dir(manifest)?;
-        let mut placement = Placement::default();
+        let mut placement = Placement {
+            unbuilt,
+            ..Placement::default()
+        };
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&data_dir)
             .with_threads(survey.threads)
@@ -721,24 +761,11 @@ impl<'a> Placing<'a> {
                 .is_some_and(|adding| undo(project, &data_dir, threads, state, &adding, checked));
         flushed?;
         // a run of named datasets never vouches for the others, so the next sync looks at all
-        let whole = scope == Scope::All && unknown.is_empty();
+        let whole = scope == Scope::All && unknown.is_empty() && placement.unbuilt.is_empty();
         let complete = whole && !stopped && failure.is_none() && placement.kept.is_empty();
         let synced = synced.map(|synced| Synced { complete, ..synced });
-        let resynced = state.synced != synced;
-        state.synced = synced;
-        // what the run placed, removed or took as placed must be recorded. a state that only
-        // settles files hashed as unchanged, or marks the run synced, spares later runs work, so
-        // a project folder that takes no write, as on a full disk, fails no run that changed
-        // nothing
         let recorded = removed || adopted || undone || !tallies.is_empty();
-        if recorded || needs_writing || resynced {
-            match project.write_state(state) {
-                Err(error) if !recorded => {
-                    tracing::debug!(error = %error, "could not settle the state");
-                }
-                written => written?,
-            }
-        }
+        record(project, state, synced, recorded, needs_writing)?;
         if stopped {
             return Err(Stop::stopped());
         }
@@ -793,6 +820,30 @@ impl<'a> Placing<'a> {
         );
         Ok(placement)
     }
+}
+
+/// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
+/// `recorded`, must be written. a state that only settles files hashed as unchanged, or marks
+/// the run synced, spares later runs work, so a project folder that takes no write, as on a full
+/// disk, fails no run that changed nothing.
+fn record(
+    project: &Project,
+    state: &mut State,
+    synced: Option<Synced>,
+    recorded: bool,
+    needs_writing: bool,
+) -> Result<(), Error> {
+    let resynced = state.synced != synced;
+    state.synced = synced;
+    if recorded || needs_writing || resynced {
+        match project.write_state(state) {
+            Err(error) if !recorded => {
+                tracing::debug!(error = %error, "could not settle the state");
+            }
+            written => written?,
+        }
+    }
+    Ok(())
 }
 
 /// data.toml and data.lock as a sync read them before it began.
@@ -1768,6 +1819,7 @@ mod tests {
             actions: vec![Action::Keep],
             survey: surveyed(&project),
             scope: Scope::All,
+            unbuilt: Vec::new(),
         };
 
         placing
@@ -1957,6 +2009,7 @@ mod tests {
             actions,
             survey,
             scope: Scope::All,
+            unbuilt: Vec::new(),
         };
         placing
             .apply(
@@ -2024,6 +2077,7 @@ mod tests {
                 actions: vec![Action::Overwrite(Reason::Foreign)],
                 survey: surveyed(&project),
                 scope: Scope::All,
+                unbuilt: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -2095,6 +2149,7 @@ mod tests {
                 actions: vec![Action::Unblock(blocker)],
                 survey,
                 scope: Scope::All,
+                unbuilt: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -2169,6 +2224,7 @@ mod tests {
             actions: Vec::new(),
             survey,
             scope: Scope::All,
+            unbuilt: Vec::new(),
         };
 
         placing

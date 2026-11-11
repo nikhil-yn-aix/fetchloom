@@ -130,6 +130,18 @@ sync compares sizes and times, and hashes only files those cannot vouch for, so 
 
 if cache registration fails, sync still succeeds with a warning that gc may not keep the project's files. check cache permissions and run sync again.
 
+## recipe results
+
+sync places a [recipe](../recipes.md)'s pinned result from the cache or a [mirror](../mirrors.md) like any dataset, and never runs its step. on a machine where neither holds it, as in a fresh clone, a sync of every dataset places the rest and leaves the result out with a warning naming the build that makes it, and so does any other command that syncs every dataset, such as `add`. what an older pin of the result placed retires as any file no dataset needs does, so no script reads a result data.lock no longer pins. JSON lists the recipes in `result.placement.unbuilt`, and the next sync looks again. stderr in a fresh clone, from a run on this machine:
+
+```text
+warning: clean's pinned result is not on this machine or a mirror, so it is left out
+  help: run `fetchloom build clean` to make it here
+     Synced 1 dataset into data · 1 result left out until built
+```
+
+`sync clean`, which names the recipe, and `sync --locked` stop instead with `build.needed`, exit 60, before anything is placed.
+
 ## dry run
 
 `sync --dry-run`, or `-n`, prints what sync would change without downloading files for placement, writing `data.lock` or state, changing `data/` or writing the cache. explicit `FETCHLOOM_TRACE` output is still created or truncated. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr after a dataset `cows` was added to `data.toml`, matching a test, where `[port]` stands for the test server's port:
@@ -149,7 +161,7 @@ a checkout this user may not write, such as a read-only mount in a job or a cont
 
 ## exit codes
 
-0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder, and a [recipe](../recipes.md) data.lock does not pin as built now exits 60 with `build.needed`. sync places a recipe's pinned result from the cache and never runs a step: a pinned result neither the cache nor a mirror holds exits 60 with `build.needed`, naming the `fetchloom build` that makes it. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 includes success with preserved conflicts or a registration warning. a name data.toml does not have exits 2 with `usage`. offline missing data exits 20; changed downloaded bytes exit 30. approval failures exit 1. a missing or stale lock under `--locked` exits 1 with `lock.outdated` before downloads or changes to the manifest, lock or data folder, and a [recipe](../recipes.md) data.lock does not pin as built now exits 60 with `build.needed`. a recipe's pinned result neither the cache nor a mirror holds exits 60 with `build.needed` under `--locked` or when the sync names the recipe, as [recipe results](#recipe-results) says. a missing lock reports `there is no data.lock yet`. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 

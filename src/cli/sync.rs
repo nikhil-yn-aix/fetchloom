@@ -107,6 +107,9 @@ pub(super) struct Loop<'a> {
     /// whether a person said yes to going on though the cache's disk may lack room, which says
     /// yes to the size of every download in the run as well.
     roomy: AtomicBool,
+    /// whether a pinned result found nowhere stops a run of every dataset, as `sync --locked`
+    /// asks, rather than being left out with a warning.
+    stops_on_unbuilt: bool,
 }
 
 impl<'a> Loop<'a> {
@@ -126,7 +129,15 @@ impl<'a> Loop<'a> {
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
+            stops_on_unbuilt: false,
         }
+    }
+
+    /// a pinned result that neither the cache nor a mirror holds stops the run, when `stop` says
+    /// so, even where a run of every dataset would leave it out.
+    pub(super) fn stopping_on_unbuilt(mut self, stop: bool) -> Self {
+        self.stops_on_unbuilt = stop;
+        self
     }
 
     pub(super) fn telling(mut self, name: &str) -> Self {
@@ -199,10 +210,10 @@ impl<'a> Loop<'a> {
         })
         .await
         .map_err(|error| self.as_left(error))?;
-        let unbuilt = placing.unbuilt(|digest, size| self.cache.find(digest, Some(size)).is_some());
-        if !unbuilt.is_empty() {
-            return Err(self.as_left(unbuilt_here(&unbuilt)));
-        }
+        self.settle_unbuilt(&mut placing, |digest, size| {
+            self.cache.find(digest, Some(size)).is_some()
+        })
+        .map_err(|error| self.as_left(error))?;
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
             .into_iter()
@@ -210,6 +221,47 @@ impl<'a> Loop<'a> {
         self.download_prepared(manifest, lock, &files).await?;
         self.unpack_locked(manifest, lock, &archives).await?;
         Ok(placing)
+    }
+
+    /// what becomes of the results `placing` needs bytes of that `holds` says the cache lacks:
+    /// a run of every dataset leaves them out with a warning and places the rest, while a run
+    /// that names them, or `sync --locked`, stops with the build that makes them.
+    fn settle_unbuilt(
+        &self,
+        placing: &mut Placing<'_>,
+        holds: impl Fn(&Sha256, u64) -> bool,
+    ) -> Result<(), Error> {
+        let unbuilt = placing.unbuilt(holds);
+        if unbuilt.is_empty() {
+            return Ok(());
+        }
+        if self.stops_on_unbuilt || self.scope != Scope::All {
+            return Err(unbuilt_here(&unbuilt));
+        }
+        let (said, them) = match unbuilt.as_slice() {
+            [name] => (
+                format!(
+                    "{name}'s pinned result is not on this machine or a mirror, so it is left out"
+                ),
+                "it",
+            ),
+            many => (
+                format!(
+                    "the pinned results of {} are not on this machine or a mirror, so they are left out",
+                    many.join(", ")
+                ),
+                "them",
+            ),
+        };
+        self.context.output.warn_with(
+            &said,
+            &format!(
+                "run `fetchloom build {}` to make {them} here",
+                unbuilt.join(" ")
+            ),
+        );
+        placing.leave_out(&unbuilt);
+        Ok(())
     }
 
     /// puts in the cache every file the fetched datasets `names` of `lock` hold, whatever the data
@@ -620,7 +672,7 @@ impl<'a> Loop<'a> {
         damaged: &HashSet<Sha256>,
         guessed: &HashSet<String>,
     ) -> Result<Preview, Error> {
-        let placing = Placing::new(
+        let mut placing = Placing::new(
             self.project,
             manifest,
             lock,
@@ -631,12 +683,9 @@ impl<'a> Loop<'a> {
         )?;
         // a dry run asks no mirror, so only with none could a result come from nowhere else
         if self.context.mirrors.mirrors.list.is_empty() {
-            let unbuilt = placing.unbuilt(|digest, size| {
+            self.settle_unbuilt(&mut placing, |digest, size| {
                 !damaged.contains(digest) && self.cache.find(digest, Some(size)).is_some()
-            });
-            if !unbuilt.is_empty() {
-                return Err(unbuilt_here(&unbuilt));
-            }
+            })?;
         }
         let mut unpack = Vec::new();
         for (dataset, file) in placing

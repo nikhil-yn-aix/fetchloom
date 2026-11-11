@@ -147,7 +147,9 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
         return preview_sync(context, &project, &manifest, read, &seen, &args, scope).await;
     }
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?).within(scope);
+    let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
+        .within(scope)
+        .stopping_on_unbuilt(args.locked);
     let Outcome {
         lock_changed,
         pins,
@@ -285,6 +287,7 @@ fn tell_synced(
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
+        && placement.unbuilt.is_empty()
     {
         let found = in_place(scope, verified);
         context.output.done(
@@ -298,10 +301,13 @@ fn tell_synced(
     } else {
         context.output.done(
             "Synced",
-            &synced_into(manifest, scope, placement.kept.len()),
+            &synced_into(manifest, scope, placement.kept.len(), &placement.unbuilt),
         );
         let first = match scope {
-            Scope::All => manifest.datasets.keys().next(),
+            Scope::All => manifest
+                .datasets
+                .keys()
+                .find(|name| !placement.unbuilt.contains(*name)),
             Scope::Only(names) => names.iter().next(),
         };
         if lock_changed {
@@ -320,11 +326,16 @@ fn tell_synced(
 }
 
 /// what a sync of `scope` that changed something synced, with how many other datasets it left
-/// as they were and how many files, `kept`, it left unchanged.
-fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize) -> String {
+/// as they were, how many files, `kept`, it left unchanged and the recipes whose results it left
+/// out, `unbuilt`.
+fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize, unbuilt: &[String]) -> String {
     let (datasets, others) = match scope {
         Scope::All => (
-            units::count(manifest.datasets.len() as u64, "dataset", "datasets"),
+            units::count(
+                (manifest.datasets.len() - unbuilt.len()) as u64,
+                "dataset",
+                "datasets",
+            ),
             0,
         ),
         Scope::Only(names) => (
@@ -344,6 +355,10 @@ fn synced_into(manifest: &Manifest, scope: &Scope, kept: usize) -> String {
             "other datasets left as they were",
         );
         said = format!("{said} · {others}");
+    }
+    if !unbuilt.is_empty() {
+        let left = units::count(unbuilt.len() as u64, "result", "results");
+        said = format!("{said} · {left} left out until built");
     }
     if kept > 0 {
         let kept = units::count(kept as u64, "file left unchanged", "files left unchanged");
@@ -386,7 +401,9 @@ async fn preview_sync(
     scope: Scope,
 ) -> Result<Report, Error> {
     let old = read.map(|(lock, _)| lock);
-    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?).within(scope);
+    let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?)
+        .within(scope)
+        .stopping_on_unbuilt(args.locked);
     let outcome = preview_all(
         &work,
         manifest,

@@ -1019,7 +1019,7 @@ fn a_rebuild_with_other_files_keeps_the_pin() -> Result {
 }
 
 /// sync places a pinned result from the cache and never runs its step; with the result in no
-/// cache, it names the build that makes it.
+/// cache, it names the build that makes it, unless a download of the same sync brings its bytes.
 #[test]
 fn sync_places_a_result_and_never_builds_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1046,7 +1046,154 @@ fn sync_places_a_result_and_never_builds_it() -> Result {
     );
     assert_eq!(help, "run `fetchloom build clean` to make it here");
     assert_eq!(fix, &Value::Null, "building runs the project's code");
+    // the step copies iris, so the download of iris brings the result's bytes too
+    crate::support::delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
+    let output = building_in(&sandbox, &sandbox.work(), &["sync"])?
+        .env("FETCHLOOM_CACHE", &elsewhere)
+        .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(
+        !text(&output.stderr)?.contains("left out"),
+        "{}",
+        text(&output.stderr)?
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
     assert_eq!(runs(&sandbox.work())?, 1, "sync never runs a step");
+    Ok(())
+}
+
+/// a sync of every dataset on a machine where neither the cache nor a mirror holds a pinned
+/// result places the rest and leaves the result out with a warning naming its build, as an add
+/// does, while `--locked` or naming the recipe stops.
+#[test]
+fn a_plain_sync_leaves_out_a_result_found_nowhere() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        PATH,
+        vec![
+            file(IRIS, "\"v1\""),
+            file(IRIS, "\"v1\""),
+            file(IRIS, "\"v1\""),
+        ],
+    )?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "done"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let data = sandbox.work().join("data");
+    let (iris, clean) = (
+        data.join("iris").join("iris.csv"),
+        data.join("clean").join("clean.csv"),
+    );
+    crate::support::delete(&iris)?;
+    crate::support::delete(&clean)?;
+    let elsewhere = sandbox.folder("another cache")?;
+    let there = |args: &[&str]| -> Result<std::process::Output> {
+        Ok(building_in(&sandbox, &sandbox.work(), args)?
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .output()?)
+    };
+    let output = there(&["--json", "sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(
+        document["result"]["placement"]["unbuilt"],
+        serde_json::json!(["clean"])
+    );
+    let warned = "clean's pinned result is not on this machine or a mirror, so it is left out; run `fetchloom build clean` to make it here";
+    assert!(
+        document["warnings"]
+            .as_array()
+            .is_some_and(|warnings| warnings.iter().any(|warning| warning == warned)),
+        "{}",
+        document["warnings"]
+    );
+    assert_eq!(fs::read(&iris)?, IRIS);
+    assert!(!clean.exists());
+    let again = there(&["sync"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    let told = text(&again.stderr)?;
+    assert!(told.contains("so it is left out\n"), "{told}");
+    assert!(
+        told.contains("Synced 1 dataset into data · 1 result left out until built\n"),
+        "{told}"
+    );
+    let added = there(&["add", &server.url, "--as", "again"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    assert!(
+        text(&added.stderr)?.contains("so it is left out\n"),
+        "{}",
+        text(&added.stderr)?
+    );
+    for args in [&["sync", "--locked"][..], &["sync", "clean"]] {
+        let output = there(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(60),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+    }
+    assert_eq!(runs(&sandbox.work())?, 1, "sync never runs a step");
+    Ok(())
+}
+
+/// what data.toml, data.lock and its list folder hold now, by path in the project.
+fn pins(work: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut held: BTreeMap<String, Vec<u8>> = files(&work.join("data.lock.d"))?
+        .into_iter()
+        .map(|(path, bytes)| (format!("data.lock.d/{path}"), bytes))
+        .collect();
+    for name in ["data.toml", "data.lock"] {
+        held.insert(name.to_owned(), fs::read(work.join(name))?);
+    }
+    Ok(held)
+}
+
+/// puts back what [`pins`] read.
+fn pin_again(work: &Path, held: &BTreeMap<String, Vec<u8>>) -> Result {
+    for (path, bytes) in held {
+        fs::write(work.join(path), bytes)?;
+    }
+    Ok(())
+}
+
+/// a result left out takes along the file an older pin of it placed, so no script reads a
+/// result data.lock no longer pins.
+#[test]
+fn a_left_out_result_retires_its_older_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "one"]))?;
+    let work = sandbox.work();
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let first = pins(&work)?;
+    let manifest = work.join("data.toml");
+    let text_now = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, text_now.replace("\"one\"", "\"two\""))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let second = pins(&work)?;
+    let placed = work.join("data").join("clean").join("clean.csv");
+    pin_again(&work, &first)?;
+    assert_eq!(sandbox.run(&["sync"])?.status.code(), Some(0));
+    assert_eq!(fs::read(&placed)?, b"one");
+
+    pin_again(&work, &second)?;
+    let hex = sha256(b"two");
+    crate::support::delete(
+        &sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..]),
+    )?;
+    let output = sandbox.run(&["sync"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert!(
+        text(&output.stderr)?.contains("so it is left out"),
+        "{}",
+        text(&output.stderr)?
+    );
+    assert!(!placed.exists(), "the older pin's file retires");
+    assert_eq!(runs(&work)?, 2);
     Ok(())
 }
 
