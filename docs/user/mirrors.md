@@ -28,7 +28,7 @@ objects/<2 hex>/<62 hex>   a pinned file, named by its SHA-256
 trees/<2 hex>/<62 hex>     an archive's list of files, named by the SHA-256 of that list
 ```
 
-the `fetchloom-mirror` file tells a mirror from an empty folder, such as the one a network disk mounts on when it is not mounted. `objects` is laid out as the cache's own [objects folder](reference/cache-folder.md). a tree is the record of what an archive unpacks to, kept in the cache under `unpacked/`, and its SHA-256 is the `unpacks_to` that data.lock pins for the archive. with an archive's tree on a mirror, a fresh machine takes the archive's files one by one, and never needs the archive itself.
+the `fetchloom-mirror` file tells a mirror from an empty folder, such as the one a network disk mounts on when it is not mounted. `objects` is laid out as the cache's own [objects folder](reference/cache-folder.md). a tree is the record of what an archive unpacks to, kept in the cache under `unpacked/`, and its SHA-256 is the `unpacks_to` that data.lock pins for the archive. with an archive's tree on a mirror, a fresh machine takes the archive's files one by one, and never needs the archive itself, nor any part of one [split into parts](concepts.md#split-archives).
 
 each file is copied into the cache, never linked, so a later change on the mirror cannot reach a project. on linux, where the mirror and the cache share a disk that makes reflinks, such as btrfs or xfs, the copy is a reflink and costs no space. either way the copy is read once to check its SHA-256 before the cache keeps it.
 

@@ -497,3 +497,38 @@ fn an_archive_from_a_mirror_needs_no_link_of_its_own() -> Result {
     assert_eq!(source.requests().len(), asked);
     Ok(())
 }
+
+/// a split archive's tree comes from a mirror by its tree hash and is kept under the key its
+/// parts give, so a clone gets the archive's files one by one, never its parts.
+#[test]
+fn a_split_archive_comes_from_a_mirror_by_its_tree() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/archives/python.zip"),
+    )?;
+    let scans = sandbox.folder("scans")?;
+    let (first, second) = zip.split_at(zip.len() / 2);
+    fs::write(scans.join("dataset.zip.001"), first)?;
+    fs::write(scans.join("dataset.zip.002"), second)?;
+    ok(&sandbox.run(&["add", "../scans", "--as", "dataset"])?)?;
+    let root = sandbox.folder("mirror")?;
+    mirror_of(&sandbox, &root)?;
+    let (folder, cache) = cold(&sandbox, "cold")?;
+    let output = sandbox
+        .command_in(&folder, &["--json", "sync", "--mirror"])
+        .arg(&root)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    ok(&output)?;
+    for (path, bytes) in MEMBERS {
+        let placed = folder.join("data/dataset").join(path);
+        assert_eq!(fs::read(placed)?, bytes, "{path}");
+    }
+    let document = json(&output)?;
+    assert_eq!(document["work"]["requests"], 0);
+    assert_eq!(
+        document["work"]["mirror_objects"], 5,
+        "the files, not the parts"
+    );
+    Ok(())
+}
