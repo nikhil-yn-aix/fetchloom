@@ -158,7 +158,22 @@ impl Error {
     /// marks the error as a refusal `account` could lift, after accepting `terms` where a source
     /// asks for that too.
     pub(crate) fn needs(mut self, account: crate::auth::Account, terms: Option<String>) -> Error {
-        self.need = Some(Box::new(crate::auth::Need { account, terms }));
+        self.need = Some(Box::new(crate::auth::Need {
+            account,
+            terms,
+            maybe_missing: false,
+        }));
+        self
+    }
+
+    /// marks the error as a refusal `account` could lift, from a source that refuses a name that
+    /// does not exist as it refuses a private one, so the name may be what is wrong.
+    pub(crate) fn needs_or_missing(mut self, account: crate::auth::Account) -> Error {
+        self.need = Some(Box::new(crate::auth::Need {
+            account,
+            terms: None,
+            maybe_missing: true,
+        }));
         self
     }
 

@@ -4,7 +4,7 @@
 use std::io::Write as _;
 use std::process::{Command, Output, Stdio};
 
-use crate::support::{Result, Sandbox, Server, json, reply, text};
+use crate::support::{Result, Routes, Sandbox, Server, json, reply, text};
 
 /// runs `command` with `input` on stdin.
 fn with_stdin(mut command: Command, input: &str) -> Result<Output> {
@@ -372,5 +372,128 @@ fn a_no_while_signing_in_or_out_is_a_cancel_that_changes_nothing() -> Result {
         "{screen}"
     );
     assert_eq!(std::fs::read_to_string(&token)?, "hf_old\n");
+    Ok(())
+}
+
+/// what the hub asks for a dataset's revision, as fetchloom asks, and for a model's.
+const EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags&expand=cardData";
+const MODEL_EXPAND: &str = "expand=sha&expand=gated&expand=private&expand=tags";
+
+/// the hub on this machine: its answer to a name nobody may see, as a typo gets, to a gated
+/// dataset before its terms are accepted, and to a model link whose name a dataset has.
+fn hub() -> Result<Routes> {
+    let answer = |status: &str, fixture: &str| -> Result<_> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sources/hf")
+            .join(fixture);
+        let body = std::fs::read(path)?;
+        let length = body.len().to_string();
+        let head = [
+            ("Content-Type", "application/json"),
+            ("Content-Length", length.as_str()),
+        ];
+        Ok(reply(status, &head, &body))
+    };
+    Routes::start(vec![
+        (
+            format!("/api/datasets/scikit-learn/irs/revision/main?{EXPAND}"),
+            answer("401 Unauthorized", "hidden.json")?,
+        ),
+        (
+            format!("/api/datasets/bigcode/the-stack/revision/main?{EXPAND}"),
+            answer("200 OK", "stack-revision.json")?,
+        ),
+        (
+            "/api/datasets/bigcode/the-stack/auth-check".to_owned(),
+            answer("401 Unauthorized", "stack-auth-check.json")?,
+        ),
+        (
+            format!("/api/models/scikit-learn/iris/revision/main?{MODEL_EXPAND}"),
+            answer("401 Unauthorized", "hidden.json")?,
+        ),
+        (
+            format!("/api/models/scikit-learn/irs/revision/main?{MODEL_EXPAND}"),
+            answer("401 Unauthorized", "hidden.json")?,
+        ),
+        (
+            "/api/datasets/scikit-learn/iris".to_owned(),
+            answer("200 OK", "imdb-revision.json")?,
+        ),
+    ])
+}
+
+/// at a terminal, the offer to sign in after a refusal says first what else may be wrong: a
+/// name with a typo, which the hub answers as it answers a private one, or terms a gated
+/// dataset needs accepted on its page. enter alone is a no, so a reflex starts no sign-in.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_offer_to_sign_in_says_what_comes_first_and_defaults_to_no() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hub = hub()?;
+    for (reference, first) in [
+        (
+            "hf:datasets/scikit-learn/irs",
+            "Check the name first: hugging face answers alike for a name that does not exist and for a private one",
+        ),
+        (
+            "hf:datasets/bigcode/the-stack",
+            "First accept the terms at https://huggingface.co/datasets/bigcode/the-stack",
+        ),
+    ] {
+        let mut add = sandbox.command(&["add", reference]);
+        add.env("FETCHLOOM_TEST_HF_API", &hub.url);
+        let Some((code, screen)) = crate::support::typed(
+            &sandbox.work(),
+            &add,
+            "",
+            "sign in to hugging face now?",
+            "\r",
+        )?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(40), "{screen}");
+        let said = screen.find(first);
+        let asked = screen.find("sign in to hugging face now? [y/N]");
+        assert!(
+            said.zip(asked).is_some_and(|(said, asked)| said < asked),
+            "{screen}"
+        );
+        assert!(!screen.contains("        key "), "no sign-in: {screen}");
+    }
+    Ok(())
+}
+
+/// a link without `/datasets/` names a model. when the hub shows no such model but a dataset of
+/// that name, the error gives the dataset's link rather than a sign-in that cannot help. a model
+/// whose name no dataset has stays a refusal.
+#[test]
+fn a_model_link_whose_name_a_dataset_has_gives_the_datasets_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    let hub = hub()?;
+    let add = |link: &str| {
+        sandbox
+            .command(&["--json", "add", link])
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .output()
+    };
+    let output = add("https://huggingface.co/scikit-learn/iris")?;
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "reference.unresolved", "{error}");
+    assert_eq!(
+        error["message"],
+        "huggingface.co has no public model scikit-learn/iris, but it has a dataset of that name"
+    );
+    assert_eq!(
+        error["help"],
+        "for the dataset, use https://huggingface.co/datasets/scikit-learn/iris"
+    );
+    let output = add("https://huggingface.co/scikit-learn/irs")?;
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    assert_eq!(
+        json(&output)?["errors"][0]["message"],
+        "huggingface.co has no model scikit-learn/irs, or it is private"
+    );
     Ok(())
 }

@@ -60,26 +60,11 @@ impl Repo {
             }
         }
         let response = api.get(&url).await?;
-        let info: Info = crate::source::json(self, &response).map_err(|mut err| {
-            if err.kind == Kind::AuthRequired {
-                // the hub answers 401 alike for a private repository and for one that does not exist
-                let kind = match self.kind {
-                    RepoKind::Dataset => "dataset",
-                    RepoKind::Model => "model",
-                    RepoKind::Space => "space",
-                };
-                err.message = format!(
-                    "huggingface.co has no {kind} {}, or it is private",
-                    self.id
-                );
-                err.help(format!(
-                    "check the name at {}. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`",
-                    self.page()
-                ))
-            } else {
-                err
-            }
-        })?;
+        let info: Info = match crate::source::json(self, &response) {
+            Ok(info) => info,
+            Err(err) if err.kind == Kind::AuthRequired => return Err(self.unseen(api, err).await),
+            Err(err) => return Err(err),
+        };
         if !is_commit(&info.sha) || !is_id(&info.id) {
             return Err(Error::new(
                 Kind::SourceInvalid,
@@ -104,6 +89,50 @@ impl Repo {
             ));
         }
         Ok(info)
+    }
+
+    /// the error for a repository the hub refused to show, which it does alike for a private one
+    /// and for one that does not exist, as after a typo. a link without `/datasets/` names a
+    /// model, so a model the hub does not show, whose name a dataset has, points to the dataset.
+    async fn unseen(&self, api: &impl Api, refused: Error) -> Error {
+        if let Some(dataset) = self.same_named_dataset(api).await {
+            return Error::new(
+                Kind::ReferenceUnresolved,
+                format!(
+                    "huggingface.co has no public model {}, but it has a dataset of that name",
+                    self.id
+                ),
+            )
+            .help(format!("for the dataset, use {}", dataset.page()));
+        }
+        let kind = match self.kind {
+            RepoKind::Dataset => "dataset",
+            RepoKind::Model => "model",
+            RepoKind::Space => "space",
+        };
+        Error::new(
+            refused.kind,
+            format!("huggingface.co has no {kind} {}, or it is private", self.id),
+        )
+        .help(format!(
+            "check the name at {}. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`",
+            self.page()
+        ))
+        .needs_or_missing(crate::auth::Account::HuggingFace)
+    }
+
+    /// the dataset with this model's name, when the hub shows one.
+    async fn same_named_dataset(&self, api: &impl Api) -> Option<Repo> {
+        if self.kind != RepoKind::Model {
+            return None;
+        }
+        let dataset = Repo {
+            kind: RepoKind::Dataset,
+            id: self.id.clone(),
+            revision: None,
+        };
+        let response = api.get(&dataset.api(&[]).ok()?).await.ok()?;
+        (response.status == 200).then_some(dataset)
     }
 
     /// stops at a gated repository whose terms the token on this machine has not accepted.

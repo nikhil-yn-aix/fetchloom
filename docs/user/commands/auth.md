@@ -63,15 +63,16 @@ echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --wi
 
 ## when a download is refused
 
-at a terminal, a command refused for want of an account offers to sign in, then runs once more:
+at a terminal, a command refused for want of an account offers to sign in, then runs once more. the question defaults to no, so enter alone starts no sign-in. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those refusals the offer first says to check the name:
 
 ```text
-error: huggingface.co has no dataset org/private, or it is private
-  help: check the name at https://huggingface.co/datasets/org/private. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
-sign in to hugging face now? [Y/n]
+error: huggingface.co has no dataset scikit-learn/irs, or it is private
+  help: check the name at https://huggingface.co/datasets/scikit-learn/irs. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
+      Check the name first: hugging face answers alike for a name that does not exist and for a private one
+sign in to hugging face now? [y/N]
 ```
 
-a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page; fetchloom shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.
+a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page. without a key on this machine, the offer says that first, as `First accept the terms at https://huggingface.co/datasets/bigcode/the-stack while signed in there`, then asks whether to sign in; with a key, it shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.
 
 ## status
 

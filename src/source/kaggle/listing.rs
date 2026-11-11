@@ -104,6 +104,7 @@ impl Dataset {
                 "check the name at {}. a private dataset needs an account that can read it: sign in with `fetchloom auth login kaggle`",
                 self.page()
             ))
+            .needs_or_missing(crate::auth::Account::Kaggle)
         }
     }
 
@@ -497,7 +498,11 @@ mod tests {
                 .unwrap()
                 .contains("sign in with `fetchloom auth login kaggle`")
         );
-        assert!(without.need.is_some());
+        assert_eq!(
+            without.need.map(|need| (need.account, need.maybe_missing)),
+            Some((crate::auth::Account::Kaggle, true)),
+            "the offer to sign in says first that the name may be wrong"
+        );
         let with = dataset("uciml/nope").hidden(refused(), true);
         assert_eq!(
             with.message,

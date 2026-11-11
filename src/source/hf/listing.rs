@@ -332,6 +332,51 @@ mod tests {
                 && help.contains("fetchloom auth login hf"),
             "{help}"
         );
+        assert_eq!(
+            err.need.map(|need| (need.account, need.maybe_missing)),
+            Some((crate::auth::Account::HuggingFace, true)),
+            "the offer to sign in says first that the name may be wrong"
+        );
+        assert_eq!(recorded.asked().len(), 1, "a dataset needs no other look");
+    }
+
+    /// a link without `/datasets/` names a model. a model the hub does not show, whose name a
+    /// public dataset has, points to that dataset rather than to a sign-in; one whose name no
+    /// dataset has stays a refusal that may be a typo.
+    #[test]
+    fn a_model_the_hub_does_not_show_points_to_a_dataset_of_its_name() {
+        let revision = |name: &str| {
+            api(&format!(
+                "models/scikit-learn/{name}/revision/main?{MODEL_EXPAND}"
+            ))
+        };
+        let recorded = Recorded::default()
+            .on(&revision("iris"), 401, fixture_bytes("hf/hidden.json"))
+            .on(&api("datasets/scikit-learn/iris"), 200, b"{}".to_vec())
+            .on(&revision("irs"), 401, fixture_bytes("hf/hidden.json"))
+            .on(
+                &api("datasets/scikit-learn/irs"),
+                401,
+                fixture_bytes("hf/hidden.json"),
+            );
+        let err = block_on(repo("models/scikit-learn/iris").resolve(&recorded, None)).unwrap_err();
+        assert_eq!(err.kind, Kind::ReferenceUnresolved);
+        assert_eq!(
+            err.message,
+            "huggingface.co has no public model scikit-learn/iris, but it has a dataset of that name"
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some("for the dataset, use https://huggingface.co/datasets/scikit-learn/iris")
+        );
+        assert!(err.need.is_none(), "signing in cannot help");
+        let err = block_on(repo("models/scikit-learn/irs").resolve(&recorded, None)).unwrap_err();
+        assert_eq!(err.kind, Kind::AuthRequired);
+        assert_eq!(
+            err.message,
+            "huggingface.co has no model scikit-learn/irs, or it is private"
+        );
+        assert_eq!(err.need.map(|need| need.maybe_missing), Some(true));
     }
 
     /// a gated repository needs accepted terms and a private one an account; anyone may read a

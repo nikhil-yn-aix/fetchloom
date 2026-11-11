@@ -654,22 +654,31 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
         return Ok(again == Some(true));
     }
     let signing = format!("signing in to {}", title(account));
+    // a reflex enter starts no sign-in, which cannot help when the name is wrong or terms come
+    // first, so what else may be wrong is said before the question
+    if need.maybe_missing {
+        output.say(&format!(
+            "{:>11} the name first: {} answers alike for a name that does not exist and for a private one",
+            "Check",
+            title(account)
+        ));
+    }
+    if let Some(terms) = &need.terms {
+        output.say(&format!(
+            "{:>11} accept the terms at {} while signed in there",
+            "First",
+            output.link(terms)
+        ));
+    }
     if !agree(
         context,
         &format!("sign in to {} now?", title(account)),
-        true,
+        false,
     )
     .map_err(|error| error.cancelling(&signing))?
     .unwrap_or(false)
     {
         return Ok(false);
-    }
-    if let Some(terms) = &need.terms {
-        output.say(&format!(
-            "{:>11} accept the terms at {} while signed in",
-            "First",
-            output.link(terms)
-        ));
     }
     let login = Login {
         account: account.id(),
