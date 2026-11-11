@@ -270,30 +270,37 @@ fn list_names_what_a_recipe_is_made_from() -> Result {
     Ok(())
 }
 
-/// a recipe cannot read a dataset data.toml no longer has, so the dataset stays until the
-/// recipe does.
+/// a recipe cannot read a dataset data.toml no longer has, so the dataset stays until every
+/// recipe that reads it goes, and the refusal names each of them.
 #[test]
 fn a_dataset_a_recipe_reads_is_not_removed() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     with_recipe(&sandbox, &server)?;
-    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
-    let refused = sandbox.run(&["remove", "iris"])?;
-    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
-    let stderr = text(&refused.stderr)?;
-    assert!(stderr.contains("clean is made from iris"), "{stderr}");
-    assert!(
-        stderr.contains("remove clean first, or take iris out of its from in data.toml"),
-        "{stderr}"
-    );
-    assert_eq!(
-        fs::read_to_string(sandbox.work().join("data.toml"))?,
-        manifest
-    );
+    let path = sandbox.work().join("data.toml");
+    let count = "\n[datasets.count]\nfrom = [\"iris\"]\nrun = [\"python3\", \"count.py\", \"{iris}\", \"{out}\"]\n";
+    fs::write(&path, format!("{}{count}", fs::read_to_string(&path)?))?;
+    let refused = |said: &str, help: &str| -> Result {
+        let manifest = fs::read_to_string(&path)?;
+        let refused = sandbox.run(&["remove", "iris"])?;
+        assert_eq!(refused.status.code(), Some(2), "{}", text(&refused.stderr)?);
+        let stderr = text(&refused.stderr)?;
+        assert!(stderr.contains(&format!("error: {said}\n")), "{stderr}");
+        assert!(stderr.contains(&format!("help: {help}\n")), "{stderr}");
+        assert_eq!(fs::read_to_string(&path)?, manifest);
+        Ok(())
+    };
+    refused(
+        "clean and count are made from iris",
+        "remove clean and count first, or take iris out of their from in data.toml",
+    )?;
     let removed = sandbox.run(&["remove", "clean"])?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
-    assert!(!fs::read_to_string(sandbox.work().join("data.toml"))?.contains("clean"));
-    Ok(())
+    assert!(!fs::read_to_string(&path)?.contains("clean"));
+    refused(
+        "count is made from iris",
+        "remove count first, or take iris out of its from in data.toml",
+    )
 }
 
 /// a recipe that makes `tidy` from clean, which [`CLEAN`] makes from iris.

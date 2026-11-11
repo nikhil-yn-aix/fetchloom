@@ -20,14 +20,25 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     };
     let (text, manifest) = project.manifest()?;
     known(&manifest, &args.name, "remove")?;
-    if let Some((reader, _)) = manifest.datasets.iter().find(|(_, entry)| {
-        entry
-            .recipe()
-            .is_some_and(|recipe| recipe.from.contains(&args.name))
-    }) {
+    let readers: Vec<&str> = manifest
+        .datasets
+        .iter()
+        .filter(|(_, entry)| {
+            entry
+                .recipe()
+                .is_some_and(|recipe| recipe.from.contains(&args.name))
+        })
+        .map(|(name, _)| name.as_str())
+        .collect();
+    if let Some((last, rest)) = readers.split_last() {
+        let (them, are, their) = if rest.is_empty() {
+            ((*last).to_owned(), "is", "its")
+        } else {
+            (format!("{} and {last}", rest.join(", ")), "are", "their")
+        };
         return Err(
-            Error::new(Kind::Usage, format!("{reader} is made from {}", args.name)).help(format!(
-                "remove {reader} first, or take {} out of its from in data.toml",
+            Error::new(Kind::Usage, format!("{them} {are} made from {}", args.name)).help(format!(
+                "remove {them} first, or take {} out of {their} from in data.toml",
                 args.name
             )),
         );
