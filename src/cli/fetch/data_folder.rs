@@ -1,6 +1,6 @@
 //! pinned files the project's data folder holds, taken into the cache when it lacks them, before
 //! any mirror or source is asked. a project copied with its data folder to a machine whose cache
-//! never held its files then builds and places them with no download. a file there is
+//! never held its files then pushes, builds and places them with no download. a file there is
 //! only read: the cache gets a clone or a copy, kept only when it hashes to the pin, so an edit is
 //! never taken, and the file is never changed, moved or linked, since a link would let a later
 //! edit of it change the cache's copy.
@@ -23,6 +23,7 @@ use crate::project::manifest::Manifest;
 use crate::project::state::Look;
 use crate::stop::Stop;
 use crate::units;
+use crate::volume::is_plain;
 use crate::work::Work;
 
 /// files copied from the data folder at once, as from a folder mirror.
@@ -122,6 +123,20 @@ impl DataFolder {
         self.paths.is_empty()
     }
 
+    /// which of `wanted` a file here looks to hold, after one look at each path's name: a plain
+    /// file of the pinned size in real folders, that the state does not record with other bytes.
+    /// only [`DataFolder::take`] reads the bytes.
+    pub(in crate::cli) fn holds(&self, context: &Context, wanted: &[Wanted]) -> Vec<bool> {
+        if self.is_empty() {
+            return vec![false; wanted.len()];
+        }
+        let placer = Placer::new(&self.folder);
+        crate::place::run_all(wanted, context.threads.at_most(COPIES), |want| {
+            self.places(want)
+                .any(|path| readable(&placer, &path).is_some_and(|look| look.size == want.size))
+        })
+    }
+
     /// takes into the cache each of `wanted` a file here holds, from the first path whose bytes
     /// hash to the pin, and returns the rest. a file that holds other bytes, or cannot be read,
     /// is left as it is and the next path tried. says once how many files came in.
@@ -171,7 +186,7 @@ impl DataFolder {
     }
 
     /// says with `verb` that `files` of `bytes` come from the data folder into the cache.
-    fn tell(&self, output: &Output, verb: &str, files: u64, bytes: u64) {
+    pub(in crate::cli) fn tell(&self, output: &Output, verb: &str, files: u64, bytes: u64) {
         output.step(
             verb,
             &format!(
@@ -260,6 +275,16 @@ impl DataFolder {
             })
             .map(|place| self.root.join(&place.path))
     }
+}
+
+/// how the plain file at `path` looks, when every folder between the data folder `placer` is
+/// rooted at and it is a real one.
+fn readable(placer: &Placer, path: &Path) -> Option<Look> {
+    placer.check_parent(path).ok()?;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .filter(is_plain)
+        .map(|found| Look::of(&found))
 }
 
 /// how the file at `path` looks, when there is one.
@@ -435,10 +460,26 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, &linked).unwrap();
         let data = found(&project, &manifest, &["inputs/linked/weather.csv"]);
         let context = context();
+        assert_eq!(data.holds(&context, &[wanted()]), [false]);
         assert_eq!(
             data.take(&context, &cache, vec![wanted()]).unwrap(),
             vec![wanted()]
         );
         assert!(cache.find(&wanted().digest, None).is_none());
+    }
+
+    /// one look says a file of the pinned size is there, as a dry run asks; only taking it reads
+    /// its bytes.
+    #[test]
+    fn holding_is_told_by_size_alone() {
+        let (_folder, project, manifest, _cache) = project();
+        let (edited, short) = ("inputs/weather/weather.csv", "inputs/weather/short.csv");
+        placed(&project, edited, EDITED);
+        placed(&project, short, b"station\n");
+        let context = context();
+        let held = |paths: &[&str]| found(&project, &manifest, paths).holds(&context, &[wanted()]);
+        assert_eq!(held(&[edited]), [true]);
+        assert_eq!(held(&[short]), [false]);
+        assert_eq!(held(&["inputs/weather/gone.csv"]), [false]);
     }
 }

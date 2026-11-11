@@ -1,10 +1,11 @@
 //! a project copied with its data folder to a machine whose cache never held its files: what the
 //! data folder holds at the paths data.lock places is taken back into the cache, after a check of
-//! its bytes, so build and sync need no request and no source.
+//! its bytes, so push, build and sync need no request and no source.
 
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::build::{build, building_in, runs};
 use crate::export::sha256;
@@ -13,6 +14,9 @@ use crate::support::{Result, Sandbox, Server, delete, file, json, text};
 
 /// a recipe that makes `clean` by copying iris, so the data folder holds iris's bytes twice.
 const CLEAN: &str = "\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"copy\", \"{iris}\", \"{out}\"]\n";
+
+/// iris with one byte changed: the size data.lock pins, other bytes.
+const EDITED: &[u8] = b"sepal_length,species\n5.2,setosa\n";
 
 /// a project in the work folder whose data folder is `inputs`, with iris added from `server`
 /// and, with `recipe`, [`CLEAN`] built from it: one object at two paths.
@@ -59,6 +63,11 @@ fn copy_tree(from: &Path, to: &Path) -> Result {
     Ok(())
 }
 
+/// the bytes and modification time of the file at `path`.
+fn look(path: &Path) -> Result<(Vec<u8>, SystemTime)> {
+    Ok((fs::read(path)?, fs::metadata(path)?.modified()?))
+}
+
 /// where a cache or a mirror keeps the object holding `bytes`, below `root`.
 fn object(root: &Path, bytes: &[u8]) -> PathBuf {
     let hex = sha256(bytes);
@@ -77,6 +86,54 @@ fn unlinked(path: &Path, cache: &Path) -> Result {
     }
     #[cfg(not(unix))]
     let _ = (path, cache);
+    Ok(())
+}
+
+/// push copies what the cache lacks from the data folder into the cache, then into the mirror,
+/// asking nothing of the source and leaving the data folder's files as they were. its dry run
+/// says so and writes nothing.
+#[test]
+fn a_copied_project_pushes_from_its_data_folder_with_no_request() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, true)?;
+    let asked = server.requests().len();
+    let (two, cache) = copied(&sandbox, "two")?;
+    let placed = two.join("inputs").join("iris").join("iris.csv");
+    let before = look(&placed)?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let push = |args: &[&str]| {
+        sandbox
+            .command_in(&two, args)
+            .arg("--to")
+            .arg(&mirror)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let dry = push(&["--yes", "push", "--dry-run"])?;
+    let stderr = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{stderr}");
+    let said = format!(
+        "Would copy 1 file · {} B from inputs into the cache",
+        IRIS.len()
+    );
+    assert!(stderr.contains(&said), "{stderr}");
+    assert!(!mirror.exists() && !object(&cache, IRIS).exists());
+    let output = push(&["--json", "--yes", "push"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    assert_eq!(document["result"]["copied"], 1, "{document}");
+    assert_eq!(document["work"]["data_folder_objects"], 1, "{document}");
+    assert_eq!(
+        document["work"]["data_folder_bytes"],
+        IRIS.len(),
+        "{document}"
+    );
+    assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
+    assert_eq!(server.requests().len(), asked, "the source is never asked");
+    assert_eq!(look(&placed)?, before);
+    unlinked(&placed, &cache)?;
+    unlinked(&two.join("inputs").join("clean").join("iris.csv"), &cache)?;
     Ok(())
 }
 
@@ -121,6 +178,39 @@ fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Re
         fs::read(two.join("inputs").join("clean").join("iris.csv"))?,
         IRIS
     );
+    Ok(())
+}
+
+/// a file of the pinned size holding other bytes is never taken or changed, so the push fails
+/// as it would with no file there.
+#[test]
+fn an_edit_of_the_same_size_is_never_taken() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server, false)?;
+    let (two, cache) = copied(&sandbox, "two")?;
+    let placed = two.join("inputs").join("iris").join("iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, EDITED)?;
+    let before = look(&placed)?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command_in(&two, &["--json", "--yes", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "offline.missing", "{document}");
+    assert_eq!(
+        error["message"],
+        "this machine's cache lacks files the push needs, and push never downloads"
+    );
+    assert_eq!(document["work"]["data_folder_objects"], 0, "{document}");
+    assert_eq!(look(&placed)?, before);
+    assert!(!object(&cache, IRIS).exists());
+    assert!(!object(&cache, EDITED).exists());
     Ok(())
 }
 

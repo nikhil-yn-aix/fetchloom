@@ -1,8 +1,9 @@
 //! `fetchloom push`: the files data.lock pins, copied from this machine's cache into a folder
 //! mirror as mirrors are read, with the lists of what their archives unpack to, so a teammate's
 //! sync, a machine without a network or a reviewer can take them from there. it writes the
-//! mirror alone, never the project or the cache, and it never downloads or builds: what the
-//! cache lacks is named with what to run first.
+//! mirror, and the cache only to take in a file it lacks that the data folder holds with its
+//! pinned bytes. it never changes the project, downloads or builds: what neither holds is named
+//! with what to run first.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -14,6 +15,7 @@ use serde::Serialize;
 
 use super::Context;
 use super::args;
+use super::fetch::data_folder::DataFolder;
 use super::project::{find, known, locked};
 use super::sync::Scope;
 use crate::cache::{Cache, read_unfollowed};
@@ -21,6 +23,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
 use crate::mirror::{Location, OBJECTS, TREES};
+use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::lock::archives::Archive;
 use crate::project::manifest::Manifest;
@@ -123,6 +126,16 @@ struct Planned {
     /// what the mirror holds at the name of each of `needed`.
     there: Vec<There>,
     asks: Vec<Asking>,
+    /// where in `needed` the files are that the mirror and the cache lack.
+    lacked: Vec<usize>,
+    /// each archive whose files this machine does not know: its dataset, and
+    /// `<dataset>/<archive>`.
+    unknown: Vec<(String, String)>,
+    /// where in `needed` the files are that the cache lacks and the data folder looks to hold,
+    /// which the push takes into the cache before it writes.
+    taking: Vec<usize>,
+    /// the data folder `taking` comes from.
+    folder: DataFolder,
 }
 
 pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error> {
@@ -154,15 +167,17 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         super::open_cache()?
     };
     let selected = (!args.names.is_empty()).then(|| selected(&manifest, &args.names, false));
-    let planned = plan(
+    let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
     )?;
+    settle(context, &project, &manifest, &lock, &cache, &mut planned)?;
     if args.dry.dry_run {
         let report = report(&planned, Outcome::DryRun);
         tell_dry(context, &planned, &report);
         return Ok(report);
     }
     ask(context, &planned)?;
+    take(context, &cache, &planned)?;
     let (started, puts) = write(context, &cache, &planned)?;
     let report = report(&planned, Outcome::Written(started, &puts));
     tell(context, &planned, &report);
@@ -226,13 +241,12 @@ fn selected(manifest: &Manifest, names: &[String], inputs: bool) -> Vec<String> 
     chosen.into_iter().map(str::to_owned).collect()
 }
 
-/// what pushing `datasets` from `cache` into the folder `target` needs, and what the mirror
-/// there holds of it already, looked at once a file.
+/// what pushing `datasets` from `cache` into the folder `target` needs, what the mirror there
+/// holds of it already, looked at once a file, and what neither the mirror nor the cache holds.
 ///
 /// # Errors
 ///
-/// a folder that cannot take a push, a mirror that cannot be looked in, and `offline.missing`
-/// with what to run when the cache lacks a file the mirror lacks too.
+/// a folder that cannot take a push, and a mirror that cannot be looked in.
 fn plan(
     context: &Context,
     manifest: &Manifest,
@@ -263,7 +277,7 @@ fn plan(
         .filter(|ask| copying.contains(ask.dataset.as_str()))
         .collect();
     let lacked = lacking(context, cache, &needed, &there);
-    let planned = Planned {
+    Ok(Planned {
         target,
         state,
         selected,
@@ -271,13 +285,90 @@ fn plan(
         needed,
         there,
         asks,
-    };
-    if lacked.is_empty() && unknown.is_empty() {
-        return Ok(planned);
+        lacked,
+        unknown,
+        taking: Vec::new(),
+        folder: DataFolder::default(),
+    })
+}
+
+/// moves from `planned.lacked` to `planned.taking` the files the data folder looks to hold, after
+/// one look at each, which the push takes into the cache once it may write.
+///
+/// # Errors
+///
+/// `offline.missing` with what to run first, when a file the mirror needs is nowhere on this
+/// machine or an archive's files are not known.
+fn settle(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
+    planned: &mut Planned,
+) -> Result<(), Error> {
+    if !planned.lacked.is_empty() {
+        planned.folder = DataFolder::planned(project, manifest, lock, cache);
+        let wanted: Vec<crate::mirror::Wanted> = planned
+            .lacked
+            .iter()
+            .map(|at| wanted(&planned.needed[*at]))
+            .collect();
+        let held = planned.folder.holds(context, &wanted);
+        let (taking, lacked): (Vec<_>, Vec<_>) =
+            planned.lacked.iter().zip(held).partition(|(_, held)| *held);
+        planned.taking = taking.into_iter().map(|(at, _)| *at).collect();
+        planned.lacked = lacked.into_iter().map(|(at, _)| *at).collect();
     }
-    let lacked: Vec<&Needed> = lacked.into_iter().map(|at| &planned.needed[at]).collect();
-    let error = missing(&lacked, &unknown, planned.selected.is_some());
-    Err(with_report(error, &report(&planned, Outcome::Stopped)))
+    if planned.lacked.is_empty() && planned.unknown.is_empty() {
+        return Ok(());
+    }
+    let lacked: Vec<&Needed> = planned
+        .lacked
+        .iter()
+        .map(|at| &planned.needed[*at])
+        .collect();
+    let error = missing(&lacked, &planned.unknown, planned.selected.is_some());
+    Err(with_report(error, &report(planned, Outcome::Stopped)))
+}
+
+/// takes into the cache the files `planned.taking` names, from the data folder, each only when
+/// its bytes there hash to its pin.
+///
+/// # Errors
+///
+/// a failure to write the cache, a stop, and `offline.missing` when the data folder held other
+/// bytes after all.
+fn take(context: &Context, cache: &Cache, planned: &Planned) -> Result<(), Error> {
+    if planned.taking.is_empty() {
+        return Ok(());
+    }
+    let wanted = planned
+        .taking
+        .iter()
+        .map(|at| wanted(&planned.needed[*at]))
+        .collect();
+    let rest = planned.folder.take(context, cache, wanted)?;
+    if rest.is_empty() {
+        return Ok(());
+    }
+    let lacked: Vec<&Needed> = planned
+        .taking
+        .iter()
+        .map(|at| &planned.needed[*at])
+        .filter(|needed| rest.iter().any(|want| want.digest == needed.item.digest))
+        .collect();
+    let error = missing(&lacked, &[], planned.selected.is_some());
+    Err(with_report(error, &report(planned, Outcome::Stopped)))
+}
+
+/// `needed` as the data folder is asked for it.
+fn wanted(needed: &Needed) -> crate::mirror::Wanted {
+    crate::mirror::Wanted {
+        digest: needed.item.digest,
+        size: needed.item.size,
+        label: needed.label.clone(),
+    }
 }
 
 /// what a push sends to a mirror, and the archives whose files this machine does not know.
@@ -990,10 +1081,20 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
     ));
 }
 
-/// the lines of a dry run: what a push would write, find there and ask about.
+/// the lines of a dry run: what a push would take from the data folder, write, find there and
+/// ask about.
 fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
     let output = &context.output;
     let target = planned.target.display();
+    if !planned.taking.is_empty() {
+        let bytes = planned
+            .taking
+            .iter()
+            .map(|at| planned.needed[*at].item.size)
+            .sum();
+        let files = planned.taking.len() as u64;
+        planned.folder.tell(output, "Would copy", files, bytes);
+    }
     if report.started {
         output.step("Would start", &format!("a mirror in {target}"));
     }

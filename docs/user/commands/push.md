@@ -27,7 +27,7 @@ fetchloom push [options] [name]...
 
 ## what it writes
 
-push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out, every part of one split into parts too; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out, as `fetchloom drop` writes one, is not placed, so it is not pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code, and it never changes the project or the cache.
+push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out, every part of one split into parts too; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out, as `fetchloom drop` writes one, is not placed, so it is not pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code. it never changes the project, and it adds to the cache only the files it takes from the data folder, as [it never downloads](#it-never-downloads) says.
 
 from a real run, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened, on stderr:
 
@@ -86,7 +86,16 @@ a FAT32 drive refuses a file larger than 4 GiB, so push stops at the first one w
 
 ## it never downloads
 
-push copies what this machine's cache holds. a file the mirror lacks and the cache lacks too stops it before anything is written, with `offline.missing`, exit 20, naming the files and what to run first. from a clone that never synced:
+push copies what this machine's cache holds. a file the cache lacks that the data folder holds, at a path data.lock places it at, is copied into the cache first, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder. the copy is a clone where the disk makes one, never a link, and the cache keeps it only when its bytes hash to the pin, so the file in the data folder stays as it is. stderr from a real run in such a copy, whose cache was empty, the mirror's path shortened:
+
+```text
+     Copied 1 file · 21 B from data into the cache
+    Started a mirror in /mnt/lab/fetchloom
+     Pushed 1 file · 21 B to /mnt/lab/fetchloom
+         Ok every file squares and table need is on the mirror
+```
+
+a file the mirror lacks and neither the cache nor the data folder holds stops push before anything is written, with `offline.missing`, exit 20, naming the files and what to run first. a file in the data folder with other bytes than its pin counts as missing, even with the pinned size; push never changes it. from a clone that never synced:
 
 ```text
 error: this machine's cache lacks files the push needs, and push never downloads
@@ -118,7 +127,7 @@ error: the sources of iris and pets did not say who may read them, so pushing th
 
 ## dry run
 
-`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing:
+`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder when one look finds a file of the pinned size there, as `Would copy 1 file · 21 B from data into the cache`; only the push itself hashes it. a dry run of a project whose cache holds every file:
 
 ```text
 Would start a mirror in /mnt/lab/fetchloom
@@ -143,18 +152,18 @@ a push that stops at a file's read-back has `result` null and one error: `integr
 {"kind":"local.io","message":"something replaced many/d00/f00 in the mirror /mnt/lab/fetchloom while push wrote it, so it was not given its name","details":[],"help":"stop whatever else writes into that folder, such as a sync client, a backup tool or antivirus, then push again","fix":null}
 ```
 
-the work counters stay 0, since push asks no server anything. [JSON output](../reference/json-output.md) has the envelope.
+push asks no server anything, so the work counters count no request; `data_folder_objects` and `data_folder_bytes` count the files it took from the data folder into the cache. [JSON output](../reference/json-output.md) has the envelope.
 
 ## exit codes
 
-0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that the cache lacks files; 30 that a pushed file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that neither the cache nor the data folder holds files it needs; 30 that a pushed file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
 | `holds files, but no fetchloom-mirror file says it is a mirror` | `--to` names a folder that is not a mirror, or a network disk that is not mounted | name an empty folder or a mirror's top folder, and mount the disk |
-| `this machine's cache lacks files the push needs` | this machine never synced those datasets, or `cache gc` freed them | run `fetchloom sync`, then push again |
+| `this machine's cache lacks files the push needs` | this machine never synced those datasets, or `cache gc` freed them, and the data folder does not hold them with their pinned bytes | run `fetchloom sync`, then push again |
 | `... so pushing them needs a yes` | a source wanted an account or accepted terms, or did not say who may read the data | check that everyone who can read the mirror may have it, then answer yes or add `--yes` |
 | `..., read back from ..., holds other bytes than were written, so it was not given its name` | the disk lost or changed a write, so the file read back is not what push wrote | check the disk that holds the mirror, then push again |
 | `something replaced ... in the mirror ... while push wrote it, so it was not given its name` | another program writes into the mirror's folder, such as a sync client, a backup tool or antivirus, and put another file in place of one push wrote | stop that program, or keep it out of the folder, then push again |
