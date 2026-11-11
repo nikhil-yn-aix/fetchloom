@@ -49,7 +49,8 @@ def environment(home, cache=None, origin=None):
 
 
 def check_version(binary, version, env=None, commit=None, cwd=None):
-    said = subprocess.check_output([str(binary), "--version", *(["-v"] if commit else [])], env=env, cwd=cwd,
+    command = [str(part) for part in binary] if isinstance(binary, (list, tuple)) else [str(binary)]
+    said = subprocess.check_output([*command, "--version", *(["-v"] if commit else [])], env=env, cwd=cwd,
                                    text=True, timeout=20)
     require(said.splitlines()[0] == f"fetchloom {version}", said)
     if commit:

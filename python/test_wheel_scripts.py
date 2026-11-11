@@ -1,4 +1,4 @@
-"""fl added to a built wheel by the command release.yml runs, with every other file kept."""
+"""fl added to a built wheel by the command artifacts.yml runs, with every other file kept."""
 
 import base64
 import glob
@@ -50,10 +50,10 @@ class WheelScripts(unittest.TestCase):
         return record
 
     def run_step(self):
-        text = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        text = (ROOT / ".github/workflows/artifacts.yml").read_text(encoding="utf-8")
         steps = [line.strip() for line in text.splitlines()
                  if "python/wheel_scripts.py" in line and not line.strip().startswith("#")]
-        self.assertEqual(len(steps), 1, "release.yml must add the scripts to the wheels once")
+        self.assertEqual(len(steps), 1, "artifacts.yml must add the scripts to the wheels once")
         words = shlex.split(steps[0])
         after = words[words.index("python/wheel_scripts.py") + 1:]
         wheels = [path for word in after for path in sorted(glob.glob(word, root_dir=self.root))]

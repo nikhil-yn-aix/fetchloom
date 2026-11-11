@@ -12,7 +12,7 @@ import tempfile
 import zipfile
 from email.parser import Parser
 
-from ci_journey import ROOT, digest, environment, require
+from ci_journey import ROOT, check_version, digest, environment, require
 
 
 def inspect_wheel(wheel, version, binary):
@@ -58,6 +58,8 @@ def main():
         wrong.chmod(0o755)
         env = environment(home)
         env['PATH'] = str(decoy) + os.pathsep + env['PATH']
+        check_version(scripts / ('fl.exe' if sys.platform == 'win32' else 'fl'), args.version, env, cwd=tests)
+        check_version([python, '-I', '-m', 'fetchloom'], args.version, env, cwd=tests)
         subprocess.run([str(python), '-I', str(ROOT / 'python/ci_journey.py'), '--binary', str(program),
                         '--helper', '--version', args.version, '--commit', args.commit, '--report', str(report)],
                        cwd=tests, env=env, check=True)

@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 
 from check_artifacts import archive_name
-from ci_journey import ROOT, Journey, Server, digest, environment, fixtures, require
+from ci_journey import ROOT, Journey, Server, check_version, digest, environment, fixtures, require
 
 
 @contextlib.contextmanager
@@ -102,6 +102,7 @@ def check(args):
                 return result
             invoke(True)
             require(digest(installed) == digest(args.binary), 'installer selected different bytes')
+            check_version(installed.with_name('fl.exe' if sys.platform == 'win32' else 'fl'), args.version, env, cwd=root)
             invoke(True)
             require(profile.read_text(encoding='utf-8') == '# existing profile\n', 'no-modify-path changed a profile')
             if registry is not None:

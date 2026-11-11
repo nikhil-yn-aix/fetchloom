@@ -130,6 +130,12 @@ class VersionTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 check_version(Path('fetchloom'), VERSION)
 
+    def test_python_module_entrypoint_keeps_its_interpreter_arguments(self):
+        command = [Path('venv/python'), '-I', '-m', 'fetchloom']
+        with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.0\n') as run:
+            check_version(command, VERSION)
+        self.assertEqual(run.call_args.args[0], [str(Path('venv/python')), '-I', '-m', 'fetchloom', '--version'])
+
 
 class WheelEnvironmentTests(unittest.TestCase):
     def test_restored_rust_cache_does_not_supply_the_wheel_environment(self):
