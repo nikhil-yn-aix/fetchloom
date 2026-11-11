@@ -91,6 +91,54 @@ fn a_proxy_on_this_machine_carries_a_host_that_was_typed() -> Result {
     Ok(())
 }
 
+/// a link typed over http to a site that sends it on to https, as most sites do, is followed:
+/// the https origin is another origin, which nobody trusted, and so may reach any public
+/// address. a scripted proxy stands in for the site, which answers the tunnel with 502.
+#[test]
+fn a_typed_http_link_follows_its_site_to_https() -> Result {
+    let sandbox = Sandbox::new()?;
+    let link = "http://data.example.invalid/iris.csv";
+    let upgrade = reply(
+        "301 Moved Permanently",
+        &[
+            ("Location", "https://data.example.invalid/iris.csv"),
+            ("Content-Length", "0"),
+        ],
+        b"",
+    );
+    let site = Server::start(
+        "",
+        vec![
+            upgrade,
+            reply("502 Bad Gateway", &[("Content-Length", "0")], b""),
+        ],
+    )?;
+    let output = sandbox
+        .command(&["--json", "get", link])
+        .env("HTTP_PROXY", &site.url)
+        .env("HTTPS_PROXY", &site.url)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .env("FETCHLOOM_RETRIES", "0")
+        .output()?;
+    let asked: Vec<String> = site
+        .requests()
+        .iter()
+        .filter_map(|head| head.lines().next().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            format!("get {link} http/1.1"),
+            "connect data.example.invalid:443 http/1.1".to_owned()
+        ],
+        "{}",
+        text(&output.stdout)?
+    );
+    assert_ne!(json(&output)?["errors"][0]["kind"], "network.refused");
+    Ok(())
+}
+
 /// a proxy that wants a login answers 407, to a tunnel for https and to a plain http request
 /// alike. fetchloom names the proxy rather than the site, and stops there: another try gets no
 /// further, and the help says what each kind of login needs.

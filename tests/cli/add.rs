@@ -317,6 +317,8 @@ fn adding_a_previous_source_does_not_match_an_edited_reference() -> Result {
         &manifest,
         fs::read_to_string(&manifest)?.replace(&first.url, &second.url),
     )?;
+    // data.toml now names a server on this machine, which only allowed_origins lets it reach
+    sandbox.allow(&second.url);
 
     let output = sandbox.run(&["--json", "add", &first.url])?;
     assert!(output.status.success(), "{}", text(&output.stdout)?);

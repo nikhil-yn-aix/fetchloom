@@ -5,13 +5,12 @@ use super::*;
 use crate::source::recorded::block_on;
 
 #[test]
-fn proxy_verdicts_are_cached_and_typed_hosts_skip_preflight() {
+fn proxy_verdicts_are_cached_and_typed_origins_skip_preflight() {
     for private in [false, true] {
         let lookups = Arc::new(AtomicUsize::new(0));
         let seen = lookups.clone();
-        let proxies = Proxies::with_lookup("http://127.0.0.1:9", move |name, port| {
+        let proxies = Proxies::with_lookup("http://127.0.0.1:9", move |name, _| {
             assert_eq!(name, "inward.invalid");
-            assert_eq!(port, 443);
             seen.fetch_add(1, Ordering::SeqCst);
             Box::pin(
                 async move { private.then(|| "name resolves to a private address".to_owned()) },
@@ -24,9 +23,16 @@ fn proxy_verdicts_are_cached_and_typed_hosts_skip_preflight() {
                 assert_eq!(proxies.check(&url, &typed).await.is_err(), private);
             }
             assert_eq!(lookups.load(Ordering::SeqCst), 1);
-            typed.add_host("INWARD.invalid");
-            assert!(proxies.check(&url, &typed).await.is_ok());
-            assert_eq!(lookups.load(Ordering::SeqCst), 1);
+            typed.add(&Url::parse("https://INWARD.invalid:8443/typed").unwrap());
+            let typed_url = Url::parse("https://inward.invalid:8443/file").unwrap();
+            assert!(proxies.check(&typed_url, &typed).await.is_ok());
+            assert_eq!(
+                lookups.load(Ordering::SeqCst),
+                1,
+                "a typed origin is not looked up"
+            );
+            // the host's other origins are not typed, so the verdict on the name still holds
+            assert_eq!(proxies.check(&url, &typed).await.is_err(), private);
         });
     }
 }

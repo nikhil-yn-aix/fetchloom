@@ -202,13 +202,8 @@ impl Context {
             net
         };
         // a person named these mirrors, as they type a link, so a lab server on their network
-        // may be one
-        net.trust(
-            self.mirrors
-                .mirrors
-                .web()
-                .filter_map(|base| base.host_str().map(str::to_owned)),
-        );
+        // may be one. each mirror's origin is trusted, and no other port or scheme of its host
+        net.trust(self.mirrors.mirrors.web().map(url::Url::origin));
         net
     }
 }

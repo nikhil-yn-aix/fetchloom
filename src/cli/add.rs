@@ -1289,8 +1289,8 @@ fn validate_add(
     if let Some(asked) = args.name.as_deref() {
         usable(asked, manifest)?;
     }
-    // the host the person typed, such as a dataverse install on a university network
-    net.trust(parsed.reference.written_host());
+    // the origin the person typed, such as a dataverse install on a university network
+    net.trust(parsed.reference.written_origin());
     Ok(parsed)
 }
 

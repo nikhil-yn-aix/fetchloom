@@ -131,7 +131,7 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
             server.url
         ),
     )?;
-    let refused = |command: &str, allowed: &str, cache: &std::path::Path| -> Result {
+    let refused = |command: &str, allowed: &str, cache: &std::path::Path| -> Result<_> {
         let output = sandbox
             .command(&["--json", command])
             .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
@@ -140,19 +140,22 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         let document = json(&output)?;
         assert_eq!(output.status.code(), Some(20), "{allowed}: {document}");
         assert_eq!(document["errors"][0]["kind"], "network.refused");
-        assert_eq!(
-            document["errors"][0]["help"],
-            format!(
-                "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
-            ),
-            "{command}"
-        );
-        Ok(())
+        Ok(document["errors"][0].clone())
     };
-    // allowed nowhere or on another port
-    for allowed in ["", "http://127.0.0.1:9"] {
-        refused("sync", allowed, &sandbox.cache())?;
-    }
+    let untrusted = format!(
+        "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
+    );
+    assert_eq!(refused("sync", "", &sandbox.cache())?["help"], untrusted);
+    // another port of the host is another origin, which the refusal tells apart
+    let error = refused("sync", "http://127.0.0.1:9", &sandbox.cache())?;
+    assert_eq!(
+        error["details"][0],
+        trusted_alone("http://127.0.0.1:9", "127.0.0.1")
+    );
+    assert_eq!(
+        error["help"],
+        format!("add {origin} to allowed_origins to reach it too")
+    );
     assert_eq!(server.requests(), Vec::<String>::new());
     let output = sandbox
         .command(&["--json", "sync"])
@@ -163,8 +166,163 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     assert_eq!(fs::read(&placed)?, b"a,b\n");
     // as in a fresh clone, the build must download what the recipe reads
     crate::support::delete(&placed)?;
-    refused("build", "", &sandbox.folder("empty")?)?;
+    assert_eq!(
+        refused("build", "", &sandbox.folder("empty")?)?["help"],
+        untrusted
+    );
     assert_eq!(server.requests().len(), 1, "only the allowed sync asked");
+    Ok(())
+}
+
+/// the line a refusal adds when `trusted` is another origin on `host`, the refused link's host.
+fn trusted_alone(trusted: &str, host: &str) -> String {
+    format!("only {trusted} is trusted on {host}, and trust covers that origin alone")
+}
+
+/// another port of a host that `allowed_origins` lists is another origin, which nobody trusted: it
+/// may reach public addresses only, so this machine's is refused once the name is looked up.
+#[test]
+fn another_port_of_an_allowed_host_reaches_no_private_address() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+    let link = server.url.replace("127.0.0.1", "localhost");
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.local]\nref = \"{link}\"\n"),
+    )?;
+    let output = sandbox
+        .command(&["--json", "sync"])
+        .env("FETCHLOOM_ALLOWED_ORIGINS", "http://localhost:9")
+        .output()?;
+    assert_eq!(server.requests(), Vec::<String>::new());
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        format!("fetchloom will not follow {link}: localhost resolves only to private addresses")
+    );
+    assert_eq!(
+        error["details"][0],
+        trusted_alone("http://localhost:9", "localhost")
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "add {} to allowed_origins to reach it too",
+            link.trim_end_matches(PATH)
+        )
+    );
+    Ok(())
+}
+
+/// a server on this machine that serves `body` at [`PATH`], pinned by a link typed for `add` in
+/// the sandbox's work folder, which `allowed_origins` does not list.
+fn pinned(sandbox: &Sandbox, body: &[u8]) -> Result<Routes> {
+    let source = Routes::start(vec![(PATH.to_owned(), file(body, "\"v1\""))])?;
+    let added = sandbox.run(&["add", &format!("{}{PATH}", source.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    Ok(source)
+}
+
+/// a mirror a person names is trusted at its own origin alone. in a clone, a mirror on another
+/// port of the same host lets data.lock reach no server on this machine that `allowed_origins`
+/// does not list, and the refusal names the mirror's origin.
+#[test]
+fn a_mirror_on_this_machine_trusts_its_own_origin_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = pinned(&sandbox, b"a,b\n")?;
+    let asked = source.requests().len();
+    let mirror = Routes::start(Vec::new())?;
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let base = format!("{}/m", mirror.url);
+    let output = sandbox
+        .command_in(&clone, &["--json", "sync", "--locked", "--mirror", &base])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(
+        source.requests().len(),
+        asked,
+        "the clone asked the source: {}",
+        text(&output.stdout)?
+    );
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    let link = format!("{}{PATH}", source.url);
+    assert_eq!(error["kind"], "network.refused");
+    assert_eq!(
+        error["message"],
+        format!("fetchloom will not follow {link}: {link} points at the private address 127.0.0.1")
+    );
+    assert_eq!(error["details"][0], trusted_alone(&mirror.url, "127.0.0.1"));
+    assert_eq!(
+        error["help"],
+        format!("add {} to allowed_origins to reach it too", source.url)
+    );
+    Ok(())
+}
+
+/// a link typed in a clone is trusted at its own origin alone: the server data.lock pins on
+/// another port of the same host stays out of reach.
+#[test]
+fn a_link_typed_in_a_clone_trusts_its_own_origin_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = pinned(&sandbox, b"a,b\n")?;
+    let asked = source.requests().len();
+    let other = Routes::start(vec![("/hello.txt".to_owned(), file(b"hello\n", "\"h1\""))])?;
+    let (clone, cache) = crate::mirrors::cold(&sandbox, "clone")?;
+    let output = sandbox
+        .command_in(
+            &clone,
+            &["--json", "add", &format!("{}/hello.txt", other.url)],
+        )
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    assert_eq!(
+        source.requests().len(),
+        asked,
+        "the clone asked the source: {}",
+        text(&output.stdout)?
+    );
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused", "{error}");
+    assert_eq!(error["details"][0], trusted_alone(&other.url, "127.0.0.1"));
+    Ok(())
+}
+
+/// data.toml alone names a server on this machine that `allowed_origins` does not list. a link to
+/// another port of the same host, typed for `add`, leaves that server out of reach, and the add
+/// says why.
+#[test]
+fn a_typed_link_reaches_no_other_port_that_data_toml_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let named = Routes::start(vec![(PATH.to_owned(), file(b"internal\n", "\"n1\""))])?;
+    let link = format!("{}{PATH}", named.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!("[datasets.internal]\nref = \"{link}\"\n"),
+    )?;
+    let typed = Routes::start(vec![("/y.csv".to_owned(), file(b"y\n1\n", "\"y1\""))])?;
+    let output = sandbox.run(&["--json", "add", &format!("{}/y.csv", typed.url)])?;
+    assert_eq!(
+        named.requests(),
+        Vec::<String>::new(),
+        "{}",
+        text(&output.stdout)?
+    );
+    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "network.refused", "{error}");
+    assert_eq!(
+        error["message"],
+        format!("fetchloom will not follow {link}: {link} points at the private address 127.0.0.1")
+    );
+    assert_eq!(error["details"][0], trusted_alone(&typed.url, "127.0.0.1"));
+    assert_eq!(
+        error["help"],
+        format!("add {} to allowed_origins to reach it too", named.url)
+    );
     Ok(())
 }
 

@@ -68,7 +68,7 @@ stderr:
      Synced 2 datasets into data
 ```
 
-a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its host may be reached whatever its address, other ports included. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
+a mirror you name may be on this machine or your network, such as `http://10.0.0.5:8080/fetchloom`: like a link typed on the command line, its origin, the scheme, host and port of its address, may be reached whatever its address is. another port or scheme of that host is not trusted, so it reaches public addresses only, unless [`allowed_origins`](reference/environment.md) lists it. a login for it goes in `.netrc`, which `fetchloom auth login data.lab.example` writes, and is sent over https only. over plain http the hashes still check every byte, but anyone on the network can see what is fetched.
 
 ## what goes wrong
 

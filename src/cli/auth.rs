@@ -370,11 +370,9 @@ async fn check(
     };
     let net = context.net_with(vec![credential]);
     // a dataverse host came from the person, through --host or their own earlier sign-in, so it
-    // may be on a private network, as `add` allows
-    if let Account::Dataverse(_) = account
-        && let Some(host) = check.url.host_str()
-    {
-        net.trust([host.to_owned()]);
+    // may be on a private network, as `add` allows. the origin asked is trusted, and no other
+    if let Account::Dataverse(_) = account {
+        net.trust([check.url.origin()]);
     }
     match net.get(&check.url).await {
         Ok(response) if (200..300).contains(&response.status) => {

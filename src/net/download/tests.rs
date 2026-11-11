@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::net::Options;
+use crate::net::address::Reach;
 use crate::net::scripted::{lines, reply, route, serve};
 use crate::source::recorded::block_on;
 
@@ -959,7 +960,10 @@ fn file_bodies_use_the_separate_connection_pool() {
         fs::read(cache.object_path(&fetched.digest)).unwrap(),
         b"data"
     );
-    assert!(net.wire().unwrap().apart.get().is_some());
+    let wire = net.wire().unwrap();
+    let made = |lane| wire.clients[crate::net::Wire::slot(lane, Reach::Trusted)].get();
+    assert!(made(crate::net::Lane::Apart).is_some());
+    assert!(made(crate::net::Lane::Shared).is_none());
     assert_eq!(asked.lock().unwrap().len(), 1);
 }
 

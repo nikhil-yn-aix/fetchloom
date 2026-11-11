@@ -244,12 +244,10 @@ fn key_origin(host: &str) -> Option<(String, u16)> {
 
 /// the HTTP clients and the proxies their requests go through.
 struct Wire {
-    client: reqwest::Client,
-    /// for file bodies and added ranges: HTTP/1.1, so each request has a connection of
-    /// its own instead of sharing one with every other request to the host. made when first
-    /// needed.
-    apart: OnceLock<Result<reqwest::Client, Error>>,
-    /// the cookies both clients send, so a sign-in cookie reaches the added streams too.
+    /// a client for each lane, and for each reach its lookups keep, each made when first
+    /// needed, where [`Wire::slot`] puts it.
+    clients: [OnceLock<Result<reqwest::Client, Error>>; 4],
+    /// the cookies every client sends, so a sign-in cookie reaches the added streams too.
     cookies: Arc<reqwest::cookie::Jar>,
     typed: address::Typed,
     offline: bool,
@@ -261,20 +259,20 @@ struct Wire {
 #[derive(Clone, Copy)]
 enum Lane {
     Shared,
+    /// for file bodies and added ranges: HTTP/1.1, so each request has a connection of its own
+    /// instead of sharing one with every other request to the host.
     Apart,
 }
 
 impl Wire {
-    /// the clients, once the proxy settings are known to name proxies.
+    /// the proxies, once the settings are known to name proxies, and no client yet.
     fn new(typed: &address::Typed, offline: bool, connect: Duration) -> Result<Wire, Error> {
         let proxies = address::Proxies::read(&|name| std::env::var_os(name))?;
         // the process may already have a provider, which is fine
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let cookies = Arc::new(reqwest::cookie::Jar::default());
         Ok(Wire {
-            client: Wire::client(typed, offline, &cookies, false, connect)?,
-            apart: OnceLock::new(),
-            cookies,
+            clients: std::array::from_fn(|_| OnceLock::new()),
+            cookies: Arc::default(),
             typed: typed.clone(),
             offline,
             connect,
@@ -282,25 +280,26 @@ impl Wire {
         })
     }
 
-    fn client(
-        typed: &address::Typed,
-        offline: bool,
-        cookies: &Arc<reqwest::cookie::Jar>,
-        apart: bool,
-        connect: Duration,
-    ) -> Result<reqwest::Client, Error> {
+    fn client(&self, lane: Lane, reach: address::Reach) -> Result<reqwest::Client, Error> {
         let builder = reqwest::Client::builder()
             .user_agent(concat!("fetchloom/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(connect)
-            .dns_resolver(Arc::new(address::Resolver::new(typed.clone(), offline)))
+            .connect_timeout(self.connect)
+            .dns_resolver(Arc::new(address::Resolver::new(
+                self.typed.clone(),
+                self.offline,
+                reach,
+            )))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
             // earthdata's archives sign a person in through a redirect to urs.earthdata.nasa.gov,
             // which hands back a cookie the archive then asks for. cookies live for this run only
-            .cookie_provider(cookies.clone());
-        let builder = if apart { builder.http1_only() } else { builder };
+            .cookie_provider(self.cookies.clone());
+        let builder = match lane {
+            Lane::Shared => builder,
+            Lane::Apart => builder.http1_only(),
+        };
         #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-        let builder = builder.tls_backend_preconfigured(roots::tls(apart)?);
+        let builder = builder.tls_backend_preconfigured(roots::tls(matches!(lane, Lane::Apart))?);
         builder.build().map_err(|err| {
             Error::new(
                 Kind::NetworkUnreachable,
@@ -309,16 +308,27 @@ impl Wire {
         })
     }
 
-    fn lane(&self, lane: Lane) -> Result<&reqwest::Client, Error> {
-        match lane {
-            Lane::Shared => Ok(&self.client),
-            Lane::Apart => self
-                .apart
-                .get_or_init(|| {
-                    Wire::client(&self.typed, self.offline, &self.cookies, true, self.connect)
-                })
-                .as_ref()
-                .map_err(Clone::clone),
+    /// the client of `lane` for a request to `url`: one whose lookups may keep private addresses
+    /// when the origin of `url` is trusted, else one whose lookups keep public addresses alone.
+    fn lane(&self, lane: Lane, url: &Url) -> Result<&reqwest::Client, Error> {
+        let reach = if self.typed.trusts(url) {
+            address::Reach::Trusted
+        } else {
+            address::Reach::Public
+        };
+        self.clients[Wire::slot(lane, reach)]
+            .get_or_init(|| self.client(lane, reach))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    /// where [`Wire::clients`] keeps the client of `lane` and `reach`.
+    fn slot(lane: Lane, reach: address::Reach) -> usize {
+        match (lane, reach) {
+            (Lane::Shared, address::Reach::Public) => 0,
+            (Lane::Shared, address::Reach::Trusted) => 1,
+            (Lane::Apart, address::Reach::Public) => 2,
+            (Lane::Apart, address::Reach::Trusted) => 3,
         }
     }
 }
@@ -394,20 +404,19 @@ impl Net {
             .map_err(Clone::clone)
     }
 
-    /// marks the host of a URL a person wrote, so it may be a private address such as a lab
+    /// trusts the origin of a URL a person wrote, so it may be a private address such as a lab
     /// server. only the test endpoints debug builds read need it.
     #[cfg(debug_assertions)]
     pub(crate) fn typed(&self, url: &Url) {
         self.typed.add(url);
     }
 
-    /// trusts hosts a person typed on the command line, such as a dataverse install on a
-    /// university network. hosts in data.toml get no trust of their own: a cloned project could
-    /// point them at this machine's network, so only `allowed_origins` lets them reach it.
-    pub(crate) fn trust(&self, typed_hosts: impl IntoIterator<Item = String>) {
-        for host in typed_hosts {
-            self.typed.add_host(&host);
-        }
+    /// trusts origins a person gave on the command line or in the settings, such as a dataverse
+    /// install on a university network or a mirror on a lab server, each alone: another port or
+    /// scheme of its host gets no more trust than a host in data.toml, which a cloned project
+    /// could point at this machine's network.
+    pub(crate) fn trust(&self, origins: impl IntoIterator<Item = url::Origin>) {
+        self.typed.allow(origins);
     }
 
     /// signs requests for the S3 buckets `signing` lists, once S3 refused them without a key.
@@ -521,7 +530,6 @@ impl Net {
             url
         };
         let wire = self.wire().map_err(Failure::Final)?;
-        let client = wire.lane(lane).map_err(Failure::Final)?;
         let mut hop = url.clone();
         let mut redirects = 0;
         let mut name = None;
@@ -533,6 +541,9 @@ impl Net {
                 .await
                 .map_err(|reason| refused(&hop, reason))?;
             let carrier = wire.proxies.carrier(&hop);
+            // each hop picks its client, since only a trusted origin's lookups keep private
+            // addresses
+            let client = wire.lane(lane, &hop).map_err(Failure::Final)?;
             first_origin &= hop.origin() == url.origin();
             let ticket = self.pace(&hop).await.map_err(Failure::Final)?;
             // a signature goes with the first request alone, never after a redirect
@@ -591,7 +602,7 @@ impl Net {
             name = headers::file_name(response.headers()).or(name);
             redirects += 1;
             if redirects > REDIRECTS {
-                let reason = address::Refused(format!("more than {REDIRECTS} redirects"));
+                let reason = address::Refused::new(format!("more than {REDIRECTS} redirects"));
                 return Err(refused(url, reason));
             }
             self.typed
@@ -847,7 +858,11 @@ mod tests {
         let net = Net::new(options, Arc::default(), Arc::default(), Arc::new(|_| {}));
         let url = Url::parse("https://huggingface.co/api/datasets/org/data").unwrap();
         let request = net
-            .request(&net.wire().unwrap().client, &url, true)
+            .request(
+                net.wire().unwrap().lane(Lane::Shared, &url).unwrap(),
+                &url,
+                true,
+            )
             .build()
             .unwrap();
         let sent: Vec<_> = request

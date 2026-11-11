@@ -126,6 +126,13 @@ impl Dataset {
         }
     }
 
+    /// the install's origin: https, at its host and port, where every request for it goes.
+    pub(super) fn origin(&self) -> Option<url::Origin> {
+        Url::parse(&format!("https://{}/", self.host))
+            .ok()
+            .map(|url| url.origin())
+    }
+
     /// the account a key for this install is saved under: its host, with its port when that is
     /// not 443, as the key only goes there.
     pub(super) fn account(&self) -> crate::auth::Account {

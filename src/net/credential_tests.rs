@@ -38,10 +38,24 @@ fn net() -> Net {
     )
 }
 
+/// a client of `net`'s own, to build requests with as `send` does.
+fn any_client(net: &Net) -> &reqwest::Client {
+    let any = Url::parse("https://example.org/").unwrap();
+    net.wire().unwrap().lane(Lane::Shared, &any).unwrap()
+}
+
+/// trusts the origin of each of `urls`, as a person typing them would.
+fn trust_all<'a>(net: &Net, urls: impl IntoIterator<Item = &'a str>) {
+    net.trust(
+        urls.into_iter()
+            .map(|url| Url::parse(url).unwrap().origin()),
+    );
+}
+
 #[test]
 fn each_sources_credentials_only_reach_its_https_host_on_port_443() {
     let net = net();
-    let client = &net.wire().unwrap().client;
+    let client = any_client(&net);
     for (host, value) in OWNERS {
         for url in [
             format!("https://{host}/file"),
@@ -119,8 +133,8 @@ fn redirects_never_restore_credentials_after_leaving_the_first_origin() {
         ] {
             let net = net();
             let client = transport();
-            net.trust([(*host).to_owned(), other.to_owned()]);
             let start = Url::parse(&format!("https://{host}/start")).unwrap();
+            trust_all(&net, [start.as_str(), away.as_str()]);
             let (local, asked) = server(&[
                 format!("https://{host}/same-origin"),
                 away,
@@ -172,19 +186,16 @@ fn a_saved_login_answers_on_any_hop_to_its_own_host_and_nowhere_else() {
         Arc::default(),
         Arc::new(|_| {}),
     );
-    net.trust([
-        "archive.example".to_owned(),
-        "urs.earthdata.nasa.gov".to_owned(),
-        "zenodo.org".to_owned(),
-    ]);
     // the way an earthdata archive signs a person in: away to the login host and back
+    let hops = [
+        "http://urs.earthdata.nasa.gov/oauth",
+        "https://urs.earthdata.nasa.gov/oauth",
+        "https://zenodo.org/not-the-first-origin",
+        "https://archive.example/granule?code=1",
+    ];
+    trust_all(&net, hops);
     let start = Url::parse("https://archive.example/granule").unwrap();
-    let (local, asked) = server(&[
-        "http://urs.earthdata.nasa.gov/oauth".to_owned(),
-        "https://urs.earthdata.nasa.gov/oauth".to_owned(),
-        "https://zenodo.org/not-the-first-origin".to_owned(),
-        "https://archive.example/granule?code=1".to_owned(),
-    ]);
+    let (local, asked) = server(&hops.map(str::to_owned));
     let client = transport();
     let answer = block_on(net.send(&start, |request| {
         let request = request.build().unwrap();
@@ -232,7 +243,7 @@ fn keyed(hosts: &[&str]) -> Net {
 #[test]
 fn a_key_for_another_port_reaches_that_port_only() {
     let net = keyed(&["dv.lab:8443", "dv.lab"]);
-    let client = &net.wire().unwrap().client;
+    let client = any_client(&net);
     let sent = |url: &str| {
         let url = Url::parse(url).unwrap();
         let request = net.request(client, &url, true).build().unwrap();
@@ -273,7 +284,7 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
         ),
     ] {
         let net = keyed(&["dv.lab:8443", "dv.lab"]);
-        net.trust(["dv.lab".to_owned()]);
+        trust_all(&net, [start, away]);
         let client = transport();
         let start = Url::parse(start).unwrap();
         let (local, asked) = server(&[away.to_owned(), start.join("back").unwrap().to_string()]);
@@ -293,17 +304,14 @@ fn a_redirect_to_another_port_of_the_same_host_carries_no_key() {
 #[test]
 fn a_redirect_cannot_pick_up_another_sources_credentials() {
     let net = net();
-    net.trust([
-        "example.org".to_owned(),
-        "zenodo.org".to_owned(),
-        "api.figshare.com".to_owned(),
-    ]);
+    let hops = [
+        "https://zenodo.org/file",
+        "https://api.figshare.com/file",
+        "https://example.org/back",
+    ];
+    trust_all(&net, hops);
     let start = Url::parse("https://example.org/shared-file").unwrap();
-    let (local, asked) = server(&[
-        "https://zenodo.org/file".to_owned(),
-        "https://api.figshare.com/file".to_owned(),
-        "https://example.org/back".to_owned(),
-    ]);
+    let (local, asked) = server(&hops.map(str::to_owned));
     let client = transport();
     let answer = block_on(net.send(&start, |request| {
         let request = request.build().unwrap();
@@ -328,11 +336,11 @@ fn verification_net(credentials: Vec<Credential>) -> Net {
 }
 
 fn redirect_headers(net: &Net, start: &str, hops: &[String], header: &str) -> Vec<Option<String>> {
+    trust_all(
+        net,
+        std::iter::once(start).chain(hops.iter().map(String::as_str)),
+    );
     let start = Url::parse(start).unwrap();
-    let hosts = std::iter::once(start.clone())
-        .chain(hops.iter().map(|hop| Url::parse(hop).unwrap()))
-        .filter_map(|url| url.host_str().map(str::to_owned));
-    net.trust(hosts);
     let client = transport();
     let (local, asked) = server(hops);
     let answer = block_on(net.send(&start, |request| {

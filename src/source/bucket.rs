@@ -298,13 +298,10 @@ impl Prefix {
         }
     }
 
-    /// the host of the service a person names by writing this prefix, when it is not AWS or
-    /// google's. such a host may be on a private network.
-    pub(super) fn written_host(&self) -> Option<String> {
-        match self.endpoint.as_ref()? {
-            url::Origin::Tuple(_, host, _) => Some(host.to_string()),
-            url::Origin::Opaque(_) => None,
-        }
+    /// the origin of the service a person names by writing this prefix, when it is not AWS or
+    /// google's. it may be on a private network.
+    pub(super) fn written_origin(&self) -> Option<url::Origin> {
+        self.endpoint.clone()
     }
 
     /// a pasted HTTPS link to a bucket or a folder in one, ending in `/`. a link to a single

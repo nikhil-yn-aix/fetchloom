@@ -1,7 +1,8 @@
-//! where a request may go. a host a person typed on the command line may be any address, a lab
-//! server included, and so may an origin the `allowed_origins` setting lists. a URL nobody typed,
-//! from data.toml, data.lock, a source's listing or a redirect, may not reach private, loopback
-//! or link-local addresses, so a cloned project, a hostile server or a tampered lock cannot reach
+//! where a request may go. the origin of a link a person typed on the command line, of a mirror
+//! they named and of each entry the `allowed_origins` setting lists may be at any address, a lab
+//! server included. any other URL, from data.toml, data.lock, a source's listing or a redirect,
+//! and another port or scheme of a trusted host too, may not reach private, loopback or
+//! link-local addresses, so a cloned project, a hostile server or a tampered lock cannot reach
 //! into a local network.
 
 use std::borrow::Cow;
@@ -17,32 +18,34 @@ use url::{Host, Url};
 use super::Shown;
 use crate::error::Error;
 
-/// the hosts a person typed, the origins a person allowed, and the proxies this machine sends
-/// requests through.
+/// the origins a person typed, named or allowed, and the proxies this machine sends requests
+/// through.
 #[derive(Clone, Default)]
 pub(crate) struct Typed(Arc<Mutex<Hosts>>);
 
 #[derive(Default)]
 struct Hosts {
-    written: HashSet<String>,
-    /// exact origins: a request to another port or scheme of the same host is not allowed.
+    /// exact origins: another port or scheme of the same host is not trusted.
     origins: HashSet<url::Origin>,
     /// a proxy may sit on a private address, and only reaching it is allowed: a URL that asks
-    /// for the proxy's host itself, as a redirect could, is refused unless a person wrote it.
+    /// for the proxy's host itself, as a redirect could, is refused unless its origin is trusted.
     proxies: HashSet<String>,
 }
 
+/// which addresses the lookups of one HTTP client may keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// any address of a host a trusted origin is on, for requests to a trusted origin.
+    Trusted,
+    /// public addresses alone, for every other request.
+    Public,
+}
+
 impl Typed {
+    /// trusts the origin of `url`, as a test server standing in for a source needs.
     #[cfg(debug_assertions)]
     pub(crate) fn add(&self, url: &Url) {
-        if let Some(host) = url.host_str() {
-            self.add_host(host);
-        }
-    }
-
-    /// trusts a host a person wrote down, such as a dataverse install on a university network.
-    pub(crate) fn add_host(&self, host: &str) {
-        self.hosts().written.insert(key(host));
+        self.allow([url.origin()]);
     }
 
     /// lets the proxy at `host` be reached, wherever its address is.
@@ -50,26 +53,29 @@ impl Typed {
         self.hosts().proxies.insert(key(host));
     }
 
-    /// lets requests reach `origins`, wherever they are, as the `allowed_origins` setting lists
-    /// them.
+    /// lets requests reach `origins`, wherever they are: those the `allowed_origins` setting
+    /// lists, and those of the links and mirrors a person gives.
     pub(crate) fn allow(&self, origins: impl IntoIterator<Item = url::Origin>) {
         self.hosts().origins.extend(origins);
     }
 
-    /// whether a person typed the host of `url` or allowed its origin.
-    fn trusts(&self, url: &Url) -> bool {
-        let hosts = self.hosts();
-        url.host_str()
-            .is_some_and(|host| hosts.written.contains(&key(host)))
-            || hosts.origins.contains(&url.origin())
+    /// whether the origin of `url` is trusted.
+    pub(crate) fn trusts(&self, url: &Url) -> bool {
+        self.hosts().origins.contains(&url.origin())
     }
 
-    /// whether `host` may resolve to a private address: a person wrote it, an allowed origin is
-    /// on it, or it is a proxy.
-    pub(crate) fn may_resolve_privately(&self, host: &str) -> bool {
+    /// whether `host` may resolve to a private address for a client that keeps `reach`: a proxy
+    /// may for every client, and a host a trusted origin is on for the client that carries
+    /// requests to trusted origins.
+    pub(crate) fn may_resolve_privately(&self, host: &str, reach: Reach) -> bool {
         let key = key(host);
         let hosts = self.hosts();
-        hosts.written.contains(&key) || hosts.proxies.contains(&key) || hosts.allows_on(&key)
+        hosts.proxies.contains(&key) || (reach == Reach::Trusted && hosts.trusts_on(&key))
+    }
+
+    /// the trusted origins on `host`, as messages show them.
+    pub(crate) fn origins_on(&self, host: &str) -> Vec<String> {
+        self.hosts().origins_on(&key(host))
     }
 
     fn hosts(&self) -> std::sync::MutexGuard<'_, Hosts> {
@@ -78,29 +84,21 @@ impl Typed {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// refuses a URL whose host is a private address written out, or a proxy's host, unless the
-    /// user typed it or allowed its origin. names are checked later, on the addresses they
-    /// resolve to, except a name an allowed origin is on: it may resolve privately, so its other
-    /// origins are refused here.
+    /// refuses a URL whose host is a private address written out, or a proxy's host, unless its
+    /// origin is trusted. names are checked later, on the addresses they resolve to.
     pub(crate) fn check(&self, url: &Url) -> Result<(), Refused> {
         let Some(host) = url.host_str() else {
-            return Err(Refused(format!("{} has no host", Shown(url))));
+            return Err(Refused::new(format!("{} has no host", Shown(url))));
         };
         let hosts = self.hosts();
-        let host = key(host);
-        if hosts.written.contains(&host) || hosts.origins.contains(&url.origin()) {
+        if hosts.origins.contains(&url.origin()) {
             return Ok(());
         }
+        let host = key(host);
         if hosts.proxies.contains(&host) {
-            return Err(Refused(format!(
+            return Err(Refused::new(format!(
                 "{} asks for the proxy this machine sends requests through",
                 Shown(url)
-            )));
-        }
-        if matches!(url.host(), Some(Host::Domain(_))) && hosts.allows_on(&host) {
-            return Err(Refused(format!(
-                "allowed_origins lists another origin on {host}, not {}",
-                url.origin().ascii_serialization()
             )));
         }
         let ip = match url.host() {
@@ -108,11 +106,11 @@ impl Typed {
             Some(Host::Ipv6(ip)) => IpAddr::V6(ip),
             _ => return Ok(()),
         };
-        if is_private(ip) && !hosts.written.contains(&ip.to_string()) {
-            return Err(Refused(format!(
-                "{} points at the private address {ip}",
-                Shown(url)
-            )));
+        if is_private(ip) {
+            return Err(Refused::private(
+                format!("{} points at the private address {ip}", Shown(url)),
+                hosts.origins_on(&host),
+            ));
         }
         Ok(())
     }
@@ -127,12 +125,29 @@ impl super::Net {
 }
 
 impl Hosts {
-    /// whether an allowed origin is on `host`, given as [`key`] makes it.
-    fn allows_on(&self, host: &str) -> bool {
-        self.origins.iter().any(|origin| match origin {
-            url::Origin::Tuple(_, on, _) => key(&on.to_string()) == host,
-            url::Origin::Opaque(_) => false,
-        })
+    /// whether a trusted origin is on `host`, given as [`key`] makes it.
+    fn trusts_on(&self, host: &str) -> bool {
+        self.origins.iter().any(|origin| is_on(origin, host))
+    }
+
+    /// the trusted origins on `host`, given as [`key`] makes it, sorted as messages show them.
+    fn origins_on(&self, host: &str) -> Vec<String> {
+        let mut on: Vec<String> = self
+            .origins
+            .iter()
+            .filter(|origin| is_on(origin, host))
+            .map(url::Origin::ascii_serialization)
+            .collect();
+        on.sort();
+        on
+    }
+}
+
+/// whether `origin` is on `host`, given as [`key`] makes it.
+fn is_on(origin: &url::Origin, host: &str) -> bool {
+    match origin {
+        url::Origin::Tuple(_, on, _) => key(&on.to_string()) == host,
+        url::Origin::Opaque(_) => false,
     }
 }
 
@@ -144,11 +159,33 @@ fn key(host: &str) -> String {
 }
 /// a request fetchloom will not make, with the reason in one sentence.
 #[derive(Debug)]
-pub(crate) struct Refused(pub(crate) String);
+pub(crate) struct Refused {
+    reason: String,
+    /// for a private address, the origins trusted on the same host, as messages show them: a
+    /// person may have expected one of them to cover this URL too.
+    pub(crate) trusted_on_host: Vec<String>,
+}
+
+impl Refused {
+    pub(crate) fn new(reason: impl Into<String>) -> Refused {
+        Refused {
+            reason: reason.into(),
+            trusted_on_host: Vec::new(),
+        }
+    }
+
+    /// the refusal of a private address, on a host where `trusted_on_host` are trusted.
+    fn private(reason: String, trusted_on_host: Vec<String>) -> Refused {
+        Refused {
+            reason,
+            trusted_on_host,
+        }
+    }
+}
 
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.reason)
     }
 }
 
@@ -345,10 +382,10 @@ impl Proxies {
     }
 
     /// checks `url` before it is sent, when a proxy will carry it. the proxy resolves the name
-    /// itself, so fetchloom's resolver never sees the addresses, and a host nobody wrote is looked
-    /// up here first and refused when any of its addresses is private. a name this machine cannot
-    /// resolve is left to the proxy, since some networks resolve names only through it. the
-    /// proxy itself may be reached wherever it is, since a person set it up.
+    /// itself, so fetchloom's resolver never sees the addresses, and a host whose origin is not
+    /// trusted is looked up here first and refused when any of its addresses is private. a name
+    /// this machine cannot resolve is left to the proxy, since some networks resolve names only
+    /// through it. the proxy itself may be reached wherever it is, since a person set it up.
     pub(crate) async fn check(&self, url: &Url, typed: &Typed) -> Result<(), Refused> {
         let Some(proxy) = url
             .as_str()
@@ -374,10 +411,12 @@ impl Proxies {
         } else {
             let port = url.port_or_known_default().unwrap_or(443);
             let refused = self.lookup(&name, port).await;
-            self.lock().insert(name, refused.clone());
+            self.lock().insert(name.clone(), refused.clone());
             refused
         };
-        refused.map_or(Ok(()), |reason| Err(Refused(reason)))
+        refused.map_or(Ok(()), |reason| {
+            Err(Refused::private(reason, typed.origins_on(&name)))
+        })
     }
 
     #[cfg(test)]
@@ -439,22 +478,29 @@ async fn private_address(name: &str, port: u16) -> Option<String> {
     ))
 }
 
-/// resolves names for the HTTP client, dropping private addresses for hosts nobody typed.
+/// resolves names for one HTTP client, keeping the private addresses only that its `reach`
+/// allows.
 pub(crate) struct Resolver {
     typed: Typed,
     offline: bool,
+    reach: Reach,
 }
 
 impl Resolver {
-    pub(crate) fn new(typed: Typed, offline: bool) -> Resolver {
-        Resolver { typed, offline }
+    pub(crate) fn new(typed: Typed, offline: bool, reach: Reach) -> Resolver {
+        Resolver {
+            typed,
+            offline,
+            reach,
+        }
     }
 }
 
 impl reqwest::dns::Resolve for Resolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_ascii_lowercase();
-        let allowed = self.typed.may_resolve_privately(&host);
+        let allowed = self.typed.may_resolve_privately(&host, self.reach);
+        let typed = self.typed.clone();
         let offline = self.offline;
         Box::pin(async move {
             if offline {
@@ -475,7 +521,10 @@ impl reqwest::dns::Resolve for Resolver {
                 .filter(|address| allowed || !is_private(address.ip()))
                 .collect();
             if kept.is_empty() && !found.is_empty() {
-                let refused = Refused(format!("{host} resolves only to private addresses"));
+                let refused = Refused::private(
+                    format!("{host} resolves only to private addresses"),
+                    typed.origins_on(&host),
+                );
                 return Err(Box::new(refused) as Box<dyn std::error::Error + Send + Sync>);
             }
             Ok(Box::new(kept.into_iter()) as reqwest::dns::Addrs)
@@ -665,40 +714,75 @@ mod tests {
             let url = Url::parse(url).unwrap();
             assert!(typed.check(&url).is_err(), "{url}");
         }
-        assert!(typed.may_resolve_privately("proxy.lab"));
-        assert!(!typed.may_resolve_privately("elsewhere.lab"));
-        typed.add_host("proxy.lab");
+        for reach in [Reach::Trusted, Reach::Public] {
+            assert!(typed.may_resolve_privately("proxy.lab", reach));
+            assert!(!typed.may_resolve_privately("elsewhere.lab", reach));
+        }
+        typed.add(&Url::parse("http://proxy.lab:9000/x").unwrap());
         assert!(
             typed
-                .check(&Url::parse("http://proxy.lab:9000/x").unwrap())
+                .check(&Url::parse("http://proxy.lab:9000/y").unwrap())
                 .is_ok(),
-            "unless a person wrote it"
+            "unless a person typed its origin"
         );
     }
 
+    /// a name a trusted origin is on may resolve privately for the client that carries requests
+    /// to trusted origins alone, so the host's other origins, sent by the other client, cannot
+    /// reach this machine or its network.
     #[test]
-    fn an_allowed_origin_reaches_its_server_and_nothing_else_there() {
+    fn a_trusted_name_resolves_privately_for_the_trusted_client_alone() {
         let typed = Typed::default();
-        typed.allow(
-            ["http://lab.local:8080", "http://127.0.0.1:41234"]
-                .map(|origin| Url::parse(origin).unwrap().origin()),
-        );
-        for (url, allowed) in [
-            ("http://lab.local:8080/shards/a.zip", true),
-            ("http://LAB.local:8080/a.zip", true),
-            ("http://127.0.0.1:41234/a.zip", true),
-            ("http://lab.local:9090/a.zip", false),
-            ("https://lab.local:8080/a.zip", false),
-            ("http://lab.local/a.zip", false),
-            ("http://127.0.0.1:41235/a.zip", false),
-            ("http://10.0.0.1/a.zip", false),
-            ("https://zenodo.org/a.zip", true),
+        typed.add(&Url::parse("http://LAB.local:8080/a.zip").unwrap());
+        assert!(typed.may_resolve_privately("lab.local", Reach::Trusted));
+        assert!(!typed.may_resolve_privately("lab.local", Reach::Public));
+        assert!(!typed.may_resolve_privately("other.local", Reach::Trusted));
+        assert_eq!(typed.origins_on("Lab.Local"), ["http://lab.local:8080"]);
+        assert_eq!(typed.origins_on("other.local"), Vec::<String>::new());
+    }
+
+    /// an origin `allowed_origins` lists, a link a person types and a mirror they name are each
+    /// trusted at that origin alone. another port or scheme of the host is a url nobody typed: a
+    /// private address written out is refused at once, and a name is left to the addresses it
+    /// resolves to.
+    #[test]
+    fn a_trusted_origin_trusts_nothing_else_on_its_host() {
+        let typed = Typed::default();
+        typed.allow([Url::parse("http://lab.local:8080").unwrap().origin()]);
+        typed.add(&Url::parse("http://10.0.0.5:9000/fetchloom/").unwrap());
+        typed.add(&Url::parse("https://[fd00::5]:8443/data/a.zip").unwrap());
+        for (url, trusted, checked) in [
+            ("http://lab.local:8080/shards/a.zip", true, true),
+            ("http://LAB.local:8080/a.zip", true, true),
+            ("http://lab.local:9090/a.zip", false, true),
+            ("https://lab.local:8080/a.zip", false, true),
+            ("http://lab.local/a.zip", false, true),
+            ("http://10.0.0.5:9000/fetchloom/objects/ab/cd", true, true),
+            ("http://10.0.0.5:9001/a.zip", false, false),
+            ("https://10.0.0.5:9000/a.zip", false, false),
+            ("https://[fd00::5]:8443/b.zip", true, true),
+            ("https://[fd00::5]/b.zip", false, false),
+            ("http://10.0.0.1/a.zip", false, false),
+            ("https://zenodo.org/a.zip", false, true),
         ] {
-            let checked = typed.check(&Url::parse(url).unwrap());
-            assert_eq!(checked.is_ok(), allowed, "{url}: {checked:?}");
+            let url = Url::parse(url).unwrap();
+            assert_eq!(typed.trusts(&url), trusted, "{url}");
+            let checked_url = typed.check(&url);
+            assert_eq!(checked_url.is_ok(), checked, "{url}: {checked_url:?}");
         }
-        assert!(typed.may_resolve_privately("lab.local"));
-        assert!(!typed.may_resolve_privately("other.local"));
+        let refused = |url: &str| typed.check(&Url::parse(url).unwrap()).unwrap_err();
+        assert_eq!(
+            refused("http://10.0.0.5:9001/a.zip").trusted_on_host,
+            ["http://10.0.0.5:9000"]
+        );
+        assert_eq!(
+            refused("https://[fd00::5]/b.zip").trusted_on_host,
+            ["https://[fd00::5]:8443"]
+        );
+        assert_eq!(
+            refused("http://10.0.0.1/a.zip").trusted_on_host,
+            Vec::<String>::new()
+        );
     }
 }
 

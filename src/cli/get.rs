@@ -379,7 +379,7 @@ async fn one_link(
         let files = selected(args, &parsed, &listing)?;
         (listing, files)
     } else {
-        net.trust(parsed.reference.written_host());
+        net.trust(parsed.reference.written_origin());
         let folders = crate::glob::folders_of(&wanted_patterns(args, &parsed));
         let listing = engine::resolve(&context.output, &parsed.reference, net, folders.as_deref())
             .await
@@ -592,7 +592,7 @@ async fn resolve_all(
         }
         // a list comes from a file anyone could have written, as data.toml does
         if index < args.links.len() {
-            net.trust(parsed.reference.written_host());
+            net.trust(parsed.reference.written_origin());
         }
         if !engine::resolves_locally(&parsed.reference) {
             asked.push(parsed.reference.shown());

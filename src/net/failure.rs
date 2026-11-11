@@ -410,14 +410,30 @@ pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
 }
 
 pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
-    Error::new(
+    let error = Error::new(
         Kind::NetworkRefused,
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
-    )
-    .help(format!(
-        "if you trust that server, add {} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS",
-        url.origin().ascii_serialization()
-    ))
+    );
+    let origin = url.origin().ascii_serialization();
+    let Some((last, others)) = reason.trusted_on_host.split_last() else {
+        return error.help(format!(
+            "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
+        ));
+    };
+    let (trusted, covered) = if others.is_empty() {
+        (format!("{last} is"), "that origin")
+    } else {
+        (
+            format!("{} and {last} are", others.join(", ")),
+            "those origins",
+        )
+    };
+    error
+        .detail(format!(
+            "only {trusted} trusted on {}, and trust covers {covered} alone",
+            host(url)
+        ))
+        .help(format!("add {origin} to allowed_origins to reach it too"))
 }
 
 pub(super) fn interrupted(url: &Url) -> Error {
@@ -522,6 +538,30 @@ fn retry_after_with(headers: &HeaderMap, now: impl FnOnce() -> SystemTime) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a refusal on a host where other origins are trusted names each of them, and how to reach
+    /// this one too.
+    #[test]
+    fn a_refusal_names_every_origin_trusted_on_its_host() {
+        let url = Url::parse("http://lab.local:9090/a.zip").unwrap();
+        let mut reason = address::Refused::new("lab.local resolves only to private addresses");
+        reason.trusted_on_host = vec![
+            "http://lab.local".to_owned(),
+            "http://lab.local:8080".to_owned(),
+            "https://lab.local".to_owned(),
+        ];
+        let error = refused(&url, &reason);
+        assert_eq!(
+            error.details,
+            [
+                "only http://lab.local, http://lab.local:8080 and https://lab.local are trusted on lab.local, and trust covers those origins alone"
+            ]
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some("add http://lab.local:9090 to allowed_origins to reach it too")
+        );
+    }
 
     #[test]
     fn a_permanent_http_status_says_what_to_do_without_retrying() {

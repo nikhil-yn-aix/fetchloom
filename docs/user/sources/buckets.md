@@ -20,7 +20,7 @@ fetchloom add s3:https://minio.lab.example:9000/scans/raw/
 | `https://storage.googleapis.com/<bucket>/<prefix>/` or `https://<bucket>.storage.googleapis.com/<prefix>/` | `gs://<bucket>/<prefix>/` |
 | `s3:https://<host>[:<port>]/<bucket>/<prefix>/`, or `s3:http://…` | the same, with the host in lowercase and a usual port left out |
 
-a bucket at another service that speaks S3's API, such as minio, cloudflare r2, backblaze b2, wasabi or ceph, is written `s3:` followed by the service's own link, its host and port, then the bucket and prefix. it may hold no login, query or fragment. its buckets are addressed by path on that host. a host written on the command line may be on this machine or your network for that run; one only data.toml or data.lock names reaches such a server when [`allowed_origins`](../reference/environment.md) lists its origin, as for any link.
+a bucket at another service that speaks S3's API, such as minio, cloudflare r2, backblaze b2, wasabi or ceph, is written `s3:` followed by the service's own link, its host and port, then the bucket and prefix. it may hold no login, query or fragment. its buckets are addressed by path on that host. the endpoint written on the command line may be on this machine or your network for that run, at its own origin; one only data.toml or data.lock names reaches such a server when [`allowed_origins`](../reference/environment.md) lists its origin, as for any link.
 
 a pasted HTTPS link names a prefix only when its path ends in `/`, or names the bucket alone. a link to one object stays a plain [URL](urls-and-dois.md) and downloads that object. a link with a query string, such as a presigned link, also stays a plain URL, as do website, dualstack and other S3 endpoint hosts.
 

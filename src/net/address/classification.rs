@@ -353,7 +353,7 @@ fn unknown_host_errors_keep_the_host_and_explanation() {
 async fn a_name_rejected_as_nonexistent_keeps_its_permanent_error_category() {
     use reqwest::dns::Resolve as _;
 
-    let resolver = Resolver::new(Typed::default(), false);
+    let resolver = Resolver::new(Typed::default(), false, Reach::Public);
     // an overlong label fails locally without querying a DNS server.
     let long = "x".repeat(256);
     let Err(error) = resolver.resolve(long.parse().unwrap()).await else {
@@ -366,7 +366,7 @@ async fn a_name_rejected_as_nonexistent_keeps_its_permanent_error_category() {
 async fn an_invalid_lookup_input_is_not_mislabeled_as_a_nonexistent_host() {
     use reqwest::dns::Resolve as _;
 
-    let resolver = Resolver::new(Typed::default(), false);
+    let resolver = Resolver::new(Typed::default(), false, Reach::Public);
     let Err(error) = resolver.resolve("bad\0host".parse().unwrap()).await else {
         panic!("a name containing NUL cannot resolve");
     };

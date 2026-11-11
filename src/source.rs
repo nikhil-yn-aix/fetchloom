@@ -269,13 +269,14 @@ impl Reference {
         }
     }
 
-    /// the host a person names by writing this reference, when it is not one of the fixed public
-    /// services. such a host may be on a private network.
-    pub(crate) fn written_host(&self) -> Option<String> {
+    /// the origin a person names by writing this reference, when it is not one of the fixed
+    /// public services. it may be on a private network, and only it: another port or scheme of
+    /// its host is not named.
+    pub(crate) fn written_origin(&self) -> Option<url::Origin> {
         match self {
-            Reference::Url(url) => url.host_str().map(str::to_owned),
-            Reference::Dataverse(dataset) => Some(dataset.host_name().to_owned()),
-            Reference::Bucket(prefix) => prefix.written_host(),
+            Reference::Url(url) => Some(url.origin()),
+            Reference::Dataverse(dataset) => dataset.origin(),
+            Reference::Bucket(prefix) => prefix.written_origin(),
             _ => None,
         }
     }
