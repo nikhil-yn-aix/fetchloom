@@ -1,10 +1,13 @@
-//! the certificates a client trusts besides the system's, on linux and the other systems whose
-//! verifier reads a certificate bundle. a container built without one would stop every download,
-//! so fetchloom carries mozilla's. macos and windows ask the system's own verifier instead.
+//! the certificates a client trusts, on linux and the other systems whose verifier reads a
+//! certificate bundle: the system's, read once a run into the one TLS configuration every client
+//! shares. a container built without any would stop every download, so fetchloom carries
+//! mozilla's. macos and windows ask the system's own verifier instead.
 
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::OnceLock;
+
+use rustls::RootCertStore;
 
 use crate::error::{Error, Kind};
 
@@ -37,23 +40,50 @@ fn choose(found: usize, var: &dyn Fn(&str) -> Option<OsString>) -> Roots {
     Roots::Carried
 }
 
-/// the roots a client adds to the system's: none where the system has its own, else mozilla's.
-/// read once a run, since each client would read the same store again.
+/// the TLS configuration of a client, offering HTTP/1.1 alone when `http1_only`, else HTTP/2 as
+/// well. every client of a run shares one root store and its verifier, since each verifier of its
+/// own would read the whole store again: the system's roots, or mozilla's where it has none.
 ///
 /// # Errors
 ///
 /// `usage` when `SSL_CERT_FILE` or `SSL_CERT_DIR` names certificates that cannot be read.
-pub(super) fn extra() -> Result<Vec<reqwest::Certificate>, Error> {
-    static EXTRA: OnceLock<Result<Vec<reqwest::Certificate>, Error>> = OnceLock::new();
-    EXTRA.get_or_init(read).clone()
+pub(super) fn tls(http1_only: bool) -> Result<rustls::ClientConfig, Error> {
+    static SHARED: OnceLock<Result<rustls::ClientConfig, Error>> = OnceLock::new();
+    let mut config = SHARED.get_or_init(configured).clone()?;
+    config.alpn_protocols = if http1_only {
+        vec![b"http/1.1".to_vec()]
+    } else {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    };
+    Ok(config)
 }
 
-fn read() -> Result<Vec<reqwest::Certificate>, Error> {
+/// the configuration reqwest would build, around the roots [`read`] finds.
+fn configured() -> Result<rustls::ClientConfig, Error> {
+    let roots = read()?;
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| std::sync::Arc::new(rustls::crypto::ring::default_provider()));
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(rustls::ALL_VERSIONS)
+        .map_err(|err| {
+            Error::new(
+                Kind::NetworkUnreachable,
+                format!("could not start the network client: {err}"),
+            )
+        })?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(config)
+}
+
+fn read() -> Result<RootCertStore, Error> {
     let loaded = rustls_native_certs::load_native_certs();
-    // the same count the verifier keeps, which skips certificates it cannot parse
-    let (found, _) = rustls::RootCertStore::empty().add_parsable_certificates(loaded.certs);
+    let mut roots = RootCertStore::empty();
+    // parsable ones only, as the system verifier keeps them
+    let (found, _) = roots.add_parsable_certificates(loaded.certs);
     match choose(found, &|name| std::env::var_os(name)) {
-        Roots::System => Ok(Vec::new()),
+        Roots::System => Ok(roots),
         Roots::Unreadable { variable, value } => {
             let why = loaded
                 .errors
@@ -74,17 +104,17 @@ fn read() -> Result<Vec<reqwest::Certificate>, Error> {
             tracing::debug!(
                 "this system has no certificates, so the mozilla roots fetchloom carries are trusted"
             );
-            Ok(carried())
+            carry(&mut roots);
+            Ok(roots)
         }
     }
 }
 
-/// mozilla's roots, as fetchloom carries them.
-fn carried() -> Vec<reqwest::Certificate> {
-    webpki_root_certs::TLS_SERVER_ROOT_CERTS
-        .iter()
-        .filter_map(|der| reqwest::Certificate::from_der(der).ok())
-        .collect()
+/// adds mozilla's roots, as fetchloom carries them, to `roots`: how many it took.
+fn carry(roots: &mut RootCertStore) -> usize {
+    let (added, _) =
+        roots.add_parsable_certificates(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned());
+    added
 }
 
 #[cfg(test)]
@@ -137,11 +167,8 @@ mod tests {
 
     #[test]
     fn the_carried_roots_are_all_usable() {
-        let carried = carried();
-        assert!(carried.len() > 100, "{}", carried.len());
-        assert_eq!(
-            carried.len(),
-            webpki_root_certs::TLS_SERVER_ROOT_CERTS.len()
-        );
+        let carried = carry(&mut RootCertStore::empty());
+        assert!(carried > 100, "{carried}");
+        assert_eq!(carried, webpki_root_certs::TLS_SERVER_ROOT_CERTS.len());
     }
 }

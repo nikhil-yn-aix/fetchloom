@@ -300,7 +300,7 @@ impl Wire {
             .cookie_provider(cookies.clone());
         let builder = if apart { builder.http1_only() } else { builder };
         #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
-        let builder = builder.tls_certs_merge(roots::extra()?);
+        let builder = builder.tls_backend_preconfigured(roots::tls(apart)?);
         builder.build().map_err(|err| {
             Error::new(
                 Kind::NetworkUnreachable,

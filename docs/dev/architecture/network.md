@@ -22,7 +22,7 @@
 | [address/reach.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/address/reach.rs) | whether the proxy carrying a request can be reached | `Carrier`, `carrier`, `unreachable`, `watch`, `reached` |
 | [shown.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/shown.rs) | URL secret recognition and masking | `Shown`, `secret`, `mask_query` |
 | [sign.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/sign.rs) | AWS signature version 4: the canonical request and the authorization header, on `hmac` and `sha2` | `Keys`, `Scope`, `Request`, `authorization`, `canonical`, `amz_date` |
-| [roots.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/roots.rs) | TLS roots besides the system's: none where it has a store, mozilla's carried roots on a linux system without one, an error when `SSL_CERT_FILE` or `SSL_CERT_DIR` names unreadable ones | `extra` |
+| [roots.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/net/roots.rs) | the one TLS configuration every client of a run shares on linux: the system's roots, read once, mozilla's carried roots on a system without any, an error when `SSL_CERT_FILE` or `SSL_CERT_DIR` names unreadable ones | `tls` |
 | [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs), [hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | download storage and ordered hash queue | `PartialWriter`, `HashPipe` |
 
 ## how it works
@@ -88,7 +88,7 @@ validators also keep the `x-amz-version-id` an S3 bucket names for the bytes, ne
 
 the bounded download queue takes one job from each initial hostname in turn, retaining order within a host and returning results in input order. a grouped slow host cannot fill the waiting task queue before another host is admitted. host grouping uses the initial request destination, not the cache identity or a redirect destination; ports of one hostname share a group.
 
-file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a TCP connection. metadata keeps protocol negotiation and HTTP/2 multiplexing. both clients share cookies, checked redirects, credential scope, request permits and the byte-rate budget.
+file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a TCP connection. metadata keeps protocol negotiation and HTTP/2 multiplexing. both clients share cookies, checked redirects, credential scope, request permits, the byte-rate budget and, on linux, the TLS configuration `roots::tls` builds once a run, so the second client never reads the system's roots again.
 
 | control | value |
 |---|---|
