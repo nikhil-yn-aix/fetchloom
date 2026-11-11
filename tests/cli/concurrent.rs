@@ -101,9 +101,26 @@ impl Syncing {
 
     fn finish(mut self) -> Result<std::process::Output> {
         for _ in 0..2 {
-            self.closed
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .map_err(|error| format!("shared-cache sync did not finish: {error}"))?;
+            if let Err(error) = self.closed.recv_timeout(std::time::Duration::from_secs(30)) {
+                // what the stuck run logged is the only clue on a runner nobody can reach
+                if let Some(child) = &mut self.child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                let logged: Vec<String> = self
+                    .readers
+                    .drain(..)
+                    .map(|reader| match reader.join() {
+                        Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                return Err(format!(
+                    "shared-cache sync did not finish: {error}\n{}",
+                    logged.join("\n")
+                )
+                .into());
+            }
         }
         let status = self.child.as_mut().ok_or("missing sync child")?.wait()?;
         self.child = None;
