@@ -98,7 +98,7 @@ webdataset splits a large dataset into numbered tar files, shards such as `train
  Downloaded 1,024 files · 10.0 MiB in 1.6 s · 6.2 MiB/s
 ```
 
-`sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows once, when the dataset is new or its entry changed, and never with `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
+`sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows when the dataset is new or a change to its entry lists the source again; a later sync, an upgrade and a switch of `extract` show none, and neither do `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
 
 ## offline
 

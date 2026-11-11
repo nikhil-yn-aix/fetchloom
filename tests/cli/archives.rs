@@ -843,29 +843,33 @@ mod shards {
     }
 
     #[test]
-    fn a_sync_hints_once_when_it_drafts_the_shards() -> Result {
+    fn a_sync_hints_only_for_a_new_entry_of_shards() -> Result {
         let sandbox = Sandbox::new()?;
         let routes = bucket()?;
-        fs::write(
-            sandbox.work().join("data.toml"),
-            format!("[datasets.shards]\nref = \"{LINK}\"\n"),
-        )?;
+        let manifest = sandbox.work().join("data.toml");
+        let entry = format!("[datasets.shards]\nref = \"{LINK}\"\n");
+        fs::write(&manifest, &entry)?;
         let first = run(&sandbox, &routes, &["sync"])?;
         ok(&first)?;
         hinted_before_downloading(
             &text(&first.stderr)?,
             &format!("  hint: {HINT} extract = false in data.toml\n"),
         );
-        let again = run(&sandbox, &routes, &["sync"])?;
-        ok(&again)?;
-        let stderr = text(&again.stderr)?;
-        assert!(!stderr.contains("webdataset"), "{stderr}");
-        // an upgrade lists the bucket again, but the entry is the one already hinted
-        let upgraded = run(&sandbox, &routes, &["lock", "--upgrade"])?;
-        ok(&upgraded)?;
-        let stderr = text(&upgraded.stderr)?;
-        assert!(!stderr.contains("webdataset"), "{stderr}");
-        Ok(())
+        let unhinted = |args: &[&str]| -> Result {
+            let output = run(&sandbox, &routes, args)?;
+            ok(&output)?;
+            let stderr = text(&output.stderr)?;
+            assert!(!stderr.contains("webdataset"), "{args:?}: {stderr}");
+            Ok(())
+        };
+        // a later sync keeps the entry, an upgrade lists the entry already hinted, and a switch
+        // of extract is a choice the person just made
+        unhinted(&["sync"])?;
+        unhinted(&["lock", "--upgrade"])?;
+        fs::write(&manifest, format!("{entry}extract = false\n"))?;
+        unhinted(&["sync"])?;
+        fs::write(&manifest, &entry)?;
+        unhinted(&["sync"])
     }
 
     #[test]
