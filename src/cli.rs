@@ -62,6 +62,8 @@ struct Context {
     unsaved: std::sync::Mutex<Vec<net::Credential>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
     cautioned: std::sync::atomic::AtomicBool,
+    /// the mirrors asked for pinned files before their sources, and what they answered.
+    mirrors: fetch::mirrors::Mirrored,
 }
 
 impl Context {
@@ -80,6 +82,7 @@ impl Context {
             needed: std::sync::Mutex::default(),
             unsaved: std::sync::Mutex::default(),
             cautioned: std::sync::atomic::AtomicBool::default(),
+            mirrors: fetch::mirrors::Mirrored::default(),
         }
     }
 
@@ -474,6 +477,10 @@ pub(crate) fn run() -> ExitCode {
             crate::archive::set_limits(settings.archive_limits());
             context.settings = settings;
         }
+        Err(error) => return finish::<()>(&context, name, Err(error), started),
+    }
+    match fetch::mirrors::read(&global.mirror, &context.settings) {
+        Ok(mirrors) => context.mirrors = fetch::mirrors::Mirrored::new(mirrors),
         Err(error) => return finish::<()>(&context, name, Err(error), started),
     }
     match net::Rate::read(&var) {

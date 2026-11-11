@@ -24,6 +24,8 @@ options:
                          you
       --color <when>     when to use color: auto, the default, always or never
   -C <dir>               run as if fetchloom started in <dir>
+      --mirror <url>     ask the mirror at this web address or folder for files
+                         before their sources. repeat it for more
   -h, --help             print help
 
 examples:

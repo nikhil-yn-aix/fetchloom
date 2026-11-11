@@ -48,6 +48,8 @@ expression: pretty
     "downloads_skipped": 0,
     "elapsed_ms": "[varies]",
     "hardlinks": "[varies]",
+    "mirror_bytes": 0,
+    "mirror_objects": 0,
     "objects_written": 1,
     "placed_from_cache": 0,
     "reflinks": "[varies]",

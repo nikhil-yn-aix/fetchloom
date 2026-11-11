@@ -67,9 +67,11 @@ chmod 2770 /scratch/lab/fetchloom-cache
 
 then each member runs `umask 002`, so the files and folders they add stay writable for the group, and sets `FETCHLOOM_CACHE=/scratch/lab/fetchloom-cache`. fetchloom keeps a folder's permissions once it exists. linux usually refuses a hardlink to a file someone else owns, so fetchloom places files another member downloaded as reflinks or copies. [concepts](concepts.md#cache) has the rules for sharing a cache.
 
+a lab that would rather not share a cache can share a [mirror](mirrors.md): a folder of pinned files each person's own cache copies from and checks before use. each member sets `mirrors = ["/scratch/lab/fetchloom-mirror"]` in their settings file, and nobody needs to write to anyone else's cache.
+
 ## no internet on compute nodes
 
-a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. [CI](ci.md) shows the same idea for build machines.
+a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. an offline job still reads a folder [mirror](mirrors.md) on a shared disk. [CI](ci.md) shows the same idea for build machines.
 
 ## backups and copies
 

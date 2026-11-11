@@ -48,6 +48,24 @@ impl Cache {
         Ok(digest::sha256(text.as_bytes()))
     }
 
+    /// records `bytes`, a tree from elsewhere such as a mirror, as what `archive` unpacks to, when
+    /// they hash to `tree`, the tree data.lock pins, and every path in them stays in its folder.
+    /// the bytes are kept as they are, so the record still hashes to `tree`. says whether they
+    /// were recorded.
+    pub(crate) fn record_tree_bytes(
+        &self,
+        archive: &Sha256,
+        tree: &Sha256,
+        bytes: &[u8],
+    ) -> io::Result<bool> {
+        let fits = digest::sha256(bytes) == *tree
+            && std::str::from_utf8(bytes).ok().and_then(parse).is_some();
+        if fits {
+            self.write_atomically(&self.unpacked_path(archive), bytes)?;
+        }
+        Ok(fits)
+    }
+
     /// what `archive` unpacked to on this machine. given a tree hash, only a record of that tree
     /// counts.
     pub(crate) fn unpacked(&self, archive: &Sha256, tree: Option<&Sha256>) -> Option<Vec<Member>> {
@@ -182,6 +200,47 @@ mod tests {
         assert_eq!(cache.unpacked(&archive, Some(&other)), None);
         assert_eq!(cache.unpacked(&other, None), None, "no record");
         assert_eq!(cache.unpacked_archives(), [archive]);
+    }
+
+    #[test]
+    fn a_tree_is_kept_only_when_it_hashes_to_the_lock() {
+        let (_dir, cache) = cache();
+        let archive = digest::sha256(b"archive");
+        let bytes = tree(&known_tree());
+        let pinned = tree_hash(&known_tree());
+        let other = digest::sha256(b"another tree");
+        assert!(
+            !cache
+                .record_tree_bytes(&archive, &other, bytes.as_bytes())
+                .unwrap()
+        );
+        assert_eq!(cache.unpacked(&archive, None), None);
+        assert!(
+            cache
+                .record_tree_bytes(&archive, &pinned, bytes.as_bytes())
+                .unwrap()
+        );
+        assert_eq!(cache.unpacked_tree(&archive), Some(pinned));
+        assert_eq!(
+            cache
+                .unpacked(&archive, Some(&pinned))
+                .map(|found| found.len()),
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn a_tree_that_climbs_out_is_refused() {
+        let (_dir, cache) = cache();
+        let archive = digest::sha256(b"archive");
+        let bytes = format!("../victim\t1\t{}\n", digest::sha256(b"x"));
+        let pinned = digest::sha256(bytes.as_bytes());
+        assert!(
+            !cache
+                .record_tree_bytes(&archive, &pinned, bytes.as_bytes())
+                .unwrap()
+        );
+        assert_eq!(cache.unpacked_archives(), []);
     }
 
     #[test]

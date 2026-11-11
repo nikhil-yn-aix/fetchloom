@@ -29,7 +29,7 @@ pub(crate) use held::Access;
 pub(crate) use object::Batch;
 #[cfg(target_os = "linux")]
 pub(crate) use object::syncfs_reports_errors;
-pub(crate) use object::{MOST_FLUSHED_ALONE, NewObject, Sealed};
+pub(crate) use object::{Copied, MOST_FLUSHED_ALONE, NewObject, Sealed};
 pub(crate) use partial::{
     Claim, Partial, PartialWriter, open_unfollowed, read_unfollowed, set_hash_batches,
 };

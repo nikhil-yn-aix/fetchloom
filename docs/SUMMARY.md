@@ -42,6 +42,7 @@
   - [project folder](user/reference/project-folder.md)
   - [compatibility](user/reference/compatibility.md)
   - [scripting](user/scripting.md)
+  - [mirrors](user/mirrors.md)
   - [CI](user/ci.md)
   - [clusters](user/hpc.md)
   - [notebooks and containers](user/notebooks.md)

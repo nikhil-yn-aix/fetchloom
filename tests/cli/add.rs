@@ -585,7 +585,7 @@ fn a_stopped_add_keeps_an_edit_made_meanwhile_and_says_nothing_was_added() -> Re
     Ok(())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};
     use std::fmt::Write as _;
     let mut text = String::with_capacity(64);

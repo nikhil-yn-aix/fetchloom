@@ -365,6 +365,32 @@ impl<'a> Placing<'a> {
         })
     }
 
+    /// the files placing needs that the cache lacks, each once by its SHA-256: whole files and
+    /// the files archives unpack to alike, as a mirror holds them.
+    pub(crate) fn wanted(&self, cache: &Cache) -> Vec<crate::mirror::Wanted> {
+        let mut unique = HashSet::new();
+        let needed: Vec<&Target> = self
+            .targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(target, action)| needs_bytes(action) && unique.insert(target.sha256))
+            .map(|(target, _)| target)
+            .collect();
+        let found = place::run_all(&needed, self.survey.threads, |target| {
+            cache.find(&target.sha256, Some(target.size)).is_some()
+        });
+        needed
+            .into_iter()
+            .zip(found)
+            .filter(|(_, found)| !found)
+            .map(|(target, _)| crate::mirror::Wanted {
+                digest: target.sha256,
+                size: target.size,
+                label: target.path.clone(),
+            })
+            .collect()
+    }
+
     /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
     fn lacking(
         &self,
@@ -374,16 +400,7 @@ impl<'a> Placing<'a> {
             .targets
             .iter()
             .zip(&self.actions)
-            .filter(|(_, action)| {
-                matches!(
-                    action,
-                    Action::Place
-                        | Action::Replace
-                        | Action::Overwrite(_)
-                        | Action::Unblock(_)
-                        | Action::Freed(_)
-                )
-            })
+            .filter(|(_, action)| needs_bytes(action))
             .map(|(target, _)| target)
             .collect();
         let mut unique = HashSet::new();
@@ -718,6 +735,18 @@ pub(crate) struct Seen {
     pub(crate) manifest: Sha256,
     /// none when the project had no data.lock yet.
     pub(crate) lock: Option<Sha256>,
+}
+
+/// whether `action` places bytes the cache must hold.
+fn needs_bytes(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Place
+            | Action::Replace
+            | Action::Overwrite(_)
+            | Action::Unblock(_)
+            | Action::Freed(_)
+    )
 }
 
 /// what a sync with nothing to do placed, found without reading what archives unpack to or

@@ -41,6 +41,7 @@ new to fetchloom? start with [getting started](getting-started.md).
 | [cache folder](reference/cache-folder.md) | inspect shared cache objects and indexes |
 | [project folder](reference/project-folder.md) | inspect local owner records and placement state |
 | [scripting](scripting.md) | use JSON recipes or the python helper |
+| [mirrors](mirrors.md) | restore pinned files from a lab disk or a usb drive instead of their sources |
 | [CI](ci.md) | keep data between CI jobs so it downloads once per lock change |
 | [clusters](hpc.md) | use a cluster's home and scratch disks, many jobs and offline nodes, or share one cache in a lab |
 | [notebooks and containers](notebooks.md) | keep the cache in hosted notebooks, dev containers and kubernetes jobs, with read-only roots and small disks |

@@ -619,6 +619,11 @@ impl Output {
                 "download skipped",
                 "downloads skipped",
             ),
+            (
+                counts.mirror_objects,
+                "file from a mirror",
+                "files from mirrors",
+            ),
             (counts.reflinks, "reflink", "reflinks"),
             (counts.hardlinks, "hardlink", "hardlinks"),
             (counts.copies, "copy", "copies"),

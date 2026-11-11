@@ -11,13 +11,13 @@ objects are read-only files named by their content digest. the cache owns public
 | file | what it holds | types and functions |
 |---|---|---|
 | [cache.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache.rs) | root layout, object lookup, URL and MD5 records | `Cache`, `Stored`, `Validators`, `UrlRecord`, `find`, `verify`, `write_hint`, `link_object` |
-| [object.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/object.rs) | staged object sealing and batch durability | `NewObject`, `Sealed`, `Batch`, `seal`, `publish`, `syncfs_reports_errors` |
+| [object.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/object.rs) | staged object sealing, batch durability and copies of files other programs keep | `NewObject`, `Sealed`, `Batch`, `Copied`, `seal`, `publish`, `copy_in`, `syncfs_reports_errors` |
 | [deferred.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/deferred.rs) | downloads waiting for a group flush before they take their names | `Finished`, `defer_downloads`, `publish_downloads`, `publish_download_of` |
 | [held.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/held.rs) | the cache-wide lock that keeps gc apart from runs using the cache | `Access`, `hold` |
 | [partial.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial.rs) | resumable bytes, records and ownership | `Claim`, `Partial`, `PartialWriter`, `claim`, `read_unfollowed`, `open_unfollowed` |
 | [partial/hashing.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/partial/hashing.rs) | ordered prefix hashing, inline or on a separate thread | `HashPipe`, `update`, `range`, `sha256_so_far`, `finish` |
 | [staging.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/staging.rs) | unpublished archive members and reclaimable locks | `Staging`, `staging`, `sweep_staging` |
-| [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `unpacked`, `holds_unpacked` |
+| [unpacked.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/unpacked.rs) | member lists and stable tree identity | `Member`, `tree_hash`, `record_unpacked`, `record_tree_bytes`, `unpacked`, `holds_unpacked` |
 | [changed.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/changed.rs) | doubts about object integrity | `Doubt`, `trusted`, `mark_changed`, `mark_replaced`, `changed` |
 | [upkeep.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cache/upkeep.rs) | registrations, scans, verification and gc | `Needed`, `Freed`, `Checked`, `register`, `scan_objects`, `sweep_with_stop`, `verify_scanned` |
 
@@ -52,6 +52,12 @@ sealing dates an object by its birth: through the handle that wrote it, its modi
 change marks are integrity metadata. only a missing folder or mark means no recorded doubt. directory enumeration, entry metadata and mark reads propagate other errors with the failed path; sync and get stop before placement or completion. hashing the cached object alone would not replace the missing history needed to audit already placed hardlinks. optional lookups such as `find` return no hit when the mark cannot be read.
 
 object hashing, gc and `cache verify` hashing, and copy input use `read_unfollowed`, and every gc removal first checks that no folder between it and the cache root became a link: the final file is opened without following a symlink or reparse point, and the opened handle must describe a plain file. archive decoders still open paths after cache lookup. directory checks and no-follow opens do not authenticate other writers of a shared cache.
+
+### copies from mirrors
+
+`Cache::copy_in` makes a new object from a file another program keeps, such as a [mirror's](../../user/mirrors.md) copy, only when its bytes are the pinned ones. it reads the name's metadata without following a link and returns `Copied::NotPlain` for a link or a special file and `Copied::OtherSize` for another size, opening neither; it then opens the file with `read_unfollowed` and checks the handle's size again. on linux it first asks for a reflink of that handle into the new object in `tmp/`, which a disk such as btrfs or xfs makes when the file is on it, and then hashes the clone itself, never the file, which may change after the clone. otherwise it copies a block at a time while hashing. either way it reads at most one byte past the pinned size, looks for a stop between 1 MiB blocks, and keeps nothing for other bytes, `Copied::OtherBytes`. a failure to read the file is `Copied::Unread`, while a failure to write the cache is an error, so a mirror's trouble never reads as a full cache disk. the sealed object is published by the caller through the same no-clobber link as any object, after one batch flush when many arrive together. the mirror's file is never linked or renamed into the cache, so a later change on the mirror cannot reach a project.
+
+`Cache::record_tree_bytes` records a tree from a mirror as what an archive unpacks to, keeping its bytes as they are, only when they hash to the archive's `unpacks_to` and every path in them passes the record's checks.
 
 ### publication and repair
 

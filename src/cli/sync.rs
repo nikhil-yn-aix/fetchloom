@@ -169,6 +169,9 @@ impl<'a> Loop<'a> {
         self.ask_room(&placing)?;
         let unknown = placing.unknown();
         if !unknown.is_empty() {
+            let unknown = fetch::mirrors::trees(self.context, &self.cache, unknown)
+                .await
+                .map_err(|error| self.as_left(error))?;
             self.unpack_locked(lock, &unknown).await?;
             let survey = placing.into_survey();
             placing = Placing::new(
@@ -181,6 +184,9 @@ impl<'a> Loop<'a> {
                 survey,
             )?;
         }
+        fetch::mirrors::fill(self.context, &self.cache, placing.wanted(&self.cache))
+            .await
+            .map_err(|error| self.as_left(error))?;
         let (archives, files): (Vec<_>, Vec<_>) = placing
             .missing(&self.cache)?
             .into_iter()
@@ -583,6 +589,13 @@ impl<'a> Loop<'a> {
         if jobs.is_empty() {
             return Ok(Vec::new());
         }
+        fetch::mirrors::fill(
+            self.context,
+            &self.cache,
+            fetch::mirrors::pinned(&jobs, &self.cache),
+        )
+        .await
+        .map_err(|error| self.as_left(error))?;
         self.refuse_offline(&jobs)?;
         crate::space::cache_holds(
             self.cache.root(),

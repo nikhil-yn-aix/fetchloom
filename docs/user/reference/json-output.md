@@ -143,6 +143,7 @@ all counts and byte quantities are unsigned integers. timestamps and large count
 | `objects_written` | new objects counted after successful downloads and archive unpacking |
 | `downloads_skipped` | downloads not made because the cache already held the bytes, as the link's earlier record or a stated MD5 showed; a download placing already knows the cache holds is never started, so it is not counted here |
 | `reflinks`, `hardlinks`, `copies` | new placements by each method, including replacements |
+| `mirror_objects`, `mirror_bytes` | pinned files a [mirror](../mirrors.md) gave this run, now in the cache, and their bytes. a file the cache already held is never asked for |
 | `placed_from_cache` | placements by `add`, `sync`, `path` and `get` from objects the run did not write to the cache itself; the other placements took bytes the run downloaded or unpacked. file times do not decide it, so it holds on filesystems that keep times in whole seconds and on file servers with their own clocks |
 | `elapsed_ms` | elapsed whole milliseconds before rendering the final report |
 

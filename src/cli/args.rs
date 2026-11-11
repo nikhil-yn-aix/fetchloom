@@ -441,6 +441,11 @@ pub(crate) struct Global {
         help_heading = "options"
     )]
     pub(crate) directory: Option<PathBuf>,
+
+    /// ask the mirror at this web address or folder for files before their sources. repeat it
+    /// for more
+    #[arg(long, value_name = "url", global = true, help_heading = "options")]
+    pub(crate) mirror: Vec<String>,
 }
 
 #[derive(Clone, Debug, Subcommand)]

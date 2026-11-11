@@ -10,10 +10,21 @@
 //! trees/<2 hex>/<62 hex>     an archive's file list, named by the SHA-256 of its bytes
 //! ```
 
+pub(crate) mod folder;
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use url::Url;
+
+use crate::digest::Sha256;
+
+/// the file at the top of every mirror, which tells a mirror from an empty or unmounted folder.
+pub(crate) const MARKER: &str = "fetchloom-mirror";
+/// the first line of that file.
+pub(crate) const MARKER_LINE: &str = "fetchloom mirror 1";
+/// the largest tree read from a mirror, about 600,000 files. a bigger archive comes as itself.
+pub(crate) const LARGEST_TREE: u64 = 64 * 1024 * 1024;
 
 /// where a mirror is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,6 +113,44 @@ pub(crate) struct Refusal {
     pub(crate) instead: String,
 }
 
+/// the mirrors a run asks, in order, and whether it may ask nothing else.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Mirrors {
+    pub(crate) list: Vec<Location>,
+    /// requests go to mirrors alone, as the `mirrors_only` setting asks.
+    pub(crate) only: bool,
+}
+
+impl Mirrors {
+    /// the mirrors `given` on the command line, then those the settings list, each once.
+    pub(crate) fn new(given: Vec<Location>, listed: &[Location], only: bool) -> Mirrors {
+        let mut list: Vec<Location> = Vec::with_capacity(given.len() + listed.len());
+        for location in given.into_iter().chain(listed.iter().cloned()) {
+            if !list.contains(&location) {
+                list.push(location);
+            }
+        }
+        Mirrors { list, only }
+    }
+}
+
+/// where a mirror keeps a file or a tree, below its top: `objects` or `trees`, then the first two
+/// hex digits of `digest`, then the other 62.
+pub(crate) fn below(kind: &str, digest: &Sha256) -> [String; 3] {
+    let hex = digest.hex();
+    let (fan, rest) = hex.split_at(2);
+    [kind.to_owned(), fan.to_owned(), rest.to_owned()]
+}
+
+/// a pinned file wanted from the mirrors: its SHA-256, its size, and the name a person knows it
+/// by, such as `pets/images/cat_001.png`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Wanted {
+    pub(crate) digest: Sha256,
+    pub(crate) size: u64,
+    pub(crate) label: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +176,9 @@ mod tests {
         );
         let web = Location::parse(" https://data.corp.internal/fetchloom ", None).unwrap();
         assert_eq!(web.to_string(), "https://data.corp.internal/fetchloom");
+        let digest = crate::digest::sha256(b"pets");
+        let hex = digest.hex();
+        assert_eq!(below("objects", &digest), ["objects", &hex[..2], &hex[2..]]);
         for (text, instead) in [
             ("file:///mnt/lab", "write the folder path itself"),
             (
@@ -146,5 +198,19 @@ mod tests {
             assert_eq!(refusal.instead, instead, "{text}");
             assert!(!refusal.reason.contains("secret"), "{}", refusal.reason);
         }
+    }
+
+    #[test]
+    fn mirrors_on_the_command_line_come_before_the_settings_and_each_comes_once() {
+        let folder = |name: &str| Location::Folder(PathBuf::from(name));
+        let mirrors = Mirrors::new(
+            vec![folder("/usb"), folder("/nas")],
+            &[folder("/nas"), folder("/home/lab")],
+            false,
+        );
+        assert_eq!(
+            mirrors.list,
+            [folder("/usb"), folder("/nas"), folder("/home/lab")]
+        );
     }
 }

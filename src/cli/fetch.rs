@@ -3,6 +3,7 @@
 //! the next run.
 
 mod again;
+pub(super) mod mirrors;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

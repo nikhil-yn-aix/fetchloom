@@ -1,18 +1,22 @@
-//! new objects written in one go, such as the members of an archive. each is created read-only in
-//! `tmp/`, written and hashed in one pass, dated by its birth, flushed and closed, then published
-//! through the cache's hardlink-or-rename policy.
+//! new objects written in one go, such as the members of an archive or a mirror's copies. each is
+//! created read-only in `tmp/`, written and hashed in one pass, dated by its birth, flushed and
+//! closed, then published through the cache's hardlink-or-rename policy.
 
 use std::fs::{File, FileTimes, Metadata, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(any(unix, test))]
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, SystemTime};
 
-use super::{Cache, Staging, Stored};
+use super::{Cache, Staging, Stored, partial};
 use crate::digest::{Hasher, Sha256};
-use crate::volume::Volume;
+use crate::stop::Stop;
+use crate::volume::{Volume, is_plain};
+
+/// how much a copy reads before it looks for a stop again.
+const BLOCK: usize = 1 << 20;
 
 /// a new object being written into `tmp/`. dropped before it is sealed, it leaves nothing.
 pub(crate) struct NewObject {
@@ -21,6 +25,26 @@ pub(crate) struct NewObject {
     hasher: Hasher,
     written: u64,
     begun: Option<SystemTime>,
+}
+
+/// what [`Cache::copy_in`] made of a file another program keeps, such as a mirror's copy.
+pub(crate) enum Copied {
+    /// the pinned bytes, sealed in `tmp/` and ready to publish.
+    Sealed(Sealed),
+    /// a file of another size, left unread, or one that grew while it was read.
+    OtherSize,
+    /// bytes other than the pinned ones, none of which the cache keeps.
+    OtherBytes,
+    /// a link or a special file, left unopened.
+    NotPlain,
+    /// the file could not be read: `NotFound` when nothing is there.
+    Unread(io::Error),
+}
+
+/// what stopped a copy into the cache: reading the file given, or writing the cache's copy.
+enum Fault {
+    Source(io::Error),
+    Cache(io::Error),
 }
 
 /// an object written in full and flushed to disk, waiting in `tmp/` to be put in place. dropped
@@ -77,9 +101,69 @@ impl Cache {
         Ok(Some(Batch(self.root.join("tmp"))))
     }
 
-    #[cfg(test)]
     pub(crate) fn new_object(&self) -> io::Result<NewObject> {
         self.new_object_in(&self.root.join("tmp"), None)
+    }
+
+    /// a new object holding the file at `source`, which another program keeps, when its bytes are
+    /// the ones `digest` and `size` pin. it is cloned where the disk makes reflinks, else read
+    /// while hashed, never more than one byte past `size`; a link or a special file is never
+    /// opened, and a file of another size never read. `source` is never linked or renamed, so a
+    /// later change to it cannot reach the cache. with `flush` the object is on the disk once
+    /// sealed; without, the caller flushes a [`Batch`] before publishing it.
+    ///
+    /// # Errors
+    ///
+    /// a failure to write the object, and `Interrupted` when `stop` asks. failing to read
+    /// `source` is [`Copied::Unread`].
+    pub(crate) fn copy_in(
+        &self,
+        source: &Path,
+        digest: &Sha256,
+        size: u64,
+        flush: bool,
+        stop: &Stop,
+    ) -> io::Result<Copied> {
+        let found = match std::fs::symlink_metadata(source) {
+            Ok(found) => found,
+            Err(err) => return Ok(Copied::Unread(err)),
+        };
+        if !is_plain(&found) {
+            return Ok(Copied::NotPlain);
+        }
+        if found.len() != size {
+            return Ok(Copied::OtherSize);
+        }
+        let mut input = match partial::read_unfollowed(source) {
+            Ok(input) => input,
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput => return Ok(Copied::NotPlain),
+            Err(err) => return Ok(Copied::Unread(err)),
+        };
+        match input.metadata() {
+            Ok(opened) if opened.len() == size => {}
+            Ok(_) => return Ok(Copied::OtherSize),
+            Err(err) => return Ok(Copied::Unread(err)),
+        }
+        let most = size.saturating_add(1);
+        let mut object = self.new_object()?;
+        #[cfg(target_os = "linux")]
+        let cloned = object.clone_from(&input, most, stop)?;
+        #[cfg(not(target_os = "linux"))]
+        let cloned = false;
+        if !cloned {
+            match object.copy_from(&mut input, most, stop) {
+                Ok(()) => {}
+                Err(Fault::Source(err)) => return Ok(Copied::Unread(err)),
+                Err(Fault::Cache(err)) => return Err(err),
+            }
+        }
+        if object.written != size {
+            return Ok(Copied::OtherSize);
+        }
+        if object.hasher.sha256_so_far() != *digest {
+            return Ok(Copied::OtherBytes);
+        }
+        object.seal(flush).map(Copied::Sealed)
     }
 
     pub(super) fn new_object_in(
@@ -211,6 +295,32 @@ fn create_sealed(path: &Path) -> io::Result<File> {
 }
 
 impl NewObject {
+    /// writes what `input` holds into the object, at most `most` bytes, looking for a stop
+    /// between blocks.
+    fn copy_from(&mut self, input: &mut impl Read, most: u64, stop: &Stop) -> Result<(), Fault> {
+        each_block(input, most, stop, |block| self.write_all(block))
+    }
+
+    /// makes the object a clone of `source`, sharing its blocks, and hashes the clone itself, at
+    /// most `most` bytes of it. says whether the disk made the clone; one that makes none leaves
+    /// the object empty.
+    #[cfg(target_os = "linux")]
+    fn clone_from(&mut self, source: &File, most: u64, stop: &Stop) -> io::Result<bool> {
+        if let Err(err) = rustix::fs::ioctl_ficlone(&self.file, source) {
+            tracing::debug!(%err, "no reflink, so the bytes are copied");
+            return Ok(false);
+        }
+        let mut clone = partial::read_unfollowed(&self.temp.path)?;
+        let (hasher, written) = (&mut self.hasher, &mut self.written);
+        each_block(&mut clone, most, stop, |block| {
+            hasher.update(block);
+            *written += block.len() as u64;
+            Ok(())
+        })
+        .map_err(|(Fault::Source(err) | Fault::Cache(err))| err)?;
+        Ok(true)
+    }
+
     /// another handle on the object's open file. a flush through it reports what a flush through
     /// the writing handle would, since both share one open file.
     pub(crate) fn handle(&self) -> io::Result<File> {
@@ -279,6 +389,36 @@ impl Write for NewObject {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
+}
+
+/// hands `each` what `input` holds a block at a time, at most `most` bytes in all, and stops
+/// between blocks when `stop` asks, which is the cache's side's `Interrupted`.
+fn each_block(
+    input: &mut impl Read,
+    most: u64,
+    stop: &Stop,
+    mut each: impl FnMut(&[u8]) -> io::Result<()>,
+) -> Result<(), Fault> {
+    let mut block = vec![0; BLOCK];
+    let mut left = most;
+    while left > 0 {
+        if stop.is_asked() {
+            return Err(Fault::Cache(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "stopped at your request",
+            )));
+        }
+        let want = usize::try_from(left).map_or(BLOCK, |left| left.min(BLOCK));
+        let read = match input.read(&mut block[..want]) {
+            Ok(0) => return Ok(()),
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(Fault::Source(err)),
+        };
+        each(&block[..read]).map_err(Fault::Cache)?;
+        left -= read as u64;
+    }
+    Ok(())
 }
 
 /// how far apart a sealed object's modification and birth times may lie: FAT and exFAT round a
@@ -468,6 +608,122 @@ mod tests {
         sealed.write_all(b"def").unwrap();
         let sealed = sealed.seal(true).unwrap();
         drop((written, sealed));
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    }
+
+    /// a file holding `bytes`, as a mirror keeps one.
+    fn kept(folder: &Path, bytes: &[u8]) -> PathBuf {
+        let path = folder.join("kept");
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn copy_in_keeps_the_pinned_bytes_and_leaves_their_file_alone() {
+        let (dir, cache) = cache();
+        let source = kept(dir.path(), b"pinned bytes");
+        let pin = crate::digest::sha256(b"pinned bytes");
+        let copied = cache.copy_in(&source, &pin, 12, true, &Stop::default());
+        let Ok(Copied::Sealed(sealed)) = copied else {
+            panic!("the pinned bytes were not copied");
+        };
+        assert_eq!(sealed.publish(&cache).unwrap().digest, pin);
+        let object = cache.find(&pin, Some(12)).unwrap();
+        assert_eq!(fs::read(object).unwrap(), b"pinned bytes");
+        assert_eq!(fs::read(&source).unwrap(), b"pinned bytes");
+    }
+
+    #[test]
+    fn copy_in_publishes_nothing_when_bytes_differ() {
+        let (dir, cache) = cache();
+        let source = kept(dir.path(), b"other bytes!");
+        let pin = crate::digest::sha256(b"pinned bytes");
+        let copied = cache.copy_in(&source, &pin, 12, true, &Stop::default());
+        assert!(matches!(copied, Ok(Copied::OtherBytes)));
+        assert!(cache.find(&pin, None).is_none());
+        assert!(
+            cache
+                .find(&crate::digest::sha256(b"other bytes!"), None)
+                .is_none()
+        );
+        assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
+    }
+
+    /// a file of another size is never opened, so one nobody may read gives the same answer
+    /// whether fetchloom runs as root or not.
+    #[cfg(unix)]
+    #[test]
+    fn copy_in_never_opens_a_file_of_another_size() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, cache) = cache();
+        let source = kept(dir.path(), b"longer than the pin");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o000)).unwrap();
+        let pin = crate::digest::sha256(b"pinned");
+        let copied = cache.copy_in(&source, &pin, 6, true, &Stop::default());
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(copied, Ok(Copied::OtherSize)));
+    }
+
+    /// a file that grows while it is read is read one byte past its pin and no further.
+    #[test]
+    fn copy_in_stops_one_byte_past_the_pin() {
+        struct Counted<'a>(&'a [u8], usize);
+        impl io::Read for Counted<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                let read = io::Read::read(&mut self.0, buffer)?;
+                self.1 += read;
+                Ok(read)
+            }
+        }
+        let (_dir, cache) = cache();
+        let mut object = cache.new_object().unwrap();
+        let mut input = Counted(&[7; 100], 0);
+        assert!(object.copy_from(&mut input, 11, &Stop::default()).is_ok());
+        assert_eq!((object.written, input.1), (11, 11));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_in_refuses_a_link_in_place_of_an_object() {
+        let (dir, cache) = cache();
+        let target = kept(dir.path(), b"pinned bytes");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let pin = crate::digest::sha256(b"pinned bytes");
+        let copied = cache.copy_in(&link, &pin, 12, true, &Stop::default());
+        assert!(matches!(copied, Ok(Copied::NotPlain)));
+        assert!(cache.find(&pin, None).is_none());
+    }
+
+    /// the cache's copy is a file of its own, so a later edit of the mirror's cannot reach it.
+    #[cfg(unix)]
+    #[test]
+    fn a_copied_object_shares_no_inode_with_the_mirror() {
+        use std::os::unix::fs::MetadataExt;
+        let (dir, cache) = cache();
+        let source = kept(dir.path(), b"pinned bytes");
+        let pin = crate::digest::sha256(b"pinned bytes");
+        let Ok(Copied::Sealed(sealed)) = cache.copy_in(&source, &pin, 12, true, &Stop::default())
+        else {
+            panic!("the pinned bytes were not copied");
+        };
+        sealed.publish(&cache).unwrap();
+        let object = fs::metadata(cache.object_path(&pin)).unwrap();
+        let mirror = fs::metadata(&source).unwrap();
+        assert_ne!((object.dev(), object.ino()), (mirror.dev(), mirror.ino()));
+        assert_eq!(mirror.nlink(), 1);
+    }
+
+    #[test]
+    fn a_stopped_copy_leaves_nothing() {
+        let (dir, cache) = cache();
+        let source = kept(dir.path(), b"pinned bytes");
+        let pin = crate::digest::sha256(b"pinned bytes");
+        let stop = Stop::default();
+        stop.ask();
+        let copied = cache.copy_in(&source, &pin, 12, true, &stop);
+        assert!(copied.is_err_and(|err| err.kind() == io::ErrorKind::Interrupted));
+        assert!(cache.find(&pin, None).is_none());
         assert_eq!(fs::read_dir(cache.root().join("tmp")).unwrap().count(), 0);
     }
 
