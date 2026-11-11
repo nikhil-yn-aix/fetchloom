@@ -402,8 +402,9 @@ fn compare(status: &mut Status, project: &Project, survey: &Survey, planned: &pl
                 Some(blocker)
                     if !survey.frees(
                         &blocker,
-                        going
-                            .get_or_insert_with(|| place::going(survey, targets, &planned.unknown)),
+                        going.get_or_insert_with(|| {
+                            place::going(survey, targets, &planned.unknown, &project.root)
+                        }),
                     ) =>
                 {
                     if !status

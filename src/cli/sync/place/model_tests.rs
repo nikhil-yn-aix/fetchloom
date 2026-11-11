@@ -301,8 +301,8 @@ fn unwanted_observations() {
         (named("set"), true),
         (named("other"), false),
     ] {
-        for flags in 0_u8..32 {
-            let [wanted, unknown, missing, edited, different] =
+        for flags in 0_u8..64 {
+            let [wanted, unknown, missing, edited, different, holds] =
                 std::array::from_fn(|bit| flags & (1 << bit) != 0);
             let mut survey = Survey::read(&project, "data", Threads::default());
             let look = Look {
@@ -321,14 +321,12 @@ fn unwanted_observations() {
                     adopted: false,
                 },
             );
+            let seen = Look {
+                modified: if different { 124 } else { 123 },
+                ..look
+            };
             if !missing {
-                survey.disk.insert(
-                    PATH.to_owned(),
-                    Look {
-                        modified: if different { 124 } else { 123 },
-                        ..look
-                    },
-                );
+                survey.disk.insert(PATH.to_owned(), seen);
             }
             if edited {
                 survey.edited.insert(PATH.to_owned());
@@ -343,20 +341,23 @@ fn unwanted_observations() {
             } else {
                 Vec::new()
             };
-            let actual = unwanted(&survey, &wanted, &unknown, &scope);
+            let actual = unwanted(&survey, &wanted, &unknown, &scope, |_, _, _| holds);
             let protected = !wanted.is_empty() || !unknown.is_empty() || !selected;
             if protected {
-                assert!(actual.is_empty(), "{scope:?} {flags:05b}");
+                assert!(actual.is_empty(), "{scope:?} {flags:06b}");
                 continue;
             }
-            assert_eq!(actual.len(), 1, "{scope:?} {flags:05b}");
+            assert_eq!(actual.len(), 1, "{scope:?} {flags:06b}");
             let actual = &actual[0].1;
             if missing {
                 assert!(matches!(actual, Unwanted::Gone));
-            } else if edited || different {
-                assert!(matches!(actual, Unwanted::Keep));
+            } else if edited || (different && !holds) {
+                assert!(matches!(actual, Unwanted::Keep), "{flags:06b}");
             } else {
-                assert!(matches!(actual, Unwanted::Remove(found) if *found == look));
+                assert!(
+                    matches!(actual, Unwanted::Remove(found) if *found == seen),
+                    "{flags:06b}"
+                );
             }
         }
     }

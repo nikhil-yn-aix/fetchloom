@@ -123,6 +123,35 @@ fn a_dry_run_names_what_drop_would_write_and_changes_nothing() -> Result {
     Ok(())
 }
 
+/// a disk such as fat settles a file's time after it is written, so a file fetchloom placed can
+/// look changed though it still holds the placed bytes. a drop removes it all the same.
+#[test]
+fn a_dropped_file_whose_time_moved_still_goes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = set(&sandbox)?;
+    let file = folder.join("train/images/x.png");
+    let bytes = fs::read(&file)?;
+    let modified = fs::metadata(&file)?.modified()?;
+    // a copy of its own, as fat places it, with the time the disk settled
+    delete(&file)?;
+    fs::write(&file, &bytes)?;
+    fs::File::options()
+        .write(true)
+        .open(&file)?
+        .set_modified(modified + std::time::Duration::from_secs(2))?;
+    let mut permissions = fs::metadata(&file)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&file, permissions)?;
+
+    let output = sandbox.run(&["drop", "data/set/train/images/x.png"])?;
+
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(!file.exists(), "{stderr}");
+    assert!(!stderr.contains("has changed"), "{stderr}");
+    Ok(())
+}
+
 /// train.zip and test.zip both hold images/x.png; a table names one archive.
 #[test]
 fn drop_excludes_a_member_of_its_own_archive_only() -> Result {

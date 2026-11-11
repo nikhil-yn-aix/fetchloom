@@ -352,7 +352,7 @@ impl<'a> Placing<'a> {
                 .iter()
                 .map(|target| target.path.as_str())
                 .collect();
-            let going = removable(&survey, &wanted, &unknown, scope);
+            let going = removable(&survey, &wanted, &unknown, scope, &project.root);
             actions = actions
                 .into_iter()
                 .map(|action| clearing(action, &survey, &going, scope))
@@ -633,7 +633,8 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| target.path.as_str())
             .collect();
-        let unwanted = unwanted(&self.survey, &wanted, &self.unknown, &self.scope);
+        let holds = still_placed(&self.survey, &self.project.root);
+        let unwanted = unwanted(&self.survey, &wanted, &self.unknown, &self.scope, holds);
         let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
         preview.placement.left_behind = self.survey.left_behind(&wanted, &going);
@@ -1479,7 +1480,8 @@ fn remove_unwanted(
     scope: &Scope,
     placement: &mut Placement,
 ) -> Result<bool, Error> {
-    let unwanted = unwanted(survey, wanted, unknown, scope);
+    let holds = still_placed(survey, &project.root);
+    let unwanted = unwanted(survey, wanted, unknown, scope, holds);
     let changed = !unwanted.is_empty();
     let going: HashSet<&str> = unwanted.iter().map(|(path, _)| path.as_str()).collect();
     placement.retired = survey.retired(wanted, &going);
@@ -1577,9 +1579,10 @@ pub(crate) fn going(
     survey: &Survey,
     targets: &[Target],
     unknown: &[(&str, &LockedFile)],
+    root: &Path,
 ) -> HashSet<String> {
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
-    removable(survey, &wanted, unknown, &Scope::All)
+    removable(survey, &wanted, unknown, &Scope::All, root)
 }
 
 /// the files fetchloom placed for a dataset in `scope` that no target of `wanted` needs now and
@@ -1589,8 +1592,9 @@ fn removable(
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
     scope: &Scope,
+    root: &Path,
 ) -> HashSet<String> {
-    unwanted(survey, wanted, unknown, scope)
+    unwanted(survey, wanted, unknown, scope, still_placed(survey, root))
         .into_iter()
         .filter_map(|(path, fate)| matches!(fate, Unwanted::Remove(_)).then_some(path))
         .collect()
@@ -1633,12 +1637,14 @@ fn clearing(action: Action, survey: &Survey, going: &HashSet<String>, scope: &Sc
 
 /// what becomes of each file fetchloom placed for a dataset in `scope` that no dataset needs
 /// now. the files of a dataset with an archive this machine never unpacked stay, since nothing
-/// tells which of them it still needs.
+/// tells which of them it still needs. one that no longer looks as placed goes only when `holds`
+/// finds the placed bytes still in it; otherwise someone changed it, and it stays.
 fn unwanted(
     survey: &Survey,
     wanted: &HashSet<&str>,
     unknown: &[(&str, &LockedFile)],
     scope: &Scope,
+    holds: impl Fn(&str, &Placed, &Look) -> bool,
 ) -> Vec<(String, Unwanted)> {
     let unsure: HashSet<&str> = unknown.iter().map(|(dataset, _)| *dataset).collect();
     survey
@@ -1653,7 +1659,8 @@ fn unwanted(
         .map(|(path, placed)| {
             let fate = match survey.disk.get(path) {
                 None => Unwanted::Gone,
-                Some(look) if *look == placed.look && !survey.edited.contains(path) => {
+                Some(_) if survey.edited.contains(path) => Unwanted::Keep,
+                Some(look) if *look == placed.look || holds(path, placed, look) => {
                     Unwanted::Remove(*look)
                 }
                 Some(_) => Unwanted::Keep,
@@ -1661,6 +1668,17 @@ fn unwanted(
             (path.clone(), fate)
         })
         .collect()
+}
+
+/// whether a file fetchloom placed below `root`, seen as `look`, still holds the bytes it placed
+/// there though it no longer looks as placed: a disk such as fat settles a file's time after it
+/// is written. only a file of the placed size is hashed, and one that cannot be read does not.
+fn still_placed<'s>(survey: &'s Survey, root: &'s Path) -> impl Fn(&str, &Placed, &Look) -> bool {
+    move |path, placed, look| {
+        let file = root.join(survey.listed.get(path).map_or(path, String::as_str));
+        look.size == placed.look.size
+            && Sha256::of_file(&file).is_ok_and(|digest| digest == placed.sha256)
+    }
 }
 
 /// how the file at `path` looks right now. a file is read again right before it is deleted,
