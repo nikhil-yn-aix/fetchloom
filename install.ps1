@@ -1,5 +1,6 @@
-# installs fetchloom from a github release into %LOCALAPPDATA%\Programs\fetchloom\bin, and
-# adds that folder to your user PATH when it lacks it, unless FETCHLOOM_NO_MODIFY_PATH=1.
+# installs fetchloom from a github release into %LOCALAPPDATA%\Programs\fetchloom\bin, with
+# fl.exe as a short name for it there unless another fl would be hidden, and adds that folder to
+# your user PATH when it lacks it, unless FETCHLOOM_NO_MODIFY_PATH=1.
 #
 #   powershell -ExecutionPolicy ByPass -c "irm https://github.com/nikhil-yn-aix/fetchloom/releases/latest/download/install.ps1 | iex"
 #
@@ -122,6 +123,31 @@ function Install-Fetchloom([string]$Version) {
     }
 
     Write-Host "installed $installed in $bin"
+    # fl.exe is a hardlink to fetchloom.exe, made again on every install, since a hardlink keeps the
+    # old bytes once fetchloom.exe is replaced. none is made where it would hide another fl
+    $short = Join-Path $bin 'fl.exe'
+    try {
+        if (Test-Path -LiteralPath $short) { Remove-Item -LiteralPath $short -Force }
+        $other = Get-Command fl -CommandType Application -All -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($other) {
+            Write-Host "left fl alone: it runs $($other.Path) here. for fl in powershell, add Set-Alias fl fetchloom -Force to your profile"
+        } else {
+            $program = Join-Path $bin $name
+            try {
+                New-Item -ItemType HardLink -Path $short -Target $program | Out-Null
+            } catch {
+                Copy-Item -LiteralPath $program -Destination $short
+            }
+            # powershell runs an alias before any program, and fl is the alias of Format-List
+            if (Get-Alias fl -ErrorAction SilentlyContinue) {
+                Write-Host 'fl.exe runs fetchloom too. in powershell, where fl is Format-List, type fl.exe'
+            } else {
+                Write-Host 'fl runs fetchloom too'
+            }
+        }
+    } catch {
+        Write-Warning "fl.exe was not made: $($_.Exception.Message) fetchloom itself is installed"
+    }
     if (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $bin) { $env:Path = "$env:Path;$bin" }
     if ($env:FETCHLOOM_NO_MODIFY_PATH -eq '1') {
         Write-Host "FETCHLOOM_NO_MODIFY_PATH=1 left your user PATH alone; add $bin to it to run fetchloom from anywhere"
