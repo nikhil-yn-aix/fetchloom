@@ -133,6 +133,7 @@ pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, 
             &manifest,
             read.as_ref().map(|(lock, _)| lock),
             "sync without --locked",
+            &scope,
         )?;
     }
     let seen = Seen {
@@ -215,7 +216,13 @@ fn settled_unheld(
         return Ok(None);
     };
     if args.locked {
-        locked(project, &manifest, Some(&lock), "sync without --locked")?;
+        locked(
+            project,
+            &manifest,
+            Some(&lock),
+            "sync without --locked",
+            &scope,
+        )?;
     }
     let seen = Seen {
         manifest: digest::sha256(text.as_bytes()),
@@ -423,7 +430,7 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
     let (_, manifest) = project.manifest()?;
     let old = project.lock()?;
     if args.check {
-        return check(&project, &manifest, old.as_ref());
+        return check(&project, &manifest, old.as_ref(), &Scope::All);
     }
     let upgrade = match args.upgrade {
         None => Upgrade::Nothing,
@@ -543,30 +550,40 @@ async fn preview_lock(
     })
 }
 
-/// what `--locked` asks: data.lock exists and is up to date with data.toml, or the command fails
-/// without writing it. `instead` is the other way out the help names, such as
-/// "sync without --locked".
+/// what `--locked` asks: data.lock exists and its entries for the datasets of `scope` are up to
+/// date with data.toml, or the command fails without writing it. `instead` is the other way out
+/// the help names, such as "sync without --locked".
 pub(super) fn locked(
     project: &Project,
     manifest: &Manifest,
     lock: Option<&Lock>,
     instead: &str,
+    scope: &Scope,
 ) -> Result<(), Error> {
     let help = format!("run `fetchloom lock` and commit data.lock, or {instead}");
     let Some(lock) = lock else {
         return Err(Error::new(Kind::Outdated, "there is no data.lock yet").help(help));
     };
-    check(project, manifest, Some(lock))
+    check(project, manifest, Some(lock), scope)
         .map(drop)
         .map_err(|error| error.help(help))
 }
 
-/// `lock --check`: compares without the network and without writing.
-fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<Report, Error> {
+/// `lock --check`: compares the entries of the datasets in `scope` without the network and
+/// without writing.
+fn check(
+    project: &Project,
+    manifest: &Manifest,
+    old: Option<&Lock>,
+    scope: &Scope,
+) -> Result<Report, Error> {
     let empty = Lock::default();
     let old = old.unwrap_or(&empty);
     let mut stale: Vec<String> = Vec::new();
     for (name, entry) in &manifest.datasets {
+        if !scope.includes(name) {
+            continue;
+        }
         match old.get(name).map(|locked| locked.drift(entry)) {
             None => stale.push(format!("{name} is not in data.lock yet")),
             Some(Some(Drift::Spec)) => stale.push(format!("{name} changed in data.toml")),
@@ -577,7 +594,7 @@ fn check(project: &Project, manifest: &Manifest, old: Option<&Lock>) -> Result<R
         }
     }
     for dataset in &old.datasets {
-        if !manifest.datasets.contains_key(&dataset.name) {
+        if scope.includes(&dataset.name) && !manifest.datasets.contains_key(&dataset.name) {
             stale.push(format!(
                 "{} is in data.lock but no longer in data.toml",
                 dataset.name

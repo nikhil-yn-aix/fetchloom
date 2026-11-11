@@ -22,7 +22,7 @@ name datasets, by their names in data.toml, to sync only those, as [named datase
 | option | effect |
 |---|---|
 | `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. it finds changes by size and time; add `--verify` for changes that kept both |
-| `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI |
+| `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI. given names, only their entries are checked |
 | `--verify` | check the SHA-256 of every placed file, and put back those that changed though their size and time did not |
 | `-n`, `--dry-run` | plan locking, downloads, placement and removal without applying project or cache changes |
 
@@ -61,7 +61,7 @@ follow the upgrade hint only when you intend to change the input. [recovery](../
      Synced small into data · 1 other dataset left as it was
 ```
 
-`--force small` replaces edits in small's files only, `--verify small` hashes small's files only, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
+`--force small` replaces edits in small's files only, `--verify small` hashes small's files only, `--locked small` checks only small's entry in data.lock, so a job needing small passes while another entry is stale, and `--dry-run` shows what the named sync would do. a name data.toml does not have fails before any request, with exit 2 and the closest name:
 
 ```text
 error: data.toml has no dataset called smal

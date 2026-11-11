@@ -8,9 +8,9 @@ use serde::Serialize;
 
 use super::args;
 use super::project::{Run, Waited, find, hold_until, ignore_data, known, locked, sync_all};
-use super::sync::Loop;
 use super::sync::disk::Survey;
 use super::sync::place::Seen;
+use super::sync::{Loop, Scope};
 use super::{Context, open_cache};
 use crate::cache::Cache;
 use crate::digest;
@@ -76,6 +76,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                             &manifest,
                             read.as_ref().map(|(lock, _)| lock),
                             "run path without --locked",
+                            &Scope::All,
                         )?;
                     }
                     let cache = match cache {

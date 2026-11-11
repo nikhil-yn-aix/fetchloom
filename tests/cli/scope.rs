@@ -205,3 +205,37 @@ fn an_unknown_name_is_refused_before_any_request() -> Result {
     assert!(!fresh.folder.join("data").exists());
     Ok(())
 }
+
+/// `--locked` with a name checks that dataset's entry alone: large's entry, stale since data.toml
+/// moved it to another link, neither fails the named sync nor gets resolved, while a plain
+/// `--locked` sync fails on it.
+#[test]
+fn a_locked_named_sync_checks_only_named_entries() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (small, large) = small_and_large(&sandbox, 1)?;
+    let moved = Server::start("/files/large.csv", vec![file(LARGE, "\"v2\"")])?;
+    sandbox.allow(&moved.url);
+    let work = sandbox.work();
+    fs::write(
+        work.join("data.toml"),
+        format!(
+            "[datasets.large]\nref = \"{}\"\n\n[datasets.small]\nref = \"{}\"\n",
+            moved.url, small.url
+        ),
+    )?;
+    let lock = fs::read(work.join("data.lock"))?;
+
+    let named = sandbox.run(&["--json", "sync", "--locked", "small"])?;
+    let all = sandbox.run(&["--json", "sync", "--locked"])?;
+
+    assert_eq!(named.status.code(), Some(0), "{}", text(&named.stdout)?);
+    assert_eq!(all.status.code(), Some(1), "{}", text(&all.stdout)?);
+    assert_eq!(json(&all)?["errors"][0]["kind"], "lock.outdated");
+    assert_eq!(
+        (moved.requests().len(), large.requests().len()),
+        (0, 1),
+        "nothing asks either of large's links after the add"
+    );
+    assert_eq!(fs::read(work.join("data.lock"))?, lock);
+    Ok(())
+}

@@ -22,7 +22,7 @@
 
 ### locked entry
 
-`sync --locked` runs the same manifest-membership, spec and `extract` check as `lock --check` before opening the cache or entering `sync_all`. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
+`sync --locked` runs the same manifest-membership, spec and `extract` check as `lock --check` before opening the cache or entering `sync_all`, over the named datasets' entries alone when names are given. a stale or missing lock returns `lock.outdated`, exit 1, without downloading or updating pins or placements. the project mutation hold may already have created local owner files.
 
 ### named datasets
 

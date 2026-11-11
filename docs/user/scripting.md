@@ -55,7 +55,7 @@ invalid or missing JSON raises before inputs are used. pass `--yes` only when yo
 
 kept conflicts do not include unrelated extras. run `fetchloom --json status` and check `unlocked`, `removed`, `missing`, `edited`, `untracked`, `outdated`, `damaged`, `blocked`, `extra` and `not_unpacked`. every array empty means status found no differences. it uses saved metadata and selective hashing, not a full integrity scan, unless `--verify` asks it to hash every placed file.
 
-a job that needs one dataset names it, as in `fetchloom --json --yes sync small`: only small is downloaded and placed, and `result.selected` echoes `["small"]`. the other datasets keep their data.lock entries and files as they are, so `kept` and `placement` speak of small alone, and the next plain `sync` still checks every dataset. a name data.toml does not have fails with `usage`, exit 2, before any request.
+a job that needs one dataset names it, as in `fetchloom --json --yes sync --locked small`: only small is downloaded and placed, `--locked` checks only small's entry in data.lock, and `result.selected` echoes `["small"]`. the other datasets keep their data.lock entries and files as they are, so `kept` and `placement` speak of small alone, and the next plain `sync` still checks every dataset. a name data.toml does not have fails with `usage`, exit 2, before any request.
 
 ## adding and fetching
 
