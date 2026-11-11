@@ -141,7 +141,8 @@ def get(
     ``path``, the download goes into a new folder named after it, or into ``folder``, and
     the folder is returned. ``sha256`` is the hash the one file must have; with ``path``, a
     file already holding it is kept without a download. ``yes=True`` approves large
-    downloads; ``offline=True`` prevents network requests.
+    downloads; ``offline=True`` prevents network requests, and keeps a file at ``path`` that
+    still holds what the link served last time.
     """
     if path is not None and folder is not None:
         raise Error(

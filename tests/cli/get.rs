@@ -323,6 +323,25 @@ fn output_leaves_a_file_holding_the_same_bytes_as_it_is() -> Result {
     Ok(())
 }
 
+/// offline, the bytes a link served last time stand for what it serves, so a notebook run again
+/// without a network keeps its file.
+#[test]
+fn offline_output_keeps_a_file_holding_what_the_link_served_last() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let first = sandbox.run(&["get", &server.url, "-o", "data.csv"])?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let output = sandbox.run(&["--offline", "get", &server.url, "-o", "data.csv"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok data.csv already holds what the link served last time"),
+        "{stderr}"
+    );
+    assert_eq!(server.requests().len(), 1);
+    Ok(())
+}
+
 #[test]
 fn output_refuses_a_file_holding_other_bytes_until_force() -> Result {
     let sandbox = Sandbox::new()?;

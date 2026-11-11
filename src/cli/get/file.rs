@@ -99,6 +99,8 @@ enum Wanted {
     Named,
     /// the hash the link's source states.
     Stated,
+    /// what the link served the last time it was fetched here, all an offline run knows.
+    Recorded,
 }
 
 impl Wanted {
@@ -107,6 +109,7 @@ impl Wanted {
             Wanted::Served => "the link serves now",
             Wanted::Named => "--sha256 names",
             Wanted::Stated => "its source states",
+            Wanted::Recorded => "the link served last time",
         }
     }
 }
@@ -184,7 +187,7 @@ pub(super) async fn one(
             .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
         shown,
     };
-    if let Some(kept) = decided_early(context, &remote, args, &destination)? {
+    if let Some(kept) = decided_early(context, cache, &remote, args, &destination)? {
         return Ok(kept);
     }
     let fetched = download(context, net, cache, &remote).await?;
@@ -197,14 +200,26 @@ pub(super) async fn one(
 /// request: none when it decides nothing, as when the path is free or the file must go.
 fn decided_early(
     context: &Context,
+    cache: &Cache,
     remote: &Remote,
     args: &Get,
     destination: &Destination,
 ) -> Result<Option<(PathBuf, Done)>, Error> {
-    let (digest, wanted) = match (args.sha256, remote.sha256) {
-        (Some(named), _) => (named, Wanted::Named),
-        (None, Some(stated)) => (stated, Wanted::Stated),
-        (None, None) => return Ok(None),
+    let recorded = || {
+        context
+            .offline
+            .enabled()
+            .then(|| cache.url_record(remote.url.as_str()))
+            .flatten()
+            .map(|record| (record.sha256, Wanted::Recorded))
+    };
+    let known = match (args.sha256, remote.sha256) {
+        (Some(named), _) => Some((named, Wanted::Named)),
+        (None, Some(stated)) => Some((stated, Wanted::Stated)),
+        (None, None) => recorded(),
+    };
+    let Some((digest, wanted)) = known else {
+        return Ok(None);
     };
     let found = existing(&destination.path)?;
     match decide(&found, &digest, args.force) {

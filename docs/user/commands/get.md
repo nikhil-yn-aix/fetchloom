@@ -94,7 +94,7 @@ a file already at the path stays as it is unless `--force` asks to replace it:
 
 a link to a file counts as that file's bytes, and `--force` replaces the link itself, never the file it leads to. the replacement takes the name in one rename, so the old file stays whole until then. on windows a read-only file there loses its flag for the rename, and on FAT and exFAT, which may refuse it, the old file is moved aside first and back again if the new one cannot take its name.
 
-with `--sha256`, or a SHA-256 the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. without one, the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
+with `--sha256`, or a SHA-256 the source states, the file there is hashed before anything downloads, and a run that finds those bytes downloads nothing. offline, the bytes the link served the last time this machine fetched it count instead, so a run without a network keeps a file that still holds them. otherwise the run downloads the file to compare it. a refused run leaves those bytes in the cache, so `--force` afterwards can reuse them when the server says they are unchanged:
 
 ```text
 $ fetchloom get http://127.0.0.1:18931/iris.csv -o other.csv
