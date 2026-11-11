@@ -2,7 +2,7 @@
 //! lines now and then anywhere else.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -33,18 +33,22 @@ pub(crate) struct Bar {
     moved: Arc<Moved>,
 }
 
-/// when a bar last moved, so a download that stopped receiving can say so.
+/// when a bar last moved, so a download that stopped receiving can say so, and whether the run
+/// is stopping, which a bar says instead.
 struct Moved {
     born: Instant,
     /// milliseconds from `born` to the last bytes or answer.
     at: AtomicU64,
+    /// set once for every bar of the run, at the first ctrl-c.
+    stopping: Arc<AtomicBool>,
 }
 
 impl Moved {
-    fn new() -> Moved {
+    fn new(stopping: Arc<AtomicBool>) -> Moved {
         Moved {
             born: Instant::now(),
             at: AtomicU64::new(0),
+            stopping,
         }
     }
 
@@ -67,18 +71,19 @@ impl Bar {
             drawn: None,
             color: false,
             unicode: false,
-            moved: Arc::new(Moved::new()),
+            moved: Arc::new(Moved::new(Arc::default())),
         }
     }
 
+    /// a bar on `bars` that says the run is stopping once `stopping` is set.
     pub(super) fn add(
         bars: &MultiProgress,
         verb: &'static str,
         message: String,
-        color: bool,
-        unicode: bool,
+        (color, unicode): (bool, bool),
+        stopping: Arc<AtomicBool>,
     ) -> Bar {
-        let moved = Arc::new(Moved::new());
+        let moved = Arc::new(Moved::new(stopping));
         let bar = bars.add(ProgressBar::no_length().with_message(message));
         bar.set_style(style(verb, color, unicode, &bar.message(), moved.clone()));
         bar.enable_steady_tick(TICK);
@@ -169,6 +174,7 @@ fn style(
                     state.elapsed(),
                     state.eta(),
                     quiet,
+                    moved.stopping.load(Ordering::Relaxed),
                 );
                 let width = usize::from(console::Term::stderr().size().1);
                 let line = render(&name, &heading, &bar, &amount, width, color);
@@ -259,7 +265,7 @@ fn middle(name: &str, width: usize) -> String {
 /// elapsed time stays visible until a settled rate can estimate the time left, and a download
 /// that has received nothing for [`STALL`] says so instead of showing a fading rate. one with
 /// every byte in says it waits for the disk. `quiet`, how long since a download last received
-/// bytes, is none for local work.
+/// bytes, is none for local work. once the run is `stopping`, the bar says that alone.
 fn measure(
     done: u64,
     total: Option<u64>,
@@ -267,10 +273,15 @@ fn measure(
     elapsed: Duration,
     left: Duration,
     quiet: Option<Duration>,
+    stopping: bool,
 ) -> String {
     let mut parts = Vec::new();
     if done > 0 {
         parts.push(total.map_or_else(|| units::size(done), |total| fraction(done, total)));
+    }
+    if stopping {
+        parts.push("stopping".to_owned());
+        return parts.join(" · ");
     }
     if let Some(quiet) = quiet {
         if every_byte_in(done, total) {
@@ -718,21 +729,32 @@ mod tests {
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
         let busy = Some(Duration::ZERO);
-        assert_eq!(measure(0, None, 0.0, second, Duration::ZERO, busy), "");
         assert_eq!(
-            measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy),
+            measure(0, None, 0.0, second, Duration::ZERO, busy, false),
+            ""
+        );
+        assert_eq!(
+            measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy, false),
             "1.0 KiB · 512 B/s · 12 s"
         );
         assert_eq!(
-            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy),
+            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy, false),
             "12 s"
         );
         assert_eq!(
-            measure(1024, Some(4096), 0.0, second, Duration::ZERO, busy),
+            measure(1024, Some(4096), 0.0, second, Duration::ZERO, busy, false),
             "1.0/4.0 KiB"
         );
         assert_eq!(
-            measure(1024, Some(4096), 512.0, 12 * second, 6 * second, busy),
+            measure(
+                1024,
+                Some(4096),
+                512.0,
+                12 * second,
+                6 * second,
+                busy,
+                false
+            ),
             "1.0/4.0 KiB · 512 B/s · 6 s left"
         );
     }
@@ -747,7 +769,8 @@ mod tests {
                 300.0,
                 40 * second,
                 10 * second,
-                Some(12 * second)
+                Some(12 * second),
+                false
             ),
             "1.0/4.0 KiB · no data for 12 s"
         );
@@ -758,7 +781,8 @@ mod tests {
                 0.0,
                 9 * second,
                 Duration::ZERO,
-                Some(9 * second)
+                Some(9 * second),
+                false
             ),
             "no data for 9 s"
         );
@@ -769,7 +793,8 @@ mod tests {
                 512.0,
                 12 * second,
                 6 * second,
-                Some(4 * second)
+                Some(4 * second),
+                false
             ),
             "1.0/4.0 KiB · 512 B/s · 6 s left",
             "a gap of a few seconds is ordinary"
@@ -788,7 +813,8 @@ mod tests {
                 4.0,
                 15 * second,
                 Duration::ZERO,
-                Some(12 * second)
+                Some(12 * second),
+                false
             ),
             "57/57 B · waiting for the disk · 12 s"
         );
@@ -799,7 +825,8 @@ mod tests {
                 40.0,
                 second,
                 Duration::ZERO,
-                Some(Duration::ZERO)
+                Some(Duration::ZERO),
+                false
             ),
             "57/57 B · waiting for the disk"
         );
@@ -837,6 +864,63 @@ mod tests {
         );
     }
 
+    /// once a stop is asked for, a bar says so, rather than that no data came or a rate and time
+    /// left that no longer apply, however long the stop takes.
+    #[test]
+    fn a_bar_says_it_is_stopping_once_a_stop_is_asked_for() {
+        let second = Duration::from_secs(1);
+        let mib = 1024 * 1024;
+        assert_eq!(
+            measure(
+                74 * mib,
+                Some(300 * mib),
+                4.6 * 1_048_576.0,
+                60 * second,
+                48 * second,
+                Some(12 * second),
+                true
+            ),
+            "74.0/300.0 MiB · stopping"
+        );
+        assert_eq!(
+            measure(
+                0,
+                Some(4096),
+                0.0,
+                9 * second,
+                Duration::ZERO,
+                Some(second),
+                true
+            ),
+            "stopping"
+        );
+        assert_eq!(
+            measure(
+                57,
+                Some(57),
+                4.0,
+                15 * second,
+                Duration::ZERO,
+                Some(12 * second),
+                true
+            ),
+            "57/57 B · stopping"
+        );
+        assert_eq!(
+            measure(
+                1024,
+                Some(4096),
+                0.0,
+                3 * second,
+                Duration::ZERO,
+                None,
+                true
+            ),
+            "1.0/4.0 KiB · stopping",
+            "unpacking stops too"
+        );
+    }
+
     #[test]
     fn the_time_left_waits_until_the_rate_can_carry_it() {
         let second = Duration::from_secs(1);
@@ -849,7 +933,8 @@ mod tests {
                 2970.0,
                 3 * second,
                 801 * 60 * second,
-                busy
+                busy,
+                false
             ),
             "9.0 KiB/136.0 MiB · 2.9 KiB/s · 3 s",
             "three seconds at the start of a slow link cannot tell thirteen hours"
@@ -861,7 +946,8 @@ mod tests {
                 2.0 * 1_048_576.0,
                 10 * second,
                 64 * second,
-                busy
+                busy,
+                false
             ),
             "9.0/136.0 MiB · 2.0 MiB/s · 1 min 04 s left"
         );
@@ -872,7 +958,8 @@ mod tests {
                 2970.0,
                 30 * second,
                 801 * 60 * second,
-                busy
+                busy,
+                false
             ),
             "1.0 KiB/136.0 MiB · 2.9 KiB/s · 801 min 00 s left",
             "half a minute of a steady slow rate is worth telling"

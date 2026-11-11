@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anstyle::Style as Paint;
@@ -49,6 +49,8 @@ pub(crate) struct Output {
     /// whether the run was asked to leave data.lock as it is, as `--locked` asks, so no fix may
     /// change it.
     locked: AtomicBool,
+    /// set at the first ctrl-c, so every bar says the run is stopping.
+    stopping: Arc<AtomicBool>,
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -157,6 +159,7 @@ impl Output {
             failed: Mutex::new(None),
             hints: true,
             locked: AtomicBool::new(false),
+            stopping: Arc::default(),
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -439,7 +442,13 @@ impl Output {
     /// a bar for one download, hidden unless a person is watching the terminal.
     pub(crate) fn bar(&self, verb: &'static str, message: String) -> Bar {
         match &self.bars {
-            Some(bars) => Bar::add(bars, verb, message, self.style.color, self.style.unicode),
+            Some(bars) => Bar::add(
+                bars,
+                verb,
+                message,
+                (self.style.color, self.style.unicode),
+                self.stopping.clone(),
+            ),
             None => Bar::hidden(),
         }
     }
@@ -789,8 +798,10 @@ impl Output {
         answer
     }
 
-    /// says that a first ctrl-c was heard, and what a second one does.
+    /// says that a first ctrl-c was heard, and what a second one does. every bar says it is
+    /// stopping from then on.
     pub(crate) fn stopping(&self) {
+        self.stopping.store(true, Ordering::Relaxed);
         self.mark("Stopping", "(press ctrl-c again to quit at once)");
     }
 
