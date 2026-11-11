@@ -80,6 +80,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        their sources, separated by commas
   FETCHLOOM_MIRRORS_ONLY
                        true asks the mirrors alone, never a source
+  FETCHLOOM_PUSH_TO    the folder fetchloom push copies files into, unless
+                       --to names one
   FETCHLOOM_LOG        a log filter such as fetchloom=debug, as -vv uses
   FETCHLOOM_TRACE      a file to write a timeline of the run to, for profiling
   FETCHLOOM_COLORS     other colors, as done=blue:accent=#d787ff
@@ -92,8 +94,9 @@ const ENVIRONMENT: &str = "fetchloom environment
   CI, AI_AGENT, coding agents' variables   no questions, color or animation
 
 a settings file keeps cache, jobs, host_jobs, retries, timeout, ask_above,
-memory, most_files, the archive_ settings, allowed_origins and s3_buckets for
-every run, one per line, as jobs = 16. a variable wins over the file.
+memory, most_files, the archive_ settings, allowed_origins, s3_buckets,
+mirrors, mirrors_only and push_to for every run, one per line, as jobs = 16. a
+variable wins over the file.
 fetchloom settings shows each value and where it came from.
 
 keys are read where each source's own tools keep them: HF_TOKEN and the hugging

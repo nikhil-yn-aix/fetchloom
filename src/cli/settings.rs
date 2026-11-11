@@ -170,6 +170,14 @@ fn rows(context: &Context) -> Vec<Shown> {
         variable: crate::settings::variable("mirrors_only"),
         said: settings.mirrors_only.value.to_string(),
     });
+    let push_to = settings.push_to.value.as_ref();
+    shown.push(Shown {
+        name: "push_to",
+        value: push_to.map_or(Value::Null, |folder| json!(folder.display().to_string())),
+        origin: settings.push_to.origin,
+        variable: crate::settings::variable("push_to"),
+        said: push_to.map_or_else(|| "none".to_owned(), |folder| folder.display().to_string()),
+    });
     shown.extend(variables(context));
     shown
 }

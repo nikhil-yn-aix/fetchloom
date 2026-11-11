@@ -26,6 +26,7 @@ mod placing;
 mod progress;
 mod project;
 mod proxy;
+mod push;
 mod recovery;
 mod remove;
 mod scope;

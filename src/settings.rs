@@ -40,7 +40,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 15] = [
+const KEYS: [(&str, &str); 16] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("jobs", "FETCHLOOM_JOBS"),
     ("host_jobs", "FETCHLOOM_HOST_JOBS"),
@@ -56,6 +56,7 @@ const KEYS: [(&str, &str); 15] = [
     ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
+    ("push_to", "FETCHLOOM_PUSH_TO"),
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
@@ -287,6 +288,8 @@ pub(crate) struct Settings {
     pub(crate) mirrors: Set<Vec<Location>>,
     /// whether requests may go to the mirrors alone, never to a source.
     pub(crate) mirrors_only: Set<bool>,
+    /// the folder mirror `fetchloom push` writes to when `--to` names none.
+    pub(crate) push_to: Set<Option<PathBuf>>,
 }
 
 impl Settings {
@@ -316,6 +319,7 @@ impl Settings {
             s3_buckets: Set::default(Vec::new()),
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
+            push_to: Set::default(None),
             memory,
         }
     }
@@ -361,6 +365,7 @@ impl Settings {
             s3_buckets: buckets(&given, "s3_buckets")?,
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
+            push_to: push_folder(&given, "push_to")?,
             memory,
             file,
         })
@@ -434,6 +439,23 @@ impl Given<'_> {
         };
         Some((
             items,
+            Origin::File,
+            format!("{key} in the settings file {}", self.file_path().display()),
+        ))
+    }
+
+    /// the text `key` holds as it is, never split at commas, since a folder's name may hold one,
+    /// with where it came from and how to name it in a message.
+    fn text(&self, key: &str) -> Option<(OsString, Origin, String)> {
+        let variable = variable(key);
+        if let Some(value) = (self.var)(variable).filter(|value| !value.is_empty()) {
+            return Some((value, Origin::Environment, variable.to_owned()));
+        }
+        let Value::Text(text) = self.file.get(key)? else {
+            return None;
+        };
+        Some((
+            OsString::from(text),
             Origin::File,
             format!("{key} in the settings file {}", self.file_path().display()),
         ))
@@ -635,6 +657,49 @@ fn mirrors(given: &Given<'_>, key: &str) -> Result<Set<Vec<Location>>, Error> {
         value: mirrors,
         origin,
     })
+}
+
+/// the folder `key` names for `fetchloom push`, which writes folders only: a web address is
+/// refused, as a mirror's is read. a relative folder in the settings file is taken from the
+/// file's folder, and one in a variable from the working folder. none when it is unset or empty.
+fn push_folder(given: &Given<'_>, key: &str) -> Result<Set<Option<PathBuf>>, Error> {
+    let Some((value, origin, named)) = given.text(key) else {
+        return Ok(Set::default(None));
+    };
+    // a web address is text, so a name that is not is a folder
+    let Some(text) = value.to_str() else {
+        return Ok(Set {
+            value: Some(PathBuf::from(value)),
+            origin,
+        });
+    };
+    if text.trim().is_empty() {
+        return Ok(Set::default(None));
+    }
+    let base = match origin {
+        Origin::File => given.file_path().parent(),
+        _ => None,
+    };
+    let shown = crate::net::mask_query(text.trim());
+    match Location::parse(text, base) {
+        Ok(Location::Folder(folder)) => Ok(Set {
+            value: Some(folder),
+            origin,
+        }),
+        Ok(Location::Web(_)) => Err(Error::new(
+            Kind::Usage,
+            format!("{named} is \"{shown}\", which is a web address, and push writes to folders"),
+        )
+        .help(format!(
+            "set it to a folder, such as /mnt/lab/fetchloom, and copy that folder to a server or a bucket with a tool such as rclone; or {}",
+            undo(origin, key)
+        ))),
+        Err(refusal) => Err(Error::new(
+            Kind::Usage,
+            format!("{named} is \"{shown}\", which is no folder: {}", refusal.reason),
+        )
+        .help(format!("{}, or {}", refusal.instead, undo(origin, key)))),
+    }
 }
 
 /// true or false, as `key` holds it: `true` or `1`, `false` or `0`, or `default`.
@@ -1197,5 +1262,59 @@ mod tests {
         );
         let wrong = file("mirrors_only = [true]\n").unwrap_err();
         assert_eq!(wrong.kind, Kind::Usage);
+    }
+
+    #[test]
+    fn push_to_is_a_folder_from_the_variable_or_else_the_file() {
+        assert_eq!(read(&[], None).unwrap().push_to, Set::default(None));
+        let set = read(&[("FETCHLOOM_PUSH_TO", " /mnt/lab/fetchloom ")], None).unwrap();
+        assert_eq!(
+            set.push_to,
+            Set {
+                value: Some(PathBuf::from("/mnt/lab/fetchloom")),
+                origin: Origin::Environment
+            }
+        );
+        // a relative folder is taken from the settings file's folder, as mirrors are
+        let filed = file("push_to = \"mirror\"\n").unwrap();
+        let set = Settings::read(&env(&[]), filed, machine(None)).unwrap();
+        assert_eq!(
+            set.push_to,
+            Set {
+                value: Some(PathBuf::from("/home/ada/.config/fetchloom/mirror")),
+                origin: Origin::File
+            }
+        );
+    }
+
+    /// push writes folders only; a bucket or a server gets the folder through rclone.
+    #[test]
+    fn push_to_a_web_address_is_a_usage_error() {
+        let error = read(
+            &[("FETCHLOOM_PUSH_TO", "https://data.lab.example/fetchloom")],
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, Kind::Usage);
+        assert_eq!(
+            error.message,
+            "FETCHLOOM_PUSH_TO is \"https://data.lab.example/fetchloom\", which is a web address, and push writes to folders"
+        );
+        assert_eq!(
+            error.help.as_deref(),
+            Some(
+                "set it to a folder, such as /mnt/lab/fetchloom, and copy that folder to a server or a bucket with a tool such as rclone; or unset FETCHLOOM_PUSH_TO"
+            )
+        );
+        let error = Settings::read(
+            &env(&[]),
+            file("push_to = \"file:///mnt/lab\"\n").unwrap(),
+            machine(None),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.help.as_deref(),
+            Some("write the folder path itself, or remove push_to from the settings file")
+        );
     }
 }
