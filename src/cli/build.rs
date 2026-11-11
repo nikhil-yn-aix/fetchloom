@@ -631,7 +631,9 @@ impl<'a> Building<'a> {
         match ran.ended {
             Ended::Exited(0) => Ok(ran),
             Ended::Stopped => Err(stopped()),
-            ended => Err(failed(name, program, ended, &ran, &folder)),
+            ended @ Ended::Exited(_) => Err(failed(name, program, ended, &ran, &folder)),
+            #[cfg(unix)]
+            ended @ Ended::Signaled(_) => Err(failed(name, program, ended, &ran, &folder)),
         }
     }
 
