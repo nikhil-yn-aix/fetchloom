@@ -1508,6 +1508,18 @@ fn a_matching_sha256_lets_the_file_in() -> Result {
     Ok(())
 }
 
+/// `--sha256` takes a hash as `-i` lists and sites write it, after `sha256:`.
+#[test]
+fn sha256_takes_the_form_sites_write() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let prefixed = format!("sha256:{IRIS_SHA256}");
+    let output = sandbox.run(&["get", &server.url, "-o", "data.csv", "--sha256", &prefixed])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(fs::read(sandbox.work().join("data.csv"))?, IRIS);
+    Ok(())
+}
+
 /// a hash that differs from the file's late, past the 12 digits a person usually reads, still
 /// reads apart: each is shown up to just past the first digit where they differ, and JSON gives
 /// both whole.

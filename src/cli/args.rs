@@ -1022,7 +1022,7 @@ pub(crate) struct Get {
 
     /// check that the file has this SHA-256 before it takes its name or goes in the folder.
     /// needs one link to one file
-    #[arg(long, value_name = "hex", value_parser = sha256, help_heading = "options")]
+    #[arg(long, value_name = "hex", value_parser = super::links::sha256, help_heading = "options")]
     pub(crate) sha256: Option<Sha256>,
 
     #[command(flatten)]
@@ -1031,11 +1031,6 @@ pub(crate) struct Get {
     /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
-}
-
-/// reads `--sha256`: 64 hex digits, in either case.
-fn sha256(text: &str) -> Result<Sha256, String> {
-    Sha256::from_hex(text.trim()).ok_or_else(|| "a SHA-256 is 64 hex digits".to_owned())
 }
 
 /// the shell a completion script is for.

@@ -80,7 +80,7 @@ pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
             return Err(not_a_link(name, number, written));
         }
         let given = words.next();
-        let sha256 = given.map(sha256);
+        let sha256 = given.map(sha256).transpose();
         let at = format!("line {number} of {name}");
         if words.next().is_some() {
             return Err(Error::new(
@@ -89,32 +89,53 @@ pub(super) fn parse(name: &str, text: &str) -> Result<Vec<Line>, Error> {
             )
             .help(FORM));
         }
-        if let (Some(given), Some(None)) = (given, sha256) {
-            return Err(Error::new(
+        let sha256 = sha256.map_err(|why| {
+            Error::new(
                 Kind::Usage,
                 format!(
                     "\"{}\" on {at} is not a SHA-256",
-                    net::mask_query(given).escape_debug()
+                    net::mask_query(given.unwrap_or_default()).escape_debug()
                 ),
             )
-            .help(FORM));
-        }
+            .detail(why)
+            .help(FORM)
+        })?;
         lines.push(Line {
             number,
             link: link.to_owned(),
-            sha256: sha256.flatten(),
+            sha256,
         });
     }
     Ok(lines)
 }
 
-/// reads a line's SHA-256: 64 hex digits in either case, or the same after `sha256:`.
-fn sha256(text: &str) -> Option<Sha256> {
+/// reads a SHA-256 as sites and lists write one: 64 hex digits in either case, or the same after
+/// `sha256:`, with spaces around ignored. otherwise says why it is none, naming the hash it looks
+/// like, since a site often states an MD5, or for a file kept in git a SHA-1, beside it.
+pub(super) fn sha256(text: &str) -> Result<Sha256, String> {
+    let text = text.trim();
     let hex = match text.get(..7) {
         Some(prefix) if prefix.eq_ignore_ascii_case("sha256:") => &text[7..],
         _ => text,
     };
-    Sha256::from_hex(hex)
+    Sha256::from_hex(hex).ok_or_else(|| {
+        let bare = hex.split_once(':').map_or(hex, |(_, bare)| bare);
+        let looks = if bare.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            match bare.len() {
+                32 => Some(("an MD5", 32)),
+                40 => Some(("a SHA-1", 40)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        match looks {
+            Some((name, digits)) => format!(
+                "this looks like {name}, which has {digits} hex digits. give the file's SHA-256, which has 64"
+            ),
+            None => "a SHA-256 is 64 hex digits".to_owned(),
+        }
+    })
 }
 
 /// `lines` of the list `name`, each with its reference, once every line names data to fetch: no
@@ -202,6 +223,42 @@ mod tests {
     use super::*;
 
     const IRIS: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// a SHA-256 is read as sites and lists write one, and a hash of another kind, which a site
+    /// may state beside it, is named.
+    #[test]
+    fn a_sha256_is_read_as_copied_and_another_hash_is_named() {
+        for text in [
+            IRIS.to_owned(),
+            format!("sha256:{IRIS}"),
+            format!(" SHA256:{} ", IRIS.to_uppercase()),
+        ] {
+            assert_eq!(
+                sha256(&text).map(|digest| digest.hex()),
+                Ok(IRIS.to_owned())
+            );
+        }
+        for (text, said) in [
+            (
+                "d41d8cd98f00b204e9800998ecf8427e",
+                "this looks like an MD5, which has 32 hex digits. give the file's SHA-256, which has 64",
+            ),
+            (
+                "md5:d41d8cd98f00b204e9800998ecf8427e",
+                "this looks like an MD5, which has 32 hex digits. give the file's SHA-256, which has 64",
+            ),
+            (
+                "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+                "this looks like a SHA-1, which has 40 hex digits. give the file's SHA-256, which has 64",
+            ),
+            ("abc", "a SHA-256 is 64 hex digits"),
+        ] {
+            assert_eq!(
+                sha256(text).map(|digest| digest.hex()),
+                Err(said.to_owned())
+            );
+        }
+    }
 
     fn line(number: usize, link: &str, sha256: Option<&str>) -> Line {
         Line {
