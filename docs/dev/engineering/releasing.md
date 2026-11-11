@@ -29,7 +29,7 @@ rustc writes the paths of the files it compiles into the binary, for panic messa
 
 build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel tests run the [installed loopback journey](ci.md#installed-artifacts), including successful helper calls and structured errors, in fresh venvs at the documented Python endpoints.
 
-`artifacts.yml` has only contents-read permission and also accepts manual dispatch. dispatching `release.yml` runs that same builder as a dry run: attestation and draft creation are tag-only and are skipped. neither rehearsal publishes packages or receives publishing secrets. the fourteen candidate files and their check receipts remain run artifacts.
+`artifacts.yml` has only contents-read permission and also accepts manual dispatch. dispatching `release.yml` runs that same builder as a dry run: attestation and draft creation require a tag push and are skipped even when dispatch names a tag. neither rehearsal publishes packages or receives publishing secrets. the fourteen candidate files and their check receipts remain run artifacts.
 
 [publish.yml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/.github/workflows/publish.yml) runs when a draft is published. nothing reaches a package index before someone has looked at the draft.
 
