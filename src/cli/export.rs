@@ -333,33 +333,37 @@ fn publish(path: &Path, text: &str, force: bool) -> Result<PathBuf, Error> {
     let hidden = write_hidden(folder, &name.to_string_lossy(), text.as_bytes())
         .map_err(|err| Error::io(writing(), &err))?;
     let placer = Placer::in_named_folder(folder);
-    let named = (|| {
-        let aside = if force {
-            match placer.move_aside(&target) {
-                Ok(aside) => Some(aside),
-                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
-                Err(err) => return Err(err),
+    let aside = if force {
+        match placer.move_aside(&target) {
+            Ok(aside) => Some(aside),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => {
+                let _ = fs::remove_file(&hidden);
+                return Err(Error::io(writing(), &err));
             }
-        } else {
-            None
-        };
-        let named = placer.move_back(&hidden, &target);
-        if let Some(aside) = aside {
-            // the old file goes only once the new one has its name
-            let _ = match &named {
-                Ok(()) => placer.delete_file(&aside),
-                Err(_) => placer.move_back(&aside, &target),
-            };
         }
-        named
-    })();
-    if let Err(err) = named {
+    } else {
+        None
+    };
+    if let Err(err) = placer.move_back(&hidden, &target) {
         let _ = fs::remove_file(&hidden);
-        return Err(if err.kind() == io::ErrorKind::AlreadyExists {
+        let error = if err.kind() == io::ErrorKind::AlreadyExists {
             taken(path)
         } else {
             Error::io(writing(), &err)
+        };
+        // the file that was there gets its name back, or says where it is kept
+        return Err(match aside {
+            Some(aside) if placer.move_back(&aside, &target).is_err() => error.detail(format!(
+                "the file that was there is kept as {}",
+                aside.display()
+            )),
+            _ => error,
         });
+    }
+    // the old file goes only once the new one has its name
+    if let Some(aside) = aside {
+        let _ = placer.delete_file(&aside);
     }
     crate::project::sync_directory(folder).map_err(|err| {
         Error::io(
