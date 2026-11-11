@@ -395,8 +395,13 @@ mod tests {
         std::os::unix::fs::symlink("real.csv", out.join("sub").join("latest")).unwrap();
         assert_eq!(refused(&out), Refused::Link("sub/latest".to_owned()));
         fs::remove_file(out.join("sub").join("latest")).unwrap();
-        let _socket = std::os::unix::net::UnixListener::bind(out.join("socket")).unwrap();
-        assert_eq!(refused(&out), Refused::Special("socket".to_owned()));
+        // sockets limit the path length, and rustix cannot make a fifo on macos.
+        let made = std::process::Command::new("mkfifo")
+            .arg(out.join("queue"))
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert_eq!(refused(&out), Refused::Special("queue".to_owned()));
     }
 
     /// what no disk could store, or two names one disk takes for one, stops a result here rather
