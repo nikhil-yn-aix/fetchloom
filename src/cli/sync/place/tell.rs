@@ -98,6 +98,7 @@ pub(super) fn tell(
     }
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
+    warn_put_back(output, manifest, &placement.put_back, "put back");
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(
@@ -127,6 +128,42 @@ fn changed_copy<'p>(placement: &'p Placement, path: &str) -> Option<&'p ChangedC
         .changed_copies
         .iter()
         .find(|copy| copy.path == path)
+}
+
+/// the most files a warning about files put back names; `-v` names each one.
+const NAMED: usize = 5;
+
+/// a warning for the files fetchloom placed that someone deleted or moved, which a sync puts
+/// back, as `verb` says, since data.lock still pins them: how to leave a sample out for good,
+/// and where a person's own files stay out of the way.
+fn warn_put_back(output: &Output, manifest: &Manifest, paths: &[String], verb: &str) {
+    let Some(first) = paths.first() else {
+        return;
+    };
+    let said = match paths.len() {
+        1 => format!("{verb} {first}, which was deleted or moved, since data.lock pins it"),
+        count => {
+            let named = paths[..count.min(NAMED)].join(", ");
+            let more = match count.saturating_sub(NAMED) {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            };
+            format!(
+                "{verb} {count} files that were deleted or moved, since data.lock pins them: {named}{more}"
+            )
+        }
+    };
+    output.warn_with(
+        &said,
+        &format!(
+            "to leave a file out for good, run `fetchloom drop {}`; keep files of your own in a folder outside {}/",
+            crate::cli::shell_word(first),
+            manifest.data_dir
+        ),
+    );
+    for path in paths {
+        output.detail(path);
+    }
 }
 
 /// the files of `dataset` that were already at their places with the pinned bytes, which sync
@@ -242,6 +279,12 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     left_behind(output, manifest, placement.left_behind.as_ref());
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
+    warn_put_back(
+        output,
+        manifest,
+        &placement.put_back,
+        "a sync would put back",
+    );
     for path in &placement.restored {
         if placement.repaired.contains(path) {
             output.warn(&format!(
@@ -496,5 +539,43 @@ fn entry_name(found: Entry) -> &'static str {
         Entry::Folder => "a folder",
         Entry::Link => "a link",
         Entry::Special => "a special file",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::{Level, Style};
+
+    /// a sync that puts back many files names the first five and counts the rest, and points
+    /// at drop with the first, quoted for a shell.
+    #[test]
+    fn files_put_back_are_counted_and_the_first_five_named() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let manifest = Manifest::parse("[datasets.pets]\nref = \"x\"\n").unwrap();
+        let paths: Vec<String> = (1..=7)
+            .map(|n| format!("data/pets/my images/{n}.png"))
+            .collect();
+        warn_put_back(&output, &manifest, &paths, "put back");
+        warn_put_back(&output, &manifest, &paths[..1], "a sync would put back");
+        warn_put_back(&output, &manifest, &[], "put back");
+        assert_eq!(
+            output.warned(),
+            [
+                "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; to leave a file out for good, run `fetchloom drop \"data/pets/my images/1.png\"`; keep files of your own in a folder outside data/",
+                "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; to leave a file out for good, run `fetchloom drop \"data/pets/my images/1.png\"`; keep files of your own in a folder outside data/",
+            ]
+        );
     }
 }

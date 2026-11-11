@@ -49,6 +49,9 @@ pub(crate) struct Placement {
     /// the files of `restored` that were links to the cache's changed copy, with the name that
     /// copy was kept under beside each, so an edit made in place through a link is not lost.
     pub(crate) changed_copies: Vec<ChangedCopy>,
+    /// files fetchloom placed that were gone, deleted or moved by someone, and that it placed
+    /// again since data.lock still pins them. `placed` counts them.
+    pub(crate) put_back: Vec<String>,
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
     #[serde(skip)]
     pub(crate) repaired: HashSet<String>,
@@ -436,6 +439,7 @@ impl<'a> Placing<'a> {
     pub(crate) fn preview(&self, guessed: &HashSet<String>) -> Preview {
         let mut preview = Preview::default();
         self.preview_unwanted(&mut preview);
+        preview.placement.put_back = put_back(&self.targets, &self.actions, &self.survey);
         let placement = &mut preview.placement;
         for (target, action) in self.targets.iter().zip(&self.actions) {
             if matches!(action, Action::Unselected) {
@@ -605,6 +609,7 @@ impl<'a> Placing<'a> {
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
         let adding = told.map(|name| added_here(name, &targets, &actions));
         let found = found_in_place(&targets, &actions, &survey);
+        placement.put_back = put_back(&targets, &actions, &survey);
         let settled = settle(
             project,
             &mut placer,
@@ -793,6 +798,19 @@ pub(crate) fn untouched(
         unchanged: state.files.len() as u64,
         ..Placement::default()
     }))
+}
+
+/// the files `actions` place where the state records a file fetchloom placed: someone deleted
+/// or moved it, and data.lock still pins it.
+fn put_back(targets: &[Target], actions: &[Action], survey: &Survey) -> Vec<String> {
+    targets
+        .iter()
+        .zip(actions)
+        .filter(|(target, action)| {
+            matches!(action, Action::Place) && survey.state.files.contains_key(&target.path)
+        })
+        .map(|(target, _)| target.path.clone())
+        .collect()
 }
 
 /// the files fetchloom did not place that already hold their target's bytes, those sync adopts,

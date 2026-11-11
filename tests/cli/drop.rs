@@ -327,3 +327,43 @@ fn drop_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
     );
     Ok(())
 }
+
+/// a sample deleted by hand comes back at the next sync, since data.lock still pins it, and the
+/// sync says so: which files, and how to leave one out for good.
+#[test]
+fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
+    let sandbox = Sandbox::new()?;
+    pets(&sandbox)?;
+    let folder = sandbox.work().join("data").join("pets");
+    let dog = folder.join("images/dog_010_corrupt.png");
+    delete(&dog)?;
+    let output = sandbox.run(&["sync"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/\n"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(&dog)?, b"broken");
+
+    delete(&folder.join("labels.csv"))?;
+    fs::create_dir(folder.join("mine"))?;
+    fs::rename(
+        folder.join("images/cat_001.png"),
+        folder.join("mine/cat_001.png"),
+    )?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    ok(&output)?;
+    let document = json(&output)?;
+    assert_eq!(
+        document["result"]["placement"]["put_back"],
+        json!(["data/pets/images/cat_001.png", "data/pets/labels.csv"])
+    );
+    assert_eq!(document["result"]["placement"]["placed"], 2);
+    assert_eq!(
+        document["warnings"][0],
+        "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; to leave a file out for good, run `fetchloom drop data/pets/images/cat_001.png`; keep files of your own in a folder outside data/"
+    );
+    assert_eq!(fs::read(folder.join("mine/cat_001.png"))?, b"cat");
+    Ok(())
+}

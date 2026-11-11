@@ -977,7 +977,7 @@ fn level(quiet: bool, verbose: u8) -> Level {
 }
 
 /// quotes a word so suggested commands preserve spaces, patterns and shell metacharacters.
-fn shell_word(word: &str) -> Cow<'_, str> {
+pub(in crate::cli) fn shell_word(word: &str) -> Cow<'_, str> {
     if !word.is_empty()
         && word
             .chars()

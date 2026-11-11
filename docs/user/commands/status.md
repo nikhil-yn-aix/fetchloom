@@ -45,7 +45,7 @@ stderr when `iris.csv` is missing and `notes.txt` is extra:
 |---|---|
 | `unlocked` | a manifest entry is missing from the lock or has a changed spec or `extract`, or a [recipe](../recipes.md)'s result is not pinned as building it now would make; the line says what moved, such as `clean · clean.py changed`, and a hint points at `fetchloom build --dry-run` instead of sync |
 | `removed` | a locked dataset is no longer in the manifest |
-| `missing` | a target path is absent |
+| `missing` | a target path is absent. sync puts it back and says so; to leave a file out for good, run [`fetchloom drop`](drop.md) |
 | `edited` | a managed path treated as locally changed; a metadata change is ignored when the file already holds the wanted bytes |
 | `untracked` | a target exists without a state record |
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again |

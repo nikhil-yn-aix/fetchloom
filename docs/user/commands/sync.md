@@ -100,6 +100,15 @@ a dry run warns the same way, and `-v` names each file. when the old folder hold
 
 ## local changes
 
+a file fetchloom placed that someone deleted or moved comes back, since data.lock still pins it, and sync says so, naming the first five and counting the rest. JSON lists them in `result.placement.put_back`, and `placed` counts them. stderr after a sample was deleted by hand, from a test run:
+
+```text
+warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it
+  help: to leave a file out for good, run `fetchloom drop data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
+```
+
+to leave a sample out for good, [`fetchloom drop`](drop.md) writes a pattern into data.toml, so every clone leaves it out too. a copy you moved elsewhere in the data folder stays, and status lists it as extra; outputs of your own belong in a folder outside the data folder. a dry run warns the same way, as `a sync would put back`.
+
 without `--force`, edited files and conflicting untracked files stay in place. JSON lists them in `result.placement.kept`. unrelated extras are not included there; use [status](status.md) to find them.
 
 save your files before using `--force`. it can overwrite edited and untracked files at locked paths, and names each one as it does, as in `Replaced data/iris/iris.csv · your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete unrelated extras or edited files no longer needed. a file it replaces, or takes out of a locked file's way, keeps its bytes until the pinned files are in place: sync first renames it to `.fetchloom-<hex>.old` in the same folder, deletes that once the pinned files have their names, and renames it back when placing fails or is stopped. a run cut off midway can leave such a file, which status lists as extra.
