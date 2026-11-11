@@ -1205,18 +1205,22 @@ async fn unpack(
     let mut done = UnpackedFiles::default();
     let mut slots = Vec::new();
     let mut todo = Vec::new();
+    let tell_packed = |path: &str, said: String| {
+        let placed = format!("{}/{path}", folder.display());
+        context.output.warn_with(
+            &said,
+            &archive::unpack_elsewhere(System::RUNNING, &placed, "", "--no-extract"),
+        );
+    };
     for (index, file) in files.iter_mut().enumerate() {
         match archive::by_name(&file.path) {
             Some(Packed::Archive) if extract => {}
             Some(Packed::Unsupported(format)) if extract => {
-                let placed = format!("{}/{}", folder.display(), file.path);
-                context.output.warn_with(
-                    &format!(
-                        "{} stays packed, since fetchloom does not unpack {format}",
-                        file.path
-                    ),
-                    &archive::unpack_elsewhere(System::RUNNING, &placed, "", "--no-extract"),
+                let said = format!(
+                    "{} stays packed, since fetchloom does not unpack {format}",
+                    file.path
                 );
+                tell_packed(&file.path, said);
                 continue;
             }
             _ => continue,
@@ -1242,6 +1246,16 @@ async fn unpack(
     }
     let results = unpacking::unpack_all(context, cache, todo).await?;
     for (index, result) in slots.into_iter().zip(results) {
+        let file = &files[index];
+        if result.is_none()
+            && let Some(format) = archive::unsupported(cache, &file.sha256, file.size)
+        {
+            let said = format!(
+                "{} stays packed: its bytes are a {format}, which fetchloom does not unpack",
+                file.path
+            );
+            tell_packed(&file.path, said);
+        }
         if let Some(result) = result {
             files[index].unpacks_to = Some(result.tree);
             done.archives.push(files[index].sha256);

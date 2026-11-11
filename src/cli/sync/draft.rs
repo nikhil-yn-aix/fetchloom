@@ -632,6 +632,9 @@ impl Unit {
 pub(super) enum Why {
     /// fetchloom does not unpack its format, `rar`.
     Format(&'static str),
+    /// its bytes are an archive of a format fetchloom does not unpack, though its name is that of
+    /// one it does, as a rar named `.zip`.
+    Bytes(&'static str),
     /// it spans several volumes only its own tools join: rar's, or a zip's `.z01` and on.
     Volumes { format: &'static str, count: usize },
     /// it is split into parts, and the part at this path is missing.

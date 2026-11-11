@@ -81,6 +81,16 @@ pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
     ) && zip::sole_member(&object).is_some_and(|member| nfc(&member) == name)
 }
 
+/// the format of an archive fetchloom does not unpack, such as rar, when that is what the cache
+/// holds under `digest`, whatever the file's name says.
+pub(crate) fn unsupported(cache: &Cache, digest: &Sha256, size: u64) -> Option<&'static str> {
+    let object = cache.find(digest, Some(size))?;
+    match detect(&Input::File(object)) {
+        Ok(Detected::Unsupported(format)) => Some(format),
+        _ => None,
+    }
+}
+
 /// an archive's file name without its archive ending: `train` for `train.tar.gz`.
 pub(crate) fn stem(name: &str) -> &str {
     let lower = name.to_ascii_lowercase();

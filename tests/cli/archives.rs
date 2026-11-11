@@ -863,6 +863,41 @@ fn a_sync_that_places_a_rar_says_once_how_to_unpack_it() -> Result {
     Ok(())
 }
 
+/// the bytes choose the decoder, so a rar under a `.zip` name stays packed as a rar does, with
+/// the same next step, from the add and from a clone's first sync.
+#[test]
+fn a_rar_under_a_zip_name_says_how_to_unpack_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/sample.zip",
+        vec![file(RAR, "\"r1\""), file(RAR, "\"r1\"")],
+    )?;
+    sandbox.allow(&server.url);
+    let warned = format!(
+        "warning: sample/sample.zip stays packed: its bytes are a rar, which fetchloom does not unpack\n  help: {}\n",
+        next_step_into(
+            "data/sample/sample.zip",
+            "data/sample/sample-unpacked",
+            "extract = false"
+        )
+    );
+    let added = sandbox.run(&["add", &server.url])?;
+    ok(&added)?;
+    let stderr = text(&added.stderr)?;
+    assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(stderr.matches("warning:").count(), 1, "{stderr}");
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let synced = sandbox
+        .command_in(&clone, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
+        .output()?;
+    ok(&synced)?;
+    let stderr = text(&synced.stderr)?;
+    assert!(stderr.contains(&warned), "{stderr}");
+    assert_eq!(fs::read(clone.join("data/sample/sample.zip"))?, RAR);
+    Ok(())
+}
+
 #[test]
 fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
     let sandbox = Sandbox::new()?;

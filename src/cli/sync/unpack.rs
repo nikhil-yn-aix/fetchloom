@@ -181,11 +181,13 @@ pub(in crate::cli) async fn unpack_all(
                 tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
                 results[index] = Some(unpacked);
             }
-            Ok(None) if !unpack.lone => context.output.warn(&format!(
+            Ok(None) if unpack.lone => tell_lone(&context.output, &unpack.label),
+            // the run says how a person unpacks it where it places the file
+            Ok(None) if archive::unsupported(cache, &unpack.archive, unpack.size).is_some() => {}
+            Ok(None) => context.output.warn(&format!(
                 "{} is no archive fetchloom can read, so it stays as it is",
                 unpack.label
             )),
-            Ok(None) => tell_lone(&context.output, &unpack.label),
             Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
                 tell_lone(&context.output, &unpack.label);
             }
@@ -286,37 +288,52 @@ impl Loop<'_> {
     }
 
     /// the archives of `lock`'s datasets in the run that stay packed and that `placing` puts in
-    /// the data folder, each with its dataset and why.
+    /// the data folder, each with its dataset and why: those their names keep packed, and those
+    /// named as archives that unpacked to nothing whose bytes are a format fetchloom does not
+    /// unpack.
     pub(super) fn packed_in<'l>(
         &self,
         manifest: &Manifest,
         lock: &'l Lock,
         placing: &Placing<'_>,
     ) -> Vec<(&'l str, &'l str, Why)> {
-        let mut packed = Vec::new();
+        let mut found = Vec::new();
         for locked in lock
             .datasets
             .iter()
             .filter(|locked| self.scope.includes(&locked.name))
         {
             let paths = locked.files.iter().map(|file| file.path.as_str());
-            for (at, why) in draft::archives(paths, locked.extract).packed {
-                packed.push((locked.name.as_str(), locked.files[at].path.as_str(), why));
+            let archives = draft::archives(paths, locked.extract);
+            for (at, why) in archives.packed {
+                found.push((locked.name.as_str(), &locked.files[at], Some(why)));
+            }
+            for unit in archives.unpack {
+                if let Unit::Whole(at) = unit
+                    && locked.files[at].unpacks_to.is_none()
+                {
+                    found.push((locked.name.as_str(), &locked.files[at], None));
+                }
             }
         }
-        if packed.is_empty() {
-            return packed;
+        if found.is_empty() {
+            return Vec::new();
         }
-        let places: Vec<String> = packed
+        let places: Vec<String> = found
             .iter()
-            .map(|(dataset, path, _)| format!("{}/{path}", plan::folder(manifest, dataset)))
+            .map(|(dataset, file, _)| format!("{}/{}", plan::folder(manifest, dataset), file.path))
             .collect();
         let put = placing.puts(&places.iter().map(String::as_str).collect());
-        packed
+        found
             .into_iter()
             .zip(&places)
             .filter(|(_, place)| put.contains(place.as_str()))
-            .map(|(packed, _)| packed)
+            .filter_map(|((dataset, file, why), _)| {
+                let why = why.or_else(|| {
+                    archive::unsupported(&self.cache, &file.sha256, file.size).map(Why::Bytes)
+                })?;
+                Some((dataset, file.path.as_str(), why))
+            })
             .collect()
     }
 
@@ -343,6 +360,12 @@ impl Loop<'_> {
         let (said, help) = match why {
             Why::Format(format) => (
                 format!("{dataset}/{path} stays packed, since fetchloom does not unpack {format}"),
+                archive::unpack_elsewhere(System::RUNNING, &placed, &beside, stop),
+            ),
+            Why::Bytes(format) => (
+                format!(
+                    "{dataset}/{path} stays packed: its bytes are a {format}, which fetchloom does not unpack"
+                ),
                 archive::unpack_elsewhere(System::RUNNING, &placed, &beside, stop),
             ),
             Why::Volumes {
