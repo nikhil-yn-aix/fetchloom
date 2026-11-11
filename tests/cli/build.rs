@@ -931,6 +931,39 @@ fn a_build_says_its_steps_read_the_pins_not_an_edit() -> Result {
     Ok(())
 }
 
+/// a rebuild keeps an edit of the result it replaces, which `copy = true` allows, and its help
+/// names only the recipe whose file stays, never iris, which has `place = false`.
+#[test]
+fn a_rebuild_that_keeps_an_edit_names_its_recipe_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let made = |text: &str| {
+        recipe(&["write", "clean.csv", text])
+            .replace("[datasets.clean]\n", "[datasets.clean]\ncopy = true\n")
+    };
+    with(&sandbox, &server, &made("one"))?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replace("[datasets.iris]\n", "[datasets.iris]\nplace = false\n"),
+    )?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    let edited = sandbox.work().join("data").join("clean").join("clean.csv");
+    crate::support::edit(&edited, b"one, edited\n")?;
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, written.replace(&made("one"), &made("two")))?;
+    let output = build(&sandbox, &["build"])?;
+    let told = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("  help: `fetchloom sync --force clean` replaces it\n"),
+        "{told}"
+    );
+    assert_eq!(fs::read(&edited)?, b"one, edited\n");
+    Ok(())
+}
+
 /// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
 /// its list and the data folder byte for byte as they were.
 #[test]

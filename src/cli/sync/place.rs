@@ -691,7 +691,7 @@ impl<'a> Placing<'a> {
                 }
                 Action::Blocked(blocker) => placement.kept.push(Kept {
                     blocker: Some(blocker.clone()),
-                    ..Kept::new(target.path.clone(), Reason::Blocked)
+                    ..Kept::of(target, Reason::Blocked)
                 }),
                 Action::Replace | Action::Overwrite(_) | Action::Unblock(_) => {
                     if let Action::Overwrite(reason) = action {
@@ -1249,7 +1249,7 @@ fn settle<'t, 'a>(
                 } else {
                     placement.kept.push(Kept {
                         blocker: Some(blocker),
-                        ..Kept::new(target.path.clone(), Reason::Blocked)
+                        ..Kept::of(target, Reason::Blocked)
                     });
                 }
             }
@@ -1261,7 +1261,7 @@ fn settle<'t, 'a>(
             }
             Action::Blocked(blocker) | Action::Freed(blocker) => placement.kept.push(Kept {
                 blocker: Some(blocker),
-                ..Kept::new(target.path.clone(), Reason::Blocked)
+                ..Kept::of(target, Reason::Blocked)
             }),
             Action::Adopt(seen) => {
                 adopt(project, cache, survey, target, seen, placement);

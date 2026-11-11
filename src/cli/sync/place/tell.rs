@@ -1,7 +1,7 @@
 //! the lines a placement prints: what each dataset cost, what was removed, and every file left
 //! alone or put back, with the reason.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::put::Tally;
 use super::{
@@ -543,15 +543,19 @@ fn warn_retired(output: &Output, placement: &Placement) {
 
 /// a warning for each file a sync of `scope` left alone, with the command that replaces it.
 fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Placement) {
-    let force = forcing(scope);
     // one warning for each entry in the way, however many files it keeps out
-    let mut blocking: BTreeMap<&str, (&Blocker, u64)> = BTreeMap::new();
+    let mut blocking: BTreeMap<&str, (&Blocker, u64, BTreeSet<&str>)> = BTreeMap::new();
     for kept in &placement.kept {
         if let Some(blocker) = &kept.blocker {
-            blocking.entry(&blocker.path).or_insert((blocker, 0)).1 += 1;
+            let entry = blocking
+                .entry(&blocker.path)
+                .or_insert((blocker, 0, BTreeSet::new()));
+            entry.1 += 1;
+            entry.2.extend(kept.dataset.as_deref());
         }
     }
-    for (blocker, files) in blocking.into_values() {
+    for (blocker, files, datasets) in blocking.into_values() {
+        let force = forcing(manifest, scope, &datasets);
         let (said, help) = in_the_way(blocker, files, &force);
         match &blocker.dataset {
             Some(dataset) => output.warn_with(&said, &left_alone(manifest, dataset)),
@@ -559,6 +563,11 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         }
     }
     for kept in &placement.kept {
+        let force = forcing(
+            manifest,
+            scope,
+            &kept.dataset.iter().map(String::as_str).collect(),
+        );
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
             Reason::Changed => match kept.dataset.as_deref() {
@@ -634,16 +643,28 @@ fn not_read(manifest: &Manifest, path: &str, dataset: &str) -> (String, String) 
     )
 }
 
-/// the command that replaces what a sync of `scope` kept: with the names of a sync of named
-/// datasets, so it replaces nothing in the others.
-fn forcing(scope: &Scope) -> String {
-    match scope {
-        Scope::All => "fetchloom sync --force".to_owned(),
-        Scope::Only(names) => {
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
-            format!("fetchloom sync --force {}", names.join(" "))
-        }
+/// the command that replaces what a sync of `scope` kept of `datasets`: after a sync of named
+/// datasets, or a build, with the names of those datasets alone, so it replaces nothing in the
+/// others, or with every name it placed when it does not know whose the files are.
+fn forcing(manifest: &Manifest, scope: &Scope, datasets: &BTreeSet<&str>) -> String {
+    let Scope::Only(names) = scope else {
+        return "fetchloom sync --force".to_owned();
+    };
+    let placed = |name: &&str| {
+        manifest
+            .datasets
+            .get(*name)
+            .is_some_and(|entry| entry.place)
+    };
+    let mut chosen: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .filter(|name| datasets.contains(name))
+        .collect();
+    if chosen.is_empty() {
+        chosen = names.iter().map(String::as_str).filter(placed).collect();
     }
+    format!("fetchloom sync --force {}", chosen.join(" "))
 }
 
 /// what clears an entry in the way that is a file of `dataset`, or a folder of its files, which
