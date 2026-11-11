@@ -719,6 +719,30 @@ fn a_pinned_result_the_cache_lacks_comes_from_a_mirror() -> Result {
     Ok(())
 }
 
+/// a step a build runs again for a pin whose files the cache lost, which makes the same files,
+/// leaves data.lock as it is, and the build says the result matches it rather than that it
+/// pinned it.
+#[test]
+fn a_rebuild_that_makes_the_pinned_files_says_it_matches() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["write", "clean.csv", "made"]))?;
+    assert_eq!(build(&sandbox, &["build"])?.status.code(), Some(0));
+    crate::support::delete(&object(&sandbox, b"made"))?;
+    let lock = fs::read(sandbox.work().join("data.lock"))?;
+    let output = build(&sandbox, &["build"])?;
+    let told = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{told}");
+    assert_eq!(runs(&sandbox.work())?, 2, "the step ran again");
+    assert_eq!(fs::read(sandbox.work().join("data.lock"))?, lock);
+    assert!(
+        told.contains("         Ok clean's result matches data.lock\n"),
+        "{told}"
+    );
+    assert!(!told.contains("pinned"), "{told}");
+    Ok(())
+}
+
 /// a step that fails stops the build with its exit code and last lines, and leaves data.lock,
 /// its list and the data folder byte for byte as they were.
 #[test]

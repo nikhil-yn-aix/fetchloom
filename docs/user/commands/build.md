@@ -64,6 +64,18 @@ the dim line under `Running` is the step's own output. a build of what `data.loc
          Ok every recipe is built as data.lock pins it
 ```
 
+on a machine whose cache lacks the result `data.lock` pins, as in a fresh clone with no mirror holding it, the build runs the step again. when the step makes the same files, `data.lock` stays as it is and the last line says so, here after the cache lost clean's result:
+
+```text
+      Needs up to 100 B on the disk holding the cache, which has 331.1 GiB free
+    Running clean · python3 clean.py <build>/in/iris <build>/out
+            kept 2 of 3 rows
+      Built clean · 1 file, 43 B in 32 ms
+         Ok clean's result matches data.lock
+```
+
+when it makes other files, the build fails instead, as [a rebuild that differs](#a-rebuild-that-differs) describes.
+
 ## the step
 
 a step runs its `run` words as the program and its arguments, without a shell, so a folder with spaces stays one argument. fetchloom makes a folder for it in the cache, which `<build>` stands for in the output:

@@ -1182,17 +1182,7 @@ impl<'a> Building<'a> {
             .filter(|step| !matches!(step.action, Did::UpToDate | Did::Fetched))
             .map(|step| step.name.as_str())
             .collect();
-        match built.as_slice() {
-            [] => output.done("Ok", "every recipe is built as data.lock pins it"),
-            [name] => output.done("Ok", &format!("pinned {name}'s result in data.lock")),
-            many => output.done(
-                "Ok",
-                &format!(
-                    "pinned the results of {} in data.lock",
-                    units::count(many.len() as u64, "recipe", "recipes")
-                ),
-            ),
-        }
+        output.done("Ok", &closing(&built, &rebuilt));
         if changed {
             output.next(&format!("commit {}", committed(self.work.project)));
         }
@@ -1200,6 +1190,34 @@ impl<'a> Building<'a> {
         self.report.lock_changed = changed;
         self.report.placement = Some(outcome.placed);
         Ok(self.report)
+    }
+}
+
+/// the last line of a build whose steps that did more than find their result are `built`, of
+/// which `repinned` holds those whose pin in data.lock changed. the others made exactly the files
+/// data.lock pinned, as a step run again for a pin the cache lost does.
+fn closing(built: &[&str], repinned: &[String]) -> String {
+    let (pinned, matched): (Vec<&str>, Vec<&str>) = built
+        .iter()
+        .partition(|name| repinned.iter().any(|repinned| repinned == *name));
+    let recipes = |names: &[&str]| units::count(names.len() as u64, "recipe", "recipes");
+    let pinned = match pinned.as_slice() {
+        [] => None,
+        [name] => Some(format!("pinned {name}'s result in data.lock")),
+        many => Some(format!(
+            "pinned the results of {} in data.lock",
+            recipes(many)
+        )),
+    };
+    let matched = match matched.as_slice() {
+        [] => None,
+        [name] => Some(format!("{name}'s result matches data.lock")),
+        many => Some(format!("the results of {} match data.lock", recipes(many))),
+    };
+    match (pinned, matched) {
+        (None, None) => "every recipe is built as data.lock pins it".to_owned(),
+        (Some(said), None) | (None, Some(said)) => said,
+        (Some(pinned), Some(matched)) => format!("{pinned}; {matched}"),
     }
 }
 
@@ -1636,5 +1654,31 @@ mod tests {
         assert_eq!(shown("two words"), "'two words'");
         assert_eq!(shown("it's"), "'it'\\''s'");
         assert_eq!(shown(""), "''");
+    }
+
+    /// a build's last line says which results it pinned anew and which made exactly what
+    /// data.lock already pinned, as a step run again for a pin the cache lost does.
+    #[test]
+    fn the_last_line_tells_new_pins_from_results_that_match() {
+        let repinned = ["clean".to_owned(), "tidy".to_owned()];
+        for (built, said) in [
+            (&[][..], "every recipe is built as data.lock pins it"),
+            (&["clean"], "pinned clean's result in data.lock"),
+            (&["raw"], "raw's result matches data.lock"),
+            (
+                &["clean", "tidy"],
+                "pinned the results of 2 recipes in data.lock",
+            ),
+            (
+                &["raw", "other"],
+                "the results of 2 recipes match data.lock",
+            ),
+            (
+                &["raw", "clean"],
+                "pinned clean's result in data.lock; raw's result matches data.lock",
+            ),
+        ] {
+            assert_eq!(closing(built, &repinned), said, "{built:?}");
+        }
     }
 }
