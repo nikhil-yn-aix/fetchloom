@@ -27,7 +27,7 @@ fetchloom get [options] <link>...
 | `--sha256 <hex>` | check the one downloaded file against this SHA-256 before it takes its name or goes in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
-| `--no-extract` | keep archives packed |
+| `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
 
 [global options](README.md#global-options) also apply. plain words use [catalog search and selection](search.md#choosing-a-dataset); quote a multiword query, as in `fetchloom get "fashion mnist"`. search words work only as the one link of a run, so `fetchloom get fashion mnist` is a usage error that says to quote the words of one search or to get one dataset at a time. quote patterns; they match source paths before download, not archive members. each select pattern must match at least one path before exclusions, and some files must remain.
 
@@ -35,7 +35,7 @@ fetchloom get [options] <link>...
 
 without `-o`:
 
-1. resolve the reference and filter the source's listed files.
+1. resolve the reference and filter the source's listed files. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
 2. reuse checksummed cached bytes or fetch the missing data. unpinned URLs can be checked with `ETag` or `Last-Modified`.
 3. unpack recognized archives unless disabled, then place the files in the output folder.
 4. print the absolute output folder on stdout. no manifest, lock or project state is written.

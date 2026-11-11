@@ -6,6 +6,7 @@ mod guard;
 mod input;
 mod names;
 mod sevenz;
+mod shards;
 mod store;
 mod tar;
 mod zip;
@@ -19,6 +20,7 @@ use crate::error::{Error, Kind};
 
 pub(crate) use detect::Format;
 pub(crate) use detect::{Detected, detect};
+pub(crate) use shards::{Shards, shards};
 
 use guard::{Guard, Meter};
 

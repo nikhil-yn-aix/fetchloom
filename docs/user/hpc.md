@@ -51,6 +51,16 @@ python train.py --data "$(fetchloom --offline path iris)"
 
 `--offline` makes a job fail at once with a clear error if a file is missing, instead of downloading it on a node that may have no internet. `--locked` stops the sync if `data.toml` and `data.lock` disagree, so every job sees the same files.
 
+## many small files
+
+a cluster's disk usually limits how many files you may keep, an inode quota, which `lfs quota` shows on lustre and `quota` on many other systems. on lustre, every file a job opens is also a request to one metadata server that all users share. webdataset shards avoid both: a `.tar` holds thousands of samples, and the loader reads it packed. unpacked, every sample in every shard becomes a file of its own, and each takes an inode. keep them packed:
+
+```sh
+fetchloom add s3://bucket/shards/ --no-extract
+```
+
+or set `extract = false` on the dataset in `data.toml` before its first sync. `add`, `get` and `sync` hint this before downloading when a dataset holds at least 8 numbered `.tar` shards in one folder; [webdataset shards](concepts.md#webdataset-shards) shows the hint.
+
 ## the cache on a shared disk
 
 the cache uses file locks, so `cache gc` never deletes a file another fetchloom is about to use. on NFS, the locks work between machines. on an NFS 4.2 server that lets clients keep file times, as recent linux servers do, a file whose download a later run finished, after a stop, is hashed again each time a new project uses it; downloads finished in one run are not. on lustre, they work between machines only when the disk is mounted with the `flock` option; with `localflock` each machine sees only its own locks, so run `fetchloom cache gc` only when no job is using the cache. if your cluster mounts it with `noflock`, fetchloom cannot lock the cache: `add`, `sync` and `get` go on without the lock, and a download they leave unfinished starts over in the next run, while `cache gc` refuses and says why. ask your admins, or keep the cache on a disk that allows locks.

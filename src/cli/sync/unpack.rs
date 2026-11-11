@@ -179,6 +179,23 @@ pub(in crate::cli) fn drop_archives(cache: &Cache, archives: &[Sha256], current:
 }
 
 impl Loop<'_> {
+    /// hints, before anything downloads, that dataset `name` holds numbered tar shards its
+    /// `draft` would unpack. `added` says it came from `add`'s command line, where --no-extract
+    /// keeps them packed as well.
+    pub(super) fn hint_shards(&self, name: &str, draft: &Draft, added: bool) {
+        if !self.context.output.shows_hints() {
+            return;
+        }
+        if let Some(shards) = draft.shards() {
+            let keep = if added {
+                "--no-extract, or extract = false in data.toml"
+            } else {
+                "extract = false in data.toml"
+            };
+            self.context.output.hint(&shards.hint(name, keep));
+        }
+    }
+
     /// learns what every new archive in `drafts` unpacks to, and says which archives stay packed
     /// and how a person can unpack them, outside the data folder `manifest` sets.
     pub(super) async fn unpack_drafts(

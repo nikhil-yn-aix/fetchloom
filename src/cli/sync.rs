@@ -416,6 +416,7 @@ impl<'a> Loop<'a> {
             };
             return Err(cite_place(error, &manifest.datasets[name], "ref"));
         }
+        let added: Vec<String> = listed.iter().map(|(name, _)| name.clone()).collect();
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
             let entry = &manifest.datasets[&name];
@@ -431,6 +432,13 @@ impl<'a> Loop<'a> {
                 upgrade.includes(&name),
                 &self.cache,
             )?;
+            // an upgrade of an unchanged entry told its hint when it was new
+            if others
+                .get(&name)
+                .is_none_or(|locked| locked.drift(entry).is_some())
+            {
+                self.hint_shards(&name, &draft, added.contains(&name));
+            }
             drafts.push((name, draft));
         }
         drafts.sort_by(|a, b| a.0.cmp(&b.0));

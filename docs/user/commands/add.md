@@ -24,7 +24,7 @@ fetchloom add [options] -i <file>
 | `--as <name>` | choose the dataset name and its default folder under `data/` |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
 | `--exclude <glob>` | drop matching files; repeat for more exclusions |
-| `--no-extract` | keep archives packed and record `extract = false` |
+| `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
 | `-i <file>`, `--input-file <file>` | add a dataset for each link in a file, one per line, each with an optional SHA-256, or in stdin for `-`; `--as`, `--select` and `--exclude` do not apply |
 | `-n`, `--dry-run` | plan the addition without applying project or cache changes |
 
@@ -33,7 +33,7 @@ fetchloom add [options] -i <file>
 ## what happens
 
 1. find the nearest project manifest. without one, the current folder becomes a new project, and a `Started a project in <folder>` line says so at the end. in your home folder or at the root of a disk, where a project would take in every folder below it, `add` asks first; without a terminal it refuses unless `--yes` is given.
-2. resolve the reference, filter its listed files and choose a dataset name.
+2. resolve the reference, filter its listed files and choose a dataset name. when the files that would unpack include at least 8 numbered `.tar` shards in one folder, a hint suggests `--no-extract` before anything downloads; [webdataset shards](../concepts.md#webdataset-shards) explains why.
 3. download every file the whole project lacks into the cache and learn each hash, with the project still as it was.
 4. write the entry in `data.toml`, pin selected files in `data.lock` and place the project's files from the cache. the entry goes before the dataset whose name follows its own, as `data.lock` keeps them in name order, so two people adding different datasets rarely change the same lines.
 5. in a git repository, add the data folder to `.gitignore` if needed.

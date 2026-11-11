@@ -761,3 +761,145 @@ fn get_says_how_to_unpack_a_rar_it_keeps_packed() -> Result {
     assert_eq!(fs::read(sandbox.work().join("sample/sample.rar"))?, RAR);
     Ok(())
 }
+
+/// webdataset shards: many numbered tars, which loaders read packed. a server stands in for S3,
+/// which only debug builds can be pointed at.
+#[cfg(debug_assertions)]
+mod shards {
+    use super::{Output, Result, Sandbox, file, fs, ok, text};
+    use crate::buckets::{md5, s3_listing, s3_page};
+    use crate::support::Routes;
+
+    const LINK: &str = "s3://shard-bucket/shards/";
+
+    /// the hint's start for the 8 shards of [`bucket`] in a dataset named shards.
+    const HINT: &str = "shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with";
+
+    /// a tar holding one file, `name`.
+    fn tar_of(name: &str, body: &[u8]) -> Result<Vec<u8>> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, name, body)?;
+        Ok(builder.into_inner()?)
+    }
+
+    /// a bucket whose `shards/` prefix holds 8 numbered tar shards of one file each.
+    fn bucket() -> Result<Routes> {
+        let base = "/shard-bucket.s3.amazonaws.com/";
+        let mut objects = Vec::new();
+        for number in 0..8 {
+            let body = tar_of(&format!("sample-{number}.txt"), b"x")?;
+            objects.push((format!("shards/train-{number:06}.tar"), body));
+        }
+        let listed: Vec<(&str, &[u8])> = objects
+            .iter()
+            .map(|(key, body)| (key.as_str(), body.as_slice()))
+            .collect();
+        let mut routes = vec![(s3_listing(base, "shards/", None), s3_page(&listed, None))];
+        for (key, body) in &objects {
+            routes.push((
+                format!("{base}{key}"),
+                file(body, &format!("\"{}\"", md5(body))),
+            ));
+        }
+        Routes::start(routes)
+    }
+
+    fn run(sandbox: &Sandbox, routes: &Routes, args: &[&str]) -> Result<Output> {
+        Ok(sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_BUCKETS", &routes.url)
+            .output()?)
+    }
+
+    /// the hint comes after the listing and before anything downloads, while the choice is free.
+    fn hinted_before_downloading(stderr: &str, hint: &str) {
+        let hinted = stderr.find(hint);
+        let downloaded = stderr.find("Downloaded");
+        assert!(
+            hinted.is_some() && hinted < downloaded,
+            "{hint:?} before any download in:\n{stderr}"
+        );
+    }
+
+    #[test]
+    fn adding_shards_hints_no_extract_before_anything_downloads() -> Result {
+        let sandbox = Sandbox::new()?;
+        let routes = bucket()?;
+        let added = run(&sandbox, &routes, &["add", LINK, "--as", "shards"])?;
+        ok(&added)?;
+        hinted_before_downloading(
+            &text(&added.stderr)?,
+            &format!("  hint: {HINT} --no-extract, or extract = false in data.toml\n"),
+        );
+        assert_eq!(
+            fs::read(sandbox.work().join("data/shards/sample-7.txt"))?,
+            b"x"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_sync_hints_once_when_it_drafts_the_shards() -> Result {
+        let sandbox = Sandbox::new()?;
+        let routes = bucket()?;
+        fs::write(
+            sandbox.work().join("data.toml"),
+            format!("[datasets.shards]\nref = \"{LINK}\"\n"),
+        )?;
+        let first = run(&sandbox, &routes, &["sync"])?;
+        ok(&first)?;
+        hinted_before_downloading(
+            &text(&first.stderr)?,
+            &format!("  hint: {HINT} extract = false in data.toml\n"),
+        );
+        let again = run(&sandbox, &routes, &["sync"])?;
+        ok(&again)?;
+        let stderr = text(&again.stderr)?;
+        assert!(!stderr.contains("webdataset"), "{stderr}");
+        // an upgrade lists the bucket again, but the entry is the one already hinted
+        let upgraded = run(&sandbox, &routes, &["lock", "--upgrade"])?;
+        ok(&upgraded)?;
+        let stderr = text(&upgraded.stderr)?;
+        assert!(!stderr.contains("webdataset"), "{stderr}");
+        Ok(())
+    }
+
+    #[test]
+    fn get_hints_no_extract_for_shards() -> Result {
+        let sandbox = Sandbox::new()?;
+        let routes = bucket()?;
+        let got = run(&sandbox, &routes, &["get", LINK])?;
+        ok(&got)?;
+        hinted_before_downloading(
+            &text(&got.stderr)?,
+            &format!(
+                "  hint: {LINK} holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract\n"
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn no_hint_when_shards_stay_packed_or_the_run_is_quiet() -> Result {
+        let routes = bucket()?;
+        for args in [
+            &["add", "--no-extract", LINK][..],
+            &["get", "--no-extract", LINK],
+            &["--json", "add", LINK],
+            &["-q", "get", LINK],
+        ] {
+            let sandbox = Sandbox::new()?;
+            let output = run(&sandbox, &routes, args)?;
+            ok(&output)?;
+            for told in [&output.stdout, &output.stderr] {
+                let told = text(told)?;
+                assert!(!told.contains("webdataset"), "{args:?}: {told}");
+            }
+        }
+        Ok(())
+    }
+}

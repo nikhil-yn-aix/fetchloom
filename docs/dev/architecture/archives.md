@@ -18,6 +18,7 @@ archive readers own format decoding; a shared guard owns name, entry and expansi
 | [zip.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/zip.rs) | central-directory checks and member decoding | `unpack` |
 | [tar.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tar.rs) | sequential tar and compression readers | `decompressed`, `unpack` |
 | [sevenz.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/sevenz.rs) | 7z header limits, encryption and link checks, block decoding | `unpack` |
+| [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs) | numbered tar shards in a listing, and the hint about them | `Shards`, `shards`, `hint` |
 | [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs) | writer queues, staging and publication | `Writers`, `keep`, `store_all`, `publish_all` |
 | [cli/sync/unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | scheduling, tree comparison and retention | `Unpack`, `unpack_all`, `unpack_locked`, `drop_archives` |
 
@@ -80,6 +81,10 @@ members are sorted by path and hashed as a tree of names, sizes and digests. get
 
 when a locked tree differs, or decoding fails with an archive error, the sync layer checks whether the packed object itself was damaged. damaged bytes are marked and fetched again. an intact archive that produces another tree fails rather than silently changing the pin. an intact damaged archive keeps its original source error; repair is attempted only when the cached bytes changed. packed objects can be dropped only when current and registered locks no longer require them. successful syncs also consider archives whose cached member records were reused from an earlier failed operation.
 
+### the shard hint
+
+`shards` finds the largest group of at least 8 files in one folder of a listing named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. it makes one pass, keyed by slices of the listing's own paths, so a listing of 100,000 files or more costs a map entry for each group rather than a copy of each path. `cli/sync` asks for each dataset `draft` lists because it is new or its entry changed, not for an upgrade of an unchanged one, and `cli/get` for each link once `prepare` has its files. both ask only while archives unpack and `Output::shows_hints` holds, so `-q`, `--json` and `FETCHLOOM_NO_HINTS=1` skip the work. the hint comes after the `Resolved` line and before any download or size question, while keeping the shards packed costs nothing; sync still drops an archive's own bytes once its files are in.
+
 ## invariants and traps
 
 - no member publishes until every entry and limit check passes. publication IO failure can still leave already published complete members for reuse or gc.
@@ -92,7 +97,7 @@ when a locked tree differs, or decoding fails with an archive error, the sync la
 
 | files | cargo filter |
 |---|---|
-| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
+| [tests.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/tests.rs), [shards.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/shards.rs), [samples.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/samples.rs), [store.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/archive/store.rs), [archive fixtures](https://github.com/nikhil-yn-aix/fetchloom/tree/main/tests/fixtures/archives) | `cargo test --locked --lib archive::` |
 | [unpack.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/src/cli/sync/unpack.rs) | `cargo test --locked --lib cli::sync::unpack::` |
 | [archives.rs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/tests/cli/archives.rs) | `cargo test --locked --test cli archives::` |
 

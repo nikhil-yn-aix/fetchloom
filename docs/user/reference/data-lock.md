@@ -136,6 +136,8 @@ the `ref=` line contains the manifest reference. when patterns are present, add 
 
 an unchanged spec and `extract` keep the existing lock entry unless an upgrade is requested. when only `extract` changed, the entry keeps every pinned file and learns again only what its archives unpack to: from this machine's record of an earlier unpacking, or from the cached archive, so the source is not listed again and a `--offline` run works while the archives are cached. an archive the cache lacks is downloaded by its pinned link. filter edits resolve the existing `resolved` reference. changing `ref`, deleting the lock or requesting `--upgrade` resolves the manifest reference instead. an explicitly versioned reference still names that version.
 
+sync drops an archive's own bytes once its files are in the cache, unless another project here keeps it packed, so turning `extract` off after unpacking downloads the archives again by their pinned links, and `--offline` names them as missing. for webdataset shards, choose before the first sync: the hint that [webdataset shards](../concepts.md#webdataset-shards) shows comes before anything downloads.
+
 `resolved` is not always immutable. plain URLs, drive links, dropbox links, OSF nodes and bucket prefixes can change. in particular, changing filters on an OSF node can select newer file versions. the file hashes pin the bytes after resolution.
 
 ## what each source records

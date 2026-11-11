@@ -18,7 +18,7 @@ const SCAN: &[u8] = b"onset\tduration\n0\t1\n";
 const README: &[u8] = b"a tiny dataset\n";
 
 /// the listing query fetchloom sends S3 for `prefix`, escaped as it escapes it.
-fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> String {
+pub(crate) fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> String {
     let mut target = format!(
         "{path}?list-type=2&prefix={}&encoding-type=url",
         prefix.replace('/', "%2F")
@@ -31,7 +31,7 @@ fn s3_listing(path: &str, prefix: &str, token: Option<&str>) -> String {
 
 /// an S3 listing page of `(key, body)` objects, with each key escaped as `encoding-type=url`
 /// asks.
-fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
+pub(crate) fn s3_page(objects: &[(&str, &[u8])], next: Option<&str>) -> Vec<Part> {
     let stated: Vec<(&str, String, u64)> = objects
         .iter()
         .map(|(key, body)| (*key, md5(body), body.len() as u64))
@@ -68,7 +68,7 @@ fn s3_stated(objects: &[(&str, String, u64)], next: Option<&str>) -> Vec<Part> {
     )
 }
 
-fn md5(body: &[u8]) -> String {
+pub(crate) fn md5(body: &[u8]) -> String {
     md5::Md5::digest(body)
         .iter()
         .fold(String::new(), |mut hex, byte| {

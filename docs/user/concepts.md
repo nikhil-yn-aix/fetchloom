@@ -88,6 +88,18 @@ an archive with no regular files creates no dataset folder in a project. `get` s
 
 [tree hashes](reference/data-lock.md#the-tree-hash) records archive member paths before placement strips a folder. empty directories are not placed.
 
+### webdataset shards
+
+webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket:
+
+```text
+   Resolved s3://wds/shards/ · 1,024 files · 10.0 MiB
+  hint: shards holds 1,024 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml
+ Downloaded 1,024 files · 10.0 MiB in 1.6 s · 6.2 MiB/s
+```
+
+`sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows once, when the dataset is new or its entry changed, and never with `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
+
 ## offline
 
 ```sh

@@ -323,6 +323,7 @@ async fn one_link(
         (parsed, listing),
         asked.expected,
     )?;
+    hint_shards(context, &wanted);
     approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
@@ -374,8 +375,9 @@ async fn many(
                 asked.expected.clone(),
             )
         });
-        if let Err(error) = &prepared {
-            tell_failed(context, link, error);
+        match &prepared {
+            Ok(wanted) => hint_shards(context, wanted),
+            Err(error) => tell_failed(context, link, error),
         }
         wanted.push(prepared);
     }
@@ -561,6 +563,19 @@ fn prepare(
         extract,
         expected,
     })
+}
+
+/// hints `--no-extract` before anything downloads when the files a link keeps are numbered tar
+/// shards that would unpack.
+fn hint_shards(context: &Context, wanted: &Wanted) {
+    if wanted.extract
+        && context.output.shows_hints()
+        && let Some(shards) = archive::shards(wanted.files.iter().map(|file| file.path.as_str()))
+    {
+        context
+            .output
+            .hint(&shards.hint(&wanted.parsed.reference.shown(), "--no-extract"));
+    }
 }
 
 /// refuses a hash for anything but one file, and a file whose source states another hash,

@@ -373,6 +373,14 @@ impl Draft {
         self.extract && archive::by_name(&file.path) == Some(Packed::Archive)
     }
 
+    /// the numbered tar shards among the dataset's files, while its archives unpack.
+    pub(super) fn shards(&self) -> Option<archive::Shards<'_>> {
+        if !self.extract {
+            return None;
+        }
+        archive::shards(self.files.iter().map(|file| file.path.as_str()))
+    }
+
     /// the entry a dry run plans with: [`Draft::finish`], with a stand-in for each hash only a
     /// download can learn and for what each archive not yet unpacked unpacks to. a stand-in
     /// matches no cached object, so planning treats its file as missing and its archive as never

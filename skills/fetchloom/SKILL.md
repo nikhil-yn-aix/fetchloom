@@ -21,6 +21,7 @@ fetchloom puts the exact files a project needs into `data/`, pinned by SHA-256 i
 | a script needs a dataset's path | `fetchloom path <name>`; stdout is the path, or `result.path` with `--json`, and it syncs that dataset alone first if needed. add `--locked` where data.lock must not change |
 | scripts already read `data/train.csv` | set `path = "."` on the dataset in data.toml, then `fetchloom sync --json`: its files land straight in `data/`. datasets may share a folder unless two of their files land on one path, which exits 50 with `project.invalid` naming both |
 | download once, no project files | `fetchloom get <ref> --dir <folder> --json` |
+| webdataset `.tar` shards | add with `--no-extract`: `fetchloom add <ref> --no-extract --json`. loaders read shards packed, and unpacked they become one file per sample |
 | one file at a path the user chose | `fetchloom get <url> -o <file> --json`; `result.file` is its absolute path. it needs one link to one file, else exit 2 naming `--dir` |
 | several links, or a list of them | `fetchloom get <ref> <ref> --json` or `fetchloom get -i links.txt --json`; a SHA-256 after a link on its line checks its one file |
 | words, not a reference | `fetchloom search <words> --json`, then use a `reference` from `result.candidates`. `--source hf,kaggle,zenodo` and `--limit <n>` narrow or widen it |
