@@ -17,7 +17,8 @@
 //! | `call <program>` | runs `program sync` and exits with its exit code |
 //! | `write-code <file>` | adds a line to `file`, as a step that edits its own code, then copies |
 //! | `leave-child <lock> <marker>` | starts a process that locks `lock`, waits until it made `marker`, then waits to be ended |
-//! | `lock <lock> <marker>` | locks the file `lock`, makes `marker` and waits to be ended, as `leave-child` starts it |
+//! | `start-child <lock> <marker>` | starts that process too, waits until it made `marker`, then copies and exits, leaving it running |
+//! | `lock <lock> <marker>` | locks the file `lock`, makes `marker` and waits to be ended, as both modes start it; a windows console's ctrl-c skips it |
 
 use std::fs;
 use std::io::{self, Write as _};
@@ -108,11 +109,12 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
         }
         ("leave-child", [lock, marker, folders @ ..]) => {
             out(folders)?;
-            let _child = Command::new(std::env::current_exe()?)
-                .args(["lock", lock, marker])
-                .spawn()?;
-            wait_for(Path::new(marker))?;
+            start_lock(lock, marker)?;
             idle()?;
+        }
+        ("start-child", [lock, marker, folders @ ..]) => {
+            start_lock(lock, marker)?;
+            copy(folders)?;
         }
         ("lock", [lock, marker]) => {
             let file = fs::OpenOptions::new()
@@ -128,6 +130,21 @@ fn run(args: &[String]) -> io::Result<ExitCode> {
     }
     Ok(ExitCode::SUCCESS)
 }
+
+/// starts this program in `lock` mode and waits until it holds `lock`. on windows it starts as a
+/// process group of its own, which ignores ctrl-c, so only fetchloom can end it after a stop.
+fn start_lock(lock: &str, marker: &str) -> io::Result<()> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command.args(["lock", lock, marker]);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut command, CREATE_NEW_PROCESS_GROUP);
+    command.spawn()?;
+    wait_for(Path::new(marker))
+}
+
+/// the windows process creation flag that starts a process group of its own.
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 /// waits until `path` exists, or gives up after [`PATIENCE`].
 fn wait_for(path: &Path) -> io::Result<()> {

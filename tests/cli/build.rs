@@ -1232,45 +1232,161 @@ fn signal(pid: u32, signal: &str) -> Result {
     }
 }
 
-/// a stop, by ctrl-c or by the SIGTERM a scheduler sends a job it ends, ends the step and what
-/// it started, and leaves data.lock and the data folder as they were.
+/// the stops a test can send a build: ctrl-c, and on linux and macos the SIGTERM a scheduler
+/// sends a job it ends.
 #[cfg(unix)]
+const STOPS: [&str; 2] = ["-INT", "-TERM"];
+#[cfg(windows)]
+const STOPS: [&str; 1] = ["ctrl-c"];
+
+/// a project whose recipe runs the step program in `mode`, `leave-child` or `start-child`, with
+/// the server it adds iris from, and the lock and the marker of the process the step starts.
+fn leaving_a_child(mode: &str) -> Result<(Sandbox, Server, PathBuf, PathBuf)> {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let held = sandbox.folder("held")?;
+    let (lock, marker) = (held.join("lock"), held.join("locked"));
+    with(
+        &sandbox,
+        &server,
+        &recipe(&[mode, &word(&lock), &word(&marker)]),
+    )?;
+    Ok((sandbox, server, lock, marker))
+}
+
+/// a stop, by ctrl-c or by the SIGTERM a scheduler sends a job it ends, ends the step and what
+/// it started, on windows even a process that ignores ctrl-c, and leaves data.lock and the data
+/// folder as they were.
 #[test]
 fn a_stopped_step_leaves_no_process_behind() -> Result {
-    for stop in ["-INT", "-TERM"] {
-        let sandbox = Sandbox::new()?;
-        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
-        let held = sandbox.folder("held")?;
-        let (lock, marker) = (held.join("lock"), held.join("locked"));
-        with(
-            &sandbox,
-            &server,
-            &recipe(&[
-                "leave-child",
-                &lock.to_string_lossy(),
-                &marker.to_string_lossy(),
-            ]),
-        )?;
+    for stop in STOPS {
+        let (sandbox, _server, lock, marker) = leaving_a_child("leave-child")?;
         let pinned = pins(&sandbox.work())?;
         let data = files(&sandbox.work().join("data"))?;
-        let running =
-            crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+        let command = building_in(&sandbox, &sandbox.work(), &["build"])?;
+        #[cfg(windows)]
+        let command = own_console(command);
+        let mut running = crate::project::Background::start(command)?;
         wait_until("the step's child to take its lock", || Ok(marker.exists()))?;
+        #[cfg(unix)]
         signal(running.child.id(), stop)?;
+        #[cfg(windows)]
+        ctrl_c(&sandbox, running.child.id())?;
+        running.child.wait()?;
+        lock_freed(&lock)?;
         let (code, stderr) = running.finish()?;
         assert_eq!(code, Some(130), "{stop}: {stderr}");
         assert_eq!(pins(&sandbox.work())?, pinned, "{stop}");
         assert_eq!(files(&sandbox.work().join("data"))?, data, "{stop}");
-        wait_until("the step's child to end and free its lock", || {
-            Ok(fs::OpenOptions::new()
-                .write(true)
-                .open(&lock)?
-                .try_lock()
-                .is_ok())
-        })?;
     }
     Ok(())
 }
+
+/// a step that ends ends what it started and left running too, so nothing writes while its
+/// result is taken in.
+#[test]
+fn a_finished_step_leaves_no_process_behind() -> Result {
+    let (sandbox, _server, lock, _) = leaving_a_child("start-child")?;
+    let mut running =
+        crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    running.child.wait()?;
+    lock_freed(&lock)?;
+    let (code, stderr) = running.finish()?;
+    assert_eq!(code, Some(0), "{stderr}");
+    Ok(())
+}
+
+/// on windows a build killed outright, as task manager or a cancelled CI job ends one, takes its
+/// step and all the step started along, since the step's job closes with fetchloom.
+#[cfg(windows)]
+#[test]
+fn a_killed_build_leaves_no_process_behind() -> Result {
+    let (sandbox, _server, lock, marker) = leaving_a_child("leave-child")?;
+    let mut running =
+        crate::project::Background::start(building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    wait_until("the step's child to take its lock", || Ok(marker.exists()))?;
+    running.child.kill()?;
+    running.child.wait()?;
+    lock_freed(&lock)?;
+    running.finish()?;
+    Ok(())
+}
+
+/// waits until the process the step program started in `lock` mode ends and frees `lock`. a
+/// test waits for this before it reads fetchloom's stderr to its end, since on windows that
+/// process inherits fetchloom's own handles, its stderr among them.
+fn lock_freed(lock: &Path) -> Result {
+    wait_until("the step's child to end and free its lock", || {
+        Ok(fs::OpenOptions::new()
+            .write(true)
+            .open(lock)?
+            .try_lock()
+            .is_ok())
+    })
+}
+
+/// `path` as a word of [`recipe`], which data.toml reads as a quoted string.
+fn word(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "\\\\")
+}
+
+/// the windows process creation flag that gives a console program a console of its own, without
+/// a window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// `command` with a console of its own, so the ctrl-c [`ctrl_c`] presses there reaches no other
+/// process.
+#[cfg(windows)]
+fn own_console(mut command: Command) -> Command {
+    std::os::windows::process::CommandExt::creation_flags(&mut command, CREATE_NO_WINDOW);
+    command
+}
+
+/// presses ctrl-c in the console of the process `pid`, which needs a console of its own, as
+/// [`own_console`] gives it. windows has no command for this and the crate forbids unsafe code,
+/// so powershell calls the console functions.
+#[cfg(windows)]
+fn ctrl_c(sandbox: &Sandbox, pid: u32) -> Result {
+    let script = sandbox.folder("console")?.join("ctrl-c.ps1");
+    fs::write(&script, CTRL_C)?;
+    let mut powershell = Command::new("powershell");
+    powershell
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive"])
+        .args(["-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg(pid.to_string())
+        .stdin(std::process::Stdio::null());
+    let output = powershell.output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "powershell could not press ctrl-c ({}): {}",
+            output.status,
+            text(&output.stderr)?
+        )
+        .into())
+    }
+}
+
+/// a powershell script that presses ctrl-c in the console of the process its argument names: it
+/// leaves its own console for that one, ignores ctrl-c itself, and sends it to every process
+/// there.
+#[cfg(windows)]
+const CTRL_C: &str = r#"param([uint32] $Id)
+Add-Type -Name Console -Namespace FetchloomTests -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern bool FreeConsole();
+[DllImport("kernel32.dll")] public static extern bool AttachConsole(uint id);
+[DllImport("kernel32.dll")] public static extern bool SetConsoleCtrlHandler(System.IntPtr handler, bool add);
+[DllImport("kernel32.dll")] public static extern bool GenerateConsoleCtrlEvent(uint signal, uint group);
+'@
+[void] [FetchloomTests.Console]::FreeConsole()
+if (-not [FetchloomTests.Console]::AttachConsole($Id)) { exit 2 }
+[void] [FetchloomTests.Console]::SetConsoleCtrlHandler([IntPtr]::Zero, $true)
+if (-not [FetchloomTests.Console]::GenerateConsoleCtrlEvent(0, 0)) { exit 3 }
+exit 0
+"#;
 
 /// a step that runs fetchloom on its own project fails at once, rather than waiting for the
 /// build that runs it.

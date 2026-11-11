@@ -2,17 +2,18 @@
 //! with nothing on stdin and both outputs read into a log only its owner may read. the log keeps
 //! the latest 16 MiB, and the last lines stay in memory for the error a failed step gives.
 //!
-//! on unix the step runs in a process group of its own, so the terminal's ctrl-c reaches only
-//! fetchloom, which ends the whole group: when asked to stop, when the step ends, so nothing it
-//! started still writes while its result is taken in, and when a second ctrl-c quits. windows
-//! ends the step's own process only, until a job object ends what it started too.
+//! the step and every process it starts run in a group of their own, which fetchloom ends whole:
+//! when asked to stop, when the step ends, so nothing it started still writes while its result
+//! is taken in, and when a second ctrl-c quits. on unix that is a process group, which the
+//! terminal's ctrl-c does not reach. on windows it is a job object, which also ends when
+//! fetchloom does, however it ends, and the console's ctrl-c reaches the step there too.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -138,11 +139,9 @@ pub(crate) fn run(
 ) -> io::Result<Ran> {
     let _span = tracing::debug_span!("step").entered();
     let log = Log::create(log)?;
-    let mut process = process(command, building)?;
+    let process = process(command, building)?;
     let started = Instant::now();
-    let mut child = process.spawn()?;
-    // known to a second ctrl-c until the step's run ends
-    let _running = group::Running::new(&child);
+    let mut group = Group::start(process)?;
     let caught = Arc::new(Mutex::new(Caught {
         log,
         tail: VecDeque::new(),
@@ -154,18 +153,8 @@ pub(crate) fn run(
         kept: forward.is_some(),
     }));
     let (done, finished) = mpsc::channel();
-    let streams = [
-        child
-            .stdout
-            .take()
-            .map(|out| Box::new(out) as Box<dyn Read + Send>),
-        child
-            .stderr
-            .take()
-            .map(|out| Box::new(out) as Box<dyn Read + Send>),
-    ];
     let mut readers = 0;
-    for stream in streams.into_iter().flatten() {
+    for stream in group.outputs() {
         readers += 1;
         let (caught, lines, done) = (Arc::clone(&caught), Arc::clone(&lines), done.clone());
         std::thread::spawn(move || {
@@ -173,8 +162,8 @@ pub(crate) fn run(
             let _ = done.send(());
         });
     }
-    let ended = watch(&mut child, &lines, forward, stop, floor);
-    group::end(&mut child);
+    let ended = watch(&mut group, &lines, forward, stop, floor);
+    group.end();
     let ended = ended?;
     let deadline = Instant::now() + DRAIN;
     for _ in 0..readers {
@@ -216,15 +205,14 @@ fn process(command: &Command<'_>, building: &Path) -> io::Result<std::process::C
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    group::configure(&mut process);
     Ok(process)
 }
 
-/// waits for `child` to end, handing on its lines meanwhile, and ends it when `stop` asks or the
-/// disk holding the cache falls below `floor`. it looks often at first, so a short step costs
-/// little waiting, then every 200 ms.
+/// waits for the step of `group` to end, handing on its lines meanwhile, and ends the group when
+/// `stop` asks or the disk holding the cache falls below `floor`. it looks often at first, so a
+/// short step costs little waiting, then every 200 ms.
 fn watch(
-    child: &mut Child,
+    group: &mut Group,
     lines: &Mutex<Lines>,
     forward: Option<&dyn Fn(&str)>,
     stop: &Stop,
@@ -234,20 +222,20 @@ fn watch(
     let mut looked = None;
     loop {
         hand_on(lines, forward);
-        if let Some(status) = child.try_wait()? {
+        if let Some(status) = group.try_wait()? {
             return Ok(ended(status));
         }
         if stop.is_asked() {
-            group::end(child);
-            child.wait()?;
+            group.end();
+            group.wait()?;
             return Ok(Ended::Stopped);
         }
         let now = Instant::now();
         if due(looked, now) {
             looked = Some(now);
             if let Some(free) = floor.breached() {
-                group::end(child);
-                child.wait()?;
+                group.end();
+                group.wait()?;
                 return Ok(Ended::Low { free });
             }
         }
@@ -422,7 +410,8 @@ impl Log {
 
 #[cfg(unix)]
 mod group {
-    use std::process::Child;
+    use std::io::{self, Read};
+    use std::process::{Child, Command, ExitStatus};
     use std::sync::{Mutex, PoisonError};
 
     use rustix::process::{Pid, Signal, kill_process_group};
@@ -431,36 +420,58 @@ mod group {
     /// quits.
     static RUNNING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-    /// a step's group, known to [`end_running`] while this lives.
-    pub(super) struct Running(u32);
+    /// a step's process in a process group of its own, named by its process id, which
+    /// [`end_running`] knows while this lives.
+    pub(super) struct Group(Child);
 
-    impl Running {
-        pub(super) fn new(child: &Child) -> Running {
+    impl Group {
+        pub(super) fn start(mut process: Command) -> io::Result<Group> {
+            std::os::unix::process::CommandExt::process_group(&mut process, 0);
+            let child = process.spawn()?;
             RUNNING
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(child.id());
-            Running(child.id())
+            Ok(Group(child))
+        }
+
+        /// the step's stdout and stderr, once.
+        pub(super) fn outputs(&mut self) -> Vec<Box<dyn Read + Send>> {
+            let stdout = self
+                .0
+                .stdout
+                .take()
+                .map(|out| Box::new(out) as Box<dyn Read + Send>);
+            let stderr = self
+                .0
+                .stderr
+                .take()
+                .map(|out| Box::new(out) as Box<dyn Read + Send>);
+            stdout.into_iter().chain(stderr).collect()
+        }
+
+        pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            self.0.try_wait()
+        }
+
+        pub(super) fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.0.wait()
+        }
+
+        /// ends the whole group, whatever is left of it.
+        pub(super) fn end(&mut self) {
+            kill(self.0.id());
         }
     }
 
-    impl Drop for Running {
+    impl Drop for Group {
         fn drop(&mut self) {
+            let id = self.0.id();
             RUNNING
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .retain(|group| *group != self.0);
+                .retain(|group| *group != id);
         }
-    }
-
-    /// starts the step in a process group of its own, named by its process id.
-    pub(super) fn configure(process: &mut std::process::Command) {
-        std::os::unix::process::CommandExt::process_group(process, 0);
-    }
-
-    /// ends `child`'s whole group, whatever is left of it.
-    pub(super) fn end(child: &mut Child) {
-        kill(child.id());
     }
 
     fn kill(group: u32) {
@@ -487,30 +498,75 @@ mod group {
 
 #[cfg(windows)]
 mod group {
-    use std::process::Child;
+    use std::fs::File;
+    use std::io::{self, Read};
+    use std::process::{Command, ExitStatus};
+    use std::time::Duration;
 
-    /// a step running now. windows ends only its own process for now, and the console's ctrl-c
-    /// reaches it as it reaches fetchloom.
-    pub(super) struct Running;
+    use process_wrap::tokio::{ChildWrapper, CommandWrap, JobObject, KillOnDrop};
 
-    impl Running {
-        pub(super) fn new(_child: &Child) -> Running {
-            Running
+    /// a step's process in a job object of its own, which takes in every process the step
+    /// starts. the job ends them all when told, and when its last handle closes, as when
+    /// fetchloom ends, however it ends. process-wrap asks for that close only through its tokio
+    /// wrapper, so the step is tokio's child, though only calls that need no runtime touch it.
+    pub(super) struct Group {
+        child: Box<dyn ChildWrapper>,
+        outputs: Vec<File>,
+    }
+
+    impl Group {
+        pub(super) fn start(process: Command) -> io::Result<Group> {
+            let mut command = CommandWrap::from(tokio::process::Command::from(process));
+            command.wrap(KillOnDrop).wrap(JobObject);
+            let mut child = command.spawn()?;
+            let mut outputs = Vec::new();
+            if let Some(stdout) = child.stdout().take() {
+                outputs.push(File::from(stdout.into_owned_handle()?));
+            }
+            if let Some(stderr) = child.stderr().take() {
+                outputs.push(File::from(stderr.into_owned_handle()?));
+            }
+            Ok(Group { child, outputs })
+        }
+
+        /// the step's stdout and stderr, once.
+        pub(super) fn outputs(&mut self) -> Vec<Box<dyn Read + Send>> {
+            self.outputs
+                .drain(..)
+                .map(|output| Box::new(output) as Box<dyn Read + Send>)
+                .collect()
+        }
+
+        pub(super) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            self.child.try_wait()
+        }
+
+        /// waits for the step's own process to end, once [`Group::end`] ended its job.
+        pub(super) fn wait(&mut self) -> io::Result<ExitStatus> {
+            let mut pause = Duration::from_millis(1);
+            loop {
+                if let Some(status) = self.child.try_wait()? {
+                    return Ok(status);
+                }
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(50));
+            }
+        }
+
+        /// ends every process in the job.
+        pub(super) fn end(&mut self) {
+            if let Err(err) = self.child.start_kill() {
+                tracing::debug!(%err, "the step's job had ended");
+            }
         }
     }
 
-    pub(super) fn configure(_process: &mut std::process::Command) {}
-
-    /// ends `child` itself, which is all std can end without a job object.
-    pub(super) fn end(child: &mut Child) {
-        if let Err(err) = child.kill() {
-            tracing::debug!(%err, "the step had ended");
-        }
-    }
-
+    /// leaves the jobs as they are: each ends with fetchloom's own process, which holds the last
+    /// handle to it.
     pub(crate) fn end_running() {}
 }
 
+use group::Group;
 pub(crate) use group::end_running;
 
 #[cfg(test)]

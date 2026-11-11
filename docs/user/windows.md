@@ -73,6 +73,12 @@ fetchloom uses the windows long-path form for project metadata renames. a workin
 
 if a replacement or deletion fails, close editors, notebooks or other programs holding the file open, then check permissions. [troubleshooting](troubleshooting.md) covers error handling without discarding local work.
 
+## recipe steps
+
+`fetchloom build` runs each step of a [recipe](recipes.md) in a job object, a windows group of processes that ends together. when the step ends, anything it started and left running ends with it, and a stop, by ctrl-c or the `build_floor` setting, ends them all at once. the job also ends when fetchloom does, even when task manager or a cancelled CI job ends fetchloom outright, so nothing a step starts outlives it: start a server a step needs before the build, not from the step.
+
+the console's ctrl-c reaches the step as well as fetchloom, so a step may print its own message, such as python's `KeyboardInterrupt`, before the build says it stopped.
+
 ## company proxies
 
 fetchloom uses the proxy that `HTTPS_PROXY` names, or the system's proxy settings when that is unset. a proxy that asks for your windows sign-in needs a local relay that signs in for you, as [company proxies](troubleshooting.md#company-proxies) shows.
