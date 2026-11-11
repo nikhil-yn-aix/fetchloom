@@ -168,16 +168,21 @@ fn a_proxy_setting_that_names_no_proxy_stops_before_any_request() -> Result {
             .env("no_proxy", "")
             .output()?;
         assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
+        let displayed_variable = if cfg!(windows) {
+            variable.to_ascii_uppercase()
+        } else {
+            variable.to_owned()
+        };
         let error = &json(&output)?["errors"][0];
         assert_eq!(error["kind"], "usage", "{error}");
         assert_eq!(
             error["message"],
-            format!("{variable} is \"{shown}\", which is not a proxy address")
+            format!("{displayed_variable} is \"{shown}\", which is not a proxy address")
         );
         assert_eq!(
             error["help"],
             format!(
-                "set {variable} to a proxy, such as http://proxy.example.org:8080, or unset {variable} to connect without one. `fetchloom help environment` lists the proxy settings"
+                "set {displayed_variable} to a proxy, such as http://proxy.example.org:8080, or unset {displayed_variable} to connect without one. `fetchloom help environment` lists the proxy settings"
             )
         );
     }
