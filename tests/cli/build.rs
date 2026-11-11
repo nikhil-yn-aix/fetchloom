@@ -974,6 +974,31 @@ fn a_failed_step_keeps_lock_and_data() -> Result {
     Ok(())
 }
 
+/// a failed step's output reaches a person once: as the step runs, or, with `-q`, which hides it
+/// then, in the error.
+#[test]
+fn a_failed_step_shows_its_output_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, &recipe(&["fail", "3"]))?;
+    for args in [&["build"][..], &["-q", "build"]] {
+        let output = build(&sandbox, args)?;
+        assert_eq!(output.status.code(), Some(60), "{args:?}");
+        let told = text(&output.stderr)?;
+        assert!(
+            told.contains("error: clean failed: recipe-step exited with code 3 after "),
+            "{told}"
+        );
+        // stdout's last line is among the last 20 however the two outputs interleave
+        assert_eq!(
+            told.matches("working on part 30\n").count(),
+            1,
+            "{args:?}: {told}"
+        );
+    }
+    Ok(())
+}
+
 /// a step that writes nothing into its result folder has made no result.
 #[test]
 fn an_empty_result_is_refused() -> Result {

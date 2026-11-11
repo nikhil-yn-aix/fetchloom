@@ -111,10 +111,21 @@ a step that changed a file of its own `code` while it ran fails too, since its r
 
 ## what a failure leaves
 
-a step that fails, is stopped or writes what a result cannot hold leaves `data.lock`, `data.lock.d` and the data folder byte for byte as they were. the error names the exit code and shows the last 20 lines of output:
+a step that fails, is stopped or writes what a result cannot hold leaves `data.lock`, `data.lock.d` and the data folder byte for byte as they were. the step's output shows as it runs, so the error names the exit code and where the whole output is (stderr):
 
 ```text
-error: clean failed: python3 exited with code 1 after 31 ms
+      Needs up to 27 B, besides what clean writes, on the disk holding the cache, which has 323.3 GiB free
+    Running clean · python3 clean.py <build>/in/raw <build>/out
+            kept 2 of 3 rows
+            stop
+error: clean failed: python3 exited with code 1 after 32 ms
+  help: the whole output is in .fetchloom/builds/clean.log, and data.lock and data/clean are as they were
+```
+
+with `-q`, which hides the output as it runs, the error shows its last 20 lines instead, and so does `errors[0].details` with `--json`:
+
+```text
+error: clean failed: python3 exited with code 1 after 32 ms
   kept 2 of 3 rows
   stop
   help: the whole output is in .fetchloom/builds/clean.log, and data.lock and data/clean are as they were

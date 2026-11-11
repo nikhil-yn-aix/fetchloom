@@ -299,6 +299,11 @@ impl Output {
         self.tells(Level::Verbose)
     }
 
+    /// whether [`Output::item`] prints: not with `-q` or `--json`.
+    pub(crate) fn shows_items(&self) -> bool {
+        self.tells(Level::Normal)
+    }
+
     /// the step a person usually takes after a run that worked, such as committing data.lock.
     pub(crate) fn next(&self, text: &str) {
         if self.shows_next() {

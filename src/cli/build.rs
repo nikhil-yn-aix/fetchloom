@@ -826,7 +826,7 @@ impl<'a> Building<'a> {
         let log = log_path(project, name)?;
         let output = &self.context.output;
         let forward = |line: &str| output.item(line);
-        let forward: Option<&dyn Fn(&str)> = (!output.json()).then_some(&forward);
+        let forward: Option<&dyn Fn(&str)> = output.shows_items().then_some(&forward);
         let cache = self.work.cache.root();
         let free = || crate::space::free(cache);
         let floor = step::Floor {
@@ -1284,7 +1284,8 @@ fn cannot_start(name: &str, program: &str, err: &io::Error) -> Error {
     .help("check that run in data.toml names a program you may run")
 }
 
-/// the error for the step of `name` whose `program` ended as `ended`, with its last lines.
+/// the error for the step of `name` whose `program` ended as `ended`, with its last lines unless
+/// every line already reached the terminal as the step ran.
 fn failed(name: &str, program: &str, ended: Ended, ran: &Ran, folder: &str) -> Error {
     let took = units::duration(ran.took);
     let unchanged = format!(
@@ -1303,8 +1304,8 @@ fn failed(name: &str, program: &str, ended: Ended, ran: &Ran, folder: &str) -> E
         ),
         Ended::Stopped | Ended::Low { .. } => return stopped(),
     };
-    ran.tail
-        .iter()
+    let tail = if ran.told { &[][..] } else { &ran.tail[..] };
+    tail.iter()
         .fold(Error::new(Kind::BuildFailed, message), |error, line| {
             error.detail(line.clone())
         })

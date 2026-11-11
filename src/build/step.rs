@@ -115,6 +115,8 @@ pub(crate) struct Ran {
     pub(crate) ended: Ended,
     /// its last lines of output, oldest first.
     pub(crate) tail: Vec<String>,
+    /// whether every line of its output was handed on as it came, none skipped.
+    pub(crate) told: bool,
     pub(crate) took: Duration,
 }
 
@@ -154,6 +156,7 @@ pub(crate) fn run(
     let lines = Arc::new(Mutex::new(Lines {
         waiting: Vec::new(),
         skipped: 0,
+        dropped: false,
         kept: forward.is_some(),
     }));
     let (done, finished) = mpsc::channel();
@@ -170,18 +173,16 @@ pub(crate) fn run(
     group.end();
     let ended = ended?;
     let deadline = Instant::now() + DRAIN;
-    for _ in 0..readers {
-        if finished
+    let drained = (0..readers).all(|_| {
+        finished
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .is_err()
-        {
-            tracing::debug!(
-                "a process the step started holds its output open, so the rest is unread"
-            );
-            break;
-        }
+            .is_ok()
+    });
+    if !drained {
+        tracing::debug!("a process the step started holds its output open, so the rest is unread");
     }
     hand_on(&lines, forward);
+    let dropped = lines.lock().unwrap_or_else(PoisonError::into_inner).dropped;
     let mut caught = caught.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(err) = caught.failed.take() {
         return Err(err);
@@ -189,6 +190,7 @@ pub(crate) fn run(
     Ok(Ran {
         ended: ended.or_stopped(stop.is_asked()),
         tail: tail(&caught.tail),
+        told: forward.is_some() && drained && !dropped,
         took: started.elapsed(),
     })
 }
@@ -263,6 +265,8 @@ struct Lines {
     waiting: Vec<String>,
     /// lines dropped since the last were handed on, since too many waited.
     skipped: usize,
+    /// whether any line was ever dropped.
+    dropped: bool,
     /// whether lines are kept at all: not when nothing shows them.
     kept: bool,
 }
@@ -311,6 +315,7 @@ fn read(mut stream: Box<dyn Read + Send>, caught: &Mutex<Caught>, lines: &Mutex<
             lines.waiting.push(shown(line));
         } else {
             lines.skipped += 1;
+            lines.dropped = true;
         }
     };
     loop {
