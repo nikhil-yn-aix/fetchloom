@@ -281,12 +281,15 @@ async fn kaggle(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candida
         .into_iter()
         .take(limit)
         .map(|item| {
+            // no bytes is how kaggle lists a dataset it does not serve as files, which says
+            // nothing of its size or its downloads
+            let unserved = item.total_bytes == Some(0);
             Ok(Candidate {
                 reference: reference(&format!("kaggle:{}", item.reference))?,
                 title: item.title,
                 source: Catalog::Kaggle.label(),
-                size: item.total_bytes,
-                downloads: item.download_count,
+                size: item.total_bytes.filter(|_| !unserved),
+                downloads: item.download_count.filter(|_| !unserved),
                 note: None,
             })
         })

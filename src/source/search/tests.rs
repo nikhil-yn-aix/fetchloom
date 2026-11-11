@@ -176,6 +176,28 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     assert_eq!(result.candidates.len(), 9);
 }
 
+/// kaggle lists a dataset it cannot serve as files, such as one kept in bigquery, with no bytes
+/// and no downloads. both are unknown then, not a size of 0 B: the match stays, as a site's own
+/// listing, while a dataset with bytes keeps a count of 0 downloads as kaggle gives it.
+#[test]
+fn kaggle_zero_bytes_are_an_unknown_size_and_count() {
+    let mut kaggle: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("search/kaggle.json")).unwrap();
+    kaggle[0]["totalBytes"] = 0.into();
+    kaggle[0]["downloadCount"] = 0.into();
+    kaggle[1]["downloadCount"] = 0.into();
+    let api = recorded().on(KAGGLE, 200, serde_json::to_vec(&kaggle).unwrap());
+    let result = block_on(search(&api, "iris", &[Catalog::Kaggle], LIMIT)).unwrap();
+    let facts: Vec<_> = result
+        .candidates
+        .iter()
+        .map(|item| (item.size, item.downloads))
+        .collect();
+    assert_eq!(facts[0], (None, None), "{:?}", result.candidates[0]);
+    assert_eq!(facts[1].1, Some(0), "{:?}", result.candidates[1]);
+    assert_eq!(result.candidates.len(), 3);
+}
+
 /// once one catalog has answered, the others get a grace period and no more, so one slow site
 /// cannot hold up the matches the rest found. no grace starts before the first answer, however
 /// slow every catalog is.
