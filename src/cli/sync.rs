@@ -359,9 +359,6 @@ impl<'a> Loop<'a> {
         upgrade: &Upgrade,
         given: Vec<Given>,
     ) -> Result<Drafted, Error> {
-        let mut kept: Vec<Locked> = Vec::new();
-        let mut others = Vec::new();
-        let mut drafts = Vec::new();
         let mut listed = Vec::new();
         let mut whole = Vec::new();
         for given in given {
@@ -370,45 +367,11 @@ impl<'a> Loop<'a> {
                 Given::Locked(locked) => whole.push(locked),
             }
         }
-        for locked in old.datasets {
-            // another dataset's entry stays as it is, even one data.toml changed or dropped
-            if !self.scope.includes(&locked.name) {
-                kept.push(locked);
-                continue;
-            }
-            if whole.iter().any(|given| given.name == locked.name) {
-                others.push(locked);
-                continue;
-            }
-            match manifest.datasets.get(&locked.name) {
-                // an import has no newer version anywhere, so even an upgrade keeps it
-                Some(entry)
-                    if !upgrade.includes(&locked.name)
-                        || entry
-                            .source()
-                            .is_some_and(|source| local::is_imported(&source.reference)) =>
-                {
-                    match (entry.source(), locked.drift(entry)) {
-                        (_, None) => kept.push(locked),
-                        // an import's files stand as data.lock pins them, so a switch only
-                        // learns what its archives unpack to
-                        (Some(source), Some(Drift::Extract))
-                            if local::is_imported(&source.reference) =>
-                        {
-                            whole.push(draft::switched_import(source, &locked));
-                            others.push(locked);
-                        }
-                        (Some(source), Some(Drift::Extract)) => {
-                            let draft = Draft::switched(entry, source, &locked)?;
-                            drafts.push((locked.name.clone(), draft));
-                            others.push(locked);
-                        }
-                        _ => others.push(locked),
-                    }
-                }
-                _ => others.push(locked),
-            }
-        }
+        let Sorted {
+            kept,
+            others,
+            mut drafts,
+        } = self.sorted(manifest, old.datasets, upgrade, &mut whole)?;
         // only `fetchloom build` pins a recipe's result, so one stays while data.toml has the
         // recipe, and otherwise goes as a dropped dataset does
         let (results, dropped) = old.derived.into_iter().partition(|result| {
@@ -477,6 +440,61 @@ impl<'a> Loop<'a> {
             pinned: whole,
             others,
             results,
+        })
+    }
+
+    /// sorts data.lock's `datasets`: kept as they are, set to replace or drop, or drafted again
+    /// from their files when only `extract` changed. one outside the run's scope stays, even one
+    /// data.toml changed or dropped, and one a command gave `whole` is replaced by it. an import
+    /// whose `extract` switched joins `whole`, with what its archives unpack to left to learn.
+    fn sorted(
+        &self,
+        manifest: &Manifest,
+        datasets: Vec<Locked>,
+        upgrade: &Upgrade,
+        whole: &mut Vec<Locked>,
+    ) -> Result<Sorted, Error> {
+        let mut kept: Vec<Locked> = Vec::new();
+        let mut others = Vec::new();
+        let mut drafts = Vec::new();
+        for locked in datasets {
+            // another dataset's entry stays as it is, even one data.toml changed or dropped
+            if !self.scope.includes(&locked.name) {
+                kept.push(locked);
+                continue;
+            }
+            if whole.iter().any(|given| given.name == locked.name) {
+                others.push(locked);
+                continue;
+            }
+            match manifest.datasets.get(&locked.name) {
+                // an import has no newer version anywhere, so even an upgrade keeps it
+                Some(entry) if !upgrade.includes(&locked.name) || entry.is_import() => {
+                    match (entry.source(), locked.drift(entry)) {
+                        (_, None) => kept.push(locked),
+                        // an import's files stand as data.lock pins them, so a switch only
+                        // learns what its archives unpack to
+                        (Some(source), Some(Drift::Extract))
+                            if local::is_imported(&source.reference) =>
+                        {
+                            whole.push(draft::switched_import(source, &locked));
+                            others.push(locked);
+                        }
+                        (Some(source), Some(Drift::Extract)) => {
+                            let draft = Draft::switched(entry, source, &locked)?;
+                            drafts.push((locked.name.clone(), draft));
+                            others.push(locked);
+                        }
+                        _ => others.push(locked),
+                    }
+                }
+                _ => others.push(locked),
+            }
+        }
+        Ok(Sorted {
+            kept,
+            others,
+            drafts,
         })
     }
 
@@ -982,6 +1000,16 @@ pub(super) struct DryRelock {
     pub(super) unpack: Vec<String>,
     /// files, as `<dataset>/<path>`, whose hash in `lock` is a stand-in.
     pub(super) guessed: HashSet<String>,
+}
+
+/// data.lock's entries as relocking sorts them, before it resolves anything.
+struct Sorted {
+    /// entries whose data.toml entry did not change, or that the run leaves alone.
+    kept: Vec<Locked>,
+    /// entries to replace or drop.
+    others: Vec<Locked>,
+    /// drafts of entries whose `extract` alone changed.
+    drafts: Vec<(String, Draft)>,
 }
 
 /// datasets on their way into data.lock.
