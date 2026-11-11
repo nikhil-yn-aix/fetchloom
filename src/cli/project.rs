@@ -95,8 +95,6 @@ pub(super) fn ignore_data(work: &Loop<'_>, manifest: &Manifest) -> Result<(), Er
     Ok(())
 }
 
-/// the project files a person commits: data.lock.d as well when a big dataset keeps its file
-/// list there, since a clone without it cannot read data.lock.
 /// ends a run that wrote lists anew into data.lock.d that git does not have, which `git commit
 /// -a` would leave out and a clone then misses: a `next:` line for a person at a terminal, else a
 /// warning, which scripts and `--json` read too. it says nothing when git has them, and with no
@@ -160,6 +158,8 @@ pub(super) fn untracked<'a>(root: &Path, parts: impl Iterator<Item = &'a str>) -
         .collect()
 }
 
+/// the project files a person commits: data.lock.d as well when a recipe's result or a big
+/// dataset keeps its file list there, since a clone without it cannot read data.lock.
 pub(super) fn committed(project: &Project) -> &'static str {
     if project.root.join(lock::lists::FOLDER).is_dir() {
         "data.toml, data.lock and data.lock.d"

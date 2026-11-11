@@ -36,10 +36,11 @@ a mirror is a folder or web server that keeps pinned files, such as a lab
 disk. fetchloom asks the mirrors you name before the sources, and
 `fetchloom push` copies a project's pinned files into a folder mirror.
 
-commit data.toml and data.lock with your code, with data.lock.d when a big
-dataset keeps its file list there, and leave data/ out. anyone who clones the
-project runs `fetchloom sync` to place the pinned files. sync warns when it
-keeps edited or conflicting files. `fetchloom status` shows what differs.
+commit data.toml and data.lock with your code, and data.lock.d once it is
+there: each recipe's result and each big dataset keep their file lists in it.
+leave data/ out. anyone who clones the project runs `fetchloom sync` to place
+the pinned files. sync warns when it keeps edited or conflicting files.
+`fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a
 quick look.

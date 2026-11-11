@@ -48,10 +48,11 @@ a mirror is a folder or web server that keeps pinned files, such as a lab
 disk. fetchloom asks the mirrors you name before the sources, and
 `fetchloom push` copies a project's pinned files into a folder mirror.
 
-commit data.toml and data.lock with your code, with data.lock.d when a big
-dataset keeps its file list there, and leave data/ out. anyone who clones the
-project runs `fetchloom sync` to place the pinned files. sync warns when it
-keeps edited or conflicting files. `fetchloom status` shows what differs.
+commit data.toml and data.lock with your code, and data.lock.d once it is
+there: each recipe's result and each big dataset keep their file lists in it.
+leave data/ out. anyone who clones the project runs `fetchloom sync` to place
+the pinned files. sync warns when it keeps edited or conflicting files.
+`fetchloom status` shows what differs.
 
 `fetchloom get` fetches a dataset once, with no list and no receipt, for a
 quick look.";
@@ -478,5 +479,16 @@ mod tests {
                 assert!(line.chars().count() <= 80, "{name}: {line}");
             }
         }
+    }
+
+    /// a build keeps every recipe's file list in data.lock.d, even a result of one file, so the
+    /// concepts ask to commit it for recipes too, not only for a big dataset.
+    #[test]
+    fn the_concepts_say_recipes_keep_their_lists_in_data_lock_d() {
+        let flat = CONCEPTS.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("and data.lock.d once it is there: each recipe's result and each big dataset keep their file lists in it."),
+            "{CONCEPTS}"
+        );
     }
 }
