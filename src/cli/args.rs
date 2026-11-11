@@ -88,7 +88,7 @@ on disk: nothing, or the one file -o names, which it never replaces without --fo
   fetchloom push --inputs clean
   fetchloom push --to /media/usb/fetchloom --json
 
-on disk: copies the files data.lock lists from the cache into the mirror folder, which it starts when the folder is new or empty. it never changes the project or the cache. --dry-run writes nothing";
+on disk: copies the files data.lock lists from the cache into the mirror folder, which it starts when the folder is new or empty. what the cache lacks it takes from the data folder or downloads first. it never changes the project. --dry-run writes nothing";
 
     pub(super) const PATH: &str = "examples:
   fetchloom path iris
@@ -734,9 +734,9 @@ const LOCAL_DRY_RUN: &str = "show what would change on disk without changing it"
 const BUILD_DRY_RUN: &str =
     "say what each step would run, what it reads and where its result goes; run nothing";
 
-/// `--dry-run` help for `push`, which writes only the mirror.
+/// `--dry-run` help for `push`, which writes the mirror and the cache.
 const PUSH_DRY_RUN: &str =
-    "say what would be copied to the mirror and what is there already; copy nothing";
+    "say what would be downloaded, what would be copied and what is there already; change nothing";
 
 /// `--dry-run`, for the commands that change files.
 #[derive(Clone, Copy, Debug, clap::Args)]

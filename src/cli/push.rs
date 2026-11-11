@@ -1,9 +1,10 @@
 //! `fetchloom push`: the files data.lock pins, copied from this machine's cache into a folder
 //! mirror as mirrors are read, with the lists of what their archives unpack to, so a teammate's
 //! sync, a machine without a network or a reviewer can take them from there. it writes the
-//! mirror, and the cache only to take in a file it lacks that the data folder holds with its
-//! pinned bytes. it never changes the project, downloads or builds: what neither holds is named
-//! with what to run first.
+//! mirror, and the cache to take in a file it lacks: from the data folder when that holds the
+//! pinned bytes, else downloaded as a sync downloads it, the mirrors asked first. it never
+//! changes the project or builds: a recipe's result the cache lacks is named with the build
+//! that makes it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -17,15 +18,15 @@ use super::Context;
 use super::args;
 use super::fetch::data_folder::DataFolder;
 use super::project::{find, known, locked};
-use super::sync::{Scope, place};
+use super::sync::{Loop, Scope, place};
 use crate::cache::{Cache, read_unfollowed};
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::mirror::folder::{self, Failed, Fault, Item, Put, Refused, State, Target, There};
 use crate::mirror::{Location, OBJECTS, TREES};
 use crate::project::Project;
-use crate::project::lock::Lock;
 use crate::project::lock::archives::Archive;
+use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::Manifest;
 use crate::source::Access;
 use crate::stop::Stop;
@@ -75,6 +76,24 @@ struct Ask {
 struct Changes {
     copy: Vec<Copied>,
     trees: Vec<Copied>,
+    /// the pinned files a push would download first, since neither the cache nor the data
+    /// folder holds what it needs of them.
+    download: Vec<Fetch>,
+    /// the archives among `download`, as `<dataset>/<path>`, which are unpacked once they are
+    /// in. the files of one this machine never unpacked are not counted.
+    unpack: Vec<String>,
+}
+
+/// a pinned file a push downloads first when the cache lacks what it brings: the needed file
+/// itself, or the archive it is inside.
+#[derive(Clone, Serialize)]
+struct Fetch {
+    /// `<dataset>/<path>`, as data.lock names it.
+    path: String,
+    size: u64,
+    /// whether it is an archive, which is unpacked once it is in.
+    #[serde(skip)]
+    archive: bool,
 }
 
 /// a file a push would write: the first file that needs it, or the archive whose list of files
@@ -94,12 +113,14 @@ struct Needed {
     /// the dataset that first needs it.
     dataset: String,
     source: Source,
+    /// for a file a source pins, the file whose download brings it.
+    fetch: Option<Fetch>,
 }
 
 /// where the bytes of a [`Needed`] are on this machine.
 #[derive(Clone, Copy)]
 enum Source {
-    /// a file a source pins, in the cache once `fetchloom sync` fetched it.
+    /// a file a source pins, which a push downloads when the cache and the data folder lack it.
     Pinned,
     /// a file of a recipe's result, in the cache once `fetchloom build` made it.
     Result,
@@ -128,9 +149,8 @@ struct Planned {
     asks: Vec<Asking>,
     /// where in `needed` the files are that the mirror and the cache lack.
     lacked: Vec<usize>,
-    /// each archive whose files this machine does not know: its dataset, and
-    /// `<dataset>/<archive>`.
-    unknown: Vec<(String, String)>,
+    /// each archive whose files this machine does not know, with its dataset.
+    unknown: Vec<(String, Fetch)>,
     /// where in `needed` the files are that the cache lacks and the data folder looks to hold,
     /// which the push takes into the cache before it writes.
     taking: Vec<usize>,
@@ -185,8 +205,47 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         tell_dry(context, &planned, &report);
         return Ok(report);
     }
+    if !planned.lacked.is_empty() || !planned.unknown.is_empty() {
+        fetch(
+            context,
+            &project,
+            &manifest,
+            &lock,
+            &cache,
+            &fetching(&planned),
+        )
+        .map_err(|error| with_report(error, &report(&planned, Outcome::Stopped)))?;
+        // what the archives hold is known now, so the push plans again
+        planned = plan(
+            context,
+            &manifest,
+            &lock,
+            &cache,
+            planned.target.clone(),
+            planned.selected.clone(),
+            planned.datasets.clone(),
+        )?;
+        settle(
+            context,
+            &project,
+            &manifest,
+            &lock,
+            &cache,
+            &mut planned,
+            false,
+        )?;
+        if !planned.lacked.is_empty() || !planned.unknown.is_empty() {
+            let lacked: Vec<&Needed> = planned
+                .lacked
+                .iter()
+                .map(|at| &planned.needed[*at])
+                .collect();
+            let error = missing(&lacked, &planned.unknown);
+            return Err(with_report(error, &report(&planned, Outcome::Stopped)));
+        }
+    }
     ask(context, &planned)?;
-    take(context, &cache, &planned)?;
+    take(context, &project, &manifest, &lock, &cache, &planned)?;
     let (started, puts) = write(context, &cache, &planned)?;
     let report = report(&planned, Outcome::Written(started, &puts));
     tell(context, &planned, &report);
@@ -323,12 +382,13 @@ fn plan(
 /// push takes into the cache once it may write. a `dry_run` counts only what the push would take:
 /// a file the project's state vouches for, unread, or one that hashes to its pin. a push counts
 /// any file the state does not say holds other bytes that has the pinned size, unread, since
-/// taking it reads and checks it.
+/// taking it reads and checks it. what is left, and the archives whose files are not known, a
+/// push downloads first.
 ///
 /// # Errors
 ///
-/// `offline.missing` with what to run first, when a file the mirror needs is nowhere on this
-/// machine or an archive's files are not known, and a stop.
+/// `offline.missing` with the build to run, when the cache lacks a file of a recipe's result,
+/// which no download brings; `project.invalid` for a pin no bytes can have; and a stop.
 fn settle(
     context: &Context,
     project: &Project,
@@ -356,21 +416,57 @@ fn settle(
         planned.taking = taking.into_iter().map(|(at, _)| *at).collect();
         planned.lacked = lacked.into_iter().map(|(at, _)| *at).collect();
     }
-    if planned.lacked.is_empty() && planned.unknown.is_empty() {
-        return Ok(());
-    }
     let lacked: Vec<&Needed> = planned
         .lacked
         .iter()
         .map(|at| &planned.needed[*at])
         .collect();
-    let error = mispinned(cache, lock, &lacked)
-        .unwrap_or_else(|| missing(&lacked, &planned.unknown, planned.selected.is_some()));
-    Err(with_report(error, &report(planned, Outcome::Stopped)))
+    match mispinned(cache, lock, &lacked).or_else(|| unbuilt(&lacked)) {
+        Some(error) => Err(with_report(error, &report(planned, Outcome::Stopped))),
+        None => Ok(()),
+    }
+}
+
+/// the datasets whose files `planned` lacks or whose archives' files it does not know, which a
+/// push downloads first.
+fn fetching(planned: &Planned) -> BTreeSet<&str> {
+    planned
+        .lacked
+        .iter()
+        .map(|at| &planned.needed[*at])
+        .filter(|needed| matches!(needed.source, Source::Pinned))
+        .map(|needed| needed.dataset.as_str())
+        .chain(planned.unknown.iter().map(|(dataset, _)| dataset.as_str()))
+        .collect()
+}
+
+/// downloads into the cache what a push lacks of the fetched datasets `names`, as a sync
+/// downloads it: the data folder and the mirrors are asked first, each file is checked against
+/// its pin, and an archive whose files are not known is unpacked. each download is told.
+///
+/// # Errors
+///
+/// offline, or in mirror-only mode, what no mirror holds, with what to do on the next push; a
+/// download that fails; and a stop.
+fn fetch(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
+    names: &BTreeSet<&str>,
+) -> Result<(), Error> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let runtime = tokio::runtime::Handle::try_current()
+        .map_err(|err| Error::new(Kind::LocalIo, format!("cannot download: {err}")))?;
+    let work = Loop::new(context, project, Arc::new(context.net()), cache.clone()).readying("push");
+    runtime.block_on(work.ready(manifest, lock, names))
 }
 
 /// the error for a file of `lacked` that `lock` pins at another size than the bytes its SHA-256
-/// names, which the cache holds: a sync could bring no other bytes, so it would not help.
+/// names, which the cache holds: no download could bring other bytes, so none is tried.
 fn mispinned(cache: &Cache, lock: &Lock, lacked: &[&Needed]) -> Option<Error> {
     lacked
         .iter()
@@ -387,13 +483,21 @@ fn mispinned(cache: &Cache, lock: &Lock, lacked: &[&Needed]) -> Option<Error> {
 }
 
 /// takes into the cache the files `planned.taking` names, from the data folder, each only when
-/// its bytes there hash to its pin.
+/// its bytes there hash to its pin. one the data folder held other bytes of after all is
+/// downloaded instead, as any file the cache lacks.
 ///
 /// # Errors
 ///
-/// a failure to write the cache, a stop, and `offline.missing` when the data folder held other
-/// bytes after all.
-fn take(context: &Context, cache: &Cache, planned: &Planned) -> Result<(), Error> {
+/// a failure to write the cache or to download, a stop, and `offline.missing` naming the build
+/// for a file of a recipe's result the data folder held other bytes of.
+fn take(
+    context: &Context,
+    project: &Project,
+    manifest: &Manifest,
+    lock: &Lock,
+    cache: &Cache,
+    planned: &Planned,
+) -> Result<(), Error> {
     if planned.taking.is_empty() {
         return Ok(());
     }
@@ -412,8 +516,15 @@ fn take(context: &Context, cache: &Cache, planned: &Planned) -> Result<(), Error
         .map(|at| &planned.needed[*at])
         .filter(|needed| rest.iter().any(|want| want.digest == needed.item.digest))
         .collect();
-    let error = missing(&lacked, &[], planned.selected.is_some());
-    Err(with_report(error, &report(planned, Outcome::Stopped)))
+    if let Some(error) = unbuilt(&lacked) {
+        return Err(with_report(error, &report(planned, Outcome::Stopped)));
+    }
+    let names = lacked
+        .iter()
+        .map(|needed| needed.dataset.as_str())
+        .collect();
+    fetch(context, project, manifest, lock, cache, &names)
+        .map_err(|error| with_report(error, &report(planned, Outcome::Stopped)))
 }
 
 /// `needed` as the data folder is asked for it.
@@ -429,9 +540,8 @@ fn wanted(needed: &Needed) -> crate::mirror::Wanted {
 struct Wanted {
     /// each file once, then the lists of what their archives unpack to.
     needed: Vec<Needed>,
-    /// each archive whose files this machine does not know: its dataset, and
-    /// `<dataset>/<archive>`.
-    unknown: Vec<(String, String)>,
+    /// each archive whose files this machine does not know, with its dataset.
+    unknown: Vec<(String, Fetch)>,
 }
 
 /// what pushing `datasets` needs on the mirror. an archive's members are the ones its
@@ -442,25 +552,36 @@ fn needed(
     cache: &Cache,
     datasets: &[String],
 ) -> Result<Wanted, Error> {
-    let mut seen = HashSet::new();
+    let mut seen = HashMap::new();
     let (mut files, mut lists, mut unknown) = (Vec::new(), Vec::new(), Vec::new());
-    let mut add = |into: &mut Vec<Needed>, item: Item, label: String, dataset: &str, source| {
-        if seen.insert((item.folder, item.digest)) {
-            into.push(Needed {
-                item,
-                label,
-                dataset: dataset.to_owned(),
-                source,
-            });
-        }
-    };
+    let mut add =
+        |into: &mut Vec<Needed>, item: Item, label: String, dataset: &str, source, fetch| {
+            let Some(&at) = seen.get(&(item.folder, item.digest)) else {
+                seen.insert((item.folder, item.digest), into.len());
+                into.push(Needed {
+                    item,
+                    label,
+                    dataset: dataset.to_owned(),
+                    source,
+                    fetch,
+                });
+                return;
+            };
+            // bytes a fetched dataset pins come with its download, though a result holds them too
+            let first: &mut Needed = &mut into[at];
+            if matches!(first.source, Source::Result) && matches!(source, Source::Pinned) {
+                first.source = source;
+                dataset.clone_into(&mut first.dataset);
+                first.fetch = fetch;
+            }
+        };
     for name in datasets {
         if let Some(result) = lock.result(name) {
             // a result's files are pinned by data.lock itself, so it needs no list on the mirror
             for member in &result.files {
                 let item = object(member.sha256, member.size);
                 let label = format!("{name}/{}", member.path);
-                add(&mut files, item, label, name, Source::Result);
+                add(&mut files, item, label, name, Source::Result, None);
             }
             continue;
         }
@@ -494,19 +615,32 @@ fn needed(
             filters,
             &members,
         )?;
+        let fetch = |file: &LockedFile| Fetch {
+            path: format!("{name}/{}", file.path),
+            size: file.size,
+            archive: file.unpacks_to.is_some(),
+        };
         for target in &planned.targets {
             let item = object(target.sha256, target.size);
-            add(&mut files, item, target.path.clone(), name, Source::Pinned);
+            let brings = target.file().map(fetch);
+            add(
+                &mut files,
+                item,
+                target.path.clone(),
+                name,
+                Source::Pinned,
+                brings,
+            );
         }
         unknown.extend(
             planned
                 .unknown
                 .iter()
-                .map(|(_, file)| (name.clone(), format!("{name}/{}", file.path))),
+                .map(|(_, file)| (name.clone(), fetch(file))),
         );
         for (item, archive, path) in records.into_inner() {
             let label = format!("{name}/{path}");
-            add(&mut lists, item, label, name, Source::List(archive));
+            add(&mut lists, item, label, name, Source::List(archive), None);
         }
     }
     files.extend(lists);
@@ -549,55 +683,59 @@ fn lacking(context: &Context, cache: &Cache, needed: &[Needed], there: &[There])
         .collect()
 }
 
-/// the error for what the cache lacks, `lacked`, and the archives whose files it does not know,
-/// `unknown`, with what to run first: a sync for what sources pin, of the datasets lacking files
-/// when the push was `named` some, and a build for what a recipe makes.
-fn missing(lacked: &[&Needed], unknown: &[(String, String)], named: bool) -> Error {
-    let lines: Vec<String> = unknown
+/// the error for the files of recipes' results among `lacked`, which no download brings, with
+/// the build that makes each, which only a person may run.
+fn unbuilt(lacked: &[&Needed]) -> Option<Error> {
+    let made: Vec<&str> = lacked
         .iter()
-        .map(|(_, archive)| format!("the files inside {archive}"))
-        .chain(lacked.iter().map(|needed| needed.label.clone()))
+        .filter(|needed| matches!(needed.source, Source::Result))
+        .map(|needed| needed.label.as_str())
         .collect();
-    let mut error = Error::new(
+    if made.is_empty() {
+        return None;
+    }
+    let error = Error::new(
         Kind::OfflineMissing,
-        "this machine's cache lacks files the push needs, and push never downloads",
+        "this machine's cache lacks files the push needs, which only a build makes",
     );
-    for line in lines.iter().take(super::fetch::NAMED) {
-        error = error.detail(line.clone());
-    }
-    if lines.len() > super::fetch::NAMED {
-        error = error.detail(format!("and {} more", lines.len() - super::fetch::NAMED));
-    }
-    let mut help = Vec::new();
-    let synced: BTreeSet<&str> = unknown
-        .iter()
-        .map(|(dataset, _)| dataset.as_str())
-        .chain(
-            lacked
-                .iter()
-                .filter(|needed| matches!(needed.source, Source::Pinned))
-                .map(|needed| needed.dataset.as_str()),
-        )
-        .collect();
-    if !synced.is_empty() {
-        let words: String = if named {
-            synced.iter().flat_map(|name| [" ", *name]).collect()
-        } else {
-            String::new()
-        };
-        help.push(format!(
-            "run `fetchloom sync{words}` first, then push again"
-        ));
-    }
     let built: BTreeSet<&str> = lacked
         .iter()
         .filter(|needed| matches!(needed.source, Source::Result))
         .map(|needed| needed.dataset.as_str())
         .collect();
-    for name in built {
-        help.push(format!("`fetchloom build {name}` makes {name}'s files"));
+    let help: Vec<String> = built
+        .iter()
+        .map(|name| format!("`fetchloom build {name}` makes {name}'s files"))
+        .collect();
+    Some(named_lines(error, &made).help(help.join("; ")))
+}
+
+/// the error for files a push still lacks once it fetched them, `lacked`, and the archives whose
+/// files it still does not know, `unknown`, as when something took them from the cache
+/// meanwhile: the next push fetches them again.
+fn missing(lacked: &[&Needed], unknown: &[(String, Fetch)]) -> Error {
+    let lines: Vec<String> = unknown
+        .iter()
+        .map(|(_, archive)| format!("the files inside {}", archive.path))
+        .chain(lacked.iter().map(|needed| needed.label.clone()))
+        .collect();
+    let error = Error::new(
+        Kind::OfflineMissing,
+        "this machine's cache lacks files the push needs",
+    );
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    named_lines(error, &lines).help("run the push again, which downloads them")
+}
+
+/// `error` with the first few of `lines` as details, and how many more there are.
+fn named_lines(mut error: Error, lines: &[&str]) -> Error {
+    for line in lines.iter().take(super::fetch::NAMED) {
+        error = error.detail((*line).to_owned());
     }
-    error.help(help.join("; "))
+    if lines.len() > super::fetch::NAMED {
+        error = error.detail(format!("and {} more", lines.len() - super::fetch::NAMED));
+    }
+    error
 }
 
 /// the datasets of `datasets` that ask before they are pushed: one fetched from a source that
@@ -885,7 +1023,7 @@ fn put_lists(
 }
 
 /// the error for `failed`, from writing the lists `lists` into the mirror at `root`. a list the
-/// cache stopped recording after the push planned is missing, as before a sync.
+/// cache stopped recording after the push planned is missing, as before a push fetched it.
 fn failed_list(failed: Failed, lists: &[(&Needed, There)], root: &Path) -> Error {
     match failed {
         Failed::File(at, Fault::Source(_)) => Error::new(
@@ -895,7 +1033,7 @@ fn failed_list(failed: Failed, lists: &[(&Needed, There)], root: &Path) -> Error
                 lists[at].0.label
             ),
         )
-        .help("run `fetchloom sync` first, then push again"),
+        .help("run the push again, which fetches what it holds"),
         failed => failed_put(failed, lists, root),
     }
 }
@@ -1021,7 +1159,31 @@ fn report(planned: &Planned, outcome: Outcome<'_>) -> Report {
         };
         report.tally(needed, put);
     }
+    if let Some(changes) = &mut report.changes {
+        (changes.download, changes.unpack) = downloads(planned);
+    }
     report
+}
+
+/// what a push would download first: the file that brings each it lacks, each once, and the
+/// archives among them, which are unpacked once they are in.
+fn downloads(planned: &Planned) -> (Vec<Fetch>, Vec<String>) {
+    let mut seen = HashSet::new();
+    let lacking = planned
+        .lacked
+        .iter()
+        .filter_map(|at| planned.needed[*at].fetch.as_ref());
+    let download: Vec<Fetch> = lacking
+        .chain(planned.unknown.iter().map(|(_, archive)| archive))
+        .filter(|fetch| seen.insert(fetch.path.as_str()))
+        .cloned()
+        .collect();
+    let unpack = download
+        .iter()
+        .filter(|fetch| fetch.archive)
+        .map(|fetch| fetch.path.clone())
+        .collect();
+    (download, unpack)
 }
 
 impl Report {
@@ -1045,6 +1207,8 @@ impl Report {
             changes: dry_run.then(|| Changes {
                 copy: Vec::new(),
                 trees: Vec::new(),
+                download: Vec::new(),
+                unpack: Vec::new(),
             }),
         }
     }
@@ -1149,6 +1313,22 @@ fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
         let files = planned.taking.len() as u64;
         planned.folder.tell(output, "Would copy", files, bytes);
     }
+    let (download, unpack): (&[Fetch], &[String]) = match &report.changes {
+        Some(changes) => (&changes.download, &changes.unpack),
+        None => (&[], &[]),
+    };
+    for fetch in download {
+        output.step(
+            "Would fetch",
+            &format!("{} \u{b7} {}", fetch.path, units::size(fetch.size)),
+        );
+    }
+    for archive in unpack {
+        output.step("Would open", archive);
+    }
+    if !planned.unknown.is_empty() {
+        output.hint("an archive's files are known once it is unpacked, so they are not counted");
+    }
     if report.started {
         output.step("Would start", &format!("a mirror in {target}"));
     }
@@ -1184,7 +1364,7 @@ fn tell_dry(context: &Context, planned: &Planned, report: &Report) {
     if !planned.asks.is_empty() && !context.yes {
         output.step("Would ask", &format!("first: {}", reasons(&planned.asks)));
     }
-    let nothing = report.copied == 0 && report.trees == 0 && !report.started;
+    let nothing = report.copied == 0 && report.trees == 0 && !report.started && download.is_empty();
     let everything = everything(&planned.datasets);
     super::project::dry_run_done(output, nothing.then_some(everything.as_str()));
 }
@@ -1320,7 +1500,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         let cache = Cache::open(folder.path().join("cache")).unwrap();
         let Wanted { needed, unknown } =
             needed(&manifest(), &lock, &cache, &["clean".to_owned()]).unwrap();
-        assert_eq!(unknown, Vec::<(String, String)>::new());
+        assert!(unknown.is_empty());
         let labels: Vec<&str> = needed.iter().map(|needed| needed.label.as_str()).collect();
         assert_eq!(labels, ["clean/a.csv", "clean/b.csv"]);
         assert!(
@@ -1330,7 +1510,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
                     && matches!(needed.source, Source::Result))
         );
         let lacked: Vec<&Needed> = needed.iter().collect();
-        let error = missing(&lacked, &[], false);
+        let error = unbuilt(&lacked).unwrap();
         assert_eq!(
             error.help.as_deref(),
             Some("`fetchloom build clean` makes clean's files")
@@ -1366,7 +1546,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
     }
 
     /// a list the cache stopped recording after the push planned is missing, with what to run,
-    /// not a failure of the disk.
+    /// not a failure of the disk: the next push fetches it again.
     #[test]
     fn a_list_the_cache_lost_is_missing_with_what_to_run() {
         let digest = crate::digest::sha256(b"images.zip");
@@ -1379,6 +1559,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             label: "pets/images.zip".into(),
             dataset: "pets".into(),
             source: Source::List(digest),
+            fetch: None,
         };
         let lost = std::io::Error::new(std::io::ErrorKind::NotFound, "no record");
         let error = failed_list(
@@ -1393,7 +1574,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
         );
         assert_eq!(
             error.help.as_deref(),
-            Some("run `fetchloom sync` first, then push again")
+            Some("run the push again, which fetches what it holds")
         );
     }
 
@@ -1407,6 +1588,7 @@ run = ["python3", "report.py", "{clean}", "{out}"]
             label: "many/d00/f00".into(),
             dataset: "many".into(),
             source: Source::Pinned,
+            fetch: None,
         };
         let root = Path::new("/mnt/lab/fetchloom");
         let changed = failure(Fault::ReadBack, &needed, root);

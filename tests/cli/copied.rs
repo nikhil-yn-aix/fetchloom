@@ -187,12 +187,12 @@ fn an_offline_build_runs_a_recipe_whose_input_is_only_in_the_data_folder() -> Re
     Ok(())
 }
 
-/// a file of the pinned size holding other bytes is never taken or changed, so the push fails
-/// as it would with no file there.
+/// a file of the pinned size holding other bytes is never taken or changed, so the push
+/// downloads the pinned bytes, as it would with no file there.
 #[test]
 fn an_edit_of_the_same_size_is_never_taken() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     project(&sandbox, &server, false)?;
     let (two, cache) = copied(&sandbox, "two")?;
     let placed = two.join("inputs").join("iris").join("iris.csv");
@@ -205,28 +205,24 @@ fn an_edit_of_the_same_size_is_never_taken() -> Result {
         .arg(&mirror)
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
     let document = json(&output)?;
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "offline.missing", "{document}");
-    assert_eq!(
-        error["message"],
-        "this machine's cache lacks files the push needs, and push never downloads"
-    );
+    assert_eq!(output.status.code(), Some(0), "{document}");
     assert_eq!(document["work"]["data_folder_objects"], 0, "{document}");
+    assert_eq!(document["work"]["requests"], 1, "{document}");
     assert_eq!(look(&placed)?, before);
-    assert!(!object(&cache, IRIS).exists());
+    assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
     assert!(!object(&cache, EDITED).exists());
     Ok(())
 }
 
 /// `cp -a` keeps a hardlink between two names of one file, so an edit made in place through one
 /// name is the other's too, and neither holds the pinned bytes, though both have their size: the
-/// dry run promises no copy, and the push, as it, stops with what is missing and changes nothing.
+/// dry run promises no copy and names the download instead, and the push downloads the pinned
+/// bytes, changing neither name.
 #[test]
 fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
     let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
     project(&sandbox, &server, true)?;
     let (two, cache) = copied(&sandbox, "two")?;
     let (raw, made) = (
@@ -252,20 +248,19 @@ fn a_dry_run_promises_no_copy_of_an_edit_two_names_share() -> Result {
             .env("FETCHLOOM_CACHE", &cache)
             .output()
     };
-    let missing =
-        "error: this machine's cache lacks files the push needs, and push never downloads";
     let dry = push(&["--yes", "push", "--dry-run"])?;
     let stderr = text(&dry.stderr)?;
-    assert_eq!(dry.status.code(), Some(20), "{stderr}");
-    assert!(stderr.contains(missing), "{stderr}");
+    assert_eq!(dry.status.code(), Some(0), "{stderr}");
+    let fetch = format!("Would fetch iris/iris.csv \u{b7} {} B\n", IRIS.len());
+    assert!(stderr.contains(&fetch), "{stderr}");
     assert!(!stderr.contains("Would copy"), "{stderr}");
+    assert!(!mirror.exists());
     let pushed = push(&["--yes", "push"])?;
     let stderr = text(&pushed.stderr)?;
-    assert_eq!(pushed.status.code(), Some(20), "{stderr}");
-    assert!(stderr.contains(missing), "{stderr}");
-    assert!(!stderr.contains("Copied"), "{stderr}");
-    assert!(!mirror.exists());
-    assert!(!object(&cache, IRIS).exists() && !object(&cache, EDITED).exists());
+    assert_eq!(pushed.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" Downloaded 1 file"), "{stderr}");
+    assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
+    assert!(!object(&cache, EDITED).exists());
     assert_eq!((look(&raw)?, look(&made)?), before);
     Ok(())
 }
@@ -310,5 +305,127 @@ fn a_file_the_data_folder_holds_elsewhere_is_placed_from_there() -> Result {
     assert_eq!(synced["work"]["mirror_objects"], 0, "{synced}");
     assert_eq!(fs::read(&made)?, IRIS);
     unlinked(&two.join("inputs").join("iris").join("iris.csv"), &cache)?;
+    Ok(())
+}
+
+/// a project whose dataset is a zip, settled, then copied to `two` with an empty cache, which
+/// knows neither the zip nor what it holds, and the server that serves the zip `downloads`
+/// times, the add's included.
+fn copied_zip(sandbox: &Sandbox, downloads: usize) -> Result<(Server, PathBuf, PathBuf)> {
+    let zip = fs::read(crate::support::workspace().join("tests/fixtures/archives/python.zip"))?;
+    let responses = (0..downloads).map(|_| file(&zip, "\"z1\"")).collect();
+    let server = Server::start("/files/dataset.zip", responses)?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (two, cache) = copied(sandbox, "two")?;
+    Ok((server, two, cache))
+}
+
+/// push downloads the pinned zip the copy's cache lacks, as a sync would, says so, and pushes
+/// what it holds with their list, so a fresh clone then syncs from the mirror alone. no file or
+/// pin of the copy changes.
+#[test]
+fn a_copied_project_pushes_once_it_fetched_what_its_cache_lacks() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 2)?;
+    let lock = fs::read(two.join("data.lock"))?;
+    let readme = two.join("data").join("dataset").join("README.md");
+    let before = look(&readme)?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let pushed = sandbox
+        .command_in(&two, &["--yes", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&pushed.stderr)?;
+    assert_eq!(pushed.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" Downloaded 1 file"), "{stderr}");
+    assert_eq!(fs::read(two.join("data.lock"))?, lock);
+    assert_eq!(look(&readme)?, before);
+    let asked = server.requests().len();
+    let fresh = sandbox.folder("fresh")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(two.join(name), fresh.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&fresh, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("fresh cache")?)
+        .env("FETCHLOOM_MIRRORS", &mirror)
+        .env("FETCHLOOM_MIRRORS_ONLY", "1")
+        .output()?;
+    let document = json(&synced)?;
+    assert_eq!(synced.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["requests"], 0, "{document}");
+    assert_eq!(server.requests().len(), asked, "the source is never asked");
+    assert_eq!(
+        fs::read(fresh.join("data").join("dataset").join("README.md"))?,
+        before.0
+    );
+    Ok(())
+}
+
+/// offline, push cannot fetch what its cache lacks, so it stops before writing anything, naming
+/// the zip, with help that works on the next push: run it online. a sync would have nothing to
+/// do here, so it is never the fix.
+#[test]
+fn an_offline_push_says_to_run_it_online() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (server, two, cache) = copied_zip(&sandbox, 1)?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let output = sandbox
+        .command_in(&two, &["--json", "--offline", "--yes", "push", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(20), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "offline.missing", "{document}");
+    assert_eq!(error["details"], serde_json::json!(["dataset/dataset.zip"]));
+    assert!(
+        error["help"]
+            .as_str()
+            .is_some_and(|help| help.starts_with("run it again without --offline")),
+        "{error}"
+    );
+    assert!(error["fix"].is_null(), "{error}");
+    assert_eq!(server.requests().len(), 1, "only the add downloaded");
+    assert!(!mirror.exists());
+    Ok(())
+}
+
+/// a recipe reads iris, which `place = false` keeps out of the data folder, so a copy of the
+/// project to another cache has iris nowhere on this machine, and no sync fetches it. `push
+/// --inputs` downloads it from its source and pushes it with the result the data folder holds.
+#[test]
+fn push_inputs_fetches_an_input_no_sync_places() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!(
+            "{}\n[datasets.clean]\nfrom = [\"iris\"]\nrun = [\"recipe-step\", \"write\", \"clean.csv\", \"done\", \"{{iris}}\", \"{{out}}\"]\n",
+            written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1)
+        ),
+    )?;
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    assert!(!sandbox.work().join("data").join("iris").exists());
+    let (two, cache) = copied(&sandbox, "two")?;
+    let mirror = sandbox.folder("lab")?.join("mirror");
+    let pushed = sandbox
+        .command_in(&two, &["--json", "--yes", "push", "--inputs", "--to"])
+        .arg(&mirror)
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let document = json(&pushed)?;
+    assert_eq!(pushed.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["requests"], 1, "{document}");
+    assert_eq!(fs::read(object(&mirror, IRIS))?, IRIS);
+    assert_eq!(fs::read(object(&mirror, b"done"))?, b"done");
     Ok(())
 }

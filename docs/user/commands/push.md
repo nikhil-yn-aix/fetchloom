@@ -1,6 +1,6 @@
 # push
 
-`push` copies the files `data.lock` pins from this machine's cache into a folder [mirror](../mirrors.md), so a teammate, a machine without a network or a reviewer can sync the project from there.
+`push` copies the files `data.lock` pins from this machine's cache into a folder [mirror](../mirrors.md), downloading first what the cache lacks, so a teammate, a machine without a network or a reviewer can sync the project from there.
 
 ```sh
 fetchloom push --to /mnt/lab/fetchloom
@@ -21,13 +21,13 @@ fetchloom push [options] [name]...
 |---|---|
 | `--to <folder>` | the mirror's folder. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
 | `--inputs` | also push the datasets the named recipes are made from, and what those are made from in turn, so a rebuild on another machine finds them on the mirror. with no name, of every recipe |
-| `-n`, `--dry-run` | say what would be copied and what is there already; copy nothing |
+| `-n`, `--dry-run` | say what would be downloaded, what would be copied and what is there already; change nothing |
 
 [global options](README.md#global-options) also apply. `--yes` answers the [question](#data-you-may-not-share) about data whose source wanted an account or accepted terms.
 
 ## what it writes
 
-push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out, every part of one split into parts too; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out, as `fetchloom drop` writes one, is not placed, so it is not pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code. it never changes the project, and it adds to the cache only the files it takes from the data folder, as [it never downloads](#it-never-downloads) says.
+push writes the layout every mirror is read in: the `fetchloom-mirror` file, each file a dataset places under `objects/` by its SHA-256, and for each archive that unpacks, the list of the files it holds under `trees/`, by the `unpacks_to` data.lock pins. with that list, a reader takes the archive's files one by one and never needs the archive, so push leaves the archive out, every part of one split into parts too; an archive with `extract = false` is a file of its own and is pushed. a member a [members table](../reference/data-toml.md#files-inside-archives) leaves out, as `fetchloom drop` writes one, is not placed, so it is not pushed. a file several datasets need goes once. push writes nothing else: not data.toml, data.lock or code. it never changes the project. what the cache lacks it takes from the data folder or downloads first, as [what it fetches](#what-it-fetches) says.
 
 from a real run, a project with a csv file and a zip that unpacks to five files, with the mirror's path shortened, on stderr:
 
@@ -84,9 +84,9 @@ rclone copy /srv/fetchloom lab-bucket:fetchloom
 
 a FAT32 drive refuses a file larger than 4 GiB, so push stops at the first one with `local.io`; exFAT has no such limit.
 
-## it never downloads
+## what it fetches
 
-push copies what this machine's cache holds. a file the cache lacks that the data folder holds, at a path data.lock places it at, is copied into the cache first, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder. the copy is a clone where the disk makes one, never a link, and the cache keeps it only when its bytes hash to the pin, so the file in the data folder stays as it is. stderr from a real run in such a copy, whose cache was empty, the mirror's path shortened:
+push copies what this machine's cache holds, and fills it first with what it lacks. a file the cache lacks that the data folder holds, at a path data.lock places it at, is copied into the cache, as in a project [moved to another machine](cache.md#moving-a-project-to-another-machine) with its data folder. the copy is a clone where the disk makes one, never a link, and the cache keeps it only when its bytes hash to the pin, so the file in the data folder stays as it is. stderr from a real run in such a copy, whose cache was empty, the mirror's path shortened:
 
 ```text
      Copied 1 file · 21 B from data into the cache
@@ -95,16 +95,34 @@ push copies what this machine's cache holds. a file the cache lacks that the dat
          Ok every file squares and table need is on the mirror
 ```
 
-a file the mirror lacks and neither the cache nor the data folder holds stops push before anything is written, with `offline.missing`, exit 20, naming the files and what to run first. a file in the data folder with other bytes than its pin counts as missing, even with the pinned size; push never changes it. push reads such a file once, as it copies it, after any [question](#data-you-may-not-share), so a file the state does not vouch for that turns out to hold other bytes stops it then, with the same error. from a clone that never synced:
+what neither holds, push downloads as a sync would: from a [mirror](../mirrors.md) when one holds it, else from its source, each file checked against its pin. an archive whose files this machine never unpacked, as in a copy whose cache is empty, is downloaded and unpacked to learn them, so its files and their list reach the mirror. so is the raw data of a dataset with `place = false`, which no sync downloads, when `--inputs` or its name asks for it. stderr from a real run in a copy of a project with a csv file, a zip and a recipe, whose cache was empty, the mirror's path shortened:
 
 ```text
-error: this machine's cache lacks files the push needs, and push never downloads
-  the files inside pets/pets.zip
-  iris/iris.csv
-  help: run `fetchloom sync` first, then push again
+ Downloaded 1 file · 824 B in 6 ms
+   Unpacked pets/pets.zip · 6 files · 639 B in 56 ms
+     Copied 2 files · 3.9 KiB from data into the cache
+    Started a mirror in /mnt/lab/fetchloom
+     Pushed 8 files · 4.6 KiB to /mnt/lab/fetchloom
+         Ok every file clean, iris and pets need is on the mirror
 ```
 
-push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds either: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60. a result data.lock pins is pushed by the files data.lock lists for it, which the cache holds once a build made them. a file of one that the cache lacks is named with the build that makes it, such as `fetchloom build clean`, and the JSON `fix` is null, since a build runs the project's code.
+offline, push downloads nothing, and in [mirror-only mode](../mirrors.md) it asks no source. a file it would have to download then stops it before anything is written, with `offline.missing` or `network.refused`, exit 20, naming the files, with help for the next push. offline, from the same copy:
+
+```text
+error: offline, and 1 file data.lock names is not in the cache
+  pets/pets.zip
+  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them
+```
+
+a file in the data folder with other bytes than its pin counts as missing, even with the pinned size, so push downloads the pinned bytes instead and never changes it. push reads such a file once, as it copies it, after any [question](#data-you-may-not-share), so a file the state does not vouch for that turns out to hold other bytes is downloaded then.
+
+push sends what data.lock pins, so a dataset `data.lock` does not pin as `data.toml` asks stops it with `lock.outdated`, exit 1, before anything is written: run `fetchloom lock`. push never builds: a [recipe](../recipes.md) whose result data.lock does not pin stops it with `build.needed`, exit 60. a result data.lock pins is pushed by the files data.lock lists for it, which the cache holds once a build made them. no download brings them, so a file of one that the cache lacks stops push before anything downloads, with `offline.missing`, exit 20, named with the build that makes it. the JSON `fix` is null, since a build runs the project's code. from a clone that never built:
+
+```text
+error: this machine's cache lacks files the push needs, which only a build makes
+  clean/clean.csv
+  help: `fetchloom build clean` makes clean's files
+```
 
 `fetchloom push --inputs clean` sends `clean`'s result with every dataset it is made from, so a reviewer whose sources are gone can rebuild it from the mirror and check it against data.lock. with that raw data on the mirror, [`cache gc --inputs`](cache.md#raw-input-a-mirror-holds) can free this machine's copy of it.
 
@@ -127,7 +145,19 @@ error: the sources of iris and pets did not say who may read them, so pushing th
 
 ## dry run
 
-`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder, as `Would copy 1 file · 21 B from data into the cache`, only when the push would take it. a file the project's state records with its pinned bytes, and that still looks as recorded, counts without being read, as sync trusts it; any other file there is read and hashed first, with nothing written. so a dry run in a copy whose `.fetchloom` came along reads no file of the data folder, one without it reads each such file once, and an edit of the pinned size, as one made through a hardlink `cp -a` kept, counts as missing in the dry run as in the push. a dry run of a project whose cache holds every file:
+`--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder, as `Would copy 1 file · 21 B from data into the cache`, only when the push would take it. a file the project's state records with its pinned bytes, and that still looks as recorded, counts without being read, as sync trusts it; any other file there is read and hashed first, with nothing written. so a dry run in a copy whose `.fetchloom` came along reads no file of the data folder, one without it reads each such file once, and an edit of the pinned size, as one made through a hardlink `cp -a` kept, counts as missing in the dry run as in the push. a file it would download is named, as `Would fetch pets/pets.zip · 824 B`, and an archive it would unpack as `Would open pets/pets.zip`. the files of an archive this machine never unpacked are not counted, since only unpacking it tells them, and a dry run asks no mirror or server, so a file a mirror holds is named too. in the copy above:
+
+```text
+Would copy 2 files · 3.9 KiB from data into the cache
+Would fetch pets/pets.zip · 824 B
+ Would open pets/pets.zip
+  hint: an archive's files are known once it is unpacked, so they are not counted
+Would start a mirror in /mnt/lab/fetchloom
+ Would push 2 files · 3.9 KiB to /mnt/lab/fetchloom
+         Ok dry run, nothing was changed
+```
+
+a dry run of a project whose cache holds every file:
 
 ```text
 Would start a mirror in /mnt/lab/fetchloom
@@ -138,12 +168,12 @@ Would start a mirror in /mnt/lab/fetchloom
 
 ## JSON
 
-`result` has `target`, the mirror's absolute folder, with any `..` in `--to` resolved as the system resolves it; `started`, whether the push started a mirror there; `selected`, the names given, or null; `datasets`, every dataset pushed; `objects` and `bytes`, the files those datasets need on the mirror, each once, and their bytes; `copied` and `copied_bytes`, the files written; `present` and `present_bytes`, the files found there and left as they were; `replaced`, how many of `copied` took the place of a damaged copy; `trees`, the lists of archives' files written; and `asks`, a `{dataset, access}` record for each dataset that asks first. `offline.missing` and `unconfirmed` keep `result`, with what the push would write. a dry run counts what it would write and adds `dry_run: true` and `changes`, with `copy`, a `{path, sha256, size}` record for each file, `path` being the first `<dataset>/<file>` that needs it, and `trees`, the same for each list of files, `path` naming its archive.
+`result` has `target`, the mirror's absolute folder, with any `..` in `--to` resolved as the system resolves it; `started`, whether the push started a mirror there; `selected`, the names given, or null; `datasets`, every dataset pushed; `objects` and `bytes`, the files those datasets need on the mirror, each once, and their bytes; `copied` and `copied_bytes`, the files written; `present` and `present_bytes`, the files found there and left as they were; `replaced`, how many of `copied` took the place of a damaged copy; `trees`, the lists of archives' files written; and `asks`, a `{dataset, access}` record for each dataset that asks first. an error before anything is written, such as `offline.missing`, `network.refused` or `unconfirmed`, keeps `result`, with what the push would write. a dry run counts what it would write and adds `dry_run: true` and `changes`, with `copy`, a `{path, sha256, size}` record for each file, `path` being the first `<dataset>/<file>` that needs it; `trees`, the same for each list of files, `path` naming its archive; `download`, a `{path, size}` record for each file it would download first, as `<dataset>/<path>` in data.lock; and `unpack`, the archives among them, which it would unpack.
 
 `result` of `fetchloom --json push iris --dry-run` from a real run, the mirror's path shortened:
 
 ```json
-{"target":"/mnt/lab/new","started":true,"selected":["iris"],"datasets":["iris"],"objects":1,"bytes":63,"copied":1,"copied_bytes":63,"present":0,"present_bytes":0,"replaced":0,"trees":0,"asks":[{"dataset":"iris","access":"unknown"}],"dry_run":true,"changes":{"copy":[{"path":"iris/iris.csv","sha256":"985aeca868a70414ab0d2404b7b9f9d7cc8ca5185a671a3cb401ccdf3bfff017","size":63}],"trees":[]}}
+{"target":"/mnt/lab/new","started":true,"selected":["iris"],"datasets":["iris"],"objects":1,"bytes":63,"copied":1,"copied_bytes":63,"present":0,"present_bytes":0,"replaced":0,"trees":0,"asks":[{"dataset":"iris","access":"unknown"}],"dry_run":true,"changes":{"copy":[{"path":"iris/iris.csv","sha256":"985aeca868a70414ab0d2404b7b9f9d7cc8ca5185a671a3cb401ccdf3bfff017","size":63}],"trees":[],"download":[],"unpack":[]}}
 ```
 
 a push that stops at a file's read-back has `result` null and one error: `integrity.mismatch` when the file read back holds other bytes than were written, and `local.io` when something else replaced it. `errors[0]` of a real run where another program kept replacing the files push wrote, the mirror's path shortened:
@@ -152,19 +182,20 @@ a push that stops at a file's read-back has `result` null and one error: `integr
 {"kind":"local.io","message":"something replaced many/d00/f00 in the mirror /mnt/lab/fetchloom while push wrote it, so it was not given its name","details":[],"help":"stop whatever else writes into that folder, such as a sync client, a backup tool or antivirus, then push again","fix":null}
 ```
 
-push asks no server anything, so the work counters count no request; `data_folder_objects` and `data_folder_bytes` count the files it took from the data folder into the cache. [JSON output](../reference/json-output.md) has the envelope.
+the work counters count what push downloaded, as `requests`, `bytes_down` and `mirror_objects` do for a sync, and `data_folder_objects` and `data_folder_bytes` count the files it took from the data folder into the cache. [JSON output](../reference/json-output.md) has the envelope.
 
 ## exit codes
 
-0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that neither the cache nor the data folder holds files it needs; 30 that a pushed file read back other bytes than were written, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, that data.lock pins a file at a size its cached bytes do not have, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means every file the datasets need is on the mirror. 1 means nobody said yes to data that asks first, or data.lock is out of date; 2 a usage error, such as no folder or a web address; 20 that a file it needs could not be downloaded, as offline or in mirror-only mode, or that the cache lacks a file of a recipe's result, which only a build makes; 30 that a download or a pushed file read back holds other bytes than expected, or that the cache's copy holds other bytes than its pin; 50 that the folder is not a mirror, that something else replaced a file push wrote, that data.lock pins a file at a size its cached bytes do not have, or that the disk refused a write or is full; 60 that a recipe needs a build; 130 a stop. other failures use the [shared exit codes](../reference/exit-codes.md).
 
 ## common mistakes
 
 | symptom | cause | fix |
 |---|---|---|
 | `holds files, but no fetchloom-mirror file says it is a mirror` | `--to` names a folder that is not a mirror, or a network disk that is not mounted | name an empty folder or a mirror's top folder, and mount the disk |
-| `this machine's cache lacks files the push needs` | this machine never synced those datasets, or `cache gc` freed them, and the data folder does not hold them with their pinned bytes | run `fetchloom sync`, then push again |
-| `data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine` | someone edited a file's size in data.lock by hand, or data.lock was damaged, and the cache holds the bytes of that SHA-256 at their real size. a sync could bring no other bytes | restore data.lock from git, or set that size back by hand, then push again |
+| `this machine's cache lacks files the push needs, which only a build makes` | a recipe's result was never built here, or `cache gc` freed it, and the data folder does not hold it | run the build the help names, then push again |
+| `offline, and 1 file data.lock names is not in the cache` | push needs to download a file the cache and the data folder lack, and the run is offline | run the push again online, or with `FETCHLOOM_CACHE` naming a cache that holds the file |
+| `data.lock pins small/small.csv at 13 bytes, but its SHA-256 is that of 12 bytes on this machine` | someone edited a file's size in data.lock by hand, or data.lock was damaged, and the cache holds the bytes of that SHA-256 at their real size. no download could bring other bytes | restore data.lock from git, or set that size back by hand, then push again |
 | `... so pushing them needs a yes` | a source wanted an account or accepted terms, or did not say who may read the data | check that everyone who can read the mirror may have it, then answer yes or add `--yes` |
 | `..., read back from ..., holds other bytes than were written, so it was not given its name` | the disk lost or changed a write, so the file read back is not what push wrote | check the disk that holds the mirror, then push again |
 | `something replaced ... in the mirror ... while push wrote it, so it was not given its name` | another program writes into the mirror's folder, such as a sync client, a backup tool or antivirus, and put another file in place of one push wrote | stop that program, or keep it out of the folder, then push again |

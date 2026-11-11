@@ -120,6 +120,8 @@ pub(super) struct Loop<'a> {
     /// `sync --locked` asks, once the rest is in place, rather than being left out with a
     /// warning.
     stops_on_unbuilt: bool,
+    /// the command [`Loop::ready`] readies files for, which its help says to run again.
+    readying: &'static str,
 }
 
 impl<'a> Loop<'a> {
@@ -142,7 +144,14 @@ impl<'a> Loop<'a> {
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
             stops_on_unbuilt: false,
+            readying: "build",
         }
+    }
+
+    /// [`Loop::ready`] readies files for `command`, as `push`, rather than a build.
+    pub(super) fn readying(mut self, command: &'static str) -> Self {
+        self.readying = command;
+        self
     }
 
     /// a pinned result that neither the cache nor a mirror holds ends the run with
@@ -400,7 +409,8 @@ impl<'a> Loop<'a> {
             let folder = plan::folder(manifest, dataset);
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             return Err(local::imported_elsewhere(dataset, &folder, mirrored).help(format!(
-                "copy them to {folder} and build again, or run `fetchloom add <folder> --as {dataset}` where they are"
+                "copy them to {folder} and {} again, or run `fetchloom add <folder> --as {dataset}` where they are",
+                self.readying
             )));
         }
         self.download_prepared(manifest, &sources, &files).await?;

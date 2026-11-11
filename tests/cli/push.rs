@@ -286,10 +286,10 @@ fn a_target_is_named_without_dots() -> Result {
     Ok(())
 }
 
-/// push copies what the cache holds and never downloads: a clone that never synced is told
-/// what is missing and what to run, and nothing is written.
+/// push downloads what the cache lacks, as a sync would, then pushes it: a clone that never
+/// synced fills the mirror from the sources, and its project stays as it was.
 #[test]
-fn push_never_downloads() -> Result {
+fn push_downloads_what_the_cache_lacks() -> Result {
     let sandbox = Sandbox::new()?;
     let source = project(&sandbox)?;
     let asked = source.requests().len();
@@ -300,17 +300,12 @@ fn push_never_downloads() -> Result {
         .arg(&root)
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
     let document = json(&output)?;
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "offline.missing");
-    let details = error["details"].to_string();
-    assert!(details.contains("iris/iris.csv"), "{details}");
-    assert!(details.contains("dataset/dataset.zip"), "{details}");
-    assert_eq!(error["fix"], "fetchloom sync");
-    assert_eq!(document["work"]["requests"], 0);
-    assert_eq!(source.requests().len(), asked);
-    assert!(!root.exists());
+    assert_eq!(output.status.code(), Some(0), "{document}");
+    assert_eq!(document["work"]["requests"], 2, "iris and the zip");
+    assert_eq!(source.requests().len(), asked + 2);
+    assert_eq!(named(&root, "objects")?, pinned());
+    assert!(!folder.join("data").exists(), "push places nothing");
     Ok(())
 }
 
@@ -587,7 +582,8 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
     let mut expected = vec![sha256(crate::project::IRIS), hex];
     expected.sort();
     assert_eq!(named(&root, "objects")?, expected);
-    // a clone that never synced is told to sync what the recipe is made from, not the recipe
+    // a clone that never built is told to build the recipe before anything downloads, since no
+    // download brings its result
     let clone = sandbox.folder("clone")?;
     for name in ["data.toml", "data.lock", "clean.py"] {
         fs::copy(sandbox.work().join(name), clone.join(name))?;
@@ -607,12 +603,16 @@ fn inputs_push_what_a_recipe_is_made_from() -> Result {
         .env("FETCHLOOM_CACHE", sandbox.folder("clone-cache")?)
         .output()?;
     assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
-    let error = &json(&output)?["errors"][0];
+    let document = json(&output)?;
+    let error = &document["errors"][0];
     assert_eq!(
-        error["help"],
-        "run `fetchloom sync iris` first, then push again; `fetchloom build clean` makes clean's files"
+        error["message"],
+        "this machine's cache lacks files the push needs, which only a build makes"
     );
-    assert_eq!(error["fix"], "fetchloom sync iris");
+    assert_eq!(error["details"], serde_json::json!(["clean/clean.csv"]));
+    assert_eq!(error["help"], "`fetchloom build clean` makes clean's files");
+    assert_eq!(error["fix"], Value::Null);
+    assert_eq!(document["work"]["requests"], 0);
     Ok(())
 }
 
