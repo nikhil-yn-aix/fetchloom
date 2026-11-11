@@ -415,7 +415,7 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
         format!("fetchloom will not follow {}: {reason}", Shown(url)),
     )
     .help(format!(
-        "if you trust that server, give its link on the command line, or add {} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS",
+        "if you trust that server, add {} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS",
         url.origin().ascii_serialization()
     ))
 }

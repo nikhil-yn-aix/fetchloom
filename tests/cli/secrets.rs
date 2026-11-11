@@ -116,6 +116,9 @@ fn a_dataverse_host_typed_for_add_may_be_on_a_private_network() -> Result {
     Ok(())
 }
 
+/// a cloned project's data.toml names a server on this machine, which neither a sync nor the
+/// build of a recipe that reads it reaches until `allowed_origins` lists it. neither takes a link
+/// on its command line, so the help names that setting alone.
 #[test]
 fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Result {
     let sandbox = Sandbox::new()?;
@@ -123,13 +126,16 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
     let origin = server.url.trim_end_matches(PATH).to_owned();
     fs::write(
         sandbox.work().join("data.toml"),
-        format!("[datasets.local]\nref = \"{}\"\n", server.url),
+        format!(
+            "[datasets.local]\nref = \"{}\"\n\n[datasets.made]\nfrom = [\"local\"]\nrun = [\"recipe-step\", \"copy\", \"{{local}}\", \"{{out}}\"]\n",
+            server.url
+        ),
     )?;
-    // a cloned project names a server on this machine, allowed nowhere or on another port
-    for allowed in ["", "http://127.0.0.1:9"] {
+    let refused = |command: &str, allowed: &str, cache: &std::path::Path| -> Result {
         let output = sandbox
-            .command(&["--json", "sync"])
+            .command(&["--json", command])
             .env("FETCHLOOM_ALLOWED_ORIGINS", allowed)
+            .env("FETCHLOOM_CACHE", cache)
             .output()?;
         let document = json(&output)?;
         assert_eq!(output.status.code(), Some(20), "{allowed}: {document}");
@@ -137,9 +143,15 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         assert_eq!(
             document["errors"][0]["help"],
             format!(
-                "if you trust that server, give its link on the command line, or add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
-            )
+                "if you trust that server, add {origin} to allowed_origins in the settings file or FETCHLOOM_ALLOWED_ORIGINS"
+            ),
+            "{command}"
         );
+        Ok(())
+    };
+    // allowed nowhere or on another port
+    for allowed in ["", "http://127.0.0.1:9"] {
+        refused("sync", allowed, &sandbox.cache())?;
     }
     assert_eq!(server.requests(), Vec::<String>::new());
     let output = sandbox
@@ -147,10 +159,12 @@ fn a_host_in_data_toml_reaches_this_machine_only_as_an_allowed_origin() -> Resul
         .env("FETCHLOOM_ALLOWED_ORIGINS", &origin)
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
-    assert_eq!(
-        fs::read(sandbox.work().join("data").join("local").join("data.csv"))?,
-        b"a,b\n"
-    );
+    let placed = sandbox.work().join("data").join("local").join("data.csv");
+    assert_eq!(fs::read(&placed)?, b"a,b\n");
+    // as in a fresh clone, the build must download what the recipe reads
+    crate::support::delete(&placed)?;
+    refused("build", "", &sandbox.folder("empty")?)?;
+    assert_eq!(server.requests().len(), 1, "only the allowed sync asked");
     Ok(())
 }
 
