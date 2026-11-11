@@ -23,12 +23,14 @@ use super::{Lock, Locked, Parsed, parse, resolve, spec};
 use crate::error::{Error, Kind};
 use crate::project::manifest::{self, Entry, Manifest};
 
-/// one side of a merge, as git's `--ours` and `--theirs` name them.
+/// one side of a merge, as git's `--ours` and `--theirs` and the stages of its index name them.
+/// a rebase turns them around from the branch a person is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Side {
-    /// the branch checked out, before `=======` in a conflict.
+    /// stage 2, before `=======` in a conflict: the branch checked out in a merge, the branch
+    /// rebased onto in a rebase.
     Ours,
-    /// the branch merged in, after `=======`.
+    /// stage 3, after `=======`: the branch merged in, or the commit a rebase replays.
     Theirs,
 }
 
@@ -493,7 +495,7 @@ fn frame(sides: &Sides) -> Result<Side, Error> {
             Kind::ProjectInvalid,
             "data.toml differs outside its datasets on each side of the merge, as in [project] or a comment",
         )
-        .help("make that part of data.toml the same on both sides by hand, then run `fetchloom lock`")),
+        .help("in data.toml, keep one side's lines of that part and delete the other side's and git's conflict lines by hand, then run `fetchloom lock`")),
     }
 }
 

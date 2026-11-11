@@ -524,11 +524,11 @@ fn text_outside_the_datasets_must_agree_or_be_changed_on_one_side() {
             .message
             .starts_with("data.toml differs outside its datasets")
     );
-    assert!(
-        error
-            .help
-            .as_deref()
-            .is_some_and(|help| help.ends_with("by hand, then run `fetchloom lock`")),
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "in data.toml, keep one side's lines of that part and delete the other side's and git's conflict lines by hand, then run `fetchloom lock`"
+        ),
         "only a person can merge that part, so no fix"
     );
     let one = sides(with("base"), with("theirs"), Some(with("base")));
