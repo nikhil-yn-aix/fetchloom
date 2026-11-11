@@ -35,10 +35,7 @@ impl Building<'_> {
             .map(|(step, _)| step.name.as_str())
             .collect();
         let free = space::free(cache.root());
-        let besides = match unknown.as_slice() {
-            [] => String::new(),
-            names => format!(", besides what {} writes,", super::listed(names)),
-        };
+        let besides = besides(&unknown);
         let has = free.map_or_else(String::new, |free| {
             format!(", which has {} free", units::size(free))
         });
@@ -175,5 +172,30 @@ impl Building<'_> {
             }
         }
         needs
+    }
+}
+
+/// what the `Needs` line adds for the steps `unknown` whose result's size is not known yet.
+fn besides(unknown: &[&str]) -> String {
+    match unknown {
+        [] => String::new(),
+        [name] => format!(", besides what {name} writes,"),
+        names => format!(", besides what {} write,", super::listed(names)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::besides;
+
+    /// the steps whose results are not known yet are named with a verb that agrees with them.
+    #[test]
+    fn what_the_steps_write_agrees_with_how_many_they_are() {
+        assert_eq!(besides(&[]), "");
+        assert_eq!(besides(&["clean"]), ", besides what clean writes,");
+        assert_eq!(
+            besides(&["thumbs", "index", "clean"]),
+            ", besides what thumbs, index and clean write,"
+        );
     }
 }
