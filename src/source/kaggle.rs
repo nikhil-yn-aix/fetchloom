@@ -11,6 +11,7 @@ use url::Url;
 
 pub(crate) use self::competition::Competition;
 pub(super) use self::competition::{may_wrap, refused_download};
+pub(crate) use self::token::{config_folder, locate};
 use super::{Reference, Var, malformed};
 use crate::error::Error;
 use crate::net::Credential;
@@ -152,7 +153,7 @@ impl fmt::Display for Dataset {
 }
 
 /// kaggle's API token or legacy key, sent to kaggle's API and nowhere else.
-pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
+pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
     token::find(var)
         .map(|value| Credential {
             host: HOST.to_owned(),
@@ -164,15 +165,8 @@ pub(super) fn credentials(var: Var<'_>) -> Vec<Credential> {
         .collect()
 }
 
-pub(super) fn config_folder(var: Var<'_>) -> Option<std::path::PathBuf> {
-    token::config_folder(var)
-}
-
-pub(super) fn locate(var: Var<'_>) -> Option<crate::auth::Found> {
-    token::locate(var)
-}
-
-pub(super) fn pasted(secret: &str) -> Option<(&'static str, String)> {
+/// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
+pub(crate) fn pasted(secret: &str) -> Option<(&'static str, String)> {
     token::pasted(secret).map(|value| (HOST, value))
 }
 

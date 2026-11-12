@@ -10,7 +10,7 @@ mod drive;
 mod dropbox;
 mod figshare;
 mod hf;
-mod kaggle;
+pub(crate) mod kaggle;
 pub(crate) mod local;
 mod osf;
 #[cfg(test)]
@@ -31,7 +31,7 @@ pub(crate) use bucket::{Bucket, Keyed, Signing, unversioned, with_version};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::name;
-use crate::net::{self, Api, Credential, Fetch, Response};
+use crate::net::{self, Api, Fetch, Response};
 
 /// the most files one dataset lists when a run says nothing else, and the least it ever allows.
 /// a run sizes its own from its memory with [`set_most_files`].
@@ -451,26 +451,6 @@ impl Remote {
     pub(crate) fn expected_size(&self) -> Option<u64> {
         self.size.filter(|_| !may_wrap(&self.url))
     }
-}
-
-/// kaggle's key, as an api token or a legacy key, found where the kaggle tools keep it.
-pub(crate) fn kaggle_credentials(var: Var<'_>) -> Vec<Credential> {
-    kaggle::credentials(var)
-}
-
-/// the kaggle key downloads send, and where it was found.
-pub(crate) fn kaggle_key(var: Var<'_>) -> Option<crate::auth::Found> {
-    kaggle::locate(var)
-}
-
-/// where the kaggle CLI keeps `kaggle.json`.
-pub(crate) fn kaggle_folder(var: Var<'_>) -> Option<PathBuf> {
-    kaggle::config_folder(var)
-}
-
-/// the `authorization` value for a kaggle key a person pasted, and the host it goes to.
-pub(crate) fn kaggle_pasted(secret: &str) -> Option<(&'static str, String)> {
-    kaggle::pasted(secret)
 }
 
 /// standard base64 with padding, which basic authentication sends.

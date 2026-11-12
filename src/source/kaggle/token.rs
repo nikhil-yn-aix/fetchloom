@@ -27,7 +27,7 @@ pub(super) fn find(var: Var<'_>) -> Option<String> {
 
 /// the key the kaggle tools would use and where it is, so `fetchloom auth` shows and checks the
 /// key downloads send.
-pub(super) fn locate(var: Var<'_>) -> Option<Found> {
+pub(crate) fn locate(var: Var<'_>) -> Option<Found> {
     api_token(var).or_else(|| legacy_key(var))
 }
 /// the `authorization` value for a key a person pasted: the text of a `kaggle.json`, or a token.
@@ -100,7 +100,7 @@ fn legacy_key(var: Var<'_>) -> Option<Found> {
 }
 /// where the kaggle CLI keeps `kaggle.json`: `KAGGLE_CONFIG_DIR`, else `~/.kaggle`, else on linux
 /// the kaggle folder of `XDG_CONFIG_HOME` when `~/.kaggle` does not exist.
-pub(super) fn config_folder(var: Var<'_>) -> Option<PathBuf> {
+pub(crate) fn config_folder(var: Var<'_>) -> Option<PathBuf> {
     if let Some(folder) = var("KAGGLE_CONFIG_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(folder));
     }

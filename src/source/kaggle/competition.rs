@@ -638,7 +638,7 @@ mod tests {
         let options = Options {
             offline: crate::net::Offline::No,
             jobs: 4,
-            credentials: crate::source::kaggle_credentials(&crate::auth::env),
+            credentials: crate::source::kaggle::credentials(&crate::auth::env),
             split: crate::net::Splitting::WhenSlow,
         };
         let net = Net::new(options, work.clone(), Arc::default(), Arc::new(|_| {}));
