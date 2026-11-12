@@ -299,6 +299,36 @@ pub(super) struct Tokened<'r> {
 }
 
 impl Tokened<'_> {
+    pub(super) fn metadata_scope(&self) -> (Option<Authorized>, Option<DriveAnswered>) {
+        let Some(stored) = self.stored else {
+            return (None, None);
+        };
+        match &stored.asked {
+            Asked::Bucket { bucket, listed } => {
+                let authorized = match self.bearer.as_ref() {
+                    Some(bearer) => Authorized::Token {
+                        bucket: bucket.clone(),
+                        identity: bearer.identity.to_string(),
+                        lacks_scope: false,
+                    },
+                    None => Authorized::Anonymous {
+                        bucket: bucket.clone(),
+                        listed: *listed,
+                    },
+                };
+                (Some(authorized), None)
+            }
+            Asked::Drive(asked) => (
+                None,
+                Some(DriveAnswered::new(
+                    asked,
+                    self.bearer.as_ref(),
+                    &HeaderMap::new(),
+                )),
+            ),
+        }
+    }
+
     /// the headers that carry the token: its `authorization`, which logs never show, or none.
     pub(super) fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -573,7 +603,9 @@ impl Net {
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .header(header::ACCEPT, "application/json")
             .body(grant);
-        let mut response = self.sent(wire, url, carrier.as_ref(), request).await?;
+        let mut response = self
+            .sent(wire, url, carrier.as_ref(), request, false)
+            .await?;
         let limits = super::pace::limits(response.status(), response.headers(), SystemTime::now());
         super::pace::Paces::heard(ticket, limits, Instant::now());
         let status = response.status();

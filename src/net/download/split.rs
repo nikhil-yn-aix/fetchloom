@@ -576,7 +576,7 @@ impl Net {
             }
         };
         let response = self
-            .send_holding(
+            .send_on(
                 crate::net::Lane::Apart,
                 job.from,
                 job.mirror,

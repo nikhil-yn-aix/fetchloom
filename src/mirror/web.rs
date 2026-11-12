@@ -74,7 +74,7 @@ pub(crate) async fn read_tree(net: &Net, base: &Url, tree: &Sha256) -> Result<Tr
         Err(error) => return Ok(Tree::Failed(error)),
     };
     Ok(match answer.status {
-        200 => Tree::Bytes(answer.body),
+        200 => Tree::Bytes(std::sync::Arc::unwrap_or_clone(answer.body)),
         404 | 410 => Tree::Absent,
         status => Tree::Answered(status),
     })

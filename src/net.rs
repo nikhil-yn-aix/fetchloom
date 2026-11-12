@@ -4,6 +4,7 @@
 mod address;
 mod api;
 mod azure;
+mod cookies;
 mod download;
 mod failure;
 mod google;
@@ -224,6 +225,7 @@ pub(crate) struct Net {
     /// proxy settings.
     wire: OnceLock<Result<Wire, Error>>,
     offline: Offline,
+    metadata: api::Memo,
     typed: address::Typed,
     credentials: Vec<Key>,
     /// which requests to S3 buckets go signed, and with which keys.
@@ -289,7 +291,7 @@ struct Wire {
     /// needed, where [`Wire::slot`] puts it.
     clients: [OnceLock<Result<reqwest::Client, Error>>; 4],
     /// the cookies every client sends, so a sign-in cookie reaches the added streams too.
-    cookies: Arc<reqwest::cookie::Jar>,
+    cookies: Arc<cookies::Cookies>,
     typed: address::Typed,
     offline: bool,
     connect: Duration,
@@ -300,6 +302,7 @@ struct Wire {
 #[derive(Clone, Copy)]
 enum Lane {
     Shared,
+    Metadata,
     /// for file bodies and added ranges: HTTP/1.1, so each request has a connection of its own
     /// instead of sharing one with every other request to the host.
     Apart,
@@ -336,7 +339,7 @@ impl Wire {
             // which hands back a cookie the archive then asks for. cookies live for this run only
             .cookie_provider(self.cookies.clone());
         let builder = match lane {
-            Lane::Shared => builder,
+            Lane::Shared | Lane::Metadata => builder,
             Lane::Apart => builder.http1_only(),
         };
         #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
@@ -366,8 +369,8 @@ impl Wire {
     /// where [`Wire::clients`] keeps the client of `lane` and `reach`.
     fn slot(lane: Lane, reach: address::Reach) -> usize {
         match (lane, reach) {
-            (Lane::Shared, address::Reach::Public) => 0,
-            (Lane::Shared, address::Reach::Trusted) => 1,
+            (Lane::Shared | Lane::Metadata, address::Reach::Public) => 0,
+            (Lane::Shared | Lane::Metadata, address::Reach::Trusted) => 1,
             (Lane::Apart, address::Reach::Public) => 2,
             (Lane::Apart, address::Reach::Trusted) => 3,
         }
@@ -410,6 +413,7 @@ impl Net {
         Net {
             wire: OnceLock::new(),
             offline: options.offline,
+            metadata: api::Memo::new(crate::settings::LEAST_MEMORY / 16),
             typed: address::Typed::default(),
             credentials,
             signing: crate::source::Signing::default(),
@@ -467,6 +471,7 @@ impl Net {
     /// cloud storage refused them without one.
     pub(crate) fn with_google(mut self, google: Google) -> Net {
         self.google = google;
+        self.metadata.invalidate();
         self
     }
 
@@ -474,6 +479,7 @@ impl Net {
     /// them without one.
     pub(crate) fn with_azure(mut self, azure: Azure) -> Net {
         self.azure = azure;
+        self.metadata.invalidate();
         self
     }
 
@@ -528,17 +534,17 @@ impl Net {
         self.offline
     }
 
-    /// [`Net::send_holding`] for what a source gives, on the shared client.
+    /// [`Net::send_on`] for what a source gives, on the shared client.
     #[cfg(test)]
     async fn send(
         &self,
         url: &Url,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
-        self.send_on(Lane::Shared, url, false, shape).await
+        self.send_on(Lane::Shared, url, false, shape, None).await
     }
 
-    /// [`Net::send_holding`] for a file body, which a `mirror` may be asked for in mirror-only mode.
+    /// [`Net::send_on`] for a file body, which a `mirror` may be asked for in mirror-only mode.
     #[cfg(test)]
     async fn send_body(
         &self,
@@ -546,7 +552,7 @@ impl Net {
         mirror: bool,
         shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, Failure> {
-        let response = self.send_on(Lane::Apart, url, mirror, shape).await?;
+        let response = self.send_on(Lane::Apart, url, mirror, shape, None).await?;
         tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
         Ok(response)
     }
@@ -559,21 +565,10 @@ impl Net {
         holding: Holding<'_>,
     ) -> Result<reqwest::Response, Failure> {
         let response = self
-            .send_holding(Lane::Apart, url, mirror, shape, Some(holding))
+            .send_on(Lane::Apart, url, mirror, shape, Some(holding))
             .await?;
         tracing::debug!(host = host(url), version = ?response.version(), "file response transport");
         Ok(response)
-    }
-
-    #[cfg(test)]
-    async fn send_on(
-        &self,
-        lane: Lane,
-        url: &Url,
-        mirror: bool,
-        shape: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-    ) -> Result<reqwest::Response, Failure> {
-        self.send_holding(lane, url, mirror, shape, None).await
     }
 
     /// a GET to `url`, shaped by `shape`, with redirects followed one hop at a time, so that each
@@ -587,7 +582,7 @@ impl Net {
     /// `gcs_buckets` lists does the same with a google token, and goes once more with a new
     /// token when cloud storage refuses one with a 401. in mirror-only mode every hop must be a
     /// `mirror`'s request below a mirror's address, checked before any name is looked up.
-    async fn send_holding(
+    async fn send_on(
         &self,
         lane: Lane,
         url: &Url,
@@ -646,7 +641,15 @@ impl Net {
             if redirects == 0 {
                 Work::add(&self.work.requests, 1);
             }
-            let mut response = self.sent(wire, &hop, carrier.as_ref(), request).await?;
+            let mut response = self
+                .sent(
+                    wire,
+                    &hop,
+                    carrier.as_ref(),
+                    request,
+                    matches!(lane, Lane::Metadata),
+                )
+                .await?;
             let limits = pace::limits(response.status(), response.headers(), SystemTime::now());
             pace::Paces::heard(ticket, limits, tokio::time::Instant::now().into_std());
             if let Some(located) = located
@@ -676,10 +679,9 @@ impl Net {
                     .extensions_mut()
                     .insert(located.keyed(signer.as_ref()));
             }
-            if self.google_again(&tokened, &mut response).await? {
-                continue;
-            }
-            if self.azure_again(&blobbed, &mut response)? {
+            if self.google_again(&tokened, &mut response).await?
+                || self.azure_again(&blobbed, &mut response)?
+            {
                 continue;
             }
             let Some(next) = self.next_hop(url, &hop, &response, &mut redirects, &mut name)? else {
@@ -739,9 +741,13 @@ impl Net {
         hop: &Url,
         carrier: Option<&address::Carrier>,
         request: reqwest::RequestBuilder,
+        metadata: bool,
     ) -> Result<reqwest::Response, Failure> {
+        let sent = metadata
+            .then(|| api::Sent::capture(wire, hop, &request))
+            .flatten();
         let deadline = self.connect + self.idle;
-        let response = tokio::select! {
+        let mut response = tokio::select! {
             sent = tokio::time::timeout(deadline, request.send()) => match sent {
                 Err(_) => return Err(failure::transient(format!("{} did not answer within {} s", host(hop), deadline.as_secs()))),
                 Ok(Err(err)) => return Err(unanswered(wire, hop, carrier, &err, self.offline).await),
@@ -754,6 +760,9 @@ impl Net {
         };
         if let Some(carrier) = carrier {
             wire.proxies.reached(carrier);
+        }
+        if let Some(sent) = sent {
+            response.extensions_mut().insert(sent);
         }
         Ok(response)
     }
@@ -1185,7 +1194,7 @@ mod tests {
             ("http://mirror.invalid/fetchloom/objects/ab/cd", true),
         ] {
             let url = Url::parse(link).unwrap();
-            let sent = block_on(net.send_on(Lane::Shared, &url, mirror, |request| request));
+            let sent = block_on(net.send_on(Lane::Shared, &url, mirror, |request| request, None));
             let Err(Failure::Final(error)) = sent else {
                 panic!("{link} was not refused");
             };
@@ -1212,7 +1221,7 @@ mod tests {
         let net = mirror_only(&[base.as_str()]);
         net.typed(&url);
         let marker = base.join("fetchloom-mirror").unwrap();
-        let sent = block_on(net.send_on(Lane::Shared, &marker, true, |request| request));
+        let sent = block_on(net.send_on(Lane::Shared, &marker, true, |request| request, None));
         let Err(Failure::Final(error)) = sent else {
             panic!("the redirect off the mirror was followed");
         };

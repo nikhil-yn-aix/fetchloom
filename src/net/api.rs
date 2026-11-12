@@ -2,6 +2,10 @@
 
 use std::borrow::Cow;
 use std::future::Future;
+use std::sync::Arc;
+
+mod memo;
+pub(super) use memo::{Memo, Sent};
 
 use reqwest::header;
 use serde::de::DeserializeOwned;
@@ -56,7 +60,7 @@ pub(crate) struct Response {
     pub(crate) authorized: Option<super::Authorized>,
     /// how a request to google drive's api went out: with a google token or not, and whose.
     pub(crate) drive: Option<super::DriveAnswered>,
-    pub(crate) body: Vec<u8>,
+    pub(crate) body: Arc<Vec<u8>>,
 }
 
 impl Response {
@@ -75,7 +79,7 @@ impl Response {
 
 impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
-        self.get_for(url, false).await
+        Box::pin(self.get_for(url, false)).await
     }
 
     fn drive_refused<'a>(
@@ -98,10 +102,15 @@ impl Api for Net {
         }
         let mut permits = Some(self.permit(&url).await?);
         match self
-            .answer(&url, false, Some(super::Holding::new(&url, &mut permits)))
+            .answer(
+                &url,
+                false,
+                false,
+                Some(super::Holding::new(&url, &mut permits)),
+            )
             .await
         {
-            Ok(response) => Ok(response),
+            Ok((response, _)) => Ok(response),
             Err(Failure::Final(err)) => Err(err),
             Err(Failure::Transient { reason, .. } | Failure::Limited { reason, .. }) => {
                 Err(Error::new(Kind::NetworkStatus, reason))
@@ -114,17 +123,147 @@ impl Net {
     /// [`Api::get`] for what a mirror gives, its marker or a tree, which mirror-only mode lets a
     /// request ask a mirror for.
     pub(crate) async fn mirror_get(&self, url: &Url) -> Result<Response, Error> {
-        self.get_for(url, true).await
+        let url = self.asking(url)?;
+        self.get_unmemoized(&url, true, false)
+            .await
+            .map(|(response, _)| response)
+    }
+
+    pub(crate) fn with_memory(mut self, bytes: u64) -> Self {
+        self.metadata = Memo::new(bytes / 16);
+        self
     }
 
     async fn get_for(&self, url: &Url, mirror: bool) -> Result<Response, Error> {
-        let url = &self.asking(url)?;
+        let url = self.asking(url)?;
+        self.may_ask(&url, mirror, None)
+            .map_err(|failure| match failure {
+                Failure::Final(error) => error,
+                Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
+                    Error::new(Kind::NetworkRefused, reason)
+                }
+            })?;
+        loop {
+            self.stop.check()?;
+            let Some(key) = self.metadata_key(&url, mirror).await? else {
+                return self
+                    .get_unmemoized(&url, mirror, false)
+                    .await
+                    .map(|(response, _)| response);
+            };
+            match self.metadata.find(key.clone()) {
+                memo::Found::Ready(response) => {
+                    if key.sent.current(self.wire()?) {
+                        return Ok(response);
+                    }
+                }
+                memo::Found::Waiting(flight) => {
+                    tokio::select! {
+                        () = flight.finished() => {}
+                        () = self.stop.asked() => return Err(failure::interrupted(&url)),
+                    }
+                    self.stop.check()?;
+                    if let Some(key) = self.metadata_key(&url, mirror).await?
+                        && key.sent.current(self.wire()?)
+                        && let Some(response) = flight.response(&key)
+                    {
+                        return Ok(response);
+                    }
+                }
+                memo::Found::Fetching(claim) => {
+                    let (response, sent) = self.get_unmemoized(&url, mirror, true).await?;
+                    if let Some(sent) = sent
+                        && sent.sent.current(self.wire()?)
+                    {
+                        claim.keep(sent, &response);
+                    }
+                    return Ok(response);
+                }
+                memo::Found::Unkept => {
+                    return self
+                        .get_unmemoized(&url, mirror, false)
+                        .await
+                        .map(|(response, _)| response);
+                }
+            }
+        }
+    }
+
+    async fn metadata_key(&self, url: &Url, mirror: bool) -> Result<Option<memo::Key>, Error> {
+        let bucket = self.signing.locate(url);
+        let stored = self.google.locate(url);
+        let container = self.azure.locate(url);
+        #[cfg(debug_assertions)]
+        let local = stand_in(url).inspect(|local| self.typed(local));
+        #[cfg(debug_assertions)]
+        let url = local.as_ref().unwrap_or(url);
+        let wire = self.wire()?;
+        let client = wire.lane(super::Lane::Shared, url)?;
+        let signer = self
+            .signing
+            .signer(bucket.as_ref(), std::time::SystemTime::now(), &self.stop)
+            .await?;
+        let tokened =
+            self.google_bearer(stored.as_ref(), 0)
+                .await
+                .map_err(|failure| match failure {
+                    Failure::Final(error) => error,
+                    Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
+                        Error::new(Kind::NetworkStatus, reason)
+                    }
+                })?;
+        let blobbed = self
+            .azure_hop(container.as_ref(), 0)
+            .map_err(|failure| match failure {
+                Failure::Final(error) => error,
+                Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
+                    Error::new(Kind::NetworkStatus, reason)
+                }
+            })?;
+        let request = match &signer {
+            Some(signer) => super::signed(
+                client.get(url.clone()),
+                signer.headers(url, std::time::SystemTime::now()),
+            )?,
+            None => self
+                .request(client, &blobbed.url(url), true)
+                .headers(tokened.headers())
+                .headers(blobbed.headers()),
+        }
+        .header(
+            header::ACCEPT,
+            "application/json, text/html;q=0.9, */*;q=0.8",
+        );
+        let (authorized, drive) = tokened.metadata_scope();
+        let authorized = authorized.or_else(|| blobbed.authorized());
+        Ok(Sent::capture(wire, url, &request).map(|sent| memo::Key {
+            sent,
+            keyed: bucket
+                .as_ref()
+                .map(|located| located.keyed(signer.as_ref())),
+            authorized,
+            drive: drive.map(Arc::new),
+            mirror,
+        }))
+    }
+
+    async fn get_unmemoized(
+        &self,
+        url: &Url,
+        mirror: bool,
+        memoized: bool,
+    ) -> Result<(Response, Option<memo::Key>), Error> {
         let mut permits = Some(self.permit(url).await?);
         let mut retry = Retry::new(self, url);
         loop {
             self.keep_permit(url, &mut permits).await?;
             match self
-                .answer(url, mirror, Some(super::Holding::new(url, &mut permits)))
+                .answer(
+                    url,
+                    mirror,
+                    memoized,
+                    Some(super::Holding::new(url, &mut permits)),
+                )
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -174,11 +313,16 @@ impl Net {
         &self,
         url: &Url,
         mirror: bool,
+        memoized: bool,
         holding: Option<super::Holding<'_>>,
-    ) -> Result<Response, Failure> {
+    ) -> Result<(Response, Option<memo::Key>), Failure> {
         let mut response = self
-            .send_holding(
-                super::Lane::Shared,
+            .send_on(
+                if memoized {
+                    super::Lane::Metadata
+                } else {
+                    super::Lane::Shared
+                },
                 url,
                 mirror,
                 |request| {
@@ -214,6 +358,17 @@ impl Net {
         let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
         let drive = response.extensions().get::<super::DriveAnswered>().cloned();
+        let sent = response
+            .extensions()
+            .get::<Sent>()
+            .cloned()
+            .map(|sent| memo::Key {
+                sent,
+                keyed: keyed.clone(),
+                authorized: authorized.clone(),
+                drive: drive.clone().map(Arc::new),
+                mirror,
+            });
         let final_url = response.url().clone();
         let mut body = Vec::new();
         loop {
@@ -255,17 +410,20 @@ impl Net {
         if let Some(answered) = &drive {
             self.drive_heard(answered, status.as_u16(), &body)?;
         }
-        Ok(Response {
-            status: status.as_u16(),
-            url: final_url,
-            next,
-            total,
-            region,
-            keyed,
-            authorized,
-            drive,
-            body,
-        })
+        Ok((
+            Response {
+                status: status.as_u16(),
+                url: final_url,
+                next,
+                total,
+                region,
+                keyed,
+                authorized,
+                drive,
+                body: Arc::new(body),
+            },
+            sent,
+        ))
     }
 }
 
@@ -727,3 +885,6 @@ mod tests {
         assert_eq!(response.total, Some(47));
     }
 }
+
+#[cfg(test)]
+mod memo_tests;

@@ -31,7 +31,7 @@ impl Recorded {
             keyed: None,
             authorized: None,
             drive: None,
-            body: body.into(),
+            body: std::sync::Arc::new(body.into()),
         };
         self.answers.insert(parsed.to_string(), response);
         self

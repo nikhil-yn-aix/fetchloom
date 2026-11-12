@@ -296,6 +296,22 @@ pub(super) struct Blobbed<'r> {
 }
 
 impl Blobbed<'_> {
+    pub(super) fn authorized(&self) -> Option<Authorized> {
+        let located = self.located.filter(|located| !located.signed)?;
+        let sent = match &self.sas {
+            Some((sas, given)) => Sent::Sas {
+                container: located.named(),
+                given: *given,
+                expiry: sas.expiry(),
+            },
+            None => Sent::Anonymous {
+                container: located.named(),
+                listed: located.listed,
+            },
+        };
+        Some(Authorized::Azure(sent))
+    }
+
     /// the link the hop asks: `hop`, with the SAS after its query when it carries one.
     pub(super) fn url<'h>(&self, hop: &'h Url) -> Cow<'h, Url> {
         let Some((sas, _)) = &self.sas else {
@@ -373,18 +389,9 @@ impl Net {
             );
             return Ok(true);
         }
-        let sent = match &hop.sas {
-            Some((sas, given)) => Sent::Sas {
-                container: located.named(),
-                given: *given,
-                expiry: sas.expiry(),
-            },
-            None => Sent::Anonymous {
-                container: located.named(),
-                listed: located.listed,
-            },
-        };
-        response.extensions_mut().insert(Authorized::Azure(sent));
+        if let Some(sent) = hop.authorized() {
+            response.extensions_mut().insert(sent);
+        }
         Ok(false)
     }
 }

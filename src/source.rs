@@ -1397,7 +1397,7 @@ mod tests {
                 keyed: None,
                 authorized: None,
                 drive: None,
-                body: b"not json".to_vec(),
+                body: std::sync::Arc::new(b"not json".to_vec()),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();
             let text = format!("{} {}", error.message, error.details.join(" "));

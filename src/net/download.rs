@@ -446,7 +446,16 @@ impl Net {
     ) -> Result<Fetched, Error> {
         // one span per file, so a timeline shows each download as a bar with its link
         let span = tracing::debug_span!("download", url = %crate::net::Shown(&fetch.url));
-        tracing::Instrument::instrument(self.download_in_span(fetch, cache, on), span).await
+        let result =
+            tracing::Instrument::instrument(self.download_in_span(fetch, cache, on), span).await;
+        if !fetch.mirror
+            && result
+                .as_ref()
+                .is_err_and(|error| error.kind == Kind::ReferenceUnresolved)
+        {
+            self.metadata.invalidate();
+        }
+        result
     }
 
     async fn download_in_span(

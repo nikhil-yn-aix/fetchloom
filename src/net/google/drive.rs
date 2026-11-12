@@ -216,6 +216,12 @@ pub(crate) struct Answered {
 }
 
 impl Answered {
+    pub(in crate::net) fn bytes(&self) -> usize {
+        self.asked.id.len()
+            + self.identity.as_ref().map_or(0, String::len)
+            + self.account.as_ref().map_or(0, String::len)
+    }
+
     pub(super) fn new(asked: &Asked, bearer: Option<&Bearer>, headers: &HeaderMap) -> Answered {
         Answered {
             asked: asked.clone(),

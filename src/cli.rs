@@ -234,6 +234,7 @@ impl Context {
             Arc::new(crate::auth::env),
         );
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)
+            .with_memory(self.settings.memory.value)
             .with_rate(self.rate.clone())
             .with_allowed_origins(self.allowed())
             .with_signing(signing)
