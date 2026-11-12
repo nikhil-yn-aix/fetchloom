@@ -1608,7 +1608,7 @@ fn leaving_a_child(mode: &str) -> Result<(Sandbox, Server, PathBuf, PathBuf)> {
 
 /// a stop, by ctrl-c or by the SIGTERM a scheduler sends a job it ends, ends the step and what
 /// it started, on windows even a process that ignores ctrl-c, and leaves data.lock and the data
-/// folder as they were.
+/// folder as they were. its last line names a SIGTERM, which no person asked for.
 #[test]
 fn a_stopped_step_leaves_no_process_behind() -> Result {
     for stop in STOPS {
@@ -1628,6 +1628,17 @@ fn a_stopped_step_leaves_no_process_behind() -> Result {
         lock_freed(&lock)?;
         let (code, stderr) = running.finish()?;
         assert_eq!(code, Some(130), "{stop}: {stderr}");
+        let by = if stop == "-TERM" {
+            "by a SIGTERM"
+        } else {
+            "at your request"
+        };
+        assert!(
+            stderr.ends_with(&format!(
+                "    Stopped {by}, so data.lock and the data folder are as they were\n"
+            )),
+            "{stop}: {stderr}"
+        );
         assert_eq!(pins(&sandbox.work())?, pinned, "{stop}");
         assert_eq!(files(&sandbox.work().join("data"))?, data, "{stop}");
     }
@@ -1754,7 +1765,7 @@ fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
 
 /// a SIGTERM while a step runs stops the build: it says so, and what a second SIGTERM does,
 /// before any line of the stopped build, ends the step, and leaves data.lock and the data folder
-/// as they were.
+/// as they were. `--json` keeps the kind of any stop, `interrupted`.
 #[cfg(unix)]
 #[test]
 fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
@@ -1787,6 +1798,22 @@ fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
     assert!(!release.exists());
     assert_eq!(pins(&sandbox.work())?, pinned);
     assert_eq!(files(&sandbox.work().join("data"))?, data);
+    crate::support::delete(&marker)?;
+    let running = Running::start(&mut building_in(
+        &sandbox,
+        &sandbox.work(),
+        &["--json", "build"],
+    )?)?;
+    wait_until("the step to start again", || Ok(marker.exists()))?;
+    running.signal("-TERM")?;
+    let output = running.finish()?;
+    assert_eq!(output.status.code(), Some(130), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(error["kind"], "interrupted", "{error}");
+    assert_eq!(
+        error["message"],
+        "stopped by a SIGTERM, so data.lock and the data folder are as they were"
+    );
     Ok(())
 }
 

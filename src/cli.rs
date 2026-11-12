@@ -1142,6 +1142,7 @@ fn finish<T: Serialize>(
         Some(line) => error.naming(&line),
         None => error,
     });
+    let outcome = outcome.map_err(|error| stop_named(error, context.output.stopped_by()));
     if outcome.is_ok() {
         project::remind_lists(context);
     }
@@ -1178,6 +1179,18 @@ fn finish<T: Serialize>(
         Ok(_) => ExitCode::SUCCESS,
         Err(error) => ExitCode::from(error.kind.exit_code()),
     }
+}
+
+/// `error`, a stop that the SIGTERM a scheduler sends asked, saying so rather than that a person
+/// asked it. any other error stays as it is.
+fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
+    if error.kind == Kind::Interrupted
+        && by == Some(Interrupt::Terminate)
+        && let Some(rest) = error.message.strip_prefix("stopped at your request")
+    {
+        error.message = format!("stopped by a SIGTERM{rest}");
+    }
+    error
 }
 
 /// how much of the story `-q` and `-v` ask for.

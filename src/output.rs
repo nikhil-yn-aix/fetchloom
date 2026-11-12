@@ -69,6 +69,8 @@ pub(crate) struct Output {
     /// whether the interrupt heard last was the SIGTERM a scheduler sends, so the lines told for
     /// it say what a second SIGTERM does rather than ctrl-c.
     terminated: AtomicBool,
+    /// the interrupt whose `Stopping` was told first, which the stop it asked names.
+    stopped_by: std::sync::OnceLock<Interrupt>,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
     report_color: bool,
     /// every bar made, so a first ctrl-c redraws each at once to say it is stopping.
@@ -97,6 +99,12 @@ impl Alone<'_> {
     pub(crate) fn stopping(&mut self) {
         let output = self.output;
         output.stopping.store(true, Ordering::Relaxed);
+        let by = if output.terminated.load(Ordering::Relaxed) {
+            Interrupt::Terminate
+        } else {
+            Interrupt::CtrlC
+        };
+        let _ = output.stopped_by.set(by);
         self.heard("Stopping", &format!("({})", output.again(true)));
         // each bar says so now, not at its next tick, which a busy machine can put off
         let drawn = output
@@ -272,6 +280,7 @@ impl Output {
             locked: AtomicBool::new(false),
             stopping: Arc::default(),
             terminated: AtomicBool::new(false),
+            stopped_by: std::sync::OnceLock::new(),
             report_color: Style::stdout_colored(),
             drawn: Mutex::new(Vec::new()),
             untold: progress::UNTOLD,
@@ -996,6 +1005,11 @@ impl Output {
     pub(crate) fn interrupted_by(&self, interrupt: Interrupt) {
         self.terminated
             .store(interrupt == Interrupt::Terminate, Ordering::Relaxed);
+    }
+
+    /// the interrupt that stopped the run, when one did.
+    pub(crate) fn stopped_by(&self) -> Option<Interrupt> {
+        self.stopped_by.get().copied()
     }
 
     /// what quits at once after the interrupt heard last, worded for a person to `press` it.
