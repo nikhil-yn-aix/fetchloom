@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use super::*;
-use crate::net::scripted::{reply, route, serve};
+use crate::net::scripted::{lines, reply, route, serve};
 use crate::net::{Offline, Options, Splitting};
 use crate::source::recorded::block_on;
 
@@ -174,6 +174,18 @@ fn key(net: &Net, url: &Url) -> memo::Key {
     block_on(net.metadata_key(url, false, &[]))
         .unwrap()
         .unwrap()
+}
+
+/// prints the first line of each request the token endpoint took when the test holding it
+/// fails, so a failure on a runner says how many tokens were asked for.
+struct Told<'a>(&'a Mutex<Vec<String>>);
+
+impl Drop for Told<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!("the token endpoint was asked {:?}", lines(self.0));
+        }
+    }
 }
 
 #[test]
@@ -364,6 +376,7 @@ fn refreshed_google_tokens_and_scopes_change_the_metadata_identity() {
                 br#"{"access_token":"second-token","expires_in":3600,"token_type":"Bearer"}"#,
             ),
         ]);
+        let _told = Told(&asked);
         let named = credentials.into_os_string();
         let google = crate::net::Google::new(
             vec![crate::source::GcsBucket::parse("private-bucket").unwrap()],

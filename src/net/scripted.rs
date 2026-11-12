@@ -4,14 +4,15 @@
 
 use std::fmt::Write as _;
 use std::io::{Read, Write as _};
-use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use url::Url;
 
-/// serves `responses`, one connection each, and keeps the head of every request it took. a head
-/// is kept before its response is sent, so every request a finished client made is there.
+/// serves `responses`, one connection each, and keeps the head of every request it took. a
+/// request is read whole and its head kept before its response is sent, so every request a
+/// finished client made is there.
 pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
@@ -30,14 +31,8 @@ pub(super) fn serve(responses: Vec<Vec<u8>>) -> (Url, Arc<Mutex<Vec<String>>>) {
             stream
                 .set_write_timeout(Some(Duration::from_secs(30)))
                 .unwrap();
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            seen.lock()
-                .unwrap()
-                .push(String::from_utf8_lossy(&head).into_owned());
+            let head = request(&mut stream);
+            seen.lock().unwrap().push(head);
             let _ = stream.write_all(&response);
         }
     });
@@ -58,12 +53,7 @@ pub(super) fn route(
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let mut head = Vec::new();
-            let mut byte = [0u8; 1];
-            while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
-                head.push(byte[0]);
-            }
-            let head = String::from_utf8_lossy(&head).into_owned();
+            let head = request(&mut stream);
             let target = head.split(' ').nth(1).unwrap_or_default().to_owned();
             seen.lock().unwrap().push(head);
             let _ = stream.write_all(&answer(&target));
@@ -72,11 +62,33 @@ pub(super) fn route(
     (url, asked)
 }
 
+/// reads one request from `stream`, its head and then the body its `Content-Length` gives, and
+/// returns the head. a connection closed with bytes unread is reset, and windows then drops the
+/// part of the answer its client has not read yet.
+fn request(stream: &mut TcpStream) -> String {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).is_ok_and(|n| n == 1) {
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8_lossy(&head).into_owned();
+    let length = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, value)| value.trim().parse().ok())
+        .unwrap_or(0);
+    let _ = std::io::copy(&mut stream.take(length), &mut std::io::sink());
+    head
+}
+
 /// the first line of each head [`serve`] kept, such as `GET /start HTTP/1.1`.
 pub(super) fn lines(asked: &Mutex<Vec<String>>) -> Vec<String> {
+    // a test that failed holding the lock poisons it, and a guard reading it as the test
+    // unwinds must not panic again
     asked
         .lock()
-        .unwrap()
+        .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .map(|head| head.lines().next().unwrap_or_default().to_owned())
         .collect()
@@ -96,4 +108,19 @@ pub(super) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Vec<
     let mut response = head.into_bytes();
     response.extend_from_slice(body);
     response
+}
+
+/// a request's body is read before its answer goes out, so the connection ends after the answer
+/// rather than with a reset.
+#[test]
+fn a_request_body_is_read_before_the_answer() {
+    let (url, asked) = serve(vec![reply("200 OK", &[], b"token")]);
+    let mut stream = TcpStream::connect(&*url.socket_addrs(|| None).unwrap()).unwrap();
+    stream
+        .write_all(b"POST /token HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\ngrant")
+        .unwrap();
+    let mut answer = Vec::new();
+    stream.read_to_end(&mut answer).unwrap();
+    assert!(answer.ends_with(b"\r\n\r\ntoken"));
+    assert_eq!(lines(&asked), ["POST /token HTTP/1.1"]);
 }
