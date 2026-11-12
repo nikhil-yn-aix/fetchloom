@@ -75,6 +75,21 @@ class ReleaseChecks(unittest.TestCase):
         self.check_all(lambda assets, names, lines: lines.append("not a checksum"), False)
 
 
+class ReleaseChecksums(unittest.TestCase):
+    def test_sha256sums_lists_every_kind_of_release_file(self):
+        import fnmatch
+
+        text = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        lines = [line.strip() for line in text.splitlines() if line.strip().startswith("sha256sum -- ")]
+        self.assertEqual(len(lines), 1, "release.yml must write SHA256SUMS once")
+        operands = shlex.split(lines[0].split(">", 1)[0])[2:]
+        for name in ["fetchloom-0.1.0-x86_64-pc-windows-msvc.zip", "fetchloom-0.1.0-aarch64-apple-darwin.tar.gz",
+                     "fetchloom_0.1.0_amd64.deb", "fetchloom-0.1.0-py3-none-win_amd64.whl",
+                     "fetchloom-0.1.0.cdx.json", "install.sh", "install.ps1"]:
+            with self.subTest(name=name):
+                self.assertTrue(any(fnmatch.fnmatchcase(name, operand) for operand in operands), f"SHA256SUMS leaves out {name}")
+
+
 class ThirdPartyLicenses(unittest.TestCase):
     def test_the_notices_accept_exactly_the_licenses_deny_allows(self):
         import tomllib

@@ -11,7 +11,7 @@ no release has been published yet. use [source installation](../../user/getting-
 | job | permissions | work |
 |---|---|---|
 | `build`, reusable artifact workflow | contents read | run the same six-target builds, installed artifact journeys and exact inventory as [CI](ci.md#installed-artifacts), plus the source-package installation |
-| `attest`, after all builds | contents read, id-token write, attestations write | gather archives and wheels, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
+| `attest`, after all builds | contents read, id-token write, attestations write | gather archives, packages, wheels and the sbom, add installers, write `SHA256SUMS`, attest build provenance and upload the combined artifact |
 | `release`, after attestation | contents write | create a draft GitHub release with every file |
 
 | runner | target | linkage |
@@ -23,7 +23,7 @@ no release has been published yet. use [source installation](../../user/getting-
 | `macos-15`, checked on `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |
 | `macos-15` | `aarch64-apple-darwin` | same checks on native arm64 |
 
-`MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it.
+`MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it. the windows executables are not signed either. signing and notarizing need the owner's accounts: an apple developer id with `notarytool`, and a windows code-signing certificate. none is set up, so the workflow has no step for them.
 
 rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. the per-target flags belong to artifacts.yml.
 
@@ -52,7 +52,7 @@ the `github-pages` environment must allow `main` and tags matching `v*.*.*`, and
 
 ## artifacts
 
-for the current Cargo version, 0.1.0, the workflow will produce six archives, two debian packages, six wheels, two installers and a checksum file.
+for the current Cargo version, 0.1.0, the workflow will produce six archives, two debian packages, six wheels, an sbom, two installers and a checksum file.
 
 the archives are packed so the same files give the same bytes. the build job exports `SOURCE_DATE_EPOCH`, the tag commit's committer time, and every file and folder in an archive gets that time. tar archives list their entries in byte order, record owner and group as 0 without names and pass through `gzip -n`, so the gzip header holds no file name or time; macos writes them in ustar format. windows zips are written by 7-Zip from the same sorted list, with `-mtc=off`, which leaves out the ntfs creation and access times.
 
@@ -71,8 +71,9 @@ the archives are packed so the same files give the same bytes. the build job exp
 | `fetchloom-0.1.0-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl` | same for arm64 linux |
 | `fetchloom-0.1.0-py3-none-macosx_11_0_x86_64.whl` | x86_64 macos executable and python module |
 | `fetchloom-0.1.0-py3-none-macosx_11_0_arm64.whl` | same for arm64 macos |
+| `fetchloom-0.1.0.cdx.json` | the CycloneDX sbom maturin writes into every wheel, here the x86_64 linux wheel's: every crate fetchloom depends on, for any platform, with its version, license and checksum |
 | `install.sh`, `install.ps1` | release installers |
-| `SHA256SUMS` | SHA-256 of every archive, package, wheel and installer |
+| `SHA256SUMS` | SHA-256 of every archive, package, wheel, sbom and installer |
 
 THIRD-PARTY-LICENSES holds the license texts of the crates the six release binaries are built from, which most of those licenses ask to travel with every copy. each build job writes it with cargo-about 0.9.3, from [about.toml](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.toml), which accepts the licenses deny.toml allows, and the [about.hbs](https://github.com/nikhil-yn-aix/fetchloom/blob/main/about.hbs) template. it reads only the crates `cargo fetch --locked` downloaded, so every job writes the same bytes, and it fails on a crate whose license it cannot read or that deny.toml does not allow. the archives and the debian packages carry it, and each wheel lists it among its license files; a wheel built from a checkout, which has no such file, leaves it out. to write it locally:
 

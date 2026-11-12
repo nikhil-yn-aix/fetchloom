@@ -186,6 +186,30 @@ class PackageContentTests(unittest.TestCase):
                 inspect_wheel(wheel, VERSION, binary)
 
 
+class ReleaseSbomTests(unittest.TestCase):
+    def test_the_release_sbom_is_the_one_in_the_x86_64_linux_wheel(self):
+        from release_sbom import release_sbom
+
+        def wheel(folder, target, body):
+            name = f'fetchloom-{VERSION}-py3-none-' + '.'.join(sorted(TARGETS[target]['wheel'])) + '.whl'
+            with zipfile.ZipFile(folder / name, 'w') as archive:
+                archive.writestr(f'fetchloom-{VERSION}.dist-info/sboms/fetchloom.cyclonedx.json', body)
+
+        ours = json.dumps({'bomFormat': 'CycloneDX', 'metadata': {'component': {'name': 'fetchloom', 'version': VERSION}}})
+        for body, kept in [(ours, True), (ours.replace(VERSION, '0.0.9'), False), ('{"bomFormat": "SPDX"}', False)]:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                dist, out = Path(directory) / 'dist', Path(directory) / 'sbom'
+                dist.mkdir()
+                wheel(dist, 'x86_64-unknown-linux-musl', body)
+                wheel(dist, 'aarch64-apple-darwin', '{}')
+                if kept:
+                    self.assertEqual(release_sbom(dist, out, VERSION).read_text(), ours)
+                    self.assertEqual([path.name for path in out.iterdir()], [f'fetchloom-{VERSION}.cdx.json'])
+                else:
+                    with self.assertRaises(AssertionError):
+                        release_sbom(dist, out, VERSION)
+
+
 class VersionTests(unittest.TestCase):
     def test_version_prefix_does_not_accept_another_version(self):
         with patch('ci_journey.subprocess.check_output', return_value='fetchloom 0.1.01\n'):

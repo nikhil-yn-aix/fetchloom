@@ -553,3 +553,15 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
           python3 python/check_artifacts.py inventory dist target/ci-artifacts \
             --version "$version" --commit "$FETCHLOOM_COMMIT"
+      # every wheel holds the cyclonedx sbom maturin wrote of every crate fetchloom depends on, for
+      # any platform; the release attaches the x86_64 linux wheel's and lists it in SHA256SUMS
+      - name: take the release sbom from a wheel
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          python3 python/release_sbom.py dist sbom --version "$version"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/*
+          if-no-files-found: error
+          retention-days: 7
