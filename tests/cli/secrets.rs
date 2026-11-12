@@ -6,37 +6,113 @@ use crate::support::{Result, Routes, Sandbox, Server, file, json, link_folder, r
 
 const PATH: &str = "/files/data.csv";
 
-#[test]
-fn add_refuses_a_presigned_link_before_any_request() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![])?;
-    let signed = format!("{}?X-Amz-Expires=600&X-Amz-Signature=abc123", server.url);
-    let output = sandbox.run(&["add", &signed])?;
-    assert_eq!(output.status.code(), Some(10));
-    let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("carries x-amz-signature"), "{stderr}");
-    assert!(!sandbox.work().join("data.toml").exists());
-    assert_eq!(server.requests().len(), 0, "no request is sent");
-    Ok(())
+/// how a link carries its secret.
+#[derive(Clone, Copy, Debug)]
+enum Carried {
+    Signature,
+    Token,
+    Login,
 }
 
+impl Carried {
+    fn link(self, url: &str) -> String {
+        match self {
+            Carried::Signature => format!("{url}?X-Amz-Expires=600&X-Amz-Signature=abc123"),
+            Carried::Token => format!("{url}?token=abc123"),
+            Carried::Login => url.replacen("http://", "http://userinfo-name:userinfo-password@", 1),
+        }
+    }
+
+    fn secrets(self) -> &'static [&'static str] {
+        match self {
+            Carried::Login => &["userinfo-name", "userinfo-password"],
+            Carried::Signature | Carried::Token => &["abc123"],
+        }
+    }
+}
+
+/// a link that carries a secret, a signature, a token or a name and password, is refused with
+/// exit 10 before any request, whether it is typed for `add` or `get` or written in data.toml:
+/// nothing is written, and neither output nor trace shows the secret. a refusal of a link in
+/// data.toml names its line. `a_token_in_a_link_a_source_reads_is_refused_too` covers a link a
+/// source reads by its own reference.
 #[test]
-fn sync_refuses_a_token_written_into_data_toml() -> Result {
-    let sandbox = Sandbox::new()?;
-    let server = Server::start(PATH, vec![])?;
-    fs::write(
-        sandbox.work().join("data.toml"),
-        format!("[datasets.data]\nref = \"{}?token=abc123\"\n", server.url),
-    )?;
-    let output = sandbox.run(&["sync"])?;
-    assert_eq!(output.status.code(), Some(10));
-    let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("carries token"), "{stderr}");
-    assert!(stderr.contains("data.toml:2"), "{stderr}");
-    assert!(!stderr.contains("abc123"), "{stderr}");
-    let json = sandbox.run(&["--json", "sync"])?;
-    assert!(!text(&json.stdout)?.contains("abc123"));
-    assert!(!sandbox.work().join("data.lock").exists());
+fn a_secret_in_a_link_is_refused_before_any_request() -> Result {
+    let mut failures = Vec::new();
+    for (verb, carried, written, named, modes) in [
+        (
+            "add",
+            Carried::Signature,
+            false,
+            "carries x-amz-signature",
+            &[&[][..]][..],
+        ),
+        (
+            "sync",
+            Carried::Token,
+            true,
+            "carries token",
+            &[&[], &["--json"]],
+        ),
+        (
+            "get",
+            Carried::Login,
+            false,
+            "carries a user name or password",
+            MODES,
+        ),
+        (
+            "add",
+            Carried::Login,
+            false,
+            "carries a user name or password",
+            MODES,
+        ),
+    ] {
+        for mode in modes {
+            let sandbox = Sandbox::new()?;
+            let server = Server::start(PATH, vec![])?;
+            let link = carried.link(&server.url);
+            let manifest = format!("[datasets.data]\nref = \"{link}\"\n");
+            let mut args: Vec<&str> = mode.to_vec();
+            args.push(verb);
+            if written {
+                fs::write(sandbox.work().join("data.toml"), &manifest)?;
+            } else {
+                args.push(&link);
+            }
+            let row = format!("{verb} {carried:?} {mode:?}");
+            let trace = sandbox.folder("traces")?.join("refused.json");
+            let output = keyed_command(&sandbox, &args, &trace).output()?;
+            assert_eq!(output.status.code(), Some(10), "{row}");
+            let said = if mode.contains(&"--json") {
+                json(&output)?["errors"][0]["message"].to_string()
+            } else {
+                text(&output.stderr)?
+            };
+            assert!(said.contains(named), "{row}: {said}");
+            if written && !mode.contains(&"--json") {
+                assert!(said.contains("data.toml:2"), "{row}: {said}");
+            }
+            for (name, bytes) in [
+                ("stdout", output.stdout),
+                ("stderr", output.stderr),
+                ("trace", trace_bytes(&trace, false)?),
+            ] {
+                scan_secrets(
+                    &format!("{row}/{name}"),
+                    &bytes,
+                    carried.secrets(),
+                    &mut failures,
+                );
+            }
+            assert_eq!(server.requests(), Vec::<String>::new(), "{row}");
+            assert!(!sandbox.work().join("data.lock").exists(), "{row}");
+            let toml = fs::read_to_string(sandbox.work().join("data.toml")).ok();
+            assert_eq!(toml, written.then_some(manifest), "{row}");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
 }
 
@@ -730,30 +806,23 @@ fn secret_link_surfaces(suffix: &str, mode: &[&str]) -> Result<Vec<(String, Vec<
     Ok(surfaces)
 }
 
+/// a secret in a link's query shows on no surface a download leaves: stdout, stderr, a trace
+/// or the cache's record of the link. `net::shown::tests` holds every spelling of a secret's
+/// name; a token and a signature stand for them here.
 #[test]
 fn query_secrets_stay_out_of_each_output_surface() -> Result {
     let mut failures = Vec::new();
-    for key in [
-        "token",
-        "PRIVATE_TOKEN",
-        "%74oken",
-        "X-Amz-Signature",
-        "X-Amz-Credential",
-        "sig",
-        "Key-Pair-Id",
-    ] {
+    for key in ["token", "X-Amz-Signature"] {
         for mode in MODES {
             for (name, bytes) in
                 secret_link_surfaces(&format!("?{key}={LINK_SECRET}&download=1"), mode)?
             {
-                if !name.starts_with("cache/") {
-                    scan_secrets(
-                        &format!("{key}/{mode:?}/{name}"),
-                        &bytes,
-                        &[LINK_SECRET],
-                        &mut failures,
-                    );
-                }
+                scan_secrets(
+                    &format!("{key}/{mode:?}/{name}"),
+                    &bytes,
+                    &[LINK_SECRET],
+                    &mut failures,
+                );
             }
         }
     }
@@ -771,14 +840,12 @@ fn fragment_secrets_stay_out_of_each_output_surface() -> Result {
     ] {
         for mode in MODES {
             for (name, bytes) in secret_link_surfaces(&suffix, mode)? {
-                if !name.starts_with("cache/") {
-                    scan_secrets(
-                        &format!("{suffix}/{mode:?}/{name}"),
-                        &bytes,
-                        &[LINK_SECRET],
-                        &mut failures,
-                    );
-                }
+                scan_secrets(
+                    &format!("{suffix}/{mode:?}/{name}"),
+                    &bytes,
+                    &[LINK_SECRET],
+                    &mut failures,
+                );
             }
         }
     }
@@ -786,53 +853,56 @@ fn fragment_secrets_stay_out_of_each_output_surface() -> Result {
     Ok(())
 }
 
+/// a link whose fragment carries a key is refused for a project with exit 10, with or without
+/// `--dry-run` and before any request: data.toml and data.lock are never written, and neither
+/// output nor trace shows the key.
 #[test]
-fn signed_urls_leave_no_secret_in_cache_url_records() -> Result {
+fn a_fragment_key_never_enters_a_project() -> Result {
     let mut failures = Vec::new();
-    for suffix in [
-        format!("?token={LINK_SECRET}"),
-        format!("#access_token={LINK_SECRET}"),
-    ] {
-        for (name, bytes) in secret_link_surfaces(&suffix, &["--json", "-vv"])? {
-            if name.starts_with("cache/") {
-                scan_secrets(&name, &bytes, &[LINK_SECRET], &mut failures);
+    for dry in [&["--dry-run"][..], &[]] {
+        for mode in MODES {
+            let sandbox = Sandbox::new()?;
+            let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
+            let link = format!("{}#access_token={LINK_SECRET}", server.url);
+            let args: Vec<_> = mode
+                .iter()
+                .copied()
+                .chain(["add", link.as_str()])
+                .chain(dry.iter().copied())
+                .collect();
+            let trace = sandbox.folder("traces")?.join("add.json");
+            let output = keyed_command(&sandbox, &args, &trace).output()?;
+            if output.status.code() != Some(10) {
+                failures.push(format!(
+                    "{args:?}: the key was not refused: {:?}",
+                    output.status.code()
+                ));
             }
+            let state = sandbox.work().join(".fetchloom").join("state");
+            if state.exists() {
+                scan_secrets(
+                    &format!("{args:?}/state"),
+                    &fs::read(state)?,
+                    &[LINK_SECRET],
+                    &mut failures,
+                );
+            }
+            for (name, bytes) in [
+                ("stdout", output.stdout),
+                ("stderr", output.stderr),
+                ("trace", trace_bytes(&trace, false)?),
+            ] {
+                scan_secrets(
+                    &format!("{args:?}/{name}"),
+                    &bytes,
+                    &[LINK_SECRET],
+                    &mut failures,
+                );
+            }
+            assert!(!sandbox.work().join("data.lock").exists(), "{args:?}");
+            assert!(!sandbox.work().join("data.toml").exists(), "{args:?}");
+            assert_eq!(server.requests(), Vec::<String>::new(), "{args:?}");
         }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-    Ok(())
-}
-
-#[test]
-fn project_references_refuse_secret_fragments_without_persisting_them() -> Result {
-    let mut failures = Vec::new();
-    for mode in MODES {
-        let sandbox = Sandbox::new()?;
-        let server = Server::start(PATH, vec![file(b"a,b\n", "\"v1\"")])?;
-        let link = format!("{}#access_token={LINK_SECRET}", server.url);
-        let args: Vec<_> = mode
-            .iter()
-            .copied()
-            .chain(["add", link.as_str(), "--dry-run"])
-            .collect();
-        let trace = sandbox.folder("traces")?.join("add.json");
-        let output = keyed_command(&sandbox, &args, &trace).output()?;
-        if output.status.code() != Some(10) {
-            failures.push(format!(
-                "{mode:?}: secret reference was not refused: {:?}",
-                output.status.code()
-            ));
-        }
-        for (name, bytes) in [
-            ("stdout", output.stdout),
-            ("stderr", output.stderr),
-            ("trace", trace_bytes(&trace, false)?),
-        ] {
-            scan_secrets(name, &bytes, &[LINK_SECRET], &mut failures);
-        }
-        assert!(!sandbox.work().join("data.lock").exists());
-        assert!(!sandbox.work().join("data.toml").exists());
-        assert_eq!(server.requests(), Vec::<String>::new());
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     Ok(())
@@ -892,88 +962,6 @@ fn generated_output_roots_refuse_links_outside_the_working_directory() -> Result
                 text(&output.stdout)?
             );
             assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn fragment_keys_cannot_be_pinned_into_a_project() -> Result {
-    let mut failures = Vec::new();
-    for mode in MODES {
-        let sandbox = Sandbox::new()?;
-        let server = Routes::start(vec![(PATH.to_owned(), file(b"a,b\n", "\"v1\""))])?;
-        let link = format!("{}{PATH}#access_token={LINK_SECRET}", server.url);
-        let trace = sandbox.folder("traces")?.join("add.json");
-        let args: Vec<_> = mode.iter().copied().chain(["add", link.as_str()]).collect();
-        let output = keyed_command(&sandbox, &args, &trace).output()?;
-        if output.status.code() != Some(10) {
-            failures.push(format!(
-                "{mode:?}: secret reference was accepted: {:?}",
-                output.status.code()
-            ));
-        }
-        if output.status.success() {
-            let trace = sandbox.folder("traces")?.join("sync.json");
-            let synced = keyed_command(&sandbox, &["--json", "sync"], &trace).output()?;
-            assert!(synced.status.success(), "{}", text(&synced.stdout)?);
-        }
-        for name in ["data.toml", "data.lock", ".fetchloom/state"] {
-            let path = sandbox.work().join(name);
-            if path.exists() {
-                scan_secrets(
-                    &format!("{mode:?}/{name}"),
-                    &fs::read(path)?,
-                    &[LINK_SECRET],
-                    &mut failures,
-                );
-            }
-        }
-        for (name, bytes) in [
-            ("stdout", output.stdout),
-            ("stderr", output.stderr),
-            ("trace", trace_bytes(&trace, false)?),
-        ] {
-            scan_secrets(
-                &format!("{mode:?}/{name}"),
-                &bytes,
-                &[LINK_SECRET],
-                &mut failures,
-            );
-        }
-    }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-    Ok(())
-}
-
-#[test]
-fn userinfo_links_are_rejected_without_leaking_or_making_a_request() -> Result {
-    let secrets = ["userinfo-name", "userinfo-password"];
-    for verb in ["get", "add"] {
-        for mode in MODES {
-            let sandbox = Sandbox::new()?;
-            let server = Server::start(PATH, vec![])?;
-            let link = server.url.replacen(
-                "http://",
-                &format!("http://{}:{}@", secrets[0], secrets[1]),
-                1,
-            );
-            let trace = sandbox.folder("traces")?.join("userinfo.json");
-            let args: Vec<_> = mode.iter().copied().chain([verb, link.as_str()]).collect();
-            let output = keyed_command(&sandbox, &args, &trace).output()?;
-            assert_eq!(output.status.code(), Some(10));
-            let mut failures = Vec::new();
-            for (name, bytes) in [
-                ("stdout", output.stdout),
-                ("stderr", output.stderr),
-                ("trace", trace_bytes(&trace, false)?),
-            ] {
-                scan_secrets(name, &bytes, &secrets, &mut failures);
-            }
-            assert!(failures.is_empty(), "{}", failures.join("\n"));
-            assert_eq!(server.requests(), Vec::<String>::new());
-            assert!(!sandbox.work().join("data.toml").exists());
-            assert!(!sandbox.work().join("data.lock").exists());
         }
     }
     Ok(())

@@ -217,12 +217,16 @@ mod tests {
     fn any_token_or_secret_counts_however_it_is_spelled() {
         for key in [
             "private_token",
+            "PRIVATE_TOKEN",
+            "%74oken",
             "auth-token",
             "refresh_token",
             "client_secret",
             "x-api-key",
             "apiKey",
             "Sig",
+            "X-Amz-Credential",
+            "Key-Pair-Id",
         ] {
             let url = Url::parse(&format!("https://example.org/a.csv?{key}=abc123")).unwrap();
             assert!(secret(&url).is_some(), "{key}");
