@@ -63,6 +63,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [dryad](docs/user/sources/dryad.md): published dataset versions, downloaded with an API account's key
 - [mendeley data](docs/user/sources/mendeley.md): published dataset versions and their folders
 - [ENA](docs/user/sources/ena.md): the read files of runs, experiments, samples and studies, by accession, including runs from NCBI's SRA
+- [GEO](docs/user/sources/geo.md): the files GEO keeps for a series, a sample or a platform, pinned by their bytes since NCBI states no checksums
 - [OSF](docs/user/sources/osf.md): osfstorage files and folders
 - [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
 - [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions

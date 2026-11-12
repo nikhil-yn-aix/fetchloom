@@ -281,6 +281,7 @@ fn test_source(url: &Url) -> Option<Url> {
             | "gitlab.com"
             | "www.ebi.ac.uk"
             | "ftp.sra.ebi.ac.uk"
+            | "ftp.ncbi.nlm.nih.gov"
     ) {
         return None;
     }

@@ -1,6 +1,6 @@
 ---
 name: fetchloom
-description: find, download and pin research datasets with the fetchloom CLI. Use when a task needs a dataset from Hugging Face, Kaggle, Zenodo, figshare, Dryad, Mendeley Data, ENA or SRA runs, OSF, Dataverse, a GitHub or GitLab release, Google Drive, Dropbox, an S3 or GCS bucket, a DOI or a URL; when a project has data.toml or data.lock; or when code must find where a dataset lives on disk.
+description: find, download and pin research datasets with the fetchloom CLI. Use when a task needs a dataset from Hugging Face, Kaggle, Zenodo, figshare, Dryad, Mendeley Data, ENA or SRA runs, GEO, OSF, Dataverse, a GitHub or GitLab release, Google Drive, Dropbox, an S3 or GCS bucket, a DOI or a URL; when a project has data.toml or data.lock; or when code must find where a dataset lives on disk.
 license: Apache-2.0
 compatibility: needs fetchloom on PATH (`fetchloom --version`)
 ---
@@ -26,7 +26,7 @@ pass `--json` to every command: stdout is then one JSON document, with no colors
 | download once, without a project | `fetchloom get <ref> --dir <folder> --json`; `--select`, `--exclude` and `--no-extract` choose files as with `add`, and `fetchloom get -i links.txt --json` reads a list of links. add `--dry-run` to see what it would fetch first, writing nothing | `result.folder` and `result.files`; for several links, `result.items`. a dry run gives `result.changes.download`, each size null when unknown, and `result.changes.unpack` for archives whose files are not known yet |
 | one file at a path the user chose | `fetchloom get <link> -o <file> --json` | `result.file`. a link to several files exits 2; `--sha256 <hex>` checks the file before it takes the name. a file already at the path stays: the same bytes exit 0, others exit 50 with `local.not_empty` |
 
-`<ref>` is a link, a DOI or an id: `hf:datasets/org/name`, `kaggle:owner/name`, `kaggle:competitions/slug`, `zenodo:3608990`, `figshare:34744689`, `dryad:10.5061/dryad.j1fd7`, `mendeley:rscbjbr9sj@2`, `ena:SRR390728`, `osf:3eunr`, `github:owner/repo@tag`, `gitlab:group/project@tag`, `dataverse:host/doi:10.7910/DVN/X`, `s3://bucket/prefix/`, `s3:https://host:port/bucket/prefix/` for another S3 service, `gs://bucket/prefix/` or `doi:10.5281/zenodo.3608990`.
+`<ref>` is a link, a DOI or an id: `hf:datasets/org/name`, `kaggle:owner/name`, `kaggle:competitions/slug`, `zenodo:3608990`, `figshare:34744689`, `dryad:10.5061/dryad.j1fd7`, `mendeley:rscbjbr9sj@2`, `ena:SRR390728`, `geo:GSE1000`, `osf:3eunr`, `github:owner/repo@tag`, `gitlab:group/project@tag`, `dataverse:host/doi:10.7910/DVN/X`, `s3://bucket/prefix/`, `s3:https://host:port/bucket/prefix/` for another S3 service, `gs://bucket/prefix/` or `doi:10.5281/zenodo.3608990`.
 
 plain words given to `add` or `get` are a search. without a terminal fetchloom does not guess: it exits 10 with `reference.ambiguous` and lists `result.candidates`; run again with the chosen `reference`. a path such as `./x` or `~/x` is never searched or sent anywhere: `add` copies its files into the cache and pins them by their bytes, and `get` refuses it. a plain word that names a file or folder here exits 2; write it as `./name`. prefer the published link, DOI or id when there is one, since only that lets a teammate download the data.
 

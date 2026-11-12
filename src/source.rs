@@ -11,6 +11,7 @@ mod dropbox;
 mod dryad;
 mod ena;
 mod figshare;
+mod geo;
 mod github;
 mod gitlab;
 mod hf;
@@ -104,6 +105,7 @@ pub(crate) enum Reference {
     GitHub(github::Release),
     GitLab(gitlab::Release),
     Ena(ena::Accession),
+    Geo(geo::Accession),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -302,6 +304,7 @@ impl Reference {
             "github" => whole(Reference::GitHub(github::Release::parse(rest)?)),
             "gitlab" => whole(Reference::GitLab(gitlab::Release::parse(rest)?)),
             "ena" => whole(Reference::Ena(ena::Accession::parse(rest)?)),
+            "geo" => whole(Reference::Geo(geo::Accession::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -406,6 +409,7 @@ impl Reference {
             Reference::GitHub(release) => release.resolve(api).await,
             Reference::GitLab(release) => release.resolve(api).await,
             Reference::Ena(accession) => accession.resolve(api).await,
+            Reference::Geo(accession) => accession.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -431,6 +435,7 @@ impl fmt::Display for Reference {
             Reference::GitHub(release) => write!(f, "{release}"),
             Reference::GitLab(release) => write!(f, "{release}"),
             Reference::Ena(accession) => write!(f, "{accession}"),
+            Reference::Geo(accession) => write!(f, "{accession}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -463,6 +468,11 @@ pub(crate) fn fetch_plan(url: &Url) -> Fetch {
 /// bytes show the wrapper, and its listed size is no expectation for them.
 pub(crate) fn may_wrap(url: &Url) -> bool {
     kaggle::may_wrap(url)
+}
+
+/// how far apart requests to `host` start, for a host that asks for that, as NCBI's do.
+pub(crate) fn spacing(host: &str) -> Option<std::time::Duration> {
+    geo::spacing(host)
 }
 
 /// a source's own error for a download it refused, when it says more than the status.
@@ -563,20 +573,12 @@ fn link(text: &str) -> Result<Parsed, Error> {
                 .map(|(record, file)| parsed(Reference::Zenodo(record), file))
         })
         .or_else(|| {
-            dryad::Dataset::from_link(&url).map(|dataset| parsed(Reference::Dryad(dataset), None))
-        })
-        .or_else(|| {
-            mendeley::Dataset::from_link(&url)
-                .map(|dataset| parsed(Reference::Mendeley(dataset), None))
-        })
-        .or_else(|| {
-            github::Release::from_link(&url).map(|release| parsed(Reference::GitHub(release), None))
-        })
-        .or_else(|| {
-            gitlab::Release::from_link(&url).map(|release| parsed(Reference::GitLab(release), None))
-        })
-        .or_else(|| {
-            ena::Accession::from_link(&url).map(|accession| parsed(Reference::Ena(accession), None))
+            repository_link(&url).map(|(reference, folder)| Parsed {
+                reference,
+                file: None,
+                folder,
+                secret: secret.clone(),
+            })
         })
         .or_else(|| {
             figshare::Article::from_link(&url)
@@ -622,6 +624,30 @@ fn link(text: &str) -> Result<Parsed, Error> {
     Ok(routed)
 }
 
+/// a pasted link to a page of a repository whose links name no single file: the dataset the
+/// page shows, and the folder inside it a link to one names, as a GEO folder's does.
+fn repository_link(url: &Url) -> Option<(Reference, Option<String>)> {
+    let whole = |reference| (reference, None);
+    dryad::Dataset::from_link(url)
+        .map(|dataset| whole(Reference::Dryad(dataset)))
+        .or_else(|| {
+            mendeley::Dataset::from_link(url).map(|dataset| whole(Reference::Mendeley(dataset)))
+        })
+        .or_else(|| {
+            github::Release::from_link(url).map(|release| whole(Reference::GitHub(release)))
+        })
+        .or_else(|| {
+            gitlab::Release::from_link(url).map(|release| whole(Reference::GitLab(release)))
+        })
+        .or_else(|| {
+            ena::Accession::from_link(url).map(|accession| whole(Reference::Ena(accession)))
+        })
+        .or_else(|| {
+            geo::Accession::from_link(url)
+                .map(|(accession, folder)| (Reference::Geo(accession), folder))
+        })
+}
+
 /// repository file pages have a stable raw endpoint, unlike their HTML view.
 fn raw_link(url: &Url) -> Option<Url> {
     let parts: Vec<_> = url.path_segments()?.collect();
@@ -661,6 +687,7 @@ fn known_host(url: &Url) -> Option<&'static str> {
         "zenodo.org" | "www.zenodo.org" => "zenodo",
         "datadryad.org" | "www.datadryad.org" => "dryad",
         "data.mendeley.com" if !url.path().starts_with("/public-files/") => "mendeley data",
+        "www.ncbi.nlm.nih.gov" | "ncbi.nlm.nih.gov" if url.path().starts_with("/geo/") => "geo",
         "www.ebi.ac.uk" | "ebi.ac.uk"
             if ["/ena/browser/view/", "/ena/data/view/"]
                 .iter()
@@ -967,6 +994,16 @@ mod tests {
             (
                 "https://www.ebi.ac.uk/ena/browser/view/PRJNA172563?show=reads",
                 "ena:PRJNA172563",
+            ),
+            ("geo:GSE1000", "geo:GSE1000"),
+            ("geo:gsm2666939", "geo:GSM2666939"),
+            (
+                "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GPL96",
+                "geo:GPL96",
+            ),
+            (
+                "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/",
+                "geo:GSE1000",
             ),
         ] {
             assert_eq!(parse(text).reference.to_string(), canonical, "{text}");

@@ -1,7 +1,8 @@
 //! how often a host lets fetchloom ask, from the rate limit headers it sends: zenodo's
 //! `X-RateLimit-Remaining` and `X-RateLimit-Reset`, hugging face's `RateLimit` and
 //! `RateLimit-Policy`, and the `Retry-After` of a 429. requests to a host stop starting while one
-//! of its limits is used up, and start again when it resets.
+//! of its limits is used up, and start again when it resets. a host that asks its requests to
+//! start apart, as NCBI's do, gets them no closer together than that.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -204,6 +205,8 @@ struct Pace {
     /// the reset the last notice was about, so the requests waiting for one reset tell of it
     /// once.
     announced: Option<Instant>,
+    /// the earliest the next request may start, at a host that asks its requests to start apart.
+    next: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -271,6 +274,14 @@ impl Paces {
             .max_by_key(|known| known.reset)
             .copied();
         let Some(known) = blocking else {
+            if let Some(until) = pace.spaced(host, now) {
+                return Err(Hold {
+                    until,
+                    quota: None,
+                    window: None,
+                    announce: false,
+                });
+            }
             pace.pending += 1;
             drop(pace);
             return Ok(Ticket { pace: Some(shared) });
@@ -326,6 +337,17 @@ impl Paces {
 }
 
 impl Pace {
+    /// when a request to `host` at `now` must wait for: the host asks its requests to start apart
+    /// and the last one started too recently. else none, and the next may start a spacing later.
+    fn spaced(&mut self, host: &str, now: Instant) -> Option<Instant> {
+        let spacing = crate::source::spacing(host)?;
+        if let Some(next) = self.next.filter(|next| *next > now) {
+            return Some(next);
+        }
+        self.next = Some(now + spacing);
+        None
+    }
+
     /// takes a limit an answer stated: a new window replaces the old, answers from one window
     /// keep the lowest count, and an answer from an earlier window changes nothing.
     fn learn(&mut self, limit: Limit, at: Instant) {

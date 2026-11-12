@@ -36,6 +36,7 @@
     - [dryad](user/sources/dryad.md)
     - [mendeley data](user/sources/mendeley.md)
     - [ENA](user/sources/ena.md)
+    - [GEO](user/sources/geo.md)
     - [OSF](user/sources/osf.md)
     - [hugging face](user/sources/hugging-face.md)
     - [kaggle](user/sources/kaggle.md)

@@ -110,7 +110,7 @@ file bodies use pooled HTTP/1.1 connections, so concurrent bodies do not share a
 
 when a split download remains incomplete, a terminal stream failure keeps priority over transient stream failures in either arrival order. interruption still takes priority.
 
-`Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. a response that omits a known policy still spends one of its remembered requests. waits remain cancellable.
+`Rate` is one shared token bucket across clients, metadata, retries and streams. `Paces` reserves host quota and keeps the lowest remaining count heard within a window. a response that omits a known policy still spends one of its remembered requests. a host whose source asks its requests to start apart, through `source::spacing`, gets each hop's request no sooner than that after the last: NCBI's hosts a third of a second, since NCBI asks a program without a key for at most three requests a second and its file server states no limit in headers. waits remain cancellable.
 
 metadata pagination reads every `Link` header field. angle-bracketed targets and quoted parameters keep their commas and semicolons; the first `rel` parameter may name several relations. links with an `anchor` are skipped because their context is not the requested page. a `Content-Range: items <first>-<last>/<total>` header gives `Response.total`, the count of a listing sent in parts.
 

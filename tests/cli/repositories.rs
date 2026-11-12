@@ -840,3 +840,160 @@ fn bytes_that_differ_from_enas_md5_are_refused() -> Result {
     );
     Ok(())
 }
+
+const GEO_SERIES: &str = "/ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000";
+
+/// NCBI's file server for GSE1000: its folder, and the folders in it holding `(path, bytes)`
+/// files, as `matrix/GSE1000_series_matrix.txt.gz`, each index rounding sizes as NCBI's do.
+fn geo(files: &[(&str, &[u8])]) -> Result<Routes> {
+    let index = |entries: &[String]| -> Vec<Part> {
+        let links = entries
+            .iter()
+            .map(|entry| format!("<a href=\"{entry}\">{entry}</a>  2026-10-05 16:24  1.3M\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        reply(
+            "200 OK",
+            &[("Content-Type", "text/html;charset=UTF-8")],
+            format!("<pre><a href=\"/geo/series/GSE1nnn/\">Parent Directory</a>\n{links}</pre>")
+                .as_bytes(),
+        )
+    };
+    let mut folders: Vec<String> = Vec::new();
+    for (path, _) in files {
+        let (folder, _) = path.split_once('/').ok_or("a file outside a folder")?;
+        if !folders.iter().any(|known| known == folder) {
+            folders.push(folder.to_owned());
+        }
+    }
+    let mut routes = vec![(
+        format!("{GEO_SERIES}/"),
+        index(
+            &folders
+                .iter()
+                .map(|folder| format!("{folder}/"))
+                .collect::<Vec<_>>(),
+        ),
+    )];
+    for folder in &folders {
+        let names: Vec<String> = files
+            .iter()
+            .filter_map(|(path, _)| path.strip_prefix(&format!("{folder}/")).map(str::to_owned))
+            .collect();
+        routes.push((format!("{GEO_SERIES}/{folder}/"), index(&names)));
+    }
+    for (path, body) in files {
+        routes.push((format!("{GEO_SERIES}/{path}"), file(body, "\"v1\"")));
+    }
+    Routes::start(routes)
+}
+
+/// a pasted page of GEO's site is pinned by each file's SHA-256 and the size its download gave,
+/// not the size an index rounds, and a teammate's empty cache gets the same bytes from the lock
+/// alone.
+#[test]
+fn a_geo_series_is_pinned_by_its_bytes_and_synced_from_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = geo(&[
+        ("matrix/GSE1000_series_matrix.txt.gz", ROWS),
+        ("suppl/filelist.txt", NOTES),
+    ])?;
+    let page = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE1000";
+    let output = command(&sandbox, &routes, &["add", page, "--as", "gse1000"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let work = sandbox.work();
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    assert!(
+        manifest.contains("[datasets.gse1000]\nref = \"geo:GSE1000\"\n"),
+        "{manifest}"
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains(&format!(
+            "{{ path = \"matrix/GSE1000_series_matrix.txt.gz\", size = {}, sha256 = \"{}\", url = \"https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/matrix/GSE1000_series_matrix.txt.gz\" }}",
+            ROWS.len(),
+            sha256_hex(ROWS)
+        )),
+        "{lock}"
+    );
+    assert_eq!(
+        fs::read(work.join("data/gse1000/suppl/filelist.txt"))?,
+        NOTES
+    );
+
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(work.join(name), teammate.join(name))?;
+    }
+    let listed = routes.targets().len();
+    let synced = sandbox
+        .command_in(&teammate, &["sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(
+        fs::read(teammate.join("data/gse1000/matrix/GSE1000_series_matrix.txt.gz"))?,
+        ROWS
+    );
+    assert!(
+        routes.targets()[listed..]
+            .iter()
+            .all(|target| !target.ends_with('/')),
+        "the lock alone says what to download, so no index is read"
+    );
+    Ok(())
+}
+
+/// a pasted link to one of a series' folders on NCBI's file server takes that folder alone.
+#[test]
+fn get_takes_the_folder_a_pasted_geo_link_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = geo(&[
+        ("matrix/GSE1000_series_matrix.txt.gz", ROWS),
+        ("suppl/filelist.txt", NOTES),
+    ])?;
+    let folder = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/suppl/";
+    let output = command(&sandbox, &routes, &["get", folder, "--dir", "gse1000"]).output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let got = sandbox.work().join("gse1000");
+    assert_eq!(fs::read(got.join("suppl/filelist.txt"))?, NOTES);
+    assert!(!got.join("matrix").exists());
+    Ok(())
+}
+
+/// GEO remakes a series' files from time to time, and states no hash for them, so the SHA-256
+/// the lock pinned is what tells remade bytes apart: a sync that receives them refuses them.
+#[test]
+fn bytes_geo_remade_under_the_same_name_are_refused_by_the_lock() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = geo(&[("matrix/GSE1000_series_matrix.txt.gz", ROWS)])?;
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", "geo:GSE1000", "--as", "gse1000"],
+    )
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    routes.change(vec![(
+        format!("{GEO_SERIES}/matrix/GSE1000_series_matrix.txt.gz"),
+        file(NOTES, "\"v2\""),
+    )]);
+    let teammate = sandbox.folder("teammate")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), teammate.join(name))?;
+    }
+    let synced = sandbox
+        .command_in(&teammate, &["--json", "sync", "--locked"])
+        .env("FETCHLOOM_TEST_SOURCES", &routes.url)
+        .env("FETCHLOOM_CACHE", sandbox.folder("teammate-cache")?)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(30), "{}", text(&synced.stderr)?);
+    assert_eq!(json(&synced)?["errors"][0]["kind"], "integrity.mismatch");
+    assert!(
+        !teammate
+            .join("data/gse1000/matrix/GSE1000_series_matrix.txt.gz")
+            .exists()
+    );
+    Ok(())
+}

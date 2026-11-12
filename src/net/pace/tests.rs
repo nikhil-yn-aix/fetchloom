@@ -297,6 +297,44 @@ fn requests_stop_while_a_limit_is_used_up_and_start_at_its_reset() {
     );
 }
 
+/// NCBI asks a program without a key for no more than 3 requests a second, so requests to its
+/// hosts start apart: however many try at once, no second holds more than three starts, and the
+/// waits are too short to tell. other hosts are not held.
+#[test]
+fn requests_to_ncbi_never_start_more_than_three_in_a_second() {
+    let paces = Paces::default();
+    let start = Instant::now();
+    let mut starts = Vec::new();
+    let mut at = start;
+    while starts.len() < 10 {
+        match paces.admit("ftp.ncbi.nlm.nih.gov", at) {
+            Ok(ticket) => {
+                starts.push(at);
+                drop(ticket);
+            }
+            Err(hold) => {
+                assert_eq!(hold.told(at), None, "a wait this short is not told");
+                assert!(
+                    paces.admit("ftp.sra.ebi.ac.uk", at).is_ok(),
+                    "another host is not held"
+                );
+                at = hold.until;
+            }
+        }
+    }
+    for (index, first) in starts.iter().enumerate() {
+        let within = starts[index..]
+            .iter()
+            .filter(|later| **later < *first + Duration::from_secs(1))
+            .count();
+        assert!(within <= 3, "{within} starts within a second of {index}");
+    }
+    assert!(
+        starts[9] - starts[0] < Duration::from_secs(4),
+        "they wait no longer than they must"
+    );
+}
+
 /// zenodo's answers once its limit is used up, as a download meets them: a 429 whose limit resets
 /// a second after its date, then 429s sent once that reset came. the first is waited out and told
 /// once, the later ones hold nothing, so no try is spent and no second wait is told. the host's
