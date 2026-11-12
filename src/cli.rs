@@ -694,12 +694,11 @@ fn command_words(command: &str, windows: bool) -> Option<Vec<String>> {
     let mut chars = command.chars().peekable();
     while let Some(c) = chars.next() {
         if let Some(delimiter) = quote {
-            if c == delimiter {
-                if windows && c == '\'' && chars.peek() == Some(&'\'') {
-                    chars.next();
-                    word.get_or_insert_default().push(c);
-                } else {
-                    quote = None;
+            let powershell_single = windows && delimiter == '\'';
+            if c == delimiter || (powershell_single && is_single_quote(c)) {
+                match chars.next_if(|&next| powershell_single && is_single_quote(next)) {
+                    Some(next) => word.get_or_insert_default().push(next),
+                    None => quote = None,
                 }
             } else if delimiter == '"' && c == '\\' && !windows {
                 let next = *chars.peek()?;
@@ -1261,22 +1260,71 @@ fn level(quiet: bool, verbose: u8) -> Level {
 
 /// quotes a word so suggested commands preserve spaces, patterns and shell metacharacters.
 pub(in crate::cli) fn shell_word(word: &str) -> Cow<'_, str> {
+    shell_word_for(word, cfg!(windows))
+}
+
+/// [`shell_word`] for the shells of windows, powershell and cmd, or for bash, zsh and fish. a
+/// word starting with `~` or `=`, which zsh expands, or `@`, which powershell splats, is quoted.
+/// double quotes keep every other character literal in all of them, but for `$`, a backtick and
+/// a double quote; on windows curly double quotes, which powershell reads as double quotes; and
+/// elsewhere `!`, which bash and zsh expand from their history, and a backslash, an escape there.
+/// a word holding any of those is single-quoted: powershell doubles each single quote inside,
+/// curly ones too, and elsewhere a single quote and a backslash go outside the quotes, escaped,
+/// since fish reads a backslash inside them as an escape too.
+fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     if !word.is_empty()
+        && !word.starts_with(['~', '=', '@'])
         && word
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_./:@%+=,~".contains(c))
     {
-        Cow::Borrowed(word)
-    } else if word.contains(['\'', '"', '$', '\u{60}', '\\']) {
-        let quoted = if cfg!(windows) {
-            word.replace('\'', "''")
-        } else {
-            word.replace('\'', "'\"'\"'")
-        };
-        Cow::Owned(format!("'{quoted}'"))
-    } else {
-        Cow::Owned(format!("\"{word}\""))
+        return Cow::Borrowed(word);
     }
+    let literal = |c: char| match c {
+        '$' | '\u{60}' | '"' => false,
+        '!' | '\\' => windows,
+        '\u{201c}'..='\u{201e}' => !windows,
+        _ => true,
+    };
+    if word.chars().all(literal) {
+        return Cow::Owned(format!("\"{word}\""));
+    }
+    if windows {
+        let mut quoted = String::with_capacity(word.len() + 2);
+        quoted.push('\'');
+        for c in word.chars() {
+            if is_single_quote(c) {
+                quoted.push(c);
+            }
+            quoted.push(c);
+        }
+        quoted.push('\'');
+        return Cow::Owned(quoted);
+    }
+    let mut quoted = String::with_capacity(word.len() + 2);
+    let mut open = false;
+    for c in word.chars() {
+        if matches!(c, '\'' | '\\') {
+            if open {
+                quoted.push('\'');
+                open = false;
+            }
+            quoted.push('\\');
+        } else if !open {
+            quoted.push('\'');
+            open = true;
+        }
+        quoted.push(c);
+    }
+    if open {
+        quoted.push('\'');
+    }
+    Cow::Owned(quoted)
+}
+
+/// whether powershell reads `c` as a single quote, as it reads the curly ones.
+fn is_single_quote(c: char) -> bool {
+    matches!(c, '\'' | '\u{2018}'..='\u{201b}')
 }
 
 /// retry from the moved project, without the old working directory or its attached forms.
@@ -1932,19 +1980,99 @@ mod tests {
         assert_eq!(shell_word("my data"), "\"my data\"");
     }
 
+    /// words a shell would expand or split, as a suggested command quotes them for bash, zsh and
+    /// fish, and on windows for powershell, and for cmd too but for `$`, a backtick and a double
+    /// quote, which no quoting keeps literal in both. each reads back as it was.
+    const QUOTED: [(&str, &str, &str); 13] = [
+        ("hi!.csv", "'hi!.csv'", "\"hi!.csv\""),
+        ("$notes", "'$notes'", "'$notes'"),
+        ("a`b`", "'a`b`'", "'a`b`'"),
+        ("ada's data", "\"ada's data\"", "\"ada's data\""),
+        ("it's $5!", "'it'\\''s $5!'", "'it''s $5!'"),
+        ("my data", "\"my data\"", "\"my data\""),
+        ("données é.csv", "\"données é.csv\"", "\"données é.csv\""),
+        (r"data\notes", r"'data'\\'notes'", r#""data\notes""#),
+        ("a\"b", "'a\"b'", "'a\"b'"),
+        ("~notes.csv", "\"~notes.csv\"", "\"~notes.csv\""),
+        ("=notes.csv", "\"=notes.csv\"", "\"=notes.csv\""),
+        ("@notes.csv", "\"@notes.csv\"", "\"@notes.csv\""),
+        (
+            "ada’s “best” data",
+            "\"ada’s “best” data\"",
+            "'ada’’s “best” data'",
+        ),
+    ];
+
     #[test]
     fn suggested_commands_keep_shell_metacharacters_literal() {
-        assert_eq!(shell_word("$notes"), "'$notes'");
-        assert_eq!(shell_word("a\"b"), "'a\"b'");
-        assert_eq!(shell_word(r"data\notes"), r"'data\notes'");
-        assert_eq!(
-            shell_word("a'b"),
-            if cfg!(windows) {
-                "'a''b'"
-            } else {
-                "'a'\"'\"'b'"
+        for (word, posix, windows) in QUOTED {
+            for (on_windows, quoted) in [(false, posix), (true, windows)] {
+                assert_eq!(shell_word_for(word, on_windows), quoted, "{word}");
+                let line = format!("fetchloom get {quoted}");
+                assert_eq!(
+                    command_words(&line, on_windows),
+                    Some(vec![
+                        "fetchloom".to_owned(),
+                        "get".to_owned(),
+                        word.to_owned()
+                    ]),
+                    "{line}"
+                );
             }
-        );
+        }
+    }
+
+    /// interactive bash and zsh, which expand `!` inside double quotes from their history, and
+    /// every other shell here that a person may paste a suggested command into, take each quoted
+    /// word as it was: powershell, which reads the same wherever it runs, as windows quotes it.
+    #[cfg(unix)]
+    #[test]
+    fn a_quoted_word_reads_back_whole_in_each_shell() {
+        let words: Vec<&str> = QUOTED.iter().map(|(word, _, _)| *word).collect();
+        let printf = "printf '%s\\n'";
+        for (shell, windows, print) in [
+            (
+                &["bash", "--norc", "--noprofile", "-i", "-s"][..],
+                false,
+                printf,
+            ),
+            (&["sh", "-s"], false, printf),
+            (&["zsh", "-f", "-i", "-s"], false, printf),
+            (&["fish", "--no-config"], false, printf),
+            (
+                &["pwsh", "-NoProfile", "-NonInteractive", "-Command", "-"],
+                true,
+                "Write-Output",
+            ),
+        ] {
+            let line: Vec<String> = words
+                .iter()
+                .map(|word| shell_word_for(word, windows).into_owned())
+                .collect();
+            let script = format!("{print} {}\n", line.join(" "));
+            let started = std::process::Command::new(shell[0])
+                .args(&shell[1..])
+                .env("HISTFILE", "/dev/null")
+                .env("POWERSHELL_TELEMETRY_OPTOUT", "1")
+                .env("TERM", "dumb")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            let Ok(mut child) = started else {
+                continue;
+            };
+            std::io::Write::write_all(child.stdin.as_mut().unwrap(), script.as_bytes()).unwrap();
+            drop(child.stdin.take());
+            let output = child.wait_with_output().unwrap();
+            let told = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(
+                told.lines().collect::<Vec<_>>(),
+                words,
+                "{}: {script}",
+                shell[0]
+            );
+        }
     }
 
     /// `FETCHLOOM_OFFLINE` reads true and false as `FETCHLOOM_MIRRORS_ONLY` does, and a value it

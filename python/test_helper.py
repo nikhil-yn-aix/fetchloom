@@ -162,16 +162,46 @@ class HelperOptions(unittest.TestCase):
                 )
                 self.assertEqual(shell.stdout.decode().split("\0")[:-1], words)
 
+    # the words of the cli's own case table, quoted as it quotes them
+    QUOTED = [
+        ("plain", "plain", "plain"),
+        ("", '""', '""'),
+        ("hi!.csv", "'hi!.csv'", '"hi!.csv"'),
+        ("$notes", "'$notes'", "'$notes'"),
+        ("a`b`", "'a`b`'", "'a`b`'"),
+        ("ada's data", '"ada\'s data"', '"ada\'s data"'),
+        ("it's $5!", "'it'\\''s $5!'", "'it''s $5!'"),
+        ("my data", '"my data"', '"my data"'),
+        ("données é.csv", '"données é.csv"', '"données é.csv"'),
+        ("data\\notes", "'data'\\\\'notes'", '"data\\notes"'),
+        ('a"b', "'a\"b'", "'a\"b'"),
+        ("~notes.csv", '"~notes.csv"', '"~notes.csv"'),
+        ("=notes.csv", '"=notes.csv"', '"=notes.csv"'),
+        ("@notes.csv", '"@notes.csv"', '"@notes.csv"'),
+        ("ada’s “best” data", '"ada’s “best” data"', "'ada’’s “best” data'"),
+    ]
+
     def test_suggested_words_are_quoted_as_fetchloom_quotes_them(self):
-        for word, posix, windows in [
-            ("plain", "plain", "plain"),
-            ("my project", '"my project"', '"my project"'),
-            ("ada's project", "'ada'\"'\"'s project'", "'ada''s project'"),
-            ("", '""', '""'),
-        ]:
+        for word, posix, windows in self.QUOTED:
             with self.subTest(word=word):
                 self.assertEqual(fetchloom._shell_word(word, windows=False), posix)
                 self.assertEqual(fetchloom._shell_word(word, windows=True), windows)
+
+    @unittest.skipUnless(os.name == "posix", "runs the quoted words in posix shells")
+    def test_a_quoted_word_reads_back_whole_in_interactive_bash(self):
+        # interactive bash expands `!` inside double quotes from its history
+        words = [word for word, _, _ in self.QUOTED]
+        line = "printf '%s\\n' " + " ".join(fetchloom._shell_word(word, windows=False) for word in words) + "\n"
+        for shell in [["bash", "--norc", "--noprofile", "-i", "-s"], ["sh", "-s"]]:
+            with self.subTest(shell=shell[0]):
+                try:
+                    told = subprocess.run(
+                        shell, input=line.encode(), capture_output=True,
+                        env={**os.environ, "HISTFILE": "/dev/null"},
+                    )
+                except FileNotFoundError:
+                    continue
+                self.assertEqual(told.stdout.decode().split("\n")[:-1], words)
 
     def test_strict_names_several_files_in_the_plural(self):
         files = [{"path": f"data/iris/{name}", "reason": "changed"} for name in ["a.csv", "b.csv"]]

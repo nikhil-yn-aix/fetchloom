@@ -217,13 +217,38 @@ def _local(path: str | os.PathLike[str]) -> str:
 
 
 def _shell_word(word: str, windows: bool = sys.platform == "win32") -> str:
-    """``word`` quoted as fetchloom quotes the commands it suggests, so a shell reads it as typed."""
-    if word and all(c.isascii() and (c.isalnum() or c in "-_./:@%+=,~") for c in word):
+    """``word`` quoted as fetchloom quotes the commands it suggests, so a shell reads it as typed.
+
+    a word starting with ``~`` or ``=``, which zsh expands, or ``@``, which powershell splats, is
+    quoted. double quotes keep every other character literal in bash, zsh, fish, powershell and
+    cmd, but for ``$``, a backtick and a double quote; on windows curly double quotes, which
+    powershell reads as double quotes; and elsewhere ``!``, which bash and zsh expand from their
+    history, and a backslash. a word holding one is single-quoted: powershell doubles each single
+    quote inside, curly ones too, and elsewhere a single quote and a backslash go outside the
+    quotes, escaped, since fish reads a backslash inside them as an escape too.
+    """
+    if word[:1] not in ("", "~", "=", "@") and all(
+        c.isascii() and (c.isalnum() or c in "-_./:@%+=,~") for c in word
+    ):
         return word
-    if any(c in word for c in "'\"$`\\"):
-        quoted = word.replace("'", "''") if windows else word.replace("'", "'\"'\"'")
-        return f"'{quoted}'"
-    return f'"{word}"'
+    if not any(c in ('$`"\u201c\u201d\u201e' if windows else '$`"!\\') for c in word):
+        return f'"{word}"'
+    if windows:
+        return "'" + "".join(c * 2 if c in "'\u2018\u2019\u201a\u201b" else c for c in word) + "'"
+    quoted, inside = [], False
+    for c in word:
+        if c in "'\\":
+            if inside:
+                quoted.append("'")
+                inside = False
+            quoted.append("\\")
+        elif not inside:
+            quoted.append("'")
+            inside = True
+        quoted.append(c)
+    if inside:
+        quoted.append("'")
+    return "".join(quoted)
 
 
 def _options(arguments: list[str], yes: bool, offline: bool, locked: bool) -> list[str]:
