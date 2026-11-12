@@ -94,7 +94,7 @@ on windows, use `py -3 -m unittest discover -s python`, or `python -m unittest d
 
 ### coverage and mutation pilots
 
-[scheduled deep checks](ci.md#scheduled-deep-checks) own weekly linux coverage, longer Bolero runs and external links. coverage includes CLI child processes and publishes LCOV/JSON plus a step summary, without a coverage quota. manual mutation dispatch names one Rust source file and tests at most ten listed mutations, always after an unmutated baseline. neither check replaces a focused regression assertion.
+[scheduled deep checks](ci.md#scheduled-deep-checks) own weekly linux coverage, longer Bolero runs and external links. coverage includes CLI child processes and publishes LCOV/JSON plus a step summary, without a coverage quota. manual mutation dispatch names one Rust source file and tests at most ten listed mutations against the lib tests, or every test target with `tests=all`, always after an unmutated baseline. neither check replaces a focused regression assertion.
 
 ### code gates
 

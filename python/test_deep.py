@@ -7,7 +7,7 @@ import unittest
 
 from check_coverage import summary
 from ci_journey import ROOT
-from run_mutants import require_selection, selection, source_file
+from run_mutants import arguments, mutation_run, require_selection, selection, source_file
 
 
 class CoverageTests(unittest.TestCase):
@@ -65,6 +65,22 @@ class MutationTests(unittest.TestCase):
         for actual in [expected[:1], expected + ['src/place.rs:3: delete field'], expected + expected[:1]]:
             with self.subTest(actual=actual), self.assertRaises(AssertionError):
                 require_selection(expected, actual)
+
+    def test_lib_tests_judge_each_mutant_unless_every_target_is_asked_for(self):
+        self.assertEqual(arguments(['src/place.rs']).tests, 'lib')
+        for tests, wanted, unwanted in [('lib', '--lib', '--all-targets'), ('all', '--all-targets', '--lib')]:
+            with self.subTest(tests=tests):
+                command = mutation_run(['cargo', 'mutants'], tests, Path('out'))
+                cargo = command[command.index('--') + 1:]
+                self.assertIn(wanted, cargo)
+                self.assertNotIn(unwanted, cargo)
+
+    def test_each_mutant_is_timed_against_the_measured_baseline(self):
+        command = mutation_run(['cargo', 'mutants'], 'lib', Path('out'))
+        tool = command[:command.index('--')]
+        # a fixed --timeout also caps the unmutated baseline, which then tests nothing
+        self.assertNotIn('--timeout', tool)
+        self.assertEqual(tool[tool.index('--timeout-multiplier') + 1], '3')
 
     def test_file_scope_stays_within_rust_source(self):
         with tempfile.TemporaryDirectory() as directory:

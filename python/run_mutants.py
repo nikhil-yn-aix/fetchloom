@@ -7,6 +7,8 @@ import subprocess
 
 from ci_journey import ROOT, require
 
+TESTS = {'lib': '--lib', 'all': '--all-targets'}
+
 
 def source_file(root, requested):
     path = (root / requested).resolve()
@@ -30,11 +32,25 @@ def require_selection(expected, actual):
             'the mutation inventory differs from the announced selection')
 
 
-def main():
+def mutation_run(command, tests, output):
+    # no fixed --timeout: it would cap the unmutated baseline too. each mutant stops at three times
+    # the baseline's measured test time
+    return [*command, '--baseline', 'run', '--jobs', '2', '--timeout-multiplier', '3',
+            '--build-timeout', '600', '--no-shuffle', '--test-tool', 'cargo',
+            '--output', str(output), '--', '--locked', TESTS[tests]]
+
+
+def arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('file')
+    parser.add_argument('--tests', choices=sorted(TESTS), default='lib',
+                        help='the tests that judge each mutant: lib, or all for a file only the binary reaches')
     parser.add_argument('--output', type=Path, default=Path('target/ci-mutants'))
-    args = parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main():
+    args = arguments()
     file = source_file(ROOT, args.file)
     args.output.mkdir(parents=True, exist_ok=True)
     command = ['cargo', 'mutants', '--file', file, '--colors', 'never']
@@ -50,11 +66,10 @@ def main():
     command += ['--shard', shard, '--sharding', 'slice']
     require_selection(names, listing(command))
     (args.output / 'selected.json').write_text(json.dumps(names, indent=2) + '\n', encoding='utf-8')
-    print(f'{len(names)} selected mutants in {file}, slice {shard}; the unmutated baseline runs first', flush=True)
+    print(f'{len(names)} selected mutants in {file}, slice {shard}, judged by the {args.tests} tests; '
+          'the unmutated baseline runs first', flush=True)
     print('\n'.join(names), flush=True)
-    result = subprocess.run([*command, '--baseline', 'run', '--jobs', '2', '--timeout', '120',
-                             '--build-timeout', '600', '--no-shuffle', '--test-tool', 'cargo',
-                             '--output', str(args.output.resolve()), '--', '--locked', '--all-targets'], cwd=ROOT)
+    result = subprocess.run(mutation_run(command, args.tests, args.output.resolve()), cwd=ROOT)
     planned = json.loads((args.output / 'mutants.out/mutants.json').read_text(encoding='utf-8'))
     require_selection(names, [mutant['name'] for mutant in planned])
     if result.returncode in (0, 2):

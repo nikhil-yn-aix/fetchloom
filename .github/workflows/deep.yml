@@ -14,6 +14,11 @@ on:
         description: one Rust file for the manual mutation pilot
         type: string
         default: src/cli/sync/place.rs
+      tests:
+        description: the tests that judge each mutant; all is for a file only the binary reaches
+        type: choice
+        options: [lib, all]
+        default: lib
 
 permissions:
   contents: read
@@ -178,11 +183,12 @@ jobs:
       - name: list and test at most ten mutations in one file
         env:
           MUTATION_FILE: ${{ inputs.file }}
+          MUTATION_TESTS: ${{ inputs.tests }}
         shell: bash
         run: |
           mkdir -p target/ci-mutants
           timeout --signal=TERM --kill-after=30s 20m python3 python/run_mutants.py "$MUTATION_FILE" \
-            2>&1 | tee target/ci-mutants/run.log
+            --tests "$MUTATION_TESTS" 2>&1 | tee target/ci-mutants/run.log
       - name: summarize the mutation scope
         if: always()
         run: |
