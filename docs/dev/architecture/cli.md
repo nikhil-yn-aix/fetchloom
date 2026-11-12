@@ -40,7 +40,7 @@ built-in environment help describes `FETCHLOOM_HOST_JOBS`, the request cap per i
 
 network clients are created only where commands need them. `Net` delays TLS roots and proxy setup until the first request. version and help paths avoid that work.
 
-help routing reads short-option bundles from clap metadata. `-qh` still requests help, and attached or following values of `-C`, including non-UTF-8 paths, do not become command names. only option spellings are read lossily; command names still need valid UTF-8. help and JSON flags are found before `--`, including after malformed arguments.
+help routing reads short-option bundles from clap metadata. `-qh` still requests help, the short one: `args::short_help` finds whether the first help flag on the line is `-h`, and `help::short` renders a copy of the command with the options every command takes hidden, and at the top the less common commands and options too, its examples kept and its `on disk` and docs lines left to `--help`, which it then names. `help <topic>` and `--help --json` stay whole, and attached or following values of `-C`, including non-UTF-8 paths, do not become command names. only option spellings are read lossily; command names still need valid UTF-8. help and JSON flags are found before `--`, including after malformed arguments.
 
 ### command boundaries
 

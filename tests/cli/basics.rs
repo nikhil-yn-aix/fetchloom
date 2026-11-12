@@ -30,6 +30,53 @@ fn help_lists_every_command() -> Result {
     Ok(())
 }
 
+/// `-h` is the quick lookup: the commands and options used most, or a command's own options and
+/// examples, then where the rest is. `--help` shows all of it, and the first of the two on a
+/// line decides.
+#[test]
+fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
+    let sandbox = Sandbox::new()?;
+    let short = text(&sandbox.run(&["-h"])?.stdout)?;
+    let long = text(&sandbox.run(&["--help"])?.stdout)?;
+    assert!(short.lines().count() * 2 < long.lines().count(), "{short}");
+    for shown in ["\n  add ", "\n  sync ", "--offline", "-C <dir>"] {
+        assert!(short.contains(shown), "{shown}: {short}");
+    }
+    for left in ["\n  completions ", "--mirror", "--no-config"] {
+        assert!(
+            !short.contains(left) && long.contains(left),
+            "{left}: {short}"
+        );
+    }
+    assert!(
+        short
+            .trim_end()
+            .ends_with("`fetchloom --help` shows every command and option"),
+        "{short}"
+    );
+    let add = text(&sandbox.run(&["add", "-h"])?.stdout)?;
+    let full = text(&sandbox.run(&["add", "--help"])?.stdout)?;
+    for shown in [
+        "usage: fetchloom add",
+        "examples:",
+        "--select <glob>",
+        "--dry-run",
+    ] {
+        assert!(add.contains(shown), "{shown}: {add}");
+    }
+    for left in ["--mirror", "on disk:", "docs:"] {
+        assert!(!add.contains(left) && full.contains(left), "{left}: {add}");
+    }
+    assert!(
+        add.trim_end()
+            .ends_with("`fetchloom add --help` also lists the options every command takes"),
+        "{add}"
+    );
+    assert_eq!(text(&sandbox.run(&["add", "--help", "-h"])?.stdout)?, full);
+    assert_eq!(text(&sandbox.run(&["add", "-h", "--help"])?.stdout)?, add);
+    Ok(())
+}
+
 #[test]
 fn help_follows_color_flags_anywhere() -> Result {
     let sandbox = Sandbox::new()?;

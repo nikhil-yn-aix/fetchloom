@@ -20,7 +20,9 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         let color = args::color();
         let output = Output::new(Style::detect(color), Level::Normal, false, false);
-        let shown = super::help::examples_first(&err.render().to_string());
+        let shown = args::short_help()
+            .and_then(|topic| super::help::short(&topic))
+            .unwrap_or_else(|| super::help::examples_first(&err.render().to_string()));
         let outcome = crate::output::help(&shown, color);
         return finish(&Context::new(output), None, outcome, started);
     }

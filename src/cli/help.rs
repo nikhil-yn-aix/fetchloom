@@ -416,6 +416,92 @@ fn unknown(topic: &[String]) -> Error {
     }
 }
 
+/// the commands `-h` shows of fetchloom's own, the ones used most. `--help` lists them all.
+const COMMON_COMMANDS: [&str; 8] = [
+    "add", "remove", "sync", "status", "list", "path", "get", "search",
+];
+
+/// the options `-h` shows of fetchloom's own, by their ids. a command's `-h` shows only the
+/// options of its own, so none every command takes.
+const COMMON_OPTIONS: [&str; 7] = [
+    "quiet",
+    "verbose",
+    "json",
+    "offline",
+    "yes",
+    "directory",
+    "version",
+];
+
+/// what `-h` shows: for fetchloom itself what it does, the commands and options used most, and
+/// for a command `topic` names its usage, examples and own options, each then saying where the
+/// rest is, which `--help` shows. none when `topic` names no command.
+pub(super) fn short(topic: &[String]) -> Option<String> {
+    let mut root = args::command();
+    let global: Vec<String> = root
+        .get_arguments()
+        .filter(|arg| arg.is_global_set() || arg.get_id() == "version")
+        .map(|arg| arg.get_id().to_string())
+        .filter(|id| !(topic.is_empty() && COMMON_OPTIONS.contains(&id.as_str())))
+        .collect();
+    for id in &global {
+        root = root.mut_arg(id, |arg| arg.hide(true));
+    }
+    let pointer = if topic.is_empty() {
+        let rare: Vec<String> = root
+            .get_subcommands()
+            .map(|command| command.get_name().to_owned())
+            .filter(|name| !COMMON_COMMANDS.contains(&name.as_str()))
+            .collect();
+        for name in &rare {
+            root = root.mut_subcommand(name, |command| command.hide(true));
+        }
+        let about = args::INTRO.lines().next().unwrap_or_default().to_owned();
+        root = root.about(about).after_help("");
+        "`fetchloom --help` shows every command and option".to_owned()
+    } else {
+        // the examples, without what the command leaves on disk or its page
+        root = mut_command(root, topic, &|command| {
+            let after = command
+                .get_after_help()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let examples = after
+                .split("\n\n")
+                .find(|part| part.starts_with("examples:"))
+                .unwrap_or_default()
+                .to_owned();
+            command.after_help(examples)
+        });
+        format!(
+            "`fetchloom {} --help` also lists the options every command takes",
+            topic.join(" ")
+        )
+    };
+    let line = std::iter::once("fetchloom")
+        .chain(topic.iter().map(String::as_str))
+        .chain(std::iter::once("--help"));
+    match root.try_get_matches_from(line) {
+        Err(help) if help.kind() == ErrorKind::DisplayHelp => {
+            let shown = examples_first(&help.render().to_string());
+            Some(format!("{}\n\n{pointer}", shown.trim_end()))
+        }
+        _ => None,
+    }
+}
+
+/// `root` with `change` made to the command the names in `path` lead to, as `cache gc`.
+fn mut_command(
+    root: clap::Command,
+    path: &[String],
+    change: &dyn Fn(clap::Command) -> clap::Command,
+) -> clap::Command {
+    match path {
+        [] => change(root),
+        [first, rest @ ..] => root.mut_subcommand(first, |inner| mut_command(inner, rest, change)),
+    }
+}
+
 /// a command's help with its examples right below its usage, before the long list of options,
 /// so a person reads the commands to copy first.
 pub(super) fn examples_first(text: &str) -> String {

@@ -312,7 +312,7 @@ impl Sandbox {
 pub(crate) fn command_help() -> insta::Settings {
     let mut settings = insta::Settings::clone_current();
     settings.add_filter(
-        r"(?ms)^  -q, --quiet .*?^  -h, --help +print help$",
+        r"(?ms)^  -q, --quiet .*?^  -h, --help +print help\b[^\n]*$",
         "  [global options]",
     );
     settings

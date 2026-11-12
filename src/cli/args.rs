@@ -223,7 +223,7 @@ pub(crate) struct Args {
     #[command(flatten)]
     pub(crate) global: Global,
 
-    /// print help
+    /// print help: -h the common part, --help all of it
     #[arg(short, long, action = ArgAction::Help, global = true, help_heading = "options")]
     help: Option<bool>,
 
@@ -284,20 +284,42 @@ fn json_help(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec
 /// the command a line asking for `-h` or `--help` is about, as `help` takes it, or nothing when
 /// it asks for no help.
 fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Vec<String>> {
+    help_request(command, line).map(|(topic, _)| topic)
+}
+
+/// the command whose short help `-h` asks for on this run's command line, as `help` takes it,
+/// or nothing when the line asks for none, or for the whole help first, with `--help`.
+pub(super) fn short_help() -> Option<Vec<String>> {
+    let line: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    help_request(&Args::command(), &line)
+        .filter(|(_, short)| *short)
+        .map(|(topic, _)| topic)
+}
+
+/// the command a line asking for help is about, as `help` takes it, and whether the first help
+/// it asks for is `-h`, the short one, as clap takes the first.
+fn help_request(
+    command: &clap::Command,
+    line: &[std::ffi::OsString],
+) -> Option<(Vec<String>, bool)> {
     let mut topic = Vec::new();
     let mut current = command;
-    let mut asked = false;
+    let mut short = None;
     let mut value_next = false;
     let mut names = true;
     for word in line.iter().skip(1).take_while(|word| *word != "--") {
-        asked |= word == "--help" || word == "-h";
+        if word == "--help" || word == "-h" {
+            short.get_or_insert(word == "-h");
+        }
         if std::mem::take(&mut value_next) {
             continue;
         }
         let option = word.to_string_lossy();
         if option.starts_with('-') {
             let (help, value) = help_option(command, current, &option);
-            asked |= help;
+            if help {
+                short.get_or_insert(!option.starts_with("--"));
+            }
             value_next = value;
             continue;
         }
@@ -315,7 +337,7 @@ fn help_topic(command: &clap::Command, line: &[std::ffi::OsString]) -> Option<Ve
             }
         }
     }
-    asked.then_some(topic)
+    short.map(|short| (topic, short))
 }
 
 /// whether an option asks for help or consumes the next word. a value inside a short bundle,
