@@ -326,9 +326,25 @@ impl Project {
         self.state_by(State::parse)
     }
 
-    /// [`Project::state`] with only the records of the paths `keep` accepts.
-    pub(crate) fn state_only(&self, keep: &dyn Fn(&str) -> bool) -> (State, u64) {
-        self.state_by(|bytes| State::parse_only(bytes, keep))
+    /// [`Project::state`] with only the records at or below `folders`, paths in the project, that
+    /// `keep` accepts. `keep` must accept no path outside `folders`, since a read passes over the
+    /// parts of the state that cannot hold such a path.
+    pub(crate) fn state_within(
+        &self,
+        folders: &[String],
+        keep: &dyn Fn(&str) -> bool,
+    ) -> (State, u64) {
+        let span = tracing::debug_span!("read_state", bytes = tracing::field::Empty).entered();
+        // a planted link to a device or a fifo would never end; it reads as no state at all
+        let read = crate::cache::read_unfollowed(&self.root.join(FOLDER).join("state")).and_then(
+            |mut file| {
+                let written = Look::of(&file.metadata()?).modified;
+                let (state, bytes) = State::read_within(&mut file, folders, keep)?;
+                span.record("bytes", bytes);
+                Ok((state, written))
+            },
+        );
+        read.unwrap_or_default()
     }
 
     fn state_by(&self, parse: impl FnOnce(&[u8]) -> State) -> (State, u64) {
@@ -1755,6 +1771,65 @@ mod tests {
         let (read, _) = project.state();
         assert_eq!(read.files.len(), 0);
         assert_eq!(read.synced, None);
+    }
+
+    /// a read of the state within a folder answers as a whole read does, also once its index was
+    /// changed by hand, which the whole read ignores.
+    #[test]
+    fn a_state_read_within_a_folder_answers_as_a_whole_read() {
+        use crate::place::Method;
+        use crate::project::state::Placed;
+
+        let (_dir, project) = project(&[]);
+        let mut state = State::default();
+        for (dataset, path, size) in (0..2_000)
+            .map(|number| ("large", format!("data/large/{number:04}"), number))
+            .chain([("tiny", "data/tiny/payload.bin".to_owned(), 14)])
+        {
+            let placed = Placed {
+                dataset: dataset.to_owned(),
+                sha256: crate::digest::sha256(path.as_bytes()),
+                method: Method::Hardlink,
+                look: Look { size, modified: 42 },
+                writable: false,
+                checked: 43,
+                adopted: false,
+                racy_intact: std::sync::OnceLock::new(),
+            };
+            state.files.insert(path, placed);
+        }
+        project.write_state(&state).unwrap();
+        let folders = ["data/tiny".to_owned()];
+        let keep = |path: &str| path.starts_with("data/tiny/");
+        let whole = |project: &Project| {
+            let (mut state, written) = project.state();
+            state.files.retain(|path, _| keep(path));
+            (state.files, written)
+        };
+        let within = |project: &Project| {
+            let (state, written) = project.state_within(&folders, &keep);
+            (state.files, written)
+        };
+        assert_eq!(within(&project), whole(&project));
+        assert_eq!(within(&project).0.len(), 1);
+        // the last block is said to start past the folder, so only the one before it would be read
+        let path = project.own_folder().join("state");
+        let bytes = fs::read(&path).unwrap();
+        let index = bytes
+            .windows(10)
+            .rposition(|window| window == br#","blocks":"#)
+            .unwrap()
+            + 10;
+        let mut blocks: Vec<(String, u64, u64)> =
+            serde_json::from_slice(&bytes[index..bytes.len() - 1]).unwrap();
+        assert!(blocks.len() > 2, "{} blocks", blocks.len());
+        blocks.last_mut().unwrap().0 = "data/tinz".to_owned();
+        let mut changed = bytes[..index].to_vec();
+        changed.extend(serde_json::to_vec(&blocks).unwrap());
+        changed.push(b'}');
+        fs::write(&path, changed).unwrap();
+        assert_eq!(within(&project), whole(&project));
+        assert_eq!(within(&project).0.len(), 1);
     }
 
     #[test]

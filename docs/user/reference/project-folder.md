@@ -41,7 +41,8 @@ the record lets windows and WSL, which cannot see each other's locks, keep out o
 
 | field | value |
 |---|---|
-| `version` | integer `1` |
+| `version` | integer `2`; a state of any other version counts as empty |
+| `at` | the byte offset where `files` ends, padded with spaces to 20 characters |
 | `files` | object keyed by project-relative path, using `/` |
 | `files[path].dataset` | dataset name |
 | `files[path].sha256` | locked member or file hash, 64 hex digits |
@@ -52,7 +53,8 @@ the record lets windows and WSL, which cannot see each other's locks, keep out o
 | `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
 | `files[path].adopted` | `true` when the file was already at its place with the pinned bytes before sync took it as placed, so a removal says so; absent otherwise |
 | `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the settled-sync shortcut](../../dev/architecture/sync-loop.md#settled-sync-shortcut) uses it to skip planning |
+| `blocks` | `files` cut into blocks of about 64 KiB, each as its first path and its byte range, start and end, in the file. a `path` or `sync` that names datasets reads only the blocks their folders need |
 
-missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.
+missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a state whose `at` or `blocks` do not match its records is read whole. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.
 
 recovery files hold `data.toml` and `data.lock` as they were before an add changed them, readable by you only on unix, and go once the add succeeds or is undone. errors name them without printing them. a killed add can leave one; compare it with the current files before using it.

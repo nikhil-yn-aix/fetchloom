@@ -156,7 +156,7 @@ impl Survey {
         let within = within.map(|folders| outermost(data_dir, folders));
         let (state, written) = match &within {
             None => project.state(),
-            Some(folders) => project.state_only(&|path| inside_any(path, folders)),
+            Some(folders) => project.state_within(folders, &|path| inside_any(path, folders)),
         };
         let Scanned {
             found: disk,
