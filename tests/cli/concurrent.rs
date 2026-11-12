@@ -3,7 +3,7 @@
 use std::fs;
 
 use crate::support::{Part, Result, Running, Sandbox, Server, file, reply, text};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use crate::{project::Background, support::wait_until};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -343,15 +343,15 @@ fn processes_place_from_a_full_cache_without_downloading() -> Result {
 
 /// a push stopped with ctrl-c waits for its copies to see the stop and remove the unfinished ones
 /// from the mirror's tmp/, where the run used to end first and leave them there for good, while a
-/// file another push is writing there stays. a disk that clones files, as macos's does, ends
-/// each copy before a stop can reach it, so this runs on linux.
-#[cfg(target_os = "linux")]
+/// file another push is writing there stays. the push holds each copy once its part is in tmp/,
+/// as a debug build lets a test ask, so the stop lands mid-copy even on a disk that clones files.
+#[cfg(unix)]
 #[test]
 fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
     let sandbox = Sandbox::new()?;
     let inputs = sandbox.folder("inputs")?;
-    for at in 0..32_u8 {
-        fs::write(inputs.join(format!("f{at:02}.bin")), vec![at; 256 << 10])?;
+    for at in 0..3_u8 {
+        fs::write(inputs.join(format!("f{at}.bin")), vec![at; 1 << 10])?;
     }
     let inputs = inputs.display().to_string();
     let added = sandbox.run(&["add", &inputs, "--as", "inputs", "--yes"])?;
@@ -371,30 +371,22 @@ fn a_stopped_push_leaves_no_unfinished_copy_in_the_mirror() -> Result {
         }
         Ok(count)
     };
-    let to = mirror.display().to_string();
-    // a push that ends before its stop arrives proves nothing, so it copies again
-    for _ in 0..5 {
-        let mut pushing = Background::start(sandbox.command(&["push", "--to", &to, "--yes"]))?;
-        let mut ended = false;
-        wait_until("a copy in the mirror's tmp/", || {
-            ended = pushing.child.try_wait()?.is_some();
-            Ok(ended || unfinished()? > 0)
-        })?;
-        // a push already reaped has no process left to stop
-        if !ended {
-            pushing.interrupt()?;
-        }
-        let (code, stderr) = pushing.finish()?;
-        if code == Some(0) {
-            fs::remove_dir_all(mirror.join("objects"))?;
-            continue;
-        }
-        assert_eq!(code, Some(130), "{stderr}");
-        assert_eq!(unfinished()?, 0, "{stderr}");
-        assert!(other.exists(), "another push's file stays");
-        return Ok(());
-    }
-    Err("every push ended before its stop arrived".into())
+    let mut command = sandbox.command(&["push", "--to", &mirror.display().to_string(), "--yes"]);
+    // a file that never appears, so only the stop lets the copies go on
+    command.env("FETCHLOOM_TEST_HOLD_PUSH", sandbox.work().join("never"));
+    let mut pushing = Background::start(command)?;
+    let mut ended = false;
+    wait_until("a copy held in the mirror's tmp/", || {
+        ended = pushing.child.try_wait()?.is_some();
+        Ok(ended || unfinished()? > 0)
+    })?;
+    assert!(!ended, "the push ended before it was stopped");
+    pushing.interrupt()?;
+    let (code, stderr) = pushing.finish()?;
+    assert_eq!(code, Some(130), "{stderr}");
+    assert_eq!(unfinished()?, 0, "{stderr}");
+    assert!(other.exists(), "another push's file stays");
+    Ok(())
 }
 
 /// two first adds in one empty folder: the second waits while the first holds the project, then

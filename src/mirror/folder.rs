@@ -755,6 +755,8 @@ impl Target {
         batch: Option<&Batch>,
     ) -> Result<Written<'_>, Fault> {
         let mut temp = self.temporary().map_err(Fault::Mirror)?;
+        #[cfg(debug_assertions)]
+        held(&self.stop);
         let file = temp.file().map_err(Fault::Mirror)?;
         let most = item.size.saturating_add(1);
         if copy_hashed(source, file, most, &self.stop)? != (item.size, item.digest) {
@@ -1022,6 +1024,19 @@ fn identity(file: &File) -> io::Result<Identity> {
             device: found.volume_serial_number(),
             number: found.file_index(),
         })
+    }
+}
+
+/// holds a copy whose part is in `tmp/` until a stop is asked or the file
+/// `FETCHLOOM_TEST_HOLD_PUSH` names appears, so a CLI test can stop a push in the middle of a copy
+/// on any disk, even one that clones files at once. release builds never read it.
+#[cfg(debug_assertions)]
+fn held(stop: &Stop) {
+    let Some(release) = std::env::var_os("FETCHLOOM_TEST_HOLD_PUSH").map(PathBuf::from) else {
+        return;
+    };
+    while !stop.is_asked() && !release.exists() {
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
