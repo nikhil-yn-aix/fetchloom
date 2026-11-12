@@ -2,11 +2,10 @@
 
 use std::{fmt, io};
 
-/// where people report what fetchloom gets wrong, such as a service's answer it cannot read.
 pub(crate) const ISSUES: &str = "https://github.com/nikhil-yn-aix/fetchloom/issues";
 
-/// the help for a service's answer fetchloom cannot read. the service most likely changed, which
-/// only a newer fetchloom fixes, so neither the person nor the dataset's owner can.
+/// the help for a service's answer fetchloom cannot read, which only a newer fetchloom fixes,
+/// not the person or the dataset's owner.
 pub(crate) fn report_answer() -> String {
     format!("this usually means the service changed. please report it at {ISSUES}")
 }
@@ -37,9 +36,9 @@ pub(crate) enum Kind {
     ProjectChanged,
     /// a check found data.lock out of date with data.toml.
     Outdated,
-    /// a strict check found data the run asked for not ready to use: a file kept with other bytes
-    /// than data.lock pins, one not in place yet, a recipe's result not here, or a dataset
-    /// data.lock does not pin as data.toml asks.
+    /// a strict check found data the run asked for not ready: a file with other bytes than
+    /// data.lock pins, one not in place yet, a recipe's result not here, or a dataset not pinned
+    /// as data.toml asks.
     NotReady,
     /// data.lock does not pin what a recipe in data.toml makes now, which only `fetchloom build`
     /// can pin, since it runs the project's code.
@@ -121,7 +120,7 @@ pub(crate) struct Error {
     pub(crate) message: String,
     pub(crate) details: Vec<String>,
     pub(crate) help: Option<Box<str>>,
-    /// a command's partial result, kept beside the error. boxed, since most errors carry none
+    /// a command's partial result. boxed, since most errors carry none.
     pub(crate) result: Option<Box<serde_json::Value>>,
     pub(crate) failures: Box<[FileFailure]>,
     /// the account that would let the request through, so a person can sign in and retry.
@@ -129,9 +128,8 @@ pub(crate) struct Error {
     /// the source showed no dataset of the name asked: none exists, or none this machine may
     /// see, so the name may be what is wrong.
     pub(crate) unseen: bool,
-    /// what the person cancelled, such as "the download of x.zip", when they ended a question
-    /// on purpose. a person reads that as a plain line, not as an error; `--json` and the exit
-    /// code report the error as before.
+    /// what a person cancelled on purpose, such as "the download of x.zip": shown as a plain line,
+    /// not an error, while `--json` and the exit code still report the error.
     pub(crate) cancelled: Option<Box<str>>,
 }
 
@@ -208,9 +206,8 @@ impl Error {
         self
     }
 
-    /// marks the error as a refusal `account` could lift, from a source that refuses a name that
-    /// does not exist as it refuses a private one, so the name may be what is wrong: its `page`
-    /// shows whether it is.
+    /// marks the error as a refusal `account` could lift, from a source that refuses a missing
+    /// name as it refuses a private one, so the name may be wrong: `page` shows which.
     pub(crate) fn needs_or_missing(mut self, account: crate::auth::Account, page: String) -> Error {
         self.need = Some(Box::new(crate::auth::Need {
             account,
@@ -266,8 +263,7 @@ impl Error {
         }
     }
 
-    /// the help with `command` in place of "the command" or "the same command" it says to run,
-    /// so a person or a script knows exactly what to run.
+    /// the help with `command` where it says to run "the command" or "the same command".
     pub(crate) fn naming(mut self, command: &str) -> Error {
         if let Some(help) = &mut self.help {
             let named = format!("run `{command}`");
@@ -392,8 +388,7 @@ mod tests {
         found
     }
 
-    /// the exit codes page names every kind with the code it ends with, and a next step for each,
-    /// and names no kind that does not exist.
+    /// the exit codes page also names no kind that does not exist.
     #[test]
     fn every_kind_is_documented_with_its_exit_code_and_next_step() {
         let kinds = every_kind![
@@ -467,8 +462,7 @@ mod tests {
         );
     }
 
-    /// a question names what was cancelled once its caller knows it, and leaves the message
-    /// scripts read as it was. an error that is no cancel stays one.
+    /// the message scripts read stays as it was.
     #[test]
     fn only_a_cancel_takes_the_name_of_what_was_cancelled() {
         let failed = Error::new(Kind::LocalIo, "x").cancelling("the download of x");
@@ -481,8 +475,7 @@ mod tests {
         assert_eq!(cancel.kind.exit_code(), 130);
     }
 
-    /// a cancel says that nothing changed once its caller knows so, and keeps the message scripts
-    /// read. an error that is no cancel stays as it is.
+    /// the message scripts read stays, and an error that is no cancel is left alone.
     #[test]
     fn a_cancel_says_nothing_changed_once_its_caller_knows_so() {
         let cancel = Error::new(Kind::Unconfirmed, "did not download x")
@@ -497,8 +490,7 @@ mod tests {
         assert_eq!((failed.cancelled, failed.message.as_str()), (None, "x"));
     }
 
-    /// a failed command's report rides along as its `--json` result, and one that cannot be
-    /// written as JSON, such as a map keyed by pairs, leaves the error as it was.
+    /// a report JSON cannot hold, such as a map keyed by pairs, leaves the error as it was.
     #[test]
     fn a_report_rides_along_as_the_result_when_json_can_hold_it() {
         use std::collections::BTreeMap;
@@ -516,7 +508,7 @@ mod tests {
         }
     }
 
-    /// an error names the first lines it is given and counts the rest, with thousands apart.
+    /// the count of the rest groups its thousands, as in 1,202.
     #[test]
     fn details_name_the_first_lines_and_count_the_rest() {
         let lines: Vec<String> = (1..=1_204).map(|n| format!("file {n}")).collect();
