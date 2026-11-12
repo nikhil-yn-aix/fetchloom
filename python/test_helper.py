@@ -737,6 +737,9 @@ class ProgramDiscovery(unittest.TestCase):
                 folder.mkdir()
                 (folder / name).write_text("")
                 (folder / name).chmod(0o755)
+            # a helper with no program beside it, as from a source tree, so only PATH is left
+            # even where an installed wheel bundles one
+            unbundled = str(Path(root, "source", "fetchloom", "__init__.py"))
             here = os.getcwd()
             os.chdir(clone)
             try:
@@ -744,6 +747,7 @@ class ProgramDiscovery(unittest.TestCase):
                     environment = {"PATH": os.pathsep.join(entries), "PATHEXT": ".exe"}
                     with self.subTest(entries=entries):
                         with patch.dict(os.environ, environment), \
+                             patch.object(fetchloom, "__file__", unbundled), \
                              patch.object(fetchloom.sysconfig, "get_path", return_value=""):
                             if found is None:
                                 with self.assertRaises(FileNotFoundError):
