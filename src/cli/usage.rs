@@ -20,7 +20,8 @@ pub(super) fn answer(err: &clap::Error, started: Instant) -> ExitCode {
     if err.kind() == ErrorKind::DisplayHelp {
         let color = args::color();
         let output = Output::new(Style::detect(color), Level::Normal, false, false);
-        let outcome = crate::output::help(&err.render().to_string(), color);
+        let shown = super::help::examples_first(&err.render().to_string());
+        let outcome = crate::output::help(&shown, color);
         return finish(&Context::new(output), None, outcome, started);
     }
     let read = args::Args::command()
@@ -329,6 +330,20 @@ fn command_meant(typed: &str, parent: Option<&str>) -> Option<String> {
             .try_fold(&root, |command, name| command.find_subcommand(name))
     })?;
     let lower = typed.to_lowercase();
+    // what other tools call them, which no spelling reaches
+    let other = match lower.as_str() {
+        "rm" => Some("remove"),
+        "ls" => Some("list"),
+        "version" => Some("--version"),
+        _ => None,
+    };
+    if let Some(meant) = other.filter(|_| parent.is_none()) {
+        return Some(super::meant(
+            &[typed],
+            &[meant],
+            format!("fetchloom {meant}"),
+        ));
+    }
     let names = holder
         .get_subcommands()
         .filter(|command| !command.is_hide_set())
@@ -539,6 +554,9 @@ mod tests {
             (&["fetchloom", "snyc"], "fetchloom sync"),
             (&["fetchloom", "cache", "gx"], "fetchloom cache gc"),
             (&["fetchloom", "VERIFY"], "fetchloom cache verify"),
+            (&["fetchloom", "rm", "iris"], "fetchloom remove"),
+            (&["fetchloom", "ls"], "fetchloom list"),
+            (&["fetchloom", "version"], "fetchloom --version"),
         ] {
             assert_eq!(
                 problem(arguments)?.help.as_deref(),

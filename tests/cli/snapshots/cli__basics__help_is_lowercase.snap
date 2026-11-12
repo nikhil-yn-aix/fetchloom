@@ -14,9 +14,10 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   fetchloom sync        fill data/ in a project you cloned
 
 a name is looked up on hugging face, kaggle and zenodo. a link works too:
-  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+  fetchloom add https://zenodo.org/records/3608990
 
-learn more with `fetchloom help concepts` and `fetchloom <command> --help`
+learn more: `fetchloom --help` lists the commands;
+`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
 
 usage: fetchloom [options] <command>
 

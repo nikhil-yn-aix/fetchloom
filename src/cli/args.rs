@@ -196,9 +196,10 @@ pub(crate) const INTRO: &str =
   fetchloom sync        fill data/ in a project you cloned
 
 a name is looked up on hugging face, kaggle and zenodo. a link works too:
-  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+  fetchloom add https://zenodo.org/records/3608990
 
-learn more with `fetchloom help concepts` and `fetchloom <command> --help`";
+learn more: `fetchloom --help` lists the commands;
+`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes";
 
 /// put the exact data a project needs onto any machine with one command
 #[derive(Debug, Parser)]
@@ -1058,7 +1059,7 @@ pub(crate) struct Completions {
 /// explain the ideas behind fetchloom, or one command
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Help {
-    /// concepts, environment, exit-codes, or a command such as add or cache gc
+    /// concepts, recipes, environment, exit-codes, or a command such as add or cache gc
     #[arg(value_name = "topic", help_heading = "arguments")]
     pub(crate) topic: Vec<String>,
 }

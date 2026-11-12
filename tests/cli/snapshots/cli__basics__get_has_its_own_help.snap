@@ -6,6 +6,12 @@ fetch something once, without a project
 
 usage: fetchloom get [options] <link>...
 
+examples:
+  fetchloom get iris
+  fetchloom get https://example.org/iris.csv -o iris.csv
+  fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
+  fetchloom get -i links.txt
+
 arguments:
   [link]...  what to download: a link, a DOI, an id such as zenodo:3608990, or
              search words. several links download together, but search words go
@@ -46,12 +52,6 @@ options:
       --mirror <url>       ask the mirror at this web address or folder for
                            files before their sources. repeat it for more
   -h, --help               print help
-
-examples:
-  fetchloom get iris
-  fetchloom get https://example.org/iris.csv -o iris.csv
-  fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
-  fetchloom get -i links.txt
 
 on disk: writes one folder for each link, or with -o the one file it names,
 through the cache. does not create data.toml or data.lock

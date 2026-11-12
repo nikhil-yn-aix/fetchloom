@@ -6,6 +6,12 @@ print a script that completes fetchloom's commands in a shell
 
 usage: fetchloom completions [options] <shell>
 
+examples:
+  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
+  fetchloom completions zsh > ~/.zfunc/_fetchloom
+  fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
+  fetchloom completions powershell | Out-String | Invoke-Expression
+
 arguments:
   <shell>  the shell that loads the script [possible values: bash, elvish, fish,
            powershell, zsh]
@@ -22,12 +28,6 @@ options:
       --mirror <url>  ask the mirror at this web address or folder for files
                       before their sources. repeat it for more
   -h, --help          print help
-
-examples:
-  fetchloom completions bash > ~/.local/share/bash-completion/completions/fetchloom
-  fetchloom completions zsh > ~/.zfunc/_fetchloom
-  fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
-  fetchloom completions powershell | Out-String | Invoke-Expression
 
 on disk: nothing. it prints the script on stdout, for a file your shell loads
 

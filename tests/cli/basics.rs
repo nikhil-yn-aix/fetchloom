@@ -318,7 +318,7 @@ fn welcome() -> Result {
     let output = Sandbox::new()?.run(&[])?;
     assert!(output.status.success());
     let stdout = text(&output.stdout)?;
-    assert!(stdout.lines().count() <= 17, "{stdout}");
+    assert!(stdout.lines().count() <= 18, "{stdout}");
     assert!(
         stdout.contains(&format!("\n  {}\n", NAMED.join("\n  "))),
         "{stdout}"
@@ -331,11 +331,10 @@ fn welcome() -> Result {
         "the welcome has a first command to copy"
     );
     assert!(
-        stdout
-            .lines()
-            .last()
-            .is_some_and(|line| line.contains("`fetchloom help concepts`")),
-        "the welcome ends with where to learn more"
+        stdout.ends_with(
+            "learn more: `fetchloom --help` lists the commands;\n`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes\n"
+        ),
+        "the welcome ends with where to learn more, naming every topic: {stdout}"
     );
     let mut settings = insta::Settings::clone_current();
     settings.add_filter(r"^fetchloom \d+\.\d+\.\d+\S*", "fetchloom [version]");
@@ -747,6 +746,35 @@ fn cli_output_full_stdout_is_an_error_for_answers_and_help() -> Result {
             text(&output.stderr)?
         );
     }
+    Ok(())
+}
+
+/// the welcome wraps between words at a narrow terminal, and the wordmark leads it only where
+/// the whole welcome still fits below it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_welcome_wraps_between_words_and_the_wordmark_shows_where_it_fits() -> Result {
+    let sandbox = Sandbox::new()?;
+    let wide = text(&sandbox.run(&[])?.stdout)?;
+    let welcome = sandbox.command(&[]);
+    let at = |stty: &str| crate::support::typed(&sandbox.work(), &welcome, stty, "", "");
+    let Some((code, narrow)) = at("rows 40 cols 60")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{narrow}");
+    assert!(
+        narrow.lines().all(|line| line.chars().count() <= 60),
+        "{narrow}"
+    );
+    assert_eq!(
+        narrow.split_whitespace().collect::<Vec<_>>(),
+        wide.split_whitespace().collect::<Vec<_>>(),
+        "no word is split or lost\n{narrow}"
+    );
+    let (_, short) = at("rows 24 cols 120")?.unwrap_or_default();
+    assert!(!short.contains("|__|"), "{short}");
+    let (_, tall) = at("rows 40 cols 120")?.unwrap_or_default();
+    assert!(tall.contains("|__|"), "{tall}");
     Ok(())
 }
 

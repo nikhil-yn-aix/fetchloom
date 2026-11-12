@@ -826,18 +826,16 @@ fn alone(context: &Arc<Context>, started: Instant) -> ExitCode {
         });
         return finish(context, Some("status"), outcome, started);
     }
-    let banner = context
-        .output
-        .answer_width()
-        .map_or_else(String::new, |width| {
-            crate::output::wordmark(width, Style::stdout_color(args::color()))
-        });
-    about(
-        context,
-        &banner,
-        &format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO),
-        started,
-    )
+    let welcome = format!("fetchloom {}\n\n{}", env!("CARGO_PKG_VERSION"), args::INTRO);
+    let Some(width) = context.output.answer_width() else {
+        return about(context, "", &welcome, started);
+    };
+    let welcome = crate::output::wrap_help(&welcome, width);
+    let rows = usize::from(console::Term::stdout().size().0);
+    let banner = crate::output::wordmark(width, Style::stdout_color(args::color()));
+    // the wordmark leads only where the whole welcome still fits below it
+    let fits = banner.lines().count() + welcome.lines().count() < rows;
+    about(context, if fits { &banner } else { "" }, &welcome, started)
 }
 /// asks before a large download, or one the disk holding the cache may lack room for, unless
 /// `--yes` already said yes. without a terminal to ask on, it stops and names the flag. `room` is

@@ -245,7 +245,8 @@ pub(super) fn show(context: &Context, topic: &[String], started: Instant) -> Exi
         .chain(std::iter::once("--help"));
     match args::command().try_get_matches_from(line) {
         Err(help) if help.kind() == ErrorKind::DisplayHelp => {
-            let outcome = crate::output::help(&help.render().to_string(), args::color());
+            let shown = examples_first(&help.render().to_string());
+            let outcome = crate::output::help(&shown, args::color());
             finish(context, None, outcome, started)
         }
         _ => finish::<()>(context, None, Err(unknown(topic)), started),
@@ -401,8 +402,48 @@ fn unknown(topic: &[String]) -> Error {
             let shown = super::meant(&typed, &meant, format!("fetchloom help {best}"));
             error.help(format!("did you mean `{shown}`?"))
         }
-        None => error.help("`fetchloom help concepts` explains the ideas and `fetchloom help recipes` how to write a recipe, `fetchloom help environment` and `fetchloom help exit-codes` list settings and codes, and `fetchloom --help` lists the commands"),
+        None => error
+            .detail("topics: concepts, recipes, environment, exit-codes")
+            .detail("or a command, such as add or cache gc")
+            .help("`fetchloom --help` lists the commands"),
     }
+}
+
+/// a command's help with its examples right below its usage, before the long list of options,
+/// so a person reads the commands to copy first.
+pub(super) fn examples_first(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let Some(start) = lines.iter().position(|line| *line == "examples:") else {
+        return text.to_owned();
+    };
+    let end = lines[start..]
+        .iter()
+        .position(|line| line.starts_with("on disk:") || line.starts_with("docs:"))
+        .map_or(lines.len(), |at| start + at);
+    let Some(usage) = lines.iter().position(|line| line.starts_with("usage:")) else {
+        return text.to_owned();
+    };
+    let Some(below) = lines[usage..]
+        .iter()
+        .position(|line| line.is_empty())
+        .map(|at| usage + at)
+        .filter(|below| *below < start)
+    else {
+        return text.to_owned();
+    };
+    let mut examples = lines[start..end].to_vec();
+    while examples.last().is_some_and(|line| line.is_empty()) {
+        examples.pop();
+    }
+    lines[..=below]
+        .iter()
+        .chain(&examples)
+        .chain(std::iter::once(&""))
+        .chain(&lines[below + 1..start])
+        .chain(&lines[end..])
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -526,6 +567,60 @@ mod tests {
                 assert!(!text.contains(word), "{name} says {word}");
             }
         }
+    }
+
+    /// every topic is named where a person looks for one: the argument of `help --help`, the
+    /// help of a topic that does not exist, and the welcome.
+    #[test]
+    fn every_topic_is_named_where_topics_are_listed() {
+        let command = args::Args::command();
+        let help = command.find_subcommand("help").unwrap();
+        let argument = help
+            .get_arguments()
+            .find(|arg| arg.is_positional())
+            .unwrap();
+        let argument = argument
+            .get_help()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let unknown = super::unknown(&["nothing".to_owned()]);
+        let details = unknown.details.join(" ");
+        for (name, _) in TOPICS {
+            assert!(argument.contains(name), "{argument} lacks {name}");
+            assert!(details.contains(name), "{details} lacks {name}");
+            assert!(args::INTRO.contains(name), "the welcome lacks {name}");
+        }
+        let lines = unknown.details.iter().map(AsRef::as_ref);
+        for line in lines.chain(unknown.help.as_deref()) {
+            assert!(line.chars().count() <= 56, "{line}");
+        }
+    }
+
+    /// a command's help puts its examples right below its usage and before its options, and
+    /// keeps every line it had.
+    #[test]
+    fn a_command_help_shows_its_examples_before_its_options() {
+        let rendered = args::command()
+            .try_get_matches_from(["fetchloom", "add", "--help"])
+            .unwrap_err()
+            .render()
+            .to_string();
+        let shown = super::examples_first(&rendered);
+        let lines: Vec<&str> = shown.lines().collect();
+        let at = |heading: &str| lines.iter().position(|line| *line == heading).unwrap();
+        let usage = lines
+            .iter()
+            .position(|line| line.starts_with("usage:"))
+            .unwrap();
+        assert_eq!(lines[usage + 3], "", "{shown}");
+        assert_eq!(at("examples:"), usage + 4, "{shown}");
+        assert!(at("examples:") < at("arguments:") && at("arguments:") < at("options:"));
+        assert!(lines.last().unwrap().starts_with("docs: "), "{shown}");
+        let mut before: Vec<&str> = rendered.lines().filter(|line| !line.is_empty()).collect();
+        let mut after: Vec<&str> = lines.into_iter().filter(|line| !line.is_empty()).collect();
+        before.sort_unstable();
+        after.sort_unstable();
+        assert_eq!(before, after);
     }
 
     #[test]

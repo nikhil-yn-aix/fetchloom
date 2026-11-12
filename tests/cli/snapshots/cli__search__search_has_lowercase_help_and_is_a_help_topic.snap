@@ -6,6 +6,12 @@ find datasets on hugging face, kaggle and zenodo
 
 usage: fetchloom search [options] <words>...
 
+examples:
+  fetchloom search iris
+  fetchloom search fashion mnist
+  fetchloom search iris --source kaggle,zenodo --limit 5
+  fetchloom search iris --json
+
 arguments:
   <words>...  dataset names or keywords, with or without quotes
 
@@ -28,12 +34,6 @@ options:
       --mirror <url>     ask the mirror at this web address or folder for files
                          before their sources. repeat it for more
   -h, --help             print help
-
-examples:
-  fetchloom search iris
-  fetchloom search fashion mnist
-  fetchloom search iris --source kaggle,zenodo --limit 5
-  fetchloom search iris --json
 
 on disk: nothing. prints the exact reference of each match, such as
 zenodo:3608990, and downloads nothing

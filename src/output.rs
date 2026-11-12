@@ -1136,7 +1136,9 @@ pub(crate) fn wrap_help(text: &str, width: usize) -> String {
         if !line.starts_with(' ') {
             examples = line == "examples:";
         }
-        if line.chars().count() <= width || (examples && line.starts_with("  ")) {
+        // a command on a line of its own stays whole too, so it can be copied
+        let command = line.starts_with("  fetchloom ") && !line.trim_start().contains("  ");
+        if line.chars().count() <= width || (examples && line.starts_with("  ")) || command {
             out.push(line.to_owned());
             continue;
         }

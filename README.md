@@ -66,12 +66,13 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   fetchloom sync        fill data/ in a project you cloned
 
 a name is looked up on hugging face, kaggle and zenodo. a link works too:
-  fetchloom add https://huggingface.co/datasets/scikit-learn/iris
+  fetchloom add https://zenodo.org/records/3608990
 
-learn more with `fetchloom help concepts` and `fetchloom <command> --help`
+learn more: `fetchloom --help` lists the commands;
+`fetchloom help <topic>` explains concepts, recipes, environment or exit-codes
 ```
 
-that is the introductory part of the welcome outside a project. it follows a version line and, at a wide terminal, a wordmark. inside a project, bare `fetchloom` shows its status. where an installer made it, `fl` is the same program under a shorter name: `fl sync` is `fetchloom sync`.
+that is the introductory part of the welcome outside a project. it follows a version line and, at a terminal wide and tall enough to show the whole welcome below it, a wordmark. inside a project, bare `fetchloom` shows its status. where an installer made it, `fl` is the same program under a shorter name: `fl sync` is `fetchloom sync`.
 
 files in `data/` are read-only by default. `sync` keeps your local edits and reports them as conflicts; check `fetchloom status` before `fetchloom sync --force`, which puts the original files back. [scripting](docs/user/scripting.md) covers JSON output and the python helper.
 
