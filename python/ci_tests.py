@@ -121,7 +121,8 @@ def run(args):
                   for line in references.read_text(encoding="utf-8").splitlines() if line}
     (folder / "snapshots.json").write_text(json.dumps(sorted(referenced), indent=2), encoding="utf-8")
     references.unlink()
-    junit = Path(document["rust-build-meta"]["target-directory"]) / "nextest/ci/junit.xml"
+    # nextest keeps its reports in the workspace's target folder, whatever CARGO_TARGET_DIR says
+    junit = ROOT / "target/nextest/ci/junit.xml"
     if junit.is_file():
         shutil.copyfile(junit, folder / "junit.xml")
         tests = list(ET.parse(junit).iter("testcase"))
