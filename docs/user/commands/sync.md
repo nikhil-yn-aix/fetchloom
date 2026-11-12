@@ -148,7 +148,7 @@ error: the data is not ready to use
   help: each line says what makes it ready
 ```
 
-once the file holds the pinned bytes again, `sync --strict` exits 0. with `--json`, `errors[0].kind` is `data.not_ready` and `result` holds the sync's report as without `--strict`.
+once the file holds the pinned bytes again, `sync --strict` exits 0. a strict sync that fails tells no closing `Ok` line before its error, such as `Ok all pinned files are in place by size and time, nothing to do` when only a recipe is not built yet, since the error says what is not ready. with `--json`, `errors[0].kind` is `data.not_ready` and `result` holds the sync's report as without `--strict`.
 
 save your files before using `--force`. it overwrites edited and untracked files at pinned paths and names each one, as in `Replaced data/iris/iris.csv · discarding your edit`; JSON lists them in `result.placement.overwritten`, and `--dry-run` warns about each first. it does not delete extra files, or edited files no dataset needs now. a file it replaces keeps its bytes until the pinned files are in place: sync renames it to `.fetchloom-<hex>.old` in the same folder, deletes that once the pinned files have their names, and renames it back if placing fails or is stopped. a run cut off midway can leave such a file, which status lists as extra.
 

@@ -333,24 +333,34 @@ fn uncommitted(files: &[Uncommitted<'_>], ignored: bool) -> Option<(String, Stri
 /// data it was asked for is not ready to use once it is done.
 pub(super) async fn sync(context: &Context, args: args::Sync) -> Result<Report, Error> {
     let strict = args.strict.then(|| args.names.clone());
-    let report = sync_as_asked(context, args).await?;
-    let (Some(names), Some(placement)) = (strict, &report.placement) else {
-        return Ok(report);
+    let (report, closing) = sync_as_asked(context, args).await?;
+    let ready = match (strict, &report.placement) {
+        (Some(names), Some(placement)) => {
+            let project = Project {
+                root: report.project.clone(),
+            };
+            let scope = if names.is_empty() {
+                Scope::All
+            } else {
+                Scope::Only(names.into_iter().collect())
+            };
+            let unready = super::status::ready::after_sync(&project, &scope, placement)?;
+            super::status::ready::ready(&unready)
+        }
+        _ => Ok(()),
     };
-    let project = Project {
-        root: report.project.clone(),
-    };
-    let scope = if names.is_empty() {
-        Scope::All
-    } else {
-        Scope::Only(names.into_iter().collect())
-    };
-    let unready = super::status::ready::after_sync(&project, &scope, placement)?;
-    super::status::ready::ready(&unready).map_err(|error| error.with_report(&report))?;
+    if let Some(closing) = closing {
+        closing.tell(&context.output, ready.is_ok());
+    }
+    ready.map_err(|error| error.with_report(&report))?;
     Ok(report)
 }
 
-async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Error> {
+/// the sync `args` asks for, and its last lines, which a dry run tells itself.
+async fn sync_as_asked(
+    context: &Context,
+    args: args::Sync,
+) -> Result<(Report, Option<Closing>), Error> {
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
     // a dry run changes nothing, so like `lock --check` it needs no hold
@@ -363,7 +373,7 @@ async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Er
             // sync that would write nothing
             Err(error) if error.kind == Kind::LocalIo => {
                 return match settled_unheld(context, &project, &args)? {
-                    Some(report) => Ok(report),
+                    Some((report, closing)) => Ok((report, Some(closing))),
                     None => Err(error),
                 };
             }
@@ -375,9 +385,9 @@ async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Er
     if !dry_run
         && !args.locked
         && !args.verify
-        && let Some(report) = settled_named(context, &project, &manifest, &text, &scope)?
+        && let Some((report, closing)) = settled_named(context, &project, &manifest, &text, &scope)?
     {
-        return Ok(report);
+        return Ok((report, Some(closing)));
     }
     let read = project.lock_and_text()?;
     if args.locked {
@@ -396,7 +406,9 @@ async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Er
             .map(|(_, text)| digest::sha256(text.as_bytes())),
     };
     if dry_run {
-        return preview_sync(context, &project, &manifest, read, &seen, &args, scope).await;
+        return preview_sync(context, &project, &manifest, read, &seen, &args, scope)
+            .await
+            .map(|report| (report, None));
     }
     let old = read.map(|(lock, _)| lock);
     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
@@ -424,17 +436,16 @@ async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Er
     // a locked run places what the sources serve before it stops for the results only a
     // build makes, so a job still checks every source
     let stops = args.locked && !placement.unbuilt.is_empty();
-    if !stops {
-        tell_synced(
-            context,
+    let closing = (!stops).then(|| {
+        closing(
             &project,
             &manifest,
             &work.scope,
             lock_changed,
             &placement,
             args.verify,
-        );
-    }
+        )
+    });
     unbuilt_locked(
         stops,
         Report {
@@ -446,6 +457,7 @@ async fn sync_as_asked(context: &Context, args: args::Sync) -> Result<Report, Er
             ..Report::default()
         },
     )
+    .map(|report| (report, closing))
 }
 
 /// `report`, or when the run `stops` for the recipes whose pinned results its placement left
@@ -478,17 +490,17 @@ pub(super) fn selected(
 }
 
 /// a sync of named datasets that would write nothing, found from their pins and their folders
-/// alone, so it costs what they hold rather than what the project holds. none when that cannot
-/// tell: a run of every dataset, one that would place or record anything, or one whose hashing
-/// asks for the state to be written again, which needs every record. the whole run then starts
-/// over.
+/// alone, so it costs what they hold rather than what the project holds, with its last lines.
+/// none when that cannot tell: a run of every dataset, one that would place or record anything,
+/// or one whose hashing asks for the state to be written again, which needs every record. the
+/// whole run then starts over.
 fn settled_named(
     context: &Context,
     project: &Project,
     manifest: &Manifest,
     text: &str,
     scope: &Scope,
-) -> Result<Option<Report>, Error> {
+) -> Result<Option<(Report, Closing)>, Error> {
     let Scope::Only(names) = scope else {
         return Ok(None);
     };
@@ -527,26 +539,27 @@ fn settled_named(
     context.stop.finish();
     register(&work);
     ignore_data(&work, manifest)?;
-    tell_synced(context, project, manifest, scope, false, &placement, false);
-    Ok(Some(Report {
+    let closing = closing(project, manifest, scope, false, &placement, false);
+    let report = Report {
         selected: Some(scope.clone()),
         project: project.root.clone(),
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
         ..Report::default()
-    }))
+    };
+    Ok(Some((report, closing)))
 }
 
-/// a sync that would write nothing, found without the project's hold: data.toml and data.lock
-/// are byte for byte as the last complete sync left them, every file still looks as placed, no
-/// doubt is open, and the ignore rule is in place. none when a sync would write anything, which
-/// needs the hold.
+/// a sync that would write nothing, found without the project's hold, with its last lines:
+/// data.toml and data.lock are byte for byte as the last complete sync left them, every file
+/// still looks as placed, no doubt is open, and the ignore rule is in place. none when a sync
+/// would write anything, which needs the hold.
 fn settled_unheld(
     context: &Context,
     project: &Project,
     args: &args::Sync,
-) -> Result<Option<Report>, Error> {
+) -> Result<Option<(Report, Closing)>, Error> {
     let (text, manifest) = project.manifest()?;
     let scope = selected(&manifest, &args.names, "sync")?;
     let Some((lock, lock_text)) = project.lock_and_text()? else {
@@ -592,35 +605,48 @@ fn settled_unheld(
     if held && let Err(err) = cache.register(&project.root) {
         tracing::debug!(%err, "could not list a read-only project in the cache");
     }
-    tell_synced(
-        context,
-        project,
-        &manifest,
-        &scope,
-        false,
-        &placement,
-        args.verify,
-    );
-    Ok(Some(Report {
+    let closing = closing(project, &manifest, &scope, false, &placement, args.verify);
+    let report = Report {
         project: project.root.clone(),
         selected: Some(scope),
         datasets: Vec::new(),
         lock_changed: false,
         placement: Some(placement),
         ..Report::default()
-    }))
+    };
+    Ok(Some((report, closing)))
+}
+
+/// the last lines of a sync: what it found or did, and what to do next.
+struct Closing {
+    verb: &'static str,
+    text: String,
+    next: Option<String>,
+}
+
+impl Closing {
+    /// tells the lines. a closing `Ok` says the sync found nothing amiss, so a strict sync whose
+    /// data is not `ready` leaves it untold, and its error says what is not ready instead.
+    fn tell(self, output: &Output, ready: bool) {
+        if self.verb == "Ok" && !ready {
+            return;
+        }
+        output.done(self.verb, &self.text);
+        if let Some(next) = self.next {
+            output.next(&next);
+        }
+    }
 }
 
 /// the last lines of a sync of `scope`: nothing to do, or what it synced and what to do next.
-fn tell_synced(
-    context: &Context,
+fn closing(
     project: &Project,
     manifest: &Manifest,
     scope: &Scope,
     lock_changed: bool,
     placement: &Placement,
     verified: bool,
-) {
+) -> Closing {
     if !lock_changed
         && placement.placed + placement.replaced + placement.removed == 0
         && placement.kept.is_empty()
@@ -628,39 +654,42 @@ fn tell_synced(
         && placement.adopted.is_empty()
     {
         let found = in_place(manifest, scope, verified);
-        context.output.done(
-            "Ok",
-            &if verified {
-                format!("{found}; nothing to do")
-            } else {
-                format!("{found}, nothing to do")
-            },
-        );
+        let text = if verified {
+            format!("{found}; nothing to do")
+        } else {
+            format!("{found}, nothing to do")
+        };
+        return Closing {
+            verb: "Ok",
+            text,
+            next: None,
+        };
+    }
+    let (verb, text) = synced(manifest, scope, placement.kept.len(), &placement.unbuilt);
+    // `path` answers only a dataset placed in the data folder, and the line names one this
+    // sync just placed
+    let first = placement.filled.iter().find(|name| {
+        scope.includes(name)
+            && manifest
+                .datasets
+                .get(*name)
+                .is_some_and(|entry| entry.place)
+            && !placement.unbuilt.contains(*name)
+    });
+    let next = if lock_changed {
+        Some(format!(
+            "commit {}, so other clones use these pins",
+            committed(project)
+        ))
     } else {
-        let (verb, text) = synced(manifest, scope, placement.kept.len(), &placement.unbuilt);
-        context.output.done(verb, &text);
-        // `path` answers only a dataset placed in the data folder, and the line names one this
-        // sync just placed
-        let first = placement.filled.iter().find(|name| {
-            scope.includes(name)
-                && manifest
-                    .datasets
-                    .get(*name)
-                    .is_some_and(|entry| entry.place)
-                && !placement.unbuilt.contains(*name)
-        });
-        if lock_changed {
-            context.output.next(&format!(
-                "commit {}, so other clones use these pins",
-                committed(project)
-            ));
-        } else if let Some(name) = first {
-            context.output.next(&format!(
+        first.map(|name| {
+            format!(
                 "`{}` tells your scripts where {name} is",
                 command(&format!("path {name}"))
-            ));
-        }
-    }
+            )
+        })
+    };
+    Closing { verb, text, next }
 }
 
 /// the last line of a sync of `scope` that changed something, as its verb and text: what it

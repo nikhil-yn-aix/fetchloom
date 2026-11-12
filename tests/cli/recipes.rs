@@ -86,6 +86,35 @@ fn sync_warns_of_a_recipe_not_built_yet() -> Result {
     Ok(())
 }
 
+/// a strict sync that fails, here for a recipe not built yet, never first says that everything
+/// is in place: its error says what is not ready. once the data is ready, it says so again.
+#[test]
+fn a_strict_sync_that_fails_says_no_ok_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(&sandbox, &server, WRITE)?;
+    let said_ok = |stderr: &str| {
+        stderr
+            .lines()
+            .any(|line| line.trim_start().starts_with("Ok "))
+    };
+    let failed = sandbox.run(&["sync", "--strict"])?;
+    let stderr = text(&failed.stderr)?;
+    assert_eq!(failed.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("error: the data is not ready to use\n"),
+        "{stderr}"
+    );
+    assert!(!said_ok(&stderr), "{stderr}");
+    let built = build(&sandbox, &["build"])?;
+    assert_eq!(built.status.code(), Some(0), "{}", text(&built.stderr)?);
+    let ready = sandbox.run(&["sync", "--strict"])?;
+    let stderr = text(&ready.stderr)?;
+    assert_eq!(ready.status.code(), Some(0), "{stderr}");
+    assert!(said_ok(&stderr), "{stderr}");
+    Ok(())
+}
+
 /// a recipe whose code changed since its build keeps the result data.lock pins: sync and path
 /// place that result and say what changed and which build makes it again, once each.
 #[test]
