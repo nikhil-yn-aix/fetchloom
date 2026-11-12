@@ -534,6 +534,50 @@ fn an_import_the_cache_disk_cannot_hold_asks_first() -> Result {
     Ok(())
 }
 
+/// a file whose name is not text is refused by its path in the folder imported, at its top as
+/// below it.
+#[cfg(unix)]
+#[test]
+fn a_name_that_is_not_text_is_refused_by_its_path_in_the_folder() -> Result {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let sandbox = Sandbox::new()?;
+    let notes = sandbox.folder("notes")?;
+    fs::create_dir(notes.join("inner"))?;
+    let name = OsString::from_vec(b"notes-\xff.csv".to_vec());
+    // apfs and other filesystems refuse a name that is not UTF-8, so no such file reaches
+    // fetchloom there
+    match fs::write(notes.join(&name), b"1\n") {
+        Err(err) if err.raw_os_error() == Some(rustix::io::Errno::ILSEQ.raw_os_error()) => {
+            return Ok(());
+        }
+        made => made?,
+    }
+    fs::write(notes.join("inner").join(&name), b"1\n")?;
+    let refusal = |path: &str| {
+        format!(
+            "error: ../notes holds \"{path}\", which fetchloom refuses because it is not text every machine can read\n"
+        )
+    };
+    let top = sandbox.run(&["add", "../notes"])?;
+    assert_eq!(top.status.code(), Some(10));
+    assert!(
+        text(&top.stderr)?.starts_with(&refusal("notes-\u{fffd}.csv")),
+        "{}",
+        text(&top.stderr)?
+    );
+    fs::remove_file(notes.join(&name))?;
+    let below = sandbox.run(&["add", "../notes"])?;
+    assert_eq!(below.status.code(), Some(10));
+    assert!(
+        text(&below.stderr)?.starts_with(&refusal("inner/notes-\u{fffd}.csv")),
+        "{}",
+        text(&below.stderr)?
+    );
+    Ok(())
+}
+
 /// two files whose names differ only in how their unicode is written, as a mac and a linux
 /// machine may write café, are refused as that, never as a file and a folder.
 #[cfg(not(target_os = "macos"))]

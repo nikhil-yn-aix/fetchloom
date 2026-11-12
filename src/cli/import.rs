@@ -248,7 +248,7 @@ pub(super) fn walk(
                 let Some(file_name) = file_name.to_str() else {
                     return Err(refused(
                         shown,
-                        &format!("{folder}/{}", file_name.to_string_lossy()),
+                        &name::joined(&folder, &file_name.to_string_lossy()),
                         "it is not text every machine can read",
                     ));
                 };
