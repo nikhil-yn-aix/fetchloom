@@ -373,15 +373,24 @@ fn every_byte_in(done: u64, total: Option<u64>) -> bool {
     total.is_some_and(|total| total > 0 && done >= total)
 }
 
+/// how far a bar got of `total`, both in the total's unit, with two decimals below one of it.
 fn fraction(done: u64, total: u64) -> String {
-    let done = units::size(done);
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let total = units::size(total);
-    match (done.rsplit_once(' '), total.rsplit_once(' ')) {
-        (Some((value, unit)), Some((_, total_unit))) if unit == total_unit => {
-            format!("{value}/{total}")
-        }
-        _ => format!("{done}/{total}"),
+    let power = total
+        .rsplit_once(' ')
+        .and_then(|(_, unit)| UNITS.iter().position(|known| *known == unit))
+        .unwrap_or_default();
+    if power == 0 {
+        return format!("{done}/{total}");
     }
+    let divisor = 1024_u128.pow(u32::try_from(power).unwrap_or_default());
+    let hundredths = (u128::from(done) * 100 + divisor / 2) / divisor;
+    if hundredths < 100 {
+        return format!("0.{hundredths:02}/{total}");
+    }
+    let tenths = (u128::from(done) * 10 + divisor / 2) / divisor;
+    format!("{}.{}/{total}", tenths / 10, tenths % 10)
 }
 
 /// where bars draw: stderr, with the cursor back at the start of the last bar's line after each
@@ -903,12 +912,20 @@ mod tests {
         );
     }
 
+    /// a bar tells how far it got in the unit of its total all the way, with two decimals
+    /// below one of it, so the count never jumps from `1002.0 MiB/2.0 GiB` to `1.0/2.0 GiB`.
     #[test]
-    fn counters_share_units_only_when_the_units_match() {
+    fn a_fraction_counts_in_the_unit_of_its_total() {
+        let mib = 1024 * 1024;
         assert_eq!(fraction(1024, 4096), "1.0/4.0 KiB");
-        assert_eq!(fraction(512, 4096), "512 B/4.0 KiB");
+        assert_eq!(fraction(512, 4096), "0.50/4.0 KiB");
         assert_eq!(fraction(1, 4), "1/4 B");
         assert_eq!(fraction(0, 0), "0/0 B");
+        assert_eq!(fraction(1002 * mib, 2048 * mib), "0.98/2.0 GiB");
+        assert_eq!(fraction(1946 * mib, 2048 * mib), "1.9/2.0 GiB");
+        assert_eq!(fraction(0, 2048 * mib), "0.00/2.0 GiB");
+        assert_eq!(fraction(1023 * mib + mib / 2, 2048 * mib), "1.0/2.0 GiB");
+        assert_eq!(fraction(9 * 1024, 136 * mib), "0.01/136.0 MiB");
     }
 
     #[test]
@@ -1143,7 +1160,7 @@ mod tests {
                 busy,
                 false
             ),
-            "9.0 KiB/136.0 MiB · 2.9 KiB/s · 3 s",
+            "0.01/136.0 MiB · 2.9 KiB/s · 3 s",
             "three seconds at the start of a slow link cannot tell thirteen hours"
         );
         assert_eq!(
@@ -1168,7 +1185,7 @@ mod tests {
                 busy,
                 false
             ),
-            "1.0 KiB/136.0 MiB · 2.9 KiB/s · 801 min 00 s left",
+            "0.00/136.0 MiB · 2.9 KiB/s · 801 min 00 s left",
             "half a minute of a steady slow rate is worth telling"
         );
     }
