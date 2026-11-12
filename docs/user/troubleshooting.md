@@ -1,6 +1,6 @@
 # troubleshooting
 
-error text, exit codes and local status distinguish missing inputs from changed bytes and access problems.
+find the error or warning you see in the tables below, with its cause and fix.
 
 ```sh
 fetchloom status
@@ -18,9 +18,9 @@ fetchloom -vv sync 2> fetchloom-debug.txt
 fetchloom --version -v >> fetchloom-debug.txt
 ```
 
-on windows, run these lines in cmd or powershell 7; windows powershell 5.1 rewrites redirected stderr. attach `fetchloom-debug.txt`, the exit code, and the `data.toml` and `data.lock` entries for the dataset. debug lines say whether each file came from the cache or a download, why a placed file was hashed again, which placement method was used and why a better one was given up, which host a stored credential was sent to, and each retry and redirect.
+on windows, run these lines in cmd or powershell 7, since windows powershell 5.1 rewrites redirected stderr. attach `fetchloom-debug.txt`, the exit code, and the `data.toml` and `data.lock` entries for the dataset. the debug lines say where each file came from, why a file was hashed again, how it was placed, which host a key was sent to, and each retry and redirect.
 
-credentials are logged by host and header, not by value. URL logins and recognized secret fields show as `***`; arbitrary secret fields cannot be identified reliably. the log also names local paths, such as the project folder, dataset references, and every link fetchloom asked for with its query, search words included, so read the file before sharing it. [what leaves your machine](concepts.md#what-leaves-your-machine) lists what fetchloom itself sends. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
+keys are never logged, and logins and known secret fields in links show as `***`, but a secret under a name fetchloom does not know can show. the log also names local paths and every link fetchloom asked for, search words included, so read the file before sharing it. `FETCHLOOM_LOG=fetchloom::net=debug` limits the log to one part of fetchloom when the full log is too long.
 
 ## errors
 
@@ -30,7 +30,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: there is no command called "init"` | no setup command is needed | run `fetchloom add <link>` in the project folder |
 | `error: data.toml has an unfinished git merge conflict`, or `data.lock has ...` | a git merge left both sides of a change between its `<<<<<<<`, `=======` and `>>>>>>>` lines | run `fetchloom lock`, which merges both files without downloading; where both sides changed one dataset, it asks for `--ours <name>` or `--theirs <name>`, as [after a git merge](commands/lock.md#after-a-git-merge) says |
 | `error: there is no data.toml in this folder or any folder above it inside the git repository at /home/ada/thesis/experiment` | the folder is in a git repository of its own, and the search for a project stops at its top | run `fetchloom add <link>` to start a project there, or name the folder of the project above it with `-C`, as in `fetchloom -C .. sync`; see [finding the project](reference/project-folder.md#finding-the-project) |
-| `error: <link> is missing` or `error: <link>... is missing` | `add` or `get` needs a reference | pass a dataset link, or a list to `get -i`; use `fetchloom get --help` for syntax |
+| `error: add needs <link>, <path> or -i <file>`, or `error: <link>... is missing` from `get` | `add` or `get` needs a reference | pass a dataset link, or a list with `-i`; `fetchloom add --help` shows the forms |
 | `error: offline, and 1 file data.lock names is not in the cache` | an offline project needs bytes neither the cache nor the data folder holds | sync online first; remove `--offline` and unset `FETCHLOOM_OFFLINE` if it is `1` or `true`. a CI job can restore a cache that holds them, as [CI](ci.md) shows |
 | `error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone` | [mirror-only mode](mirrors.md#mirror-only-mode) is on, and no mirror holds the file, as the details say for each mirror | ask whoever keeps the mirror to add it; a fetchloom on a machine that may ask sources can sync the project and fill the mirror with [`fetchloom push`](commands/push.md) |
 | `error: gave up on huggingface.co after 5 tries` | the network or the site stayed down longer than the retries wait | run the same command when the network is back; downloaded bytes are kept and the next run goes on from them where the server allows it, as the line under the error says. on a network that drops for minutes, set `FETCHLOOM_RETRIES=10` |
@@ -51,7 +51,7 @@ credentials are logged by host and header, not by value. URL logins and recogniz
 | `error: huggingface.co has no dataset scikit-learn/irsi, or it is private`, or signed in, `error: hf:datasets/scikit-learn/irsi does not exist, or is not public` | the name has a typo, or the dataset is private: the hub answers both alike | when the owner has a public dataset a typo away, `add`'s help gives the command meant, signed in or not, as ``did you mean `fetchloom add hf:datasets/scikit-learn/iris`?``. otherwise check the name at the page the help gives. only for a private dataset does signing in help, with an account that can read it; at a terminal the offer to sign in defaults to no |
 | `error: huggingface.co refused the key in HF_TOKEN for hf:datasets/bigcode/the-stack` | `HF_TOKEN` holds an old or wrong key, which goes with every request to huggingface.co | set `HF_TOKEN` to a current key from https://huggingface.co/settings/tokens, or unset it to use the key `fetchloom auth login hf` saves. a refused key in the token file gets `sign in again with fetchloom auth login hf` instead |
 | `error: huggingface.co has no public model scikit-learn/iris, but it has a dataset of that name` | a link without `/datasets/` names a model | use the dataset link the help gives, as `https://huggingface.co/datasets/scikit-learn/iris` |
-| `error: dataset has no file or folder called not-a-file.csv` | the requested member is absent | use one of the dataset paths named in the error details |
+| `error: iris has no file or folder called not-a-file.csv` | `path` was given a file the dataset does not hold | use one of the paths the error names |
 | `error: kaggle:epa/epa-historical-air-quality cannot be fetched through kaggle's api` | kaggle lists the dataset, but its api sends none of its files, which a later try does not change | open the dataset's page to see how kaggle offers it, or choose another dataset |
 
 for a size mismatch, the full stderr answer can be:
@@ -62,7 +62,7 @@ error: iris/iris.csv is not the file data.lock records
   help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade iris`
 ```
 
-fetchloom places nothing it cannot check, so the clone stays without the file. to keep the pinned bytes, someone who has them, such as whoever pinned them, runs `fetchloom push --to <folder>` into a folder you can read, then `fetchloom sync --mirror <folder>` takes them from there, checked against data.lock. if the new input is intended, run the suggested upgrade, sync and commit the lock. with `--json` the error's `fix` is null, since only a person may choose other bytes than data.lock pins.
+fetchloom places nothing it cannot check, so the clone stays without the file. to keep the pinned bytes, someone who has them, such as whoever pinned them, runs `fetchloom push --to <folder>` into a folder you can read, and `fetchloom sync --mirror <folder>` takes them from there. if the new bytes are intended, run the upgrade the help names, sync and commit the lock. with `--json` the error's `fix` is null, since only a person may choose other bytes than data.lock pins.
 
 ## warnings and unexpected results
 
@@ -160,12 +160,12 @@ in a new terminal, `fetchloom settings` shows the `rate` row coming from the env
 
 restore a broken lock from git when you need its exact pins. deleting it and running `fetchloom lock` can resolve newer inputs. a lock with a higher `version` comes from a newer fetchloom and needs one.
 
-a failed `add` attempts to restore both `data.toml` and `data.lock`. if either restoration fails, restore the metadata from the named recovery file under `.fetchloom/`. it holds the original bytes, not a JSON string; do not paste its contents into logs, since they may contain credentials. cached downloads and files already placed can remain.
+a failed `add` puts `data.toml` and `data.lock` back. if that fails, copy them back from the recovery file the error names under `.fetchloom/`, which holds their bytes as they were; never paste it into a log, since it may hold credentials.
 
-if `remove` changed metadata but could not delete files, fix the reported local error and run sync to finish removal.
+if `remove` changed `data.toml` and `data.lock` but could not delete files, fix the reported error and run `fetchloom sync` to finish.
 
-an interrupted project command can leave an owner record. only delete the exact owner path named by a waiting command after confirming that its owning process has ended. records from another operating system are never reclaimed by age or pid. [project state](reference/project-folder.md#owner-record) explains the locking rules.
+a command that was killed can leave a record that it holds the project. delete only the exact path a waiting command names, and only once the process it names has ended; [owner record](reference/project-folder.md#owner-record) explains the rules.
 
 ### the system cannot start another worker
 
-local placement, cache verification and archive work fall back to the calling thread when the OS refuses a worker. before starting the async runtime, fetchloom probes whether a thread can be created. a refused probe reports `local.io` (exit 50), including in JSON. the probe does not reserve resources for later runtime workers. reduce `FETCHLOOM_THREADS` or raise the process or container's thread limit, then retry. this is a resource failure, not a corrupt cache.
+before it starts, fetchloom checks that the system lets it start a thread, and stops with `local.io`, exit 50, when it does not. lower `FETCHLOOM_THREADS`, or raise the process's or container's thread limit, then retry. this is a resource limit, not a damaged cache.
