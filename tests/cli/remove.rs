@@ -6,6 +6,27 @@ use std::fs;
 use crate::project::{IRIS, PATH, added, clone};
 use crate::support::{Result, Sandbox, Server, file, json, text};
 
+/// `remove` given no name lists the datasets it could remove and names one as an example,
+/// which `--json` gives as no fix, since only a person knows which one to remove.
+#[test]
+fn remove_without_a_name_lists_the_datasets() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.iris]\nref = \"zenodo:1\"\n\n[datasets.wine]\nref = \"zenodo:2\"\n",
+    )?;
+    let output = sandbox.run(&["remove"])?;
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        text(&output.stderr)?,
+        "error: name the dataset to remove\n  datasets: iris, wine\n  help: name one of them, as in `fetchloom remove iris`\n"
+    );
+    let document = json(&sandbox.run(&["--json", "remove"])?)?;
+    assert_eq!(document["errors"][0]["kind"], "usage");
+    assert_eq!(document["errors"][0]["fix"], serde_json::Value::Null);
+    Ok(())
+}
+
 #[test]
 fn remove_drops_the_dataset_and_only_its_files() -> Result {
     let sandbox = Sandbox::new()?;

@@ -11,6 +11,9 @@ use crate::project::lock;
 use crate::project::manifest::{self, Manifest};
 
 pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Error> {
+    let Some(name) = args.name else {
+        return Err(unnamed(context));
+    };
     let project = find(&context.output)?;
     let dry_run = args.dry.dry_run;
     let _held = if dry_run {
@@ -19,14 +22,14 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         Some(hold(context, &project, "remove").await?)
     };
     let (text, manifest) = project.manifest()?;
-    known(&manifest, &args.name, "remove")?;
+    known(&manifest, &name, "remove")?;
     let readers: Vec<&str> = manifest
         .datasets
         .iter()
         .filter(|(_, entry)| {
             entry
                 .recipe()
-                .is_some_and(|recipe| recipe.from.contains(&args.name))
+                .is_some_and(|recipe| recipe.from.contains(&name))
         })
         .map(|(name, _)| name.as_str())
         .collect();
@@ -37,17 +40,16 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             (format!("{} and {last}", rest.join(", ")), "are", "their")
         };
         return Err(
-            Error::new(Kind::Usage, format!("{them} {are} made from {}", args.name)).help(format!(
-                "remove {them} first, or take {} out of {their} from in data.toml",
-                args.name
+            Error::new(Kind::Usage, format!("{them} {are} made from {name}")).help(format!(
+                "remove {them} first, or take {name} out of {their} from in data.toml"
             )),
         );
     }
-    let updated = manifest::without_dataset(&text, &args.name)?;
+    let updated = manifest::without_dataset(&text, &name)?;
     let new_manifest = Manifest::parse(&updated)?;
     let mut lock = project.lock()?.unwrap_or_default();
-    lock.datasets.retain(|dataset| dataset.name != args.name);
-    lock.derived.retain(|result| result.name != args.name);
+    lock.datasets.retain(|dataset| dataset.name != name);
+    lock.derived.retain(|result| result.name != name);
     let cache = if dry_run {
         peek_cache()?
     } else {
@@ -67,7 +69,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
         let preview = placing.preview_removal();
         context.output.step(
             "Would remove",
-            &format!("{} from data.toml and data.lock", args.name),
+            &format!("{name} from data.toml and data.lock"),
         );
         place::tell_preview(&context.output, &new_manifest, &Scope::All, &preview);
         dry_run_done(&context.output, None);
@@ -76,7 +78,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             pins: Vec::new(),
             placed: preview,
         };
-        return Ok(Report::dry(project.root, vec![args.name], outcome));
+        return Ok(Report::dry(project.root, vec![name], outcome));
     }
     // a stop asked while the data folder was read leaves the project as it was; once the files
     // change, the removal runs to its end
@@ -92,16 +94,46 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             super::project::command("sync")
         ))
     })?;
-    context.output.done("Removed", &args.name);
+    context.output.done("Removed", &name);
     context.output.next(&format!(
         "commit {}; after pulling, other clones remove unchanged files with `fetchloom sync`",
         committed(&project)
     ));
     Ok(Report {
         project: project.root,
-        datasets: vec![args.name],
+        datasets: vec![name],
         lock_changed: true,
         placement: Some(placement),
         ..Report::default()
     })
+}
+
+/// the error for `remove` given no name: the datasets the project has, and the command for one,
+/// as an example, since only a person knows which to remove.
+fn unnamed(context: &Context) -> Error {
+    const NAMED: usize = 10;
+    let error = Error::new(Kind::Usage, "name the dataset to remove");
+    let Some((_, manifest)) = find(&context.output)
+        .ok()
+        .and_then(|project| project.manifest().ok())
+    else {
+        return error.help("`fetchloom remove --help` says what it takes");
+    };
+    let names: Vec<&str> = manifest.datasets.keys().map(String::as_str).collect();
+    let Some(first) = names.first() else {
+        return error.help("data.toml has no datasets yet, so there is nothing to remove");
+    };
+    let more = match names.len().saturating_sub(NAMED) {
+        0 => String::new(),
+        more => format!(" and {} more", crate::units::grouped(more as u64)),
+    };
+    error
+        .detail(format!(
+            "datasets: {}{more}",
+            names[..names.len().min(NAMED)].join(", ")
+        ))
+        .help(format!(
+            "name one of them, as in `{}`",
+            super::project::command(&format!("remove {first}"))
+        ))
 }

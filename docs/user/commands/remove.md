@@ -55,7 +55,14 @@ edited files that a real removal would keep, and the folders that keep files fet
 
 ## exit codes
 
-0 means removal completed, even when edited files remain. invalid usage exits 2; local or invalid-project failures use 50. [exit codes](../reference/exit-codes.md) lists all kinds.
+0 means removal completed, even when edited files remain. invalid usage exits 2; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove, with one as an example:
+
+```text
+error: name the dataset to remove
+  datasets: iris, wine
+  help: name one of them, as in `fetchloom remove iris`
+```
+ [exit codes](../reference/exit-codes.md) lists all kinds.
 
 ## common mistakes
 

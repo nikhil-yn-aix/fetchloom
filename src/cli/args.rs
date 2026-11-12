@@ -792,7 +792,7 @@ pub(crate) struct Add {
 pub(crate) struct Remove {
     /// the dataset's name in data.toml
     #[arg(value_name = "name", help_heading = "arguments")]
-    pub(crate) name: String,
+    pub(crate) name: Option<String>,
 
     #[command(flatten)]
     pub(crate) dry: DryRun,
