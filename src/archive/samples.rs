@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use ::tar::{Builder, EntryType, Header};
 use ::zip::ZipWriter;
 use ::zip::write::SimpleFileOptions;
+use sevenz_rust2::encoder_options::Lzma2Options;
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
 use super::{Format, Input, Limits, Member, Unpacked, unpack};
@@ -173,9 +174,12 @@ pub(super) fn seven_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     })
 }
 
-/// a 7z of what `write` pushes into it.
+/// a 7z of what `write` pushes into it, in LZMA2 at level 1 unless `write` sets its methods:
+/// the writer's default level takes seconds over a test's few MiB, and the tar.xz builder uses
+/// level 1 too.
 pub(super) fn seven_zip_with(write: impl FnOnce(&mut ArchiveWriter<Cursor<Vec<u8>>>)) -> Vec<u8> {
     let mut writer = ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
+    writer.set_content_methods(vec![Lzma2Options::from_level(1).into()]);
     write(&mut writer);
     writer.finish().unwrap().into_inner()
 }
