@@ -191,9 +191,7 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
         _ => None,
     };
     let message = match (&usage, parent) {
-        (Some(forms), Some(parent))
-            if err.kind() == ErrorKind::MissingRequiredArgument && forms.len() > 1 =>
-        {
+        (Some(forms), Some(parent)) if err.kind() == ErrorKind::MissingRequiredArgument => {
             needs(parent, forms)
         }
         _ => message(err),
@@ -254,15 +252,26 @@ fn describe(err: &clap::Error, parent: Option<&str>) -> Error {
     error.help(help)
 }
 
-/// what a command with several forms needs, from the part of each usage line after its options,
-/// as in `add needs <link>, <path> or -i <file>`.
+/// what a command needs, from the part of each usage line after its options, without what is
+/// optional there, as in `add needs <link>, <path> or -i <file>` and `path needs <name>`.
 fn needs(command: &str, forms: &[String]) -> String {
-    let wanted: Vec<&str> = forms
+    let wanted: Vec<String> = forms
         .iter()
         .map(|form| {
-            form.split_once("[options] ")
-                .map_or(form.as_str(), |(_, wanted)| wanted)
-                .trim_end_matches("...")
+            let wanted = form
+                .split_once("[options] ")
+                .map_or(form.as_str(), |(_, wanted)| wanted);
+            let mut kept = String::new();
+            let mut optional = 0_usize;
+            for c in wanted.chars() {
+                match c {
+                    '[' => optional += 1,
+                    ']' => optional = optional.saturating_sub(1),
+                    c if optional == 0 => kept.push(c),
+                    _ => {}
+                }
+            }
+            kept.trim().trim_end_matches("...").to_owned()
         })
         .collect();
     format!("{command} needs {}", crate::units::listed(&wanted, "or"))
@@ -485,6 +494,63 @@ mod tests {
         ] {
             assert_eq!(problem(arguments)?.message, expected);
         }
+        Ok(())
+    }
+
+    /// every command clap refuses without an argument says so in one shape: the command, then
+    /// what it needs, as its usage names it, above the usage.
+    #[test]
+    fn a_missing_argument_is_named_as_what_the_command_needs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let table = [
+            ("add", "add needs <link>, <path> or -i <file>"),
+            ("get", "get needs <link>"),
+            ("search", "search needs <words>"),
+            ("drop", "drop needs <path>"),
+            ("path", "path needs <name>"),
+            ("completions", "completions needs <shell>"),
+            ("auth login", "auth login needs <account>"),
+            ("auth logout", "auth logout needs <account>"),
+        ];
+        for (command, expected) in table {
+            let arguments: Vec<&str> = std::iter::once("fetchloom")
+                .chain(command.split(' '))
+                .collect();
+            let error = problem(&arguments)?;
+            assert_eq!(error.message, expected, "{command}");
+            assert!(error.details[0].starts_with(&format!("usage: fetchloom {command} ")));
+        }
+        let root = args::Args::command();
+        let mut commands: Vec<Vec<&str>> = root
+            .get_subcommands()
+            .map(|command| vec![command.get_name()])
+            .collect();
+        let mut refused = Vec::new();
+        while let Some(path) = commands.pop() {
+            let command = path
+                .iter()
+                .try_fold(&root, |command, name| command.find_subcommand(name))
+                .ok_or("a listed command is not found")?;
+            commands.extend(command.get_subcommands().map(|inner| {
+                let mut deeper = path.clone();
+                deeper.push(inner.get_name());
+                deeper
+            }));
+            let arguments = std::iter::once("fetchloom").chain(path.iter().copied());
+            if args::Args::command()
+                .try_get_matches_from(arguments)
+                .is_err_and(|err| err.kind() == ErrorKind::MissingRequiredArgument)
+            {
+                refused.push(path.join(" "));
+            }
+        }
+        refused.sort_unstable();
+        let mut named: Vec<&str> = table.iter().map(|(command, _)| *command).collect();
+        named.sort_unstable();
+        assert_eq!(
+            refused, named,
+            "every command refused without an argument is in the table"
+        );
         Ok(())
     }
 

@@ -113,7 +113,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
 /// as an example, since only a person knows which to remove.
 fn unnamed(context: &Context) -> Error {
     const NAMED: usize = 10;
-    let error = Error::new(Kind::Usage, "name the dataset to remove");
+    let error = Error::new(Kind::Usage, "remove needs <name>");
     let Some((_, manifest)) = find(&context.output)
         .ok()
         .and_then(|project| project.manifest().ok())

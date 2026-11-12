@@ -58,7 +58,7 @@ the files a real removal would keep, and the folders they keep, are named in war
 0 means removal completed, even when edited files remain. invalid usage exits 2, as does a dataset a recipe reads; local or invalid-project failures use 50. `remove` with no name exits 2 too, and lists the datasets it could remove:
 
 ```text
-error: name the dataset to remove
+error: remove needs <name>
   datasets: iris, wine
   help: name one of them, as in `fetchloom remove iris`
 ```

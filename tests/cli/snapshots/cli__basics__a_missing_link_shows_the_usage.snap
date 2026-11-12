@@ -3,6 +3,6 @@ source: tests/cli/basics.rs
 assertion_line: 314
 expression: text(&output.stderr)?
 ---
-error: <link>... is missing
+error: get needs <link>
   usage: fetchloom get [options] <link>...
   help: `fetchloom get --help` says what it takes

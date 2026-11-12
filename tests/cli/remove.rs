@@ -19,7 +19,7 @@ fn remove_without_a_name_lists_the_datasets() -> Result {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         text(&output.stderr)?,
-        "error: name the dataset to remove\n  datasets: iris, wine\n  help: name one of them, as in `fetchloom remove iris`\n"
+        "error: remove needs <name>\n  datasets: iris, wine\n  help: name one of them, as in `fetchloom remove iris`\n"
     );
     let document = json(&sandbox.run(&["--json", "remove"])?)?;
     assert_eq!(document["errors"][0]["kind"], "usage");
