@@ -148,7 +148,7 @@ frame = pd.read_csv(fetchloom.get("https://example.org/iris.csv", "data.csv"))
 
 without `path`, an archive is unpacked into the folder `get()` returns, and one whose members share one top folder loses it, as [archives](concepts.md#archives) shows: a `flowers.zip` holding `flowers/iris.csv` gives a folder `flowers` with `iris.csv` in it. the files in that folder may be read-only links to the cache's one copy, shared with every project holding the same bytes, while the file `get()` writes at `path` is your own writable copy. to change data, write a new file, such as `df.to_csv("results/iris-clean.csv")`.
 
-the helpers run the executable installed with the package, else one in the python environment's scripts folders, else the first in an absolute folder on PATH, never one in the working folder or a relative or empty PATH entry, which a cloned project could hold, with `--json --progress`, and pass each warning on as a python warning, its help after its message, and the progress lines to `sys.stderr`, so a notebook shows a long download while it runs:
+the helpers run the executable installed with the package, else one in the python environment's scripts folders, else the first in an absolute folder on PATH, on windows one with a drive or a share and a root, as `C:\tools`, never one in the working folder or a relative or empty PATH entry, such as `\tools` or `C:tools`, which a cloned project could hold, with `--json --progress`, and pass each warning on as a python warning, its help after its message, and the progress lines to `sys.stderr`, so a notebook shows a long download while it runs:
 
 ```text
 Downloading big.bin · 2.9 MiB

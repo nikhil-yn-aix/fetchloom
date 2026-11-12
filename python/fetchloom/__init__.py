@@ -8,7 +8,9 @@ progress lines a long download prints go to ``sys.stderr`` as they come.
 
 import collections
 import json
+import ntpath
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -485,15 +487,28 @@ def _on_path(windows: bool) -> str | None:
     user may run, with each extension PATHEXT names on ``windows``. a relative folder, an empty
     entry among them, is passed over, and so is the working folder, which python's own search
     tries first on windows: a cloned project could hold a program of that name."""
+    paths = ntpath if windows else posixpath
     names = ["fetchloom"]
     if windows:
         extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
         names = [f"fetchloom{extension}" for extension in extensions if extension]
-    for folder in os.environ.get("PATH", os.defpath).split(os.pathsep):
-        if not os.path.isabs(folder):
+    for folder in os.environ.get("PATH", paths.defpath).split(paths.pathsep):
+        if not _absolute(folder, windows):
             continue
         for name in names:
-            program = os.path.join(folder, name)
+            program = paths.join(folder, name)
             if os.path.isfile(program) and os.access(program, os.X_OK):
                 return program
     return None
+
+
+def _absolute(folder: str, windows: bool) -> bool:
+    """whether ``folder`` is one place wherever the program runs, as rust's ``Path::is_absolute``
+    reads it. on ``windows`` that is a drive with a root, as ``C:\\tools``, or a share, as
+    ``\\\\lab\\share``: ``\\tools`` and ``C:tools`` depend on the working drive or its folder, though
+    python before 3.13 counts the first as absolute."""
+    if not windows:
+        return posixpath.isabs(folder)
+    drive, rest = ntpath.splitdrive(folder)
+    # a share or a device, as \\lab\share, roots itself, while a drive letter needs its own root
+    return bool(drive) and (drive[0] in "\\/" or rest[:1] in ("\\", "/"))

@@ -753,6 +753,23 @@ class ProgramDiscovery(unittest.TestCase):
             finally:
                 os.chdir(here)
 
+    def test_windows_counts_a_path_folder_absolute_only_with_a_drive_or_share_and_a_root(self):
+        # as rust's Path::is_absolute reads windows paths, which python 3.12 and 3.13 read apart
+        folders = ["\\tools", "C:tools", "tools", "", "C:\\tools", "\\\\lab\\share\\tools", "D:/tools"]
+        tried = []
+
+        def is_file(program):
+            tried.append(program)
+            return False
+
+        with patch.dict(os.environ, {"PATH": ";".join(folders), "PATHEXT": ".EXE"}), \
+             patch.object(fetchloom.os.path, "isfile", side_effect=is_file):
+            self.assertIsNone(fetchloom._on_path(windows=True))
+        self.assertEqual(
+            tried,
+            ["C:\\tools\\fetchloom.EXE", "\\\\lab\\share\\tools\\fetchloom.EXE", "D:/tools\\fetchloom.EXE"],
+        )
+
     def test_user_scripts_follow_the_interpreters_preferred_scheme(self):
         with patch.object(fetchloom.sysconfig, "get_preferred_scheme", return_value="custom_user") as preferred:
             with patch.object(fetchloom.sysconfig, "get_path", return_value="") as get_path:
