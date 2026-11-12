@@ -985,18 +985,14 @@ impl<'a> Loop<'a> {
                 .filter_map(|job| Some((job.label.as_str(), job.fetch.expect.size?))),
         )
         .map_err(|error| self.as_left(error))?;
-        let size: u64 = jobs
-            .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch))
-            .filter_map(|job| job.fetch.expect.size)
-            .fold(0, u64::saturating_add);
+        let (size, room) = budget(jobs.iter().filter(|job| !in_cache(&self.cache, &job.fetch)));
         let roomy = super::confirm(
             &self.context.output,
             self.yes(),
             self.context.settings.ask_above.value,
             &units::count(jobs.len() as u64, "file", "files"),
             size,
-            Some((self.cache.root(), size)),
+            Some((self.cache.root(), room)),
         )
         .map_err(|error| self.as_left(error))?;
         self.roomy.fetch_or(roomy, Ordering::Relaxed);
@@ -1848,6 +1844,21 @@ fn in_cache(cache: &Cache, fetch: &Fetch) -> bool {
     in_cache_where(cache, fetch, |_| true)
 }
 
+/// the bytes `jobs` of known size transfer, which a question about a large download counts, and
+/// the room they need on the disk holding the cache: each one's size, and for one that unpacks an
+/// archive whose files nobody listed, its size once more, the least its files can take. a lower
+/// bound, since an archive may unpack to much more.
+fn budget<'j>(jobs: impl Iterator<Item = &'j Job>) -> (u64, u64) {
+    jobs.filter_map(|job| Some((job.fetch.expect.size?, job.fetch.unpack)))
+        .fold((0, 0), |(moved, room), (size, unpacks)| {
+            let unpacked = if unpacks { size } else { 0 };
+            (
+                moved.saturating_add(size),
+                room.saturating_add(size).saturating_add(unpacked),
+            )
+        })
+}
+
 fn in_cache_where(cache: &Cache, fetch: &Fetch, usable: impl Fn(&Sha256) -> bool) -> bool {
     let expect = &fetch.expect;
     match (expect.sha256, expect.md5) {
@@ -2037,6 +2048,38 @@ mod tests {
     use crate::net::Offline;
     use crate::output::{Level, Style};
     use crate::source::recorded::block_on;
+
+    /// a download that unpacks an archive whose files nobody listed needs room for the archive
+    /// and for its files, at least its size once more, while a question about its size counts
+    /// only what it transfers. a file kept as it came, or one of unknown size, adds nothing more,
+    /// and the sum stops at the largest number rather than wrapping.
+    #[test]
+    fn an_archive_to_unpack_needs_room_for_its_files_too() {
+        const MB: u64 = 1_000_000;
+        let url = Url::parse("https://example.org/a.zip").unwrap();
+        let job = |size: Option<u64>, unpack: bool| {
+            let file = LockedFile {
+                path: "a.zip".to_owned(),
+                size: size.unwrap_or_default(),
+                sha256: digest::sha256(b"a"),
+                md5: None,
+                url: url.to_string(),
+                unpacks_to: None,
+            };
+            let mut job = make_job(&Lock::default(), "a", &file, &url);
+            job.fetch.expect.size = size;
+            job.fetch.unpack = unpack;
+            job
+        };
+        let jobs = [
+            job(Some(MB), true),
+            job(Some(MB / 2), false),
+            job(None, true),
+        ];
+        assert_eq!(budget(jobs.iter()), (MB + MB / 2, 2 * MB + MB / 2));
+        let huge = [job(Some(u64::MAX), true)];
+        assert_eq!(budget(huge.iter()), (u64::MAX, u64::MAX));
+    }
 
     #[test]
     fn a_full_commit_is_shown_short_and_anything_else_as_it_is() {
