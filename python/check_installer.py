@@ -96,8 +96,13 @@ def check(args):
                         require(value == old, f'failed install changed user {name}')
 
             def invoke(success):
-                result = subprocess.run(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
-                                        capture_output=True, text=True, timeout=90)
+                try:
+                    result = subprocess.run(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
+                                            capture_output=True, text=True, timeout=90)
+                except subprocess.TimeoutExpired as error:
+                    told = [part.decode(errors='replace') if isinstance(part, bytes) else part or ''
+                            for part in (error.stdout, error.stderr)]
+                    raise RuntimeError('the installer ran past 90 s:\n' + ''.join(told)) from error
                 require((result.returncode == 0) == success, result.stdout + result.stderr)
                 return result
             invoke(True)
