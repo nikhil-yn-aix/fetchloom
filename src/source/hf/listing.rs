@@ -295,6 +295,9 @@ mod tests {
         }
     }
 
+    /// a revision the hub does not show is named with its repository and a page to check it on.
+    /// the hub answers alike for a repository a key cannot read, so the repository is not said
+    /// to exist.
     #[test]
     fn a_missing_revision_is_unresolved() {
         let recorded = Recorded::default().on(
@@ -308,6 +311,22 @@ mod tests {
             block_on(repo("datasets/stanfordnlp/imdb@no-such-branch").resolve(&recorded, None))
                 .unwrap_err();
         assert_eq!(err.kind, Kind::ReferenceUnresolved);
+        assert_eq!(
+            err.message,
+            "huggingface.co has no revision no-such-branch of dataset stanfordnlp/imdb, or the dataset is private"
+        );
+        assert_eq!(
+            err.details,
+            ["huggingface.co says: Invalid rev id: no-such-branch"]
+        );
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "check that no-such-branch is a branch, a tag or a commit of the dataset at https://huggingface.co/datasets/stanfordnlp/imdb/tree/main, then fix it on the command line or as ref in data.toml"
+            )
+        );
+        assert!(err.need.is_none(), "signing in is offered only for a 401");
+        assert_eq!(recorded.asked().len(), 1, "nothing else is asked");
     }
 
     #[test]

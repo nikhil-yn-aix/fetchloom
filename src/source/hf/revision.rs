@@ -5,7 +5,7 @@ use serde::Deserialize;
 use super::{Repo, RepoKind, is_id};
 use crate::auth::{Account, Origin};
 use crate::error::{Error, Kind};
-use crate::net::Api;
+use crate::net::{Api, Response};
 use crate::source::Access;
 
 /// what the revision endpoint says about a repository.
@@ -61,6 +61,11 @@ impl Repo {
             }
         }
         let response = api.get(&url).await?;
+        if response.status == 404
+            && let Some(requested) = &self.revision
+        {
+            return Err(self.missing_revision(requested, &response));
+        }
         let info: Info = match crate::source::json(self, &response) {
             Ok(info) => info,
             Err(err) if err.kind == Kind::AuthRequired => return Err(self.unseen(api, err).await),
@@ -92,6 +97,27 @@ impl Repo {
         Ok(info)
     }
 
+    /// the error for a revision the hub answered 404 for. the hub answers so for a repository a
+    /// key went with but cannot read too, so the repository is not said to exist.
+    fn missing_revision(&self, requested: &str, response: &Response) -> Error {
+        let kind = kind_word(self.kind);
+        let error = Error::new(
+            Kind::ReferenceUnresolved,
+            format!(
+                "huggingface.co has no revision {requested} of {kind} {}, or the {kind} is private",
+                self.id
+            ),
+        );
+        let error = match response.json::<Refusal>() {
+            Ok(refusal) => error.detail(format!("huggingface.co says: {}", refusal.error)),
+            Err(_) => error,
+        };
+        error.help(format!(
+            "check that {requested} is a branch, a tag or a commit of the {kind} at {}/tree/main, then fix it on the command line or as ref in data.toml",
+            self.page()
+        ))
+    }
+
     /// the error for a repository the hub refused to show, which it does alike for a private one
     /// and for one that does not exist, as after a typo. a link without `/datasets/` names a
     /// model, so a model the hub does not show, whose name a dataset has, points to the dataset.
@@ -106,11 +132,7 @@ impl Repo {
             )
             .help(format!("for the dataset, use {}", dataset.page()));
         }
-        let kind = match self.kind {
-            RepoKind::Dataset => "dataset",
-            RepoKind::Model => "model",
-            RepoKind::Space => "space",
-        };
+        let kind = kind_word(self.kind);
         let error = Error::new(
             refused.kind,
             format!("huggingface.co has no {kind} {}, or it is private", self.id),
@@ -248,6 +270,15 @@ impl Info {
 
 /// where hugging face keys are made.
 const TOKENS: &str = "https://huggingface.co/settings/tokens";
+
+/// what messages call a repository of `kind`.
+fn kind_word(kind: RepoKind) -> &'static str {
+    match kind {
+        RepoKind::Dataset => "dataset",
+        RepoKind::Model => "model",
+        RepoKind::Space => "space",
+    }
+}
 
 /// where the key requests to huggingface.co carry comes from, as the network that sends them
 /// found it, when there is one a request can carry.
