@@ -8,7 +8,7 @@ fetchloom auth login hf
 fetchloom auth logout zenodo
 ```
 
-fetchloom reuses supported credentials saved by a source's tools. signing in with fetchloom shares credential files for hugging face, kaggle and `.netrc` logins. other source keys use fetchloom's credential store, as the table below shows.
+fetchloom reads the keys a source's own tools saved, and a sign-in saves where those tools read: hugging face's and kaggle's files and `.netrc`. keys for the other sources go in the system's credential store, as the table below shows.
 
 ## usage
 
@@ -18,13 +18,11 @@ fetchloom auth login [options] <account>
 fetchloom auth logout [options] <account>
 ```
 
-`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a host name such as `data.example.edu`. `--host` names a dataverse installation; harvard's is the default. it takes a host name, with its port when that is not 443, as `--host dv.example.edu:8443`, and refuses a login, path or query.
-
-an account name must be a source name or a plain host name, not a URL, query or fragment. rejected arguments use the same masking as URL output, including percent-encoded URLs and syntax the URL parser would normalize. `--json` and `-vv` keep that masking. malformed hosts in the account index or `.netrc` are ignored.
+`<account>` is `hf`, `kaggle`, `zenodo`, `figshare`, `osf`, `dataverse`, `earthdata`, `physionet` or a plain host name such as `data.example.edu`, never a link. `--host` names a dataverse installation, with its port when that is not 443, as `--host dv.example.edu:8443`; harvard's is the default. an argument that is refused is shown with any secret in it masked.
 
 ## signing in
 
-`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, as a link you can click in most terminals, and what to pick there. hugging face and kaggle add the step a gated dataset or a competition needs: accept its terms or rules on its own page, with the same account. paste the key; it stays hidden until you press enter, then only its first and last four characters and its length show so you can tell it arrived, or only stars for a key under 24 characters. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
+`fetchloom auth login hf` shows the steps to a key: make a free account if you have none, open the page where you make a key, and what to pick there, and for a gated dataset or a competition, accept its terms on its own page with the same account. paste the key; it stays hidden, then only its first and last four characters and its length show, so you can tell it arrived. fetchloom asks the source whose key it is, then asks before saving it. stderr excerpt from a loopback check with a synthetic key and the home path shortened:
 
 ```text
     Sign in hugging face
@@ -39,7 +37,7 @@ save it to /home/ada/.cache/huggingface/token? [Y/n] yes
   hint: the hf command and the hugging face python libraries use this key too
 ```
 
-when a key is already saved, it asks before replacing it; `--yes` answers both questions yes. a no to either question changes nothing: `auth login` ends with `Cancelled signing in to hugging face, so nothing changed` and exit 1. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
+when a key is already saved, it asks before replacing it; `--yes` answers both questions yes. a no to either changes nothing and exits 1, with `Cancelled signing in to hugging face, so nothing changed`. after [a refused download](#when-a-download-is-refused), a key you do not save serves only that command's next try. a key the source refuses is never saved. zenodo and earthdata check a key without naming whose it is, and a login for any other host is not checked.
 
 | account | where the key goes | also read by |
 |---|---|---|
@@ -48,9 +46,9 @@ when a key is already saved, it asks before replacing it; `--yes` answers both q
 | nasa earthdata, physionet, any host | `.netrc` in your home folder, or the file `NETRC` names; `_netrc` on windows when it already exists | curl, wget, python's requests |
 | zenodo, figshare, osf, dataverse | the system's credential store: windows credential manager, the macos keychain or the linux secret service | nothing else; these sources have no shared file |
 
-a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. credential files start with mode `0600` on unix. on windows they inherit the folder's permissions, so keep any custom credential folder private. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
+a machine without a credential store, such as a server reached over ssh, asks before saving the key in `credentials.json` in fetchloom's settings folder, readable by you only on linux and macos: `%APPDATA%\fetchloom` on windows, `~/Library/Application Support/fetchloom` on macos, and `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom` on linux. answering no keeps it out of files; set the source's variable in your environment instead. `FETCHLOOM_KEYRING=0` skips the credential store.
 
-each key is sent over https to its own host only, on port 443 unless it was saved for another port, never after a redirect leaves that host. a login from `.netrc` is the exception curl makes too: earthdata's archives send you to `urs.earthdata.nasa.gov` and back, and the login answers there. an osf key also goes to `osf.io` and `files.osf.io` on any hop, since osf's download links start on the one and send you to the other.
+each key is sent over https to its own host only, never after a redirect leaves that host. two exceptions follow how those sites work: a `.netrc` login answers at `urs.earthdata.nasa.gov`, where earthdata's archives send you to sign in, as curl does too, and an osf key goes to both `osf.io` and `files.osf.io`.
 
 ## scripts and CI
 
@@ -59,7 +57,7 @@ echo "$HF_TOKEN" | fetchloom auth login hf --with-token
 echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --with-token
 ```
 
-`--with-token` reads the key from stdin and saves it without asking. a login reads `username:password`. setting a source's variable, such as `HF_TOKEN`, works without signing in at all. without a terminal and without `--with-token`, `auth login` fails with `usage` and names the scripted form.
+`--with-token` reads the key from stdin and saves it without asking; a login reads `username:password`. a source's variable, such as `HF_TOKEN`, works without signing in at all. without a terminal and without `--with-token`, `auth login` fails with `usage` and names the scripted form.
 
 ## when a download is refused
 
@@ -100,16 +98,14 @@ a key saved by signing in is named by its file, and the help says to sign in aga
 fetchloom auth
 ```
 
-it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line. each is named as `fetchloom auth login` takes it:
+it lists each account with a key, where the key came from and, online, who the source says it belongs to. accounts without a key share one line:
 
 ```text
   Signed in to hf as ada · /home/ada/.cache/huggingface/token
   Signed in to none of kaggle, zenodo, figshare, osf, earthdata, physionet
 ```
 
-a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. the key itself is never printed, in any output.
-
-a key that holds a character no request header can carry, such as a line break, is never sent. `auth` and the offer to sign in after a refusal warn about it, naming where the key is but not the key. on linux and macos, `auth` also warns when other users can open the `.netrc` fetchloom reads, the file python's netrc module refuses to read then.
+a key the source refuses is marked `Refused` with the command to sign in again. `--offline` skips asking the sources. a key is never printed, in any output. a key that holds a character no request can carry, such as a line break, is never sent, and `auth` and the offer to sign in after a refusal warn about it, naming where the key is. on linux and macos, `auth` also warns when other users can open the `.netrc` it reads.
 
 ## signing out
 
@@ -117,6 +113,4 @@ a key that holds a character no request header can carry, such as a line break, 
 
 ## JSON
 
-`auth` returns `result.accounts`. `account` is a string id; `signed_in` is true when a key was found, even if it is refused. `from` and `user` are strings or null. `valid` is true or false after a source check, or null when no check was made, including offline or for an unsendable key.
-
-`auth login` returns `account`, nullable `user` and nullable `saved_to`. `auth logout` returns `account` and nullable `removed_from`. a null destination means no key was saved or removed. secrets never appear.
+`auth` returns `result.accounts`, each with `account`; `signed_in`, true when a key was found, even a refused one; `from` and `user`, or null; and `valid`, true or false after a source checked the key, else null. `auth login` returns `account`, `user` and `saved_to`, and `auth logout` returns `account` and `removed_from`, null when nothing was saved or removed. keys never appear.
