@@ -25,8 +25,9 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
+Documentation = "https://nikhil-yn-aix.github.io/fetchloom/"
 Repository = "https://github.com/nikhil-yn-aix/fetchloom"
-Documentation = "https://github.com/nikhil-yn-aix/fetchloom/tree/main/docs"
+Issues = "https://github.com/nikhil-yn-aix/fetchloom/issues"
 
 [tool.maturin]
 bindings = "bin"

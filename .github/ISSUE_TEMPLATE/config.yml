@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: report a security vulnerability
+    url: https://github.com/nikhil-yn-aix/fetchloom/security/advisories/new
+    about: report it privately, as SECURITY.md says, rather than in a public issue
+  - name: read the guide
+    url: https://nikhil-yn-aix.github.io/fetchloom/
+    about: commands, sources, troubleshooting and the json output
