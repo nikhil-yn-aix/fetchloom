@@ -186,6 +186,16 @@ impl Hasher {
         }
     }
 
+    /// separates the optional MD5 state, including any prefix already hashed.
+    pub(crate) fn take_md5(&mut self) -> Option<md5::Md5> {
+        self.md5.take()
+    }
+
+    /// puts back the MD5 state once its lane has joined the SHA-256 prefix.
+    pub(crate) fn restore_md5(&mut self, state: md5::Md5) {
+        self.md5 = Some(state);
+    }
+
     pub(crate) fn update(&mut self, bytes: &[u8]) {
         sha2::Digest::update(&mut self.sha256, bytes);
         if let Some(md5) = &mut self.md5 {

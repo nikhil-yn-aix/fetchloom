@@ -27,7 +27,7 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 
 `max` leaves memory and local workers at the default, since no measure found a run faster with more of them.
 
-a setting you set by name, with its variable or its key in the settings file, wins over any level. `FETCHLOOM_RESOURCES=max FETCHLOOM_HOST_JOBS=8 fetchloom sync` runs 32 requests at once, but at most 8 to one host. lean caps local workers only when `FETCHLOOM_THREADS` is unset.
+a setting you set by name, with its variable or its key in the settings file, wins over any level. `FETCHLOOM_RESOURCES=max FETCHLOOM_HOST_JOBS=8 fetchloom sync` runs 32 requests at once, but at most 8 to one host. lean caps local workers only when `FETCHLOOM_THREADS` is unset. with that derived ceiling, each download keeps a required MD5 beside SHA-256 on its existing worker, without extra queued byte batches.
 
 a level changes speed and memory only. it never changes which files are pinned or how they are checked, and it leaves every other setting as it is: `most_files`, which stays sized from the default budget so that lean lists every dataset `default` lists, the archive limits, `retries`, `timeout`, `ask_above`, `rate`, `split`, the mirrors and the buckets.
 

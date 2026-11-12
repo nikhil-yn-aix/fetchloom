@@ -529,6 +529,21 @@ impl Settings {
         }
     }
 
+    /// the CPU budget for checksum lanes; lean must not retain an extra lane's byte batches.
+    pub(crate) fn hash_workers(&self) -> usize {
+        if matches!(
+            self.threads,
+            Some(Set {
+                origin: Origin::Resources(Level::Lean),
+                ..
+            })
+        ) {
+            1
+        } else {
+            self.machine.processors
+        }
+    }
+
     /// how many batches each download may queue for its hash worker: the memory budget shared
     /// among the downloads that can run at once, between 1 and 16 batches of a mebibyte.
     pub(crate) fn hash_batches(&self) -> usize {
@@ -1419,6 +1434,38 @@ mod tests {
             assert_eq!(error.message, said, "{name}");
             assert_eq!(error.help.as_deref(), Some(help), "{name}");
         }
+    }
+
+    #[test]
+    fn lean_keeps_required_checksums_on_existing_workers() {
+        for (level, processors, ceiling, expected) in [
+            ("default", 12, 8, 8),
+            ("default", 12, 2, 2),
+            ("lean", 12, 2, 1),
+            ("max", 12, 8, 8),
+            ("max", 1, 8, 1),
+        ] {
+            let mut settings = read(&[("FETCHLOOM_RESOURCES", level)], None).unwrap();
+            settings.machine.processors = processors;
+            let cap = crate::threads::Threads::default().at_most(ceiling);
+            assert_eq!(
+                cap.limit(settings.hash_workers()),
+                expected,
+                "{level} on {processors} CPUs"
+            );
+        }
+        let mut explicit = read(
+            &[("FETCHLOOM_RESOURCES", "lean"), ("FETCHLOOM_THREADS", "8")],
+            None,
+        )
+        .unwrap();
+        explicit.machine.processors = 12;
+        let cap = crate::threads::Threads::default().at_most(8);
+        assert_eq!(
+            cap.limit(explicit.hash_workers()),
+            8,
+            "a named ceiling overrides the level"
+        );
     }
 
     #[test]

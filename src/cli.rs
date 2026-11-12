@@ -626,6 +626,7 @@ pub(crate) fn run() -> ExitCode {
                 context.threads = context.threads.at_most(threads.value);
             }
             crate::cache::set_hash_batches(settings.hash_batches());
+            crate::cache::set_hash_workers(context.threads.limit(settings.hash_workers()));
             crate::source::set_most_files(settings.most_files.value);
             crate::archive::set_limits(settings.archive_limits());
             context.settings = settings;

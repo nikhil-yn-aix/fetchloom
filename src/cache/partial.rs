@@ -19,7 +19,7 @@ use crate::volume::is_plain;
 
 mod hashing;
 
-pub(crate) use hashing::set_batches as set_hash_batches;
+pub(crate) use hashing::{set_batches as set_hash_batches, set_workers as set_hash_workers};
 
 use hashing::HashPipe;
 

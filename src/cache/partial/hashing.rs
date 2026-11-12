@@ -2,7 +2,11 @@
 
 use std::fs::File;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+mod lanes;
+
+use lanes::{Input, Lane, Workers};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
@@ -22,11 +26,42 @@ pub(crate) fn set_batches(batches: usize) {
     BATCHES.store(batches.max(1), Ordering::Relaxed);
 }
 
+static WORKERS: OnceLock<Arc<Workers>> = OnceLock::new();
+
+/// sets the CPU budget for additional checksum lanes, inside the caller's thread cap.
+pub(crate) fn set_workers(workers: usize) {
+    let _ = WORKERS.set(Arc::new(Workers::new(workers)));
+}
+
+#[derive(Clone)]
+struct Policy {
+    workers: Arc<Workers>,
+    start: lanes::Spawn,
+}
+
+impl Policy {
+    fn current() -> Policy {
+        Policy {
+            workers: Arc::clone(WORKERS.get_or_init(|| Arc::new(Workers::new(1)))),
+            start: lanes::spawn,
+        }
+    }
+}
+
 /// how much the pipe gathers before waking the worker. a message per 16 KiB response chunk spent
 /// more time waking threads than hashing.
 const BATCH: usize = 1024 * 1024;
 
 enum Message {
+    #[cfg(test)]
+    Paired {
+        reply: SyncSender<bool>,
+    },
+    #[cfg(test)]
+    Md5Closing {
+        ready: SyncSender<()>,
+        release: Receiver<()>,
+    },
     #[cfg(test)]
     Pause {
         ready: SyncSender<()>,
@@ -61,10 +96,19 @@ struct Inline {
 
 impl HashPipe {
     pub(super) fn new(hasher: Hasher, file: Arc<File>, received: u64) -> io::Result<Self> {
+        Self::with_policy(hasher, file, received, Policy::current())
+    }
+
+    fn with_policy(
+        hasher: Hasher,
+        file: Arc<File>,
+        received: u64,
+        policy: Policy,
+    ) -> io::Result<Self> {
         let (sender, inbox) = mpsc::sync_channel(BATCHES.load(Ordering::Relaxed));
         let worker = thread::Builder::new()
             .name("fetchloom-hash".to_owned())
-            .spawn(move || hash(&file, hasher, received, &inbox))?;
+            .spawn(move || hash(&file, hasher, received, &inbox, &policy))?;
         Ok(Self {
             sender: Some(sender),
             worker: Some(worker),
@@ -199,33 +243,83 @@ fn hash(
     mut hasher: Hasher,
     mut received: u64,
     inbox: &Receiver<Message>,
+    policy: &Policy,
 ) -> io::Result<(Hasher, u64)> {
-    while let Ok(message) = inbox.recv() {
-        match message {
-            #[cfg(test)]
-            Message::Pause { ready, release } => tests::wait_for_release(&ready, &release),
-            Message::Chunks(chunks) => {
-                for bytes in chunks {
-                    hasher.update(&bytes);
-                    received += bytes.len() as u64;
+    let _primary = policy.workers.enter();
+    let mut lane: Option<Lane> = None;
+    let mut may_pair = true;
+    let result: io::Result<()> = (|| {
+        while let Ok(message) = inbox.recv() {
+            match message {
+                #[cfg(test)]
+                Message::Paired { reply } => {
+                    let _ = reply.send(lane.is_some());
+                }
+                #[cfg(test)]
+                Message::Md5Closing { ready, release } => {
+                    lane.as_mut()
+                        .ok_or_else(stopped)?
+                        .send(Input::Closing { ready, release })?;
+                }
+                #[cfg(test)]
+                Message::Pause { ready, release } => tests::wait_for_release(&ready, &release),
+                Message::Chunks(chunks) => {
+                    if lane.is_some() && policy.workers.crowded() {
+                        restore(&mut lane, &mut hasher, received)?;
+                        may_pair = false;
+                    }
+                    if may_pair && chunks.iter().map(Bytes::len).sum::<usize>() >= BATCH {
+                        may_pair = false;
+                        lane = Lane::start(&mut hasher, received, &policy.workers, policy.start);
+                    }
+                    if let Some(lane) = &mut lane {
+                        let chunks = Arc::new(chunks);
+                        lane.send(Input::Chunks(Arc::clone(&chunks)))?;
+                        for bytes in chunks.iter() {
+                            hasher.update(bytes);
+                            received += bytes.len() as u64;
+                        }
+                    } else {
+                        for bytes in chunks {
+                            hasher.update(&bytes);
+                            received += bytes.len() as u64;
+                        }
+                    }
+                }
+                Message::Range { start, end } => {
+                    same_prefix(received, start)?;
+                    restore(&mut lane, &mut hasher, received)?;
+                    may_pair = false;
+                    hash_range(file, &mut hasher, start, end)?;
+                    received = end;
+                }
+                Message::Checkpoint {
+                    received: written,
+                    reply,
+                } => {
+                    same_prefix(received, written)?;
+                    if let Some(lane) = &mut lane {
+                        lane.checkpoint(written)?;
+                    }
+                    let _ = reply.send(hasher.sha256_so_far());
                 }
             }
-            Message::Range { start, end } => {
-                same_prefix(received, start)?;
-                hash_range(file, &mut hasher, start, end)?;
-                received = end;
-            }
-            Message::Checkpoint {
-                received: written,
-                reply,
-            } => {
-                // a fifo barrier excludes later chunks and waits for every earlier byte.
-                same_prefix(received, written)?;
-                let _ = reply.send(hasher.sha256_so_far());
-            }
         }
-    }
+        Ok(())
+    })();
+    let joined = restore(&mut lane, &mut hasher, received);
+    result?;
+    joined?;
     Ok((hasher, received))
+}
+
+fn restore(lane: &mut Option<Lane>, hasher: &mut Hasher, received: u64) -> io::Result<()> {
+    if let Some(lane) = lane.take() {
+        let (state, reached) = lane.finish()?;
+        same_prefix(reached, received)?;
+        hasher.restore_md5(state);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

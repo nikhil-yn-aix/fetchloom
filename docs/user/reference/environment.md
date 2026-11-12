@@ -64,7 +64,7 @@ a variable one typo from one of these, such as `FETCHLOM_CACHE`, changes nothing
 
 the shared rate limit permits a burst of one second's bytes or 1 MiB, whichever is larger. `2.5M` allows 2,621,440 bytes per second.
 
-`FETCHLOOM_THREADS` does not change `FETCHLOOM_JOBS`.
+`FETCHLOOM_THREADS` does not change `FETCHLOOM_JOBS`. a cap of 1 also keeps a required MD5 and SHA-256 on one hash worker; with spare CPU capacity, a large download may compute them on separate workers. network writers and the original hash workers remain separate from the local worker-group cap.
 
 sizes and rates take a decimal fraction with digits on both sides of the point, and the suffixes multiply by powers of 1024, rounding down to whole bytes. signs, exponent notation, lowercase suffixes and suffixes such as `MB` are refused. numbers may have spaces around them.
 

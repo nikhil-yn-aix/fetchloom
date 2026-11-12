@@ -20,6 +20,7 @@ every change measured with the current harness, one row each: what it gained whe
 | network | shorter download queues | xfs s1 1.108 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | hashing | a hashing read's buffer sized to the file | importing 100,000 files 0.812; `cache verify` of 100,000 objects 0.784 | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | hashing | hashing read buffers started at a page | `cache verify` of 8 GiB on glibc 0.697; flat on musl | kept | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
+| hashing | SHA-256 and a required MD5 on separate workers | 512 MiB 0.776 glibc, 0.767 musl; musl median RSS 106.3 to 120.3 MiB, maximum 168.6 to 154.3 MiB | kept | [paired checksums](#overlapping-required-checksums-2026-11-12) |
 | flushing | runs of up to 64 files flushed one by one, larger batches with one `syncfs` | a sync of 4 small files on a busy disk 684 to 185 ms; the lab flat | kept | [busy disk](#flushing-a-few-files-on-a-busy-disk-2026-11-09) |
 | flushing | a waiting group of finished downloads named after at most 1 s | a second project on a shared cache 26.4 to 12.9 s | kept | [shared cache](#a-second-run-on-a-shared-cache-2026-11-12) |
 | flushing | one flush per file instead of one `syncfs` a batch | ext4 s3 1.567 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
@@ -511,6 +512,40 @@ the fixtures are the scale map's files-n folders, hardlinked into a folder of th
 | 100,000 | musl | 4.30 to 4.34 s | 1.001 [0.988, 1.020] | 216.3 to 194.6 MiB | 0.908 [0.898, 0.927] |
 
 kept: 11% less peak memory for 100,000 files on glibc and 9% on musl, below the replay's 17% of heap, with no time interval away from 1. the import's time is mostly copying the files into the cache.
+
+## overlapping required checksums, 2026-11-12
+
+SHA-256 and MD5 shared one download hash worker. the CPU sweep found their combined throughput about 0.37 GB/s, against 1.49 GB/s for SHA-256 alone. a large download that needs both now gives MD5 a second worker when the quota-aware CPU count and `FETCHLOOM_THREADS` leave a slot. a SHA-256 pin still needs no MD5, and known small files still hash on the writer. no caller waits for an extra CPU slot or fails because the optional thread could not start.
+
+each lane shares the same immutable byte batches. the MD5 handoff holds one waiting batch, not another copy of the body; it can retain about two extra 1 MiB batches across queued and running work. checkpoints wait for both prefixes, and finish and cancellation join both workers before the partial claim is released. range readback returns MD5 to the original worker so it reads the file only once. a new hash worker that exceeds the CPU budget also returns an existing pair to one lane at its next batch. after resource levels landed, lean's derived ceiling was kept on the original single-lane path so it spends no extra batch memory; an explicit `FETCHLOOM_THREADS` still overrides the level. fixed-input tests check that distinction, and no lean speedup is claimed by this default-level table.
+
+the test: a local TLS Dataverse stand-in, with a private test CA trusted for the child process alone, stated independently calculated MD5 or SHA-256 values. release builds of 7dc24bbd plus the change, fat LTO, one codegen unit, abort, frame pointers and line tables, one binary per libc with a read-once switch. the EPYC 7V13 had 24 visible CPUs and shared training load; builds used cores 0–11 at nice 10, and timed commands 12–23 at nice 0. `abh.py` shuffled both arms per round under the measure lock, each batch under five minutes; each began with an empty cache/output on ext4 NVMe and warm source files. Python hashlib checked every resulting file outside the clock.
+
+there were twelve measured rounds before bounded noise retries; a pair with a burst in either arm was left out. GNU time supplied the actual child's RSS, since the harness's parent can set a higher inherited wait4 floor. the table gives clean paired medians and their 95% bootstrap intervals, with before/after median time and median RSS. counts are process pairs, not response chunks.
+
+| workload | libc | pairs | before s | after s | after/before [95%] | median MiB before → after |
+|---|---|---:|---:|---:|---|---|
+| one 512 MiB file, MD5 | glibc | 9 | 1.5574 | 1.2086 | 0.776 [0.768, 0.782] | 79.3 → 75.6 |
+| one 512 MiB file, MD5 | musl | 11 | 1.5323 | 1.1774 | 0.767 [0.765, 0.771] | 106.3 → 120.3 |
+| eight 64 MiB files, MD5 | glibc | 11 | 0.9603 | 0.9236 | 0.982 [0.953, 1.037] | 146.1 → 129.1 |
+| eight 64 MiB files, MD5 | musl | 14 | 0.7828 | 0.7087 | 0.934 [0.870, 0.999] | 244.0 → 217.2 |
+| 64 files of 4 KiB, MD5 | glibc | 23 | 0.7200 | 0.7210 | 1.003 [0.999, 1.005] | 15.1 → 15.0 |
+| 64 files of 4 KiB, MD5 | musl | 14 | 0.7208 | 0.7186 | 0.999 [0.994, 1.003] | 34.8 → 34.9 |
+| one 512 MiB SHA-256 pin | glibc | 11 | 0.7578 | 0.7875 | 0.962 [0.923, 1.130] | 25.7 → 24.2 |
+| one 512 MiB SHA-256 pin | musl | 13 | 0.7600 | 0.7614 | 1.009 [0.983, 1.063] | 70.9 → 68.6 |
+| 512 MiB MD5, thread cap 1 | glibc | 8 | 1.5417 | 1.5382 | 0.998 [0.991, 1.010] | 55.0 → 54.0 |
+| 512 MiB MD5, thread cap 1 | musl | 12 | 1.5344 | 1.5301 | 1.001 [0.993, 1.004] | 94.5 → 91.5 |
+| 512 MiB MD5, split requested | glibc | 12 | 1.5832 | 1.2118 | 0.768 [0.765, 0.771] | 70.0 → 64.5 |
+| 512 MiB MD5, split requested | musl | 12 | 1.5263 | 1.1670 | 0.766 [0.765, 0.770] | 104.5 → 108.5 |
+
+the 512 MiB MD5 case wins by 22–23%, with no established time regression in the controls. the first small-file GNU pilot included the switch only on one arm; a confirmation with it set to 0 and 1 on the two arms was flat, 1.001 [0.997, 1.004]. that switch is removed from the kept code. the slow split scheduler was entered in the split-requested case, but these fast transfers could finish before its next stream; a separate checked 64 MiB/s-capped run made three requests and exercised real range readback. its wall time is not in this table.
+
+memory is not claimed neutral. for the main MD5 case, glibc's largest clean child RSS was 95.7 → 90.0 MiB; musl's median rose by 14.1 MiB, while its largest clean peak fell from 168.6 to 154.3 MiB. both run envelopes already extend past the historical ordinary-workload 150 MB target. the measured worst peak did not grow, but the higher median residency is a cost of this change, not memory neutrality. the many-file case used less memory. cap one adds no second lane.
+
+characterization checks use independently generated hashlib vectors, including a prefixed checkpoint, range readback and final SHA-256/MD5. channel-controlled tests cover bounded shared ownership, cancellation/claim lifetime, optional-thread refusal, worker failure and CPU slots becoming busy. the lane-selection test failed on the original code; deliberately losing the saved MD5 state on thread-start refusal failed the independent vector test, then passed after restoration. no test uses elapsed time to prove blocking.
+
+raw commands, binary hashes, checked payload hashes, round records and noise flags are retained under `/datadisk/fl-perf/cpu2/records/p2-*`; `scripts/measure-p2.py` and `scripts/analyze-p2.py` reproduce the comparison and its paired analysis. no bandwidth, interface, global cache or global filesystem flush was changed for the test.
+
 
 ## evidence limits
 
