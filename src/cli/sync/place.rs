@@ -8,7 +8,7 @@ mod model_tests;
 mod put;
 mod tell;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -55,6 +55,14 @@ pub(crate) struct Placement {
     /// those of `put_back` that `fetchloom drop` would not leave out, by path, with why.
     #[serde(skip)]
     pub(crate) undroppable: BTreeMap<String, Undroppable>,
+    /// those of `put_back` in a folder that held no file, with that folder, no higher than
+    /// their dataset's own, so a warning names the folder once.
+    #[serde(skip)]
+    pub(crate) emptied: HashMap<String, String>,
+    /// the folders of datasets that were gone, as after a person deleted one, or the data folder,
+    /// to start afresh. a sync fills them again without a warning.
+    #[serde(skip)]
+    pub(crate) refilled: BTreeSet<String>,
     /// recipes whose pinned results a sync of every dataset left out, since neither the cache nor
     /// a mirror holds them and only `fetchloom build` makes them.
     pub(crate) unbuilt: Vec<String>,
@@ -134,6 +142,21 @@ impl Placement {
             *planned.entry(target.dataset).or_default() += 1;
         }
         let back: HashSet<&str> = self.put_back.iter().map(String::as_str).collect();
+        let holding = tell::holding(survey.disk.keys());
+        for target in targets
+            .iter()
+            .filter(|target| back.contains(target.path.as_str()))
+        {
+            let floor = plan::folder(manifest, target.dataset);
+            let Some(folder) = tell::emptied(&holding, &target.path, &floor) else {
+                continue;
+            };
+            // a folder still there after its files went is no fresh start
+            if folder == floor && !survey.entries.contains_key(&floor) {
+                self.refilled.insert(floor);
+            }
+            self.emptied.insert(target.path.clone(), folder.to_owned());
+        }
         // as drop refuses them: a result's file, and a dataset's every file
         self.undroppable = targets
             .iter()

@@ -63,10 +63,15 @@ pub(super) fn tell(
             (0, _) => format!("copied, {}", units::size(tally.copied)),
             (_, _) => format!("partly copied, {}", units::size(tally.copied)),
         };
+        let fresh = if placement.refilled.contains(folder) {
+            " · the folder was missing"
+        } else {
+            ""
+        };
         output.step(
             "Placed",
             &format!(
-                "{folder} · {} {how}",
+                "{folder} · {} {how}{fresh}",
                 units::count(tally.files, "file", "files")
             ),
         );
@@ -170,40 +175,59 @@ const NAMED: usize = 5;
 /// a warning for the files fetchloom placed that someone deleted or moved, which a sync puts
 /// back, as `verb` says, since data.lock still pins them: how to leave each kind of them out for
 /// good, at most [`NAMED`] ways, where a person's own files stay out of the way, and, when no
-/// file of the data folder was left, how to keep that folder elsewhere.
+/// file of the data folder was left, how to keep that folder elsewhere. a folder deleted whole
+/// is named once, and a dataset's own folder deleted whole is a fresh start, which needs no
+/// warning.
 fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, verb: &str) {
-    let paths = &placement.put_back;
-    let Some(first) = paths.first() else {
-        return;
+    let fresh = |path: &String| {
+        placement
+            .emptied
+            .get(path)
+            .is_some_and(|folder| placement.refilled.contains(folder))
     };
-    let said = match paths.len() {
-        1 => format!("{verb} {first}, which was deleted or moved, since data.lock pins it"),
-        count => {
-            let named = paths[..count.min(NAMED)].join(", ");
-            let more = match count.saturating_sub(NAMED) {
-                0 => String::new(),
-                more => format!(" and {} more", units::grouped(more as u64)),
-            };
-            format!(
-                "{verb} {} that were deleted or moved, since data.lock pins them: {named}{more}",
-                units::count(count as u64, "file", "files")
-            )
-        }
-    };
-    let mut leave = Vec::new();
-    if let Some(droppable) = paths
+    let paths: Vec<&String> = placement
+        .put_back
         .iter()
-        .find(|path| !placement.undroppable.contains_key(*path))
+        .filter(|path| !fresh(path))
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    // each folder deleted whole, with its files, or a file alone
+    let mut items: Vec<(&str, u64, &String)> = Vec::new();
+    let mut folders: BTreeMap<&str, usize> = BTreeMap::new();
+    for path in &paths {
+        match placement.emptied.get(*path) {
+            Some(folder) => {
+                let at = *folders.entry(folder).or_insert_with(|| {
+                    items.push((folder, 0, path));
+                    items.len() - 1
+                });
+                items[at].1 += 1;
+            }
+            None => items.push((path, 1, path)),
+        }
+    }
+    let said = put_back_said(verb, &paths, &items, &folders);
+    let mut leave = Vec::new();
+    if let Some((name, _, _)) = items
+        .iter()
+        .find(|(_, _, path)| !placement.undroppable.contains_key(*path))
     {
+        let what = if folders.contains_key(name) {
+            "folder"
+        } else {
+            "file"
+        };
         leave.push(format!(
-            "to leave a file out for good, run `fetchloom drop {}`",
-            crate::cli::shell_word(droppable)
+            "to leave a {what} out for good, run `{}`",
+            crate::cli::project::command(&format!("drop {}", crate::cli::shell_word(name)))
         ));
     }
     let mut told = BTreeSet::new();
     for (path, why) in paths
         .iter()
-        .filter_map(|path| Some((path, placement.undroppable.get(path)?)))
+        .filter_map(|path| Some((*path, placement.undroppable.get(*path)?)))
     {
         if leave.len() == NAMED {
             break;
@@ -213,7 +237,8 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
                 "{recipe} makes {path}, so to leave it out for good, choose the files inside {recipe}'s step"
             )),
             Undroppable::Only(dataset) if told.insert(dataset) => leave.push(format!(
-                "{path} is the only file of {dataset}, so to leave it out for good, run `fetchloom remove {dataset}`"
+                "{path} is the only file of {dataset}, so to leave it out for good, run `{}`",
+                crate::cli::project::command(&format!("remove {dataset}"))
             )),
             _ => {}
         }
@@ -231,6 +256,47 @@ fn warn_put_back(output: &Output, manifest: &Manifest, placement: &Placement, ve
     output.warn_with(&said, &leave.join("; "));
     for path in paths {
         output.detail(path);
+    }
+}
+
+/// what a warning about `paths`, put back as `verb` says, names: the one file, the one folder
+/// deleted whole, or the first [`NAMED`] of `items`, each folder of `folders` with how many files
+/// it held, and how many files the rest hold.
+fn put_back_said(
+    verb: &str,
+    paths: &[&String],
+    items: &[(&str, u64, &String)],
+    folders: &BTreeMap<&str, usize>,
+) -> String {
+    let shown = |(name, files, _): &(&str, u64, &String)| {
+        if folders.contains_key(name) {
+            format!("the {} in {name}/", units::grouped(*files))
+        } else {
+            (*name).to_owned()
+        }
+    };
+    match (paths.len(), items) {
+        (1, _) => format!(
+            "{verb} {}, which was deleted or moved, since data.lock pins it",
+            paths[0]
+        ),
+        (count, [(folder, ..)]) => format!(
+            "{verb} the {} files in {folder}/, which was deleted or moved, since data.lock pins them",
+            units::grouped(count as u64)
+        ),
+        (count, _) => {
+            let named: Vec<String> = items.iter().take(NAMED).map(shown).collect();
+            let more: u64 = items.iter().skip(NAMED).map(|(_, files, _)| files).sum();
+            let more = match more {
+                0 => String::new(),
+                more => format!(" and {} more", units::grouped(more)),
+            };
+            format!(
+                "{verb} {} that were deleted or moved, since data.lock pins them: {}{more}",
+                units::count(count as u64, "file", "files"),
+                named.join(", ")
+            )
+        }
     }
 }
 
@@ -800,6 +866,26 @@ fn entry_name(found: Entry) -> &'static str {
 mod tests {
     use super::*;
     use crate::output::{Level, Style};
+
+    /// the folder a file was deleted with is the topmost that holds no file, never above the
+    /// floor, and a file whose own folder still holds one was deleted alone.
+    #[test]
+    fn a_file_belongs_to_the_topmost_folder_left_without_files() {
+        let files = [
+            "data/set/b/kept.csv".to_owned(),
+            "data/notes.txt".to_owned(),
+        ];
+        let holding = holding(files.iter());
+        for (path, floor, folder) in [
+            ("data/set/a/x/y.csv", "data/set", Some("data/set/a")),
+            ("data/set/b/gone.csv", "data/set", None),
+            ("data/set/top.csv", "data/set", None),
+            ("data/other/a/y.csv", "data/other", Some("data/other")),
+            ("data/other/a/y.csv", "data/elsewhere", None),
+        ] {
+            assert_eq!(emptied(&holding, path, floor), folder, "{path}");
+        }
+    }
 
     /// a sync that puts back many files names the first five and counts the rest, with their
     /// thousands apart, and points at drop with the first drop leaves out, quoted for a shell.

@@ -613,6 +613,37 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     Ok(())
 }
 
+/// a folder deleted whole inside a dataset is named once, with the drop that leaves the folder
+/// out. a dataset's own folder deleted whole, or the whole data folder, is a fresh start: the
+/// sync places it again and says only that the folder was missing.
+#[test]
+fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = tree(&sandbox)?;
+    fs::remove_dir_all(folder.join("sub"))?;
+    let output = sandbox.run(&["sync"])?;
+    ok(&output)?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: to leave a folder out for good, run `fetchloom drop data/tree/sub`; keep files of your own in a folder outside data/\n"),
+        "{stderr}"
+    );
+    for gone in [folder.clone(), sandbox.work().join("data")] {
+        fs::remove_dir_all(&gone)?;
+        let output = sandbox.run(&["sync"])?;
+        ok(&output)?;
+        let stderr = text(&output.stderr)?;
+        assert!(!stderr.contains("warning"), "{stderr}");
+        assert!(
+            stderr.contains("     Placed data/tree · 6 files ")
+                && stderr.contains(" · the folder was missing\n"),
+            "{stderr}"
+        );
+        assert_eq!(fs::read(folder.join("sub/s2.txt"))?, b"s2\n");
+    }
+    Ok(())
+}
+
 /// a folder of files the source lists leaves as one pattern, which stays the same however the
 /// paths overlap, and each file keeps its own record. files named one by one, as a shell expands
 /// `flac/*.flac`, stay one pattern each, so files added to the folder later are not left out.
