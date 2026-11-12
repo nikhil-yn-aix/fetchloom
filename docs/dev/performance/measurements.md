@@ -79,6 +79,7 @@ every change measured with the current harness, one row each: what it gained whe
 | cache | the cache report's copies pass on parallel workers | 100,000 placed files 0.82 to 0.60 s, same peak memory | kept | [cache report](#the-cache-report-on-100000-placed-files-2026-11-11) |
 | cache | a file's details taken from its open's check, a new object's birth read once, a clone hashed through the file that wrote it | import of 10,000 files of 1 to 8 KiB on xfs: 4 of 41 syscalls a file fewer, cpu 0.982 [0.979, 0.986], time 1.021 [0.980, 1.036]; ext4, reflink placement and links flat | dropped, no win | [syscalls a new object costs](#the-syscalls-a-new-object-costs-2026-11-12) |
 | push | files written, flushed by the batch rule, then read back | first push of 10,000 small files 36.7 to 2.7 s | kept | [folder mirror](#pushing-into-a-folder-mirror-2026-11-11) |
+| push | staging shards only for large pushes, with compact-name retry | musl 100,000 files: time 0.732, peak RSS 1.042 [1.024, 1.050] | dropped, memory regression | [conditional shards](#conditional-mirror-staging-shards-2026-11-12) |
 | push | a push's unfinished files spread over 16 folders | 100,000 files 0.729, but 50 files 1.046 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
 | build | memoized immutable recipe-input contents, three versions | 4,000-recipe status ratios 0.0140 glibc and 0.0092 musl, but no-reuse controls slowed about 1% | dropped, control time | [recipe inputs](#memoizing-recipe-input-contents-2026-11-12) |
 | build | a step's exit wakes the build's watch | a 10,000-file recipe 0.889, but on musl peak memory 1.061 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -840,6 +841,38 @@ warm 512 MiB verification is 84–85% faster, cold verification about 74% faster
 an unlocked strace check, outside timing, counted exactly 64 MiB read from each of the eight files on both arms: one reading thread before, eight after, 536,870,912 bytes in each. the gain therefore does not come from skipping hashes. worker-choice tests use fixed CPUs, sizes and ceilings. independent 4 MiB SHA-256 vectors check result ordering and refused-thread fallback; interrupted reads stay errors. the count-only policy failed the new scheduling test. deliberately dropping the IO racy-proof filter failed its existing regression, and allowing extra readers under a small ceiling failed the lean-buffer test; restoration passed. the kept path has no experiment switch.
 
 raw commands, binary hashes, source patch, reports, per-file read counts and every paired run remain in the CPU sweep's `p1-*` records. these measurements cover warm/cold ext4 NVMe on linux, not rotational disks, network filesystems, native macos/windows or aarch64 throughput; those remain unmeasured rather than inferred from the CPU gain.
+
+## conditional mirror staging shards, 2026-11-12
+
+an earlier unconditional staging experiment saved time at 100,000 files but lost at 50. this experiment counted the mirror entries still needing a copy, not all the project's files. at the chosen threshold it prepared 16 checked subfolders below `tmp/`, selected one from each item's hash, and kept the existing flat temporary-name path below it. publication, read-back hashing, flushing and the worker limits stayed unchanged. stale cleanup also visited just the reserved shard folders, without following a listed link or touching unrelated folders.
+
+the threshold pilot used 32-byte distinct files already checked into one ext4 cache, a fresh mirror for each arm on ext4 or a mounted xfs image over nvme, and whole `push --offline` commands. one switched release binary per libc, based on 7ba9970135eb050dcb2db1edb63b7ba867f07b93, ran each arm once per seeded shuffled round. this table compares always-on sharding with the flat path to locate the crossover; there are six clean pairs unless noted. 500 entries was the first sampled size with a gain on both filesystems and libc builds, so the subsequent conditional candidate left pushes below 500 unchanged.
+
+| files | filesystem | glibc time ratio [95%] | musl time ratio [95%] |
+|---:|---|---|---|
+| 50 | ext4 | 1.001 [0.961, 1.042] | 1.049 [1.013, 1.057] |
+| 50 | xfs | 1.010 [0.963, 1.148] | 1.017 [0.957, 1.039] |
+| 500 | ext4 | 0.852 [0.824, 0.930] | 0.872 [0.829, 0.924] |
+| 500 | xfs | 0.831 [0.816, 0.839] | 0.836 [0.808, 0.845] |
+| 5,000 | ext4 | 0.737 [0.730, 0.752] | 0.748 [0.743, 0.759] |
+| 5,000 | xfs | 0.836 [0.802, 0.875] | 0.794 [0.764, 0.816] |
+| 50,000 | ext4 | 0.730 [0.725, 0.751] | 0.726 [0.723, 0.734] |
+| 50,000 | xfs | 0.781 [0.771, 0.806] | 0.789 [0.774, 0.806] |
+| 100,000 | ext4 | 0.731 [0.715, 0.739] | 0.720 [0.706, 0.730] |
+| 100,000 | xfs | 0.797 [0.792, 0.852]; 4 pairs | not measured before the rebase |
+
+before further qualification, the experiment was rebased onto c3438f1c to include the new CPU work. the old pilot was retained, not pooled with the new builds. each row below is a separate same-binary musl comparison with 12 clean pairs and a read-once switch; each candidate shards only at 500 pending entries or more.
+
+| rebased 100,000-file ext4 case | before s [range] | after s [range] | time ratio [95%] | peak RSS MiB, before to after | peak RSS ratio [95%] |
+|---|---|---|---|---|---|
+| conditional shards, full temporary paths | 6.548 [6.380, 7.578] | 4.702 [4.604, 4.885] | 0.717 [0.707, 0.731] | 164.65 to 181.11 | 1.090 [1.070, 1.123] |
+| conditional shards, compact temporary names | 6.464 [5.803, 8.476] | 4.689 [4.572, 5.741] | 0.732 [0.719, 0.774] | 163.43 to 171.13 | 1.042 [1.024, 1.050] |
+
+the first conditional candidate failed the large-push memory check. its path capacities alone explained less than 1 MiB of extra retained storage, not the observed RSS rise. one bounded alternative retained only a shard index and nonce for each unfinished file, rebuilding a full path when needed. its small-push path kept the existing full path and introduced no retained path allocation there. it reduced the memory cost, but did not remove it: peak RSS still rose by 4.2% [2.4%, 5.0%], about 7.7 MiB at the medians, with both sides already above the ordinary default memory budget. neither candidate is kept under the no-regression rule. the remaining conditional matrix and the compact candidate's glibc qualification were not run after that failure.
+
+peak RSS came from GNU time's child `wait4`, with the original harness value retained separately. the interleaved harness ran under the shared lock on cores 12–23; bounded groups used at most a 270 s timeout plus five seconds to kill a stalled group, never five minutes of ownership. load-burst pairs stayed in the raw records, excluded from these estimates. every completed push's JSON, file count, independent payload bytes, readonly files and absence of unfinished files were checked. exact commands, ranges, build hashes, raw pairs and all three source patches remain with the filesystem sweep outside the repository.
+
+two fixed-input tests failed first: the old path did not spread two pending files into distinct parents, and its sweep left a stale sharded part behind. deliberately disabling routing and shard traversal reproduced both failures. the restored mirror module passed 25 tests; the rebased CLI push module passed 20. the tests exercised read-back corruption and stop in both layouts, two interleaved pushes, unrelated and fresh leftovers, and a planted shard link. actual mixed flat/sharded CLI pushes of 5,000 files also produced one checked mirror. deliberately resolving a compact name through the wrong shard failed the live-file assertion. the prototypes and their added tests were removed; only this record is retained.
 
 ## evidence limits
 
