@@ -636,9 +636,24 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
 
 /// when a command failed for want of an account and a person is at the terminal: offers to sign
 /// in, or to accept a gated dataset's terms, then says whether running the command again could
-/// now work.
-pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, Error> {
+/// now work. `refusal` is the command's error when it was not told above the offer: a line then
+/// names what was refused first, and a no is a cancel, which ends the run with one line.
+pub(super) async fn offer(
+    context: &Arc<Context>,
+    need: &Need,
+    refusal: Option<&Error>,
+) -> Result<bool, Error> {
     let output = &context.output;
+    if let Some(refusal) = refusal {
+        output.mark("Refused", &refusal.message);
+        for detail in &refusal.details {
+            output.item(detail);
+        }
+    }
+    let declined = |what: &str| match refusal {
+        Some(_) => Err(answered_no().cancelling(what)),
+        None => Ok(false),
+    };
     let account = &need.account;
     let found = account.find(&auth::env);
     if let Some(found) = found.as_ref().filter(|found| !account.sendable(found)) {
@@ -658,15 +673,22 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
         ));
         let again = agree(context, "try again now?", true)
             .map_err(|error| error.cancelling("trying again"))?;
-        return Ok(again == Some(true));
+        return match again {
+            Some(true) => Ok(true),
+            _ => declined("trying again"),
+        };
     }
     let signing = format!("signing in to {}", title(account));
     // a reflex enter starts no sign-in, which cannot help when the name is wrong or terms come
     // first, so what else may be wrong is said before the question
-    if need.maybe_missing {
+    if let Some(page) = &need.maybe_missing {
         output.say(&format!(
-            "{:>11} the name first: {} answers alike for a name that does not exist and for a private one",
+            "{:>11} the name first at {}",
             "Check",
+            output.link(page)
+        ));
+        output.item(&format!(
+            "{} answers alike for a name that does not exist and for a private one",
             title(account)
         ));
     }
@@ -685,7 +707,7 @@ pub(super) async fn offer(context: &Arc<Context>, need: &Need) -> Result<bool, E
     .map_err(|error| error.cancelling(&signing))?
     .unwrap_or(false)
     {
-        return Ok(false);
+        return declined(&signing);
     }
     let login = Login {
         account: account.id(),

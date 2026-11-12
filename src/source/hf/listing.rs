@@ -354,8 +354,11 @@ mod tests {
         );
         assert_eq!(
             err.need.map(|need| (need.account, need.maybe_missing)),
-            Some((crate::auth::Account::HuggingFace, true)),
-            "the offer to sign in says first that the name may be wrong"
+            Some((
+                crate::auth::Account::HuggingFace,
+                Some("https://huggingface.co/datasets/stanfordnlp/no-such-dataset".to_owned())
+            )),
+            "the offer to sign in says first that the name may be wrong, and where to check it"
         );
         assert_eq!(recorded.asked().len(), 1, "a dataset needs no other look");
     }
@@ -396,7 +399,7 @@ mod tests {
             err.message,
             "huggingface.co has no model scikit-learn/irs, or it is private"
         );
-        assert_eq!(err.need.map(|need| need.maybe_missing), Some(true));
+        assert!(err.need.is_some_and(|need| need.maybe_missing.is_some()));
     }
 
     /// a gated repository needs accepted terms and a private one an account; anyone may read a

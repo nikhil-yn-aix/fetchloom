@@ -62,9 +62,9 @@ struct Context {
     split: net::Splitting,
     work: Arc<Work>,
     stop: Arc<Stop>,
-    /// the account a failed command needed, kept so a person at the terminal can sign in and
-    /// run it again.
-    needed: std::sync::Mutex<Option<crate::auth::Need>>,
+    /// a failed command's refusal that signing in may lift, kept so a person at the terminal
+    /// can sign in and run it again.
+    needed: std::sync::Mutex<Option<Refusal>>,
     /// a key signed in with during this command but not saved, which the run again still uses.
     unsaved: std::sync::Mutex<Vec<net::Credential>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
@@ -79,7 +79,23 @@ struct Context {
     lists: std::sync::Mutex<Vec<(std::path::PathBuf, String)>>,
 }
 
+/// a refusal that signing in may lift, which a person at the terminal is offered to sign in for
+/// once the command ends.
+struct Refusal {
+    error: Error,
+    /// whether the error was told already, as `-q` tells it, above the offer.
+    told: bool,
+}
+
 impl Context {
+    /// takes the refusal the command ended with, if signing in may lift it.
+    fn refusal(&self) -> Option<Refusal> {
+        self.needed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     /// a context with every setting at its default, printing through `output`.
     fn new(output: Output) -> Context {
         Context {
@@ -595,16 +611,29 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     }
     // refused for want of an account, with a person at the terminal: offer to sign in, then run
     // the command once more with the new key
-    let needed = context
-        .needed
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    if let (Some(need), Some(command)) = (needed, command) {
-        match block_on(&context, auth::offer(&context, &need)) {
-            Ok(true) => outcome = dispatch(&context, command, Instant::now()),
-            Ok(false) => {}
-            Err(error) => context.output.error(&error),
+    if let Some(refusal) = context.refusal() {
+        let offered = match (&refusal.error.need, command) {
+            (Some(need), Some(command)) => {
+                let lead = (!refusal.told).then_some(&refusal.error);
+                Some((
+                    block_on(&context, auth::offer(&context, need, lead)),
+                    command,
+                ))
+            }
+            _ => None,
+        };
+        match offered {
+            Some((Ok(true), command)) => {
+                outcome = dispatch(&context, command, Instant::now());
+                // signed in, the command is not offered a sign-in again
+                if let Some(again) = context.refusal().filter(|again| !again.told) {
+                    context.output.error(&again.error);
+                }
+            }
+            Some((Ok(false), _)) => {}
+            Some((Err(error), _)) => context.output.error(&error),
+            None if refusal.told => {}
+            None => context.output.error(&refusal.error),
         }
     }
     drop(entered);
@@ -1110,14 +1139,21 @@ fn finish<T: Serialize>(
         context.output.retell();
     }
     if let Err(error) = &outcome {
-        context.output.error(error);
-        if let Some(need) = &error.need
-            && context.output.can_ask()
-        {
+        // a person who can answer the offer to sign in reads it first; `-q` tells the error
+        // above it, as without the offer
+        let offered = error.need.is_some() && context.output.can_ask();
+        let told = !offered || !context.output.shows_items();
+        if told {
+            context.output.error(error);
+        }
+        if offered {
             *context
                 .needed
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((**need).clone());
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Refusal {
+                error: error.clone(),
+                told,
+            });
         }
     }
     // a run that did no work, such as `--version`, has no counters worth a line

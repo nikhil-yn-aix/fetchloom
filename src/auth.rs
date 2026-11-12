@@ -52,9 +52,9 @@ pub(crate) const NAMES: &str =
 pub(crate) struct Need {
     pub(crate) account: Account,
     pub(crate) terms: Option<String>,
-    /// the source answers alike for a name that does not exist, so the name may be wrong
-    /// rather than the account missing.
-    pub(crate) maybe_missing: bool,
+    /// the page that shows the name asked, from a source that answers alike for a name that
+    /// does not exist, so the name may be wrong rather than the account missing.
+    pub(crate) maybe_missing: Option<String>,
 }
 
 /// the kind of secret an account takes.

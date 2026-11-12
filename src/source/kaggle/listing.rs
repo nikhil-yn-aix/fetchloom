@@ -101,11 +101,11 @@ impl Dataset {
                 .unseen()
         } else {
             err.message = format!("kaggle has no dataset {name}, or it is private");
+            let page = self.page();
             err.help(format!(
-                "check the name at {}. a private dataset needs an account that can read it: sign in with `fetchloom auth login kaggle`",
-                self.page()
+                "check the name at {page}. a private dataset needs an account that can read it: sign in with `fetchloom auth login kaggle`"
             ))
-            .needs_or_missing(crate::auth::Account::Kaggle)
+            .needs_or_missing(crate::auth::Account::Kaggle, page)
         }
     }
 
@@ -503,8 +503,11 @@ mod tests {
         );
         assert_eq!(
             without.need.map(|need| (need.account, need.maybe_missing)),
-            Some((crate::auth::Account::Kaggle, true)),
-            "the offer to sign in says first that the name may be wrong"
+            Some((
+                crate::auth::Account::Kaggle,
+                Some("https://www.kaggle.com/datasets/uciml/nope".to_owned())
+            )),
+            "the offer to sign in says first that the name may be wrong, and where to check it"
         );
         let with = dataset("uciml/nope").hidden(refused(), true);
         assert_eq!(

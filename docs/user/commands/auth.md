@@ -63,14 +63,17 @@ echo "$EARTHDATA_USER:$EARTHDATA_PASSWORD" | fetchloom auth login earthdata --wi
 
 ## when a download is refused
 
-at a terminal, a command refused for want of an account offers to sign in, then runs once more. the question defaults to no, so enter alone starts no sign-in. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those refusals the offer first says to check the name:
+at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`: its first line names what was refused. the question defaults to no, so enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those refusals the offer first says to check the name, and where:
 
 ```text
-error: huggingface.co has no dataset acme-lab/field-notes, or it is private
-  help: check the name at https://huggingface.co/datasets/acme-lab/field-notes. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`
-      Check the name first: hugging face answers alike for a name that does not exist and for a private one
-sign in to hugging face now? [y/N]
+    Refused huggingface.co has no dataset acme-lab/field-notes, or it is private
+      Check the name first at https://huggingface.co/datasets/acme-lab/field-notes
+            hugging face answers alike for a name that does not exist and for a private one
+sign in to hugging face now? [y/N] n
+  Cancelled signing in to hugging face
 ```
+
+a command that is refused again once you signed in ends with that refusal as an error. `-q` prints the error above the question instead of the `Refused` line.
 
 `add` first asks the source, once, for the public datasets of the same owner, signed in or not. when one is a typo away, signing in could not help, so no sign-in is offered and the help gives your command with the name fixed; signed in, the error above it reads `hf:datasets/scikit-learn/irsi does not exist, or is not public`. a source that is busy, or whose rate limit is used up, gets no second try, so the error comes at once with no suggestion. `--json` and offline runs ask nothing more:
 

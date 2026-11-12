@@ -420,21 +420,25 @@ fn hub() -> Result<Routes> {
     ])
 }
 
-/// at a terminal, the offer to sign in after a refusal says first what else may be wrong: a
-/// name with a typo, which the hub answers as it answers a private one, or terms a gated
-/// dataset needs accepted on its page. enter alone is a no, so a reflex starts no sign-in.
+/// at a terminal, a refusal that signing in may lift asks before any error: a line names what
+/// was refused, then what else may be wrong comes first: a name with a typo, which the hub
+/// answers as it answers a private one, with the page to check it at, or terms a gated dataset
+/// needs accepted on its page. enter alone is a no, so a reflex starts no sign-in, and the no
+/// ends the run with one line and the refusal's exit code.
 #[cfg(target_os = "linux")]
 #[test]
-fn the_offer_to_sign_in_says_what_comes_first_and_defaults_to_no() -> Result {
+fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     let sandbox = Sandbox::new()?;
     let hub = hub()?;
-    for (reference, first) in [
+    for (reference, refused, first) in [
         (
             "hf:datasets/scikit-learn/irs",
-            "Check the name first: hugging face answers alike for a name that does not exist and for a private one",
+            "huggingface.co has no dataset scikit-learn/irs, or it is private",
+            "Check the name first at https://huggingface.co/datasets/scikit-learn/irs\n            hugging face answers alike for a name that does not exist and for a private one\n",
         ),
         (
             "hf:datasets/bigcode/the-stack",
+            "hf:datasets/bigcode/the-stack requires permission to download its files",
             "First accept the terms at https://huggingface.co/datasets/bigcode/the-stack",
         ),
     ] {
@@ -451,14 +455,71 @@ fn the_offer_to_sign_in_says_what_comes_first_and_defaults_to_no() -> Result {
             return Ok(());
         };
         assert_eq!(code, Some(40), "{screen}");
-        let said = screen.find(first);
-        let asked = screen.find("sign in to hugging face now? [y/N]");
+        assert!(!screen.contains("error:"), "{screen}");
+        // a line told at a terminal starts with a return, which the lines below leave out
+        let screen = screen.replace('\r', "");
+        let lead = format!("    Refused {refused}\n");
+        let told = [lead.as_str(), first, "sign in to hugging face now? [y/N]"]
+            .map(|text| screen.find(text));
         assert!(
-            said.zip(asked).is_some_and(|(said, asked)| said < asked),
+            told.windows(2)
+                .all(|pair| pair[0].zip(pair[1]).is_some_and(|(one, next)| one < next)),
+            "{screen}"
+        );
+        assert!(
+            screen
+                .trim_end()
+                .ends_with("  Cancelled signing in to hugging face"),
             "{screen}"
         );
         assert!(!screen.contains("        key "), "no sign-in: {screen}");
     }
+    // -q tells the error above the question, as it always did
+    let mut quiet = sandbox.command(&["-q", "add", "hf:datasets/scikit-learn/irs"]);
+    quiet.env("FETCHLOOM_TEST_HF_API", &hub.url);
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &quiet, "", "now?", "\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(40), "{screen}");
+    let told = screen.find("error: huggingface.co has no dataset scikit-learn/irs");
+    let asked = screen.find("sign in to hugging face now? [y/N]");
+    assert!(
+        told.zip(asked).is_some_and(|(told, asked)| told < asked),
+        "{screen}"
+    );
+    assert!(!screen.contains("Cancelled"), "{screen}");
+    Ok(())
+}
+
+/// the command runs once more after signing in, and a refusal then is told as an error, since
+/// the offer to sign in comes once.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_refusal_after_signing_in_is_told_as_an_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    let challenge = [
+        ("WWW-Authenticate", "Basic realm=\"lab\""),
+        ("Content-Length", "0"),
+    ];
+    let server = Routes::start(vec![(
+        "/files/x.csv".to_owned(),
+        reply("401 Unauthorized", &challenge, b""),
+    )])?;
+    let link = format!("{}/files/x.csv", server.url);
+    let add = sandbox.command(&["add", &link]);
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &add, "", "now?", "y\rada\rsecret\ry\r")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(40), "{screen}");
+    let signed = screen.find("Signed in to 127.0.0.1");
+    let told = screen.find(&format!("error: 127.0.0.1 refused access to {link} (401)"));
+    assert!(
+        signed.zip(told).is_some_and(|(signed, told)| signed < told),
+        "{screen}"
+    );
     Ok(())
 }
 

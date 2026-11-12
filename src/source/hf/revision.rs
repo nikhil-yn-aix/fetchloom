@@ -153,12 +153,12 @@ impl Repo {
                 .help(format!(
                     "check the name at {page}. a private repository needs a key that can read it: sign in again with `fetchloom auth login hf`"
                 ))
-                .needs_or_missing(Account::HuggingFace),
+                .needs_or_missing(Account::HuggingFace, page),
             None => error
                 .help(format!(
                     "check the name at {page}. a private repository needs an account that can read it: sign in with `fetchloom auth login hf`"
                 ))
-                .needs_or_missing(Account::HuggingFace),
+                .needs_or_missing(Account::HuggingFace, page),
         }
     }
 

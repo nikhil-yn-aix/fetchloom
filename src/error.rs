@@ -165,18 +165,19 @@ impl Error {
         self.need = Some(Box::new(crate::auth::Need {
             account,
             terms,
-            maybe_missing: false,
+            maybe_missing: None,
         }));
         self
     }
 
     /// marks the error as a refusal `account` could lift, from a source that refuses a name that
-    /// does not exist as it refuses a private one, so the name may be what is wrong.
-    pub(crate) fn needs_or_missing(mut self, account: crate::auth::Account) -> Error {
+    /// does not exist as it refuses a private one, so the name may be what is wrong: its `page`
+    /// shows whether it is.
+    pub(crate) fn needs_or_missing(mut self, account: crate::auth::Account, page: String) -> Error {
         self.need = Some(Box::new(crate::auth::Need {
             account,
             terms: None,
-            maybe_missing: true,
+            maybe_missing: Some(page),
         }));
         self.unseen()
     }
