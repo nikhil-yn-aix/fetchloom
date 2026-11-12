@@ -311,6 +311,38 @@ fn output_moves_a_one_off_though_a_registered_project_is_gone() -> Result {
     Ok(())
 }
 
+/// a path beneath a file cannot be written, since that file stands where a folder must be: the
+/// error names it and another path, before anything is asked of the server or written.
+#[test]
+fn output_beneath_a_file_names_the_file_in_the_way() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let data = sandbox.work().join("data");
+    fs::create_dir(&data)?;
+    fs::write(data.join("py.csv"), b"mine")?;
+    let output = sandbox.run(&["--json", "get", &server.url, "-o", "data/py.csv/x.csv"])?;
+    assert_eq!(output.status.code(), Some(50), "{}", text(&output.stdout)?);
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "local.io");
+    assert_eq!(
+        error["message"],
+        "cannot write data/py.csv/x.csv: data/py.csv is a file, not a folder"
+    );
+    let separator = std::path::MAIN_SEPARATOR;
+    assert_eq!(
+        error["help"],
+        format!(
+            "choose another name with -o, such as `-o data{separator}x.csv`, or rename data/py.csv so a folder can take its name"
+        )
+    );
+    assert!(server.requests().is_empty(), "nothing is downloaded");
+    assert_eq!(fs::read(data.join("py.csv"))?, b"mine");
+    assert_eq!(names(&sandbox)?, ["data"]);
+    assert_eq!(objects(&sandbox), 0);
+    Ok(())
+}
+
 #[test]
 fn output_keeps_an_archive_packed() -> Result {
     let sandbox = Sandbox::new()?;

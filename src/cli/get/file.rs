@@ -28,8 +28,8 @@ use crate::volume::Volume;
 use crate::work::Work;
 
 /// refuses an `-o` that cannot name the one file to write, before anything is asked of a source:
-/// stdout, several links or a list of them, a folder, or a name this machine's disks cannot
-/// store.
+/// stdout, several links or a list of them, a folder, a name this machine's disks cannot store,
+/// or a path beneath a file.
 pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), Error> {
     if path == Path::new("-") {
         return Err(Error::new(
@@ -84,7 +84,36 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
                 .help("choose another name for -o"),
         );
     }
+    if let Some((blocked, what)) = blocked(path) {
+        let instead = blocked
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(path.file_name().unwrap_or_default());
+        return Err(Error::new(
+            Kind::LocalIo,
+            format!("cannot write {shown}: {} is {what}", blocked.display()),
+        )
+        .help(format!(
+            "choose another name with -o, such as `-o {}`, or rename {} so a folder can take its name",
+            instead.display(),
+            blocked.display()
+        )));
+    }
     Ok(())
+}
+
+/// what stands where a folder of `path` must be, as the file `data.csv` does for
+/// `data.csv/x.csv`, and what it is: nothing can be written at `path` then.
+fn blocked(path: &Path) -> Option<(&Path, &'static str)> {
+    for folder in path.ancestors().skip(1) {
+        match fs::metadata(folder) {
+            Ok(metadata) if metadata.is_dir() => return None,
+            Ok(metadata) if metadata.is_file() => return Some((folder, "a file, not a folder")),
+            Ok(_) => return Some((folder, "not a folder")),
+            Err(_) => {}
+        }
+    }
+    None
 }
 
 /// the name of the file a link points at, as its path ends, when that shows before any source

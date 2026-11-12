@@ -92,6 +92,14 @@ error: -o needs a file name, and results names a folder
 
 a file its source sends inside a zip, as kaggle may send a competition's file, is a usage error too once its bytes show it. `-o -` is refused as well, since the file is checked before it appears and stdout cannot wait for that.
 
+a path beneath a file, where that file stands in place of a folder, fails before anything downloads or is written, with exit 50, as `local.io`. the error names the file in the way and another path:
+
+```text
+$ fetchloom get https://example.org/data/iris.csv -o data/py.csv/iris.csv
+error: cannot write data/py.csv/iris.csv: data/py.csv is a file, not a folder
+  help: choose another name with -o, such as `-o data/iris.csv`, or rename data/py.csv so a folder can take its name
+```
+
 ### a file already there
 
 a file already at the path stays as it is unless `--force` asks to replace it:
