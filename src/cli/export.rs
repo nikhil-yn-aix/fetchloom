@@ -137,6 +137,9 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         tell_left_out(output, &report);
         return Ok(report);
     };
+    // the last look for a stop: once the file is being written, the export ends as it would
+    context.stop.check()?;
+    context.stop.finish();
     match publish(path, &text, args.force) {
         Ok(file) => report.file = Some(file),
         Err(error) => return Err(with_report(error, &report)),

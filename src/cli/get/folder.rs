@@ -87,7 +87,7 @@ pub(super) fn put_all(
     cache: &Cache,
     folder: &Path,
     targets: &[Target],
-    named: bool,
+    (named, last): (bool, bool),
 ) -> Result<Vec<Outcome>, Error> {
     context.stop.check()?;
     let mut placer = if named {
@@ -168,6 +168,11 @@ pub(super) fn put_all(
         };
     }
     context.stop.check()?;
+    // the run's last look for a stop: once its last files are placed, it ends as it would, the
+    // flush of their copies included
+    if last {
+        context.stop.finish();
+    }
     if let Some(error) = failure {
         return Err(error);
     }
@@ -575,7 +580,7 @@ mod tests {
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
 
-        let outcomes = put_all(&context, &cache, &folder, &targets, true).unwrap();
+        let outcomes = put_all(&context, &cache, &folder, &targets, (true, true)).unwrap();
 
         assert!(matches!(
             outcomes.as_slice(),
@@ -645,7 +650,7 @@ mod tests {
             false,
             false,
         ));
-        let result = put_all(&context, &cache, &folder, &targets, true);
+        let result = put_all(&context, &cache, &folder, &targets, (true, true));
         assert!(matches!(result, Err(error) if error.kind == Kind::LocalIo));
         assert_eq!(fs::read(folder.join("a")).unwrap(), b"old");
         assert!(!folder.join("b").exists());
@@ -703,7 +708,13 @@ mod tests {
             false,
         ));
         context.stop.ask();
-        let result = put_all(&context, &cache, &dir.path().join("got"), &targets, true);
+        let result = put_all(
+            &context,
+            &cache,
+            &dir.path().join("got"),
+            &targets,
+            (true, true),
+        );
         let counts = context.work.counts();
         assert_eq!(counts.hardlinks + counts.reflinks + counts.copies, 0);
         assert!(matches!(result, Err(error) if error.kind == Kind::Interrupted));
@@ -749,7 +760,7 @@ mod tests {
                 false,
                 false,
             ));
-            let result = put_all(&context, &cache, &folder, &targets, named);
+            let result = put_all(&context, &cache, &folder, &targets, (named, true));
             assert_eq!(result.is_ok(), named);
             assert_eq!(outside.join("file").exists(), named);
         }

@@ -1117,3 +1117,32 @@ fn on_disk(path: &std::path::Path) -> Result<u64> {
     let held = metadata.len();
     Ok(held)
 }
+
+/// a ctrl-c once `cache gc` has swept the cache, or `cache verify` has hashed it, and marked its
+/// work as finishing lets it say what it did, exit 0, rather than say it stops and then end as if
+/// nothing had been asked.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_past_the_caches_mark_lets_it_tell_what_it_did() -> Result {
+    for (args, told) in [
+        (
+            ["cache", "gc", "--now"].as_slice(),
+            "Removed 1 file \u{b7} 3 B from the cache",
+        ),
+        (
+            ["cache", "verify"].as_slice(),
+            "Verified 1 file \u{b7} 3 B, every one is intact",
+        ),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let fan = sandbox.cache().join("objects").join(&digest[..2]);
+        fs::create_dir_all(&fan)?;
+        fs::write(fan.join(&digest[2..]), b"abc")?;
+        let (running, release) =
+            crate::support::held_at_its_mark(&sandbox, &mut sandbox.command(args))?;
+        let stderr = crate::support::finished_anyway(running, &release)?;
+        assert!(stderr.contains(told), "{args:?}: {stderr}");
+    }
+    Ok(())
+}

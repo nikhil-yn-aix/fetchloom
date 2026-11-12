@@ -200,6 +200,12 @@ async fn sign_in(
     } else if context.mirrors.mirrors.only {
         output.hint("mirrors_only lets fetchloom ask its mirrors alone, so the key was not checked with its site");
     }
+    // the key checked out, so from here `auth login` ends as it would: a ctrl-c at the question
+    // below is a key that cancels it, and a stop asked otherwise lets it finish. a sign-in offered
+    // after a refusal runs its command again after it, which a stop must still reach
+    if !rerun {
+        context.stop.finish();
+    }
     let saved_to = save(
         context,
         account,
@@ -547,6 +553,9 @@ fn sign_out(context: &Context, logout: &Logout) -> Result<Report, Error> {
             removed_from: None,
         });
     };
+    // a sign-out has nothing to stop, one key removed after a question at most, which a ctrl-c
+    // there cancels as a key, so a stop asked otherwise lets it finish
+    context.stop.finish();
     let failed = |err: std::io::Error| {
         Error::io(
             format!("could not remove the {} key", title(&account)),

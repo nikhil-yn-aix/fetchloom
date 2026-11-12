@@ -618,6 +618,9 @@ fn settle(
         )
         .help("run the same command again to download it"));
     };
+    // the last look for a stop: once the file is being written, the get ends as it would
+    context.stop.check().map_err(Error::unchanged)?;
+    context.stop.finish();
     let replace = step == Step::Replace;
     let one_off = one_off(context, cache, &fetched.digest);
     let how = match write(

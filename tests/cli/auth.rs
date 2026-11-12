@@ -551,3 +551,50 @@ fn a_refused_key_is_named_by_where_it_comes_from() -> Result {
     );
     Ok(())
 }
+
+/// a ctrl-c during a sign-out, which has nothing to stop, lets it remove the key and say so, exit
+/// 0, rather than say it stops and then that it stopped, with the key removed.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_during_a_sign_out_lets_it_finish() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = home(&sandbox).join(".kaggle");
+    std::fs::create_dir_all(&folder)?;
+    std::fs::write(
+        folder.join("kaggle.json"),
+        r#"{"username":"ada","key":"api-key"}"#,
+    )?;
+    let (running, release) = crate::support::held_at_its_mark(
+        &sandbox,
+        &mut sandbox.command(&["auth", "logout", "kaggle", "--yes"]),
+    )?;
+    let stderr = crate::support::finished_anyway(running, &release)?;
+    assert!(stderr.contains("Signed out of kaggle"), "{stderr}");
+    assert!(!folder.join("kaggle.json").exists());
+    Ok(())
+}
+
+/// a ctrl-c once a sign-in has its key and marked its work as finishing, as while it saves the key,
+/// lets it save and say so, exit 0, rather than say it stops and then that it stopped, with the
+/// key saved.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_past_a_sign_ins_mark_lets_it_save_the_key() -> Result {
+    let sandbox = Sandbox::new()?;
+    let key = sandbox.folder("input")?.join("key");
+    std::fs::write(&key, "hf_example\n")?;
+    let mut command = sandbox.command(&["auth", "login", "hf", "--with-token", "--offline"]);
+    command.stdin(std::fs::File::open(&key)?);
+    let (running, release) = crate::support::held_at_its_mark(&sandbox, &mut command)?;
+    let stderr = crate::support::finished_anyway(running, &release)?;
+    assert!(
+        stderr.contains("Signed in to hf \u{b7} saved to"),
+        "{stderr}"
+    );
+    let token = home(&sandbox)
+        .join(".cache")
+        .join("huggingface")
+        .join("token");
+    assert_eq!(std::fs::read_to_string(token)?, "hf_example\n");
+    Ok(())
+}

@@ -422,7 +422,7 @@ async fn one_link(
         wanted,
         fetched,
         started,
-        &mut Taken::default(),
+        (&mut Taken::default(), true),
     )
     .await?;
     context.output.answer(&done.folder.display().to_string());
@@ -522,7 +522,17 @@ async fn many(
                 continue;
             }
         };
-        match settle(context, &cache, wanted, fetched, started, &mut taken).await {
+        let last = index + 1 == links.len();
+        match settle(
+            context,
+            &cache,
+            wanted,
+            fetched,
+            started,
+            (&mut taken, last),
+        )
+        .await
+        {
             Ok(done) => {
                 context.output.answer(&done.folder.display().to_string());
                 items.push(Item::done(link, &done));
@@ -772,7 +782,7 @@ async fn settle(
     wanted: Wanted,
     fetched: Vec<Result<Fetched, Error>>,
     started: Instant,
-    taken: &mut Taken,
+    taken: (&mut Taken, bool),
 ) -> Result<Done, Error> {
     let labels: Vec<String> = wanted.files.iter().map(|file| file.path.clone()).collect();
     let mut found = Vec::with_capacity(fetched.len());
@@ -790,14 +800,15 @@ async fn settle(
 }
 
 /// checks what arrived, unpacks archives and puts every file in the link's folder, unless an
-/// earlier link of the run took that folder.
+/// earlier link of the run took that folder. `last` says this is the run's last link, whose
+/// placement marks the run's work as finishing.
 async fn finish(
     context: &Context,
     cache: &Cache,
     wanted: Wanted,
     fetched: Vec<Fetched>,
     started: Instant,
-    taken: &mut Taken,
+    (taken, last): (&mut Taken, bool),
 ) -> Result<Done, Error> {
     let Wanted {
         parsed,
@@ -861,7 +872,8 @@ async fn finish(
         .map(|target| target.path.clone())
         .collect();
     check(&folder, Some(&placed))?;
-    let outcomes = put_all(context, cache, &folder, &planned.targets, chosen.is_some())?;
+    let named = (chosen.is_some(), last);
+    let outcomes = put_all(context, cache, &folder, &planned.targets, named)?;
     unpacking::drop_archives(cache, &unpacked.archives, None);
     if let (Some(key), [remote], [fetched]) = (&key, files.as_slice(), fetched.as_slice()) {
         remembered::keep(cache, key, &remote.path, fetched.digest, fetched.size);

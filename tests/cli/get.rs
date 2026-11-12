@@ -2264,3 +2264,29 @@ fn a_download_fat32_cannot_hold_is_refused_before_any_byte_moves() -> Result {
     assert_eq!(kinds, ["local.io", "unconfirmed"]);
     Ok(())
 }
+
+/// a ctrl-c once get has placed its files, or begins writing the one file `-o` names, and marked
+/// its work as finishing, as while the disk keeps a large copy, lets it end with its closing line,
+/// exit 0, rather than say it stops and then that it stopped, after the files were in place.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_past_gets_mark_lets_it_finish() -> Result {
+    for (args, placed) in [
+        (vec!["get"], "iris/iris.csv"),
+        (vec!["get", "-o", "data.csv"], "data.csv"),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+        let mut words = args.clone();
+        words.insert(1, &server.url);
+        let (running, release) =
+            crate::support::held_at_its_mark(&sandbox, &mut sandbox.command(&words))?;
+        let stderr = crate::support::finished_anyway(running, &release)?;
+        assert_eq!(
+            fs::read(sandbox.work().join(placed))?,
+            IRIS,
+            "{args:?}: {stderr}"
+        );
+    }
+    Ok(())
+}

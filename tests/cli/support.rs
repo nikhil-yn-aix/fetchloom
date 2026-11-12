@@ -1116,6 +1116,46 @@ pub(crate) fn wait_until(what: &str, mut ready: impl FnMut() -> Result<bool>) ->
     Ok(())
 }
 
+/// `command` run until it marks its work as finishing, held there by
+/// `FETCHLOOM_TEST_HOLD_FINISH`, so a stop sent now lands past its mark, with the file whose
+/// writing releases it.
+#[cfg(unix)]
+pub(crate) fn held_at_its_mark(
+    sandbox: &Sandbox,
+    command: &mut Command,
+) -> Result<(Running, PathBuf)> {
+    let release = sandbox.folder("hold")?.join("release");
+    command.env("FETCHLOOM_TEST_HOLD_FINISH", &release);
+    let running = Running::start(command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the run to mark its work as finishing", || {
+        Ok(Path::new(&held).exists())
+    })?;
+    Ok((running, release))
+}
+
+/// what a run past its mark says when a ctrl-c lands there: that it finishes, never that it
+/// stops, and its exit code 0.
+#[cfg(unix)]
+pub(crate) fn finished_anyway(running: Running, release: &Path) -> Result<String> {
+    running.interrupt()?;
+    running.wait_for("Finishing")?;
+    std::fs::write(release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("  Finishing what it started (ctrl-c again to quit at once)\n"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("Stopping") && !stderr.contains("Stopped"),
+        "{stderr}"
+    );
+    Ok(stderr)
+}
+
 /// the scripted server, the ranged server and the proxy each run in a `ServerTask`. dropping one
 /// stops its worker and waits for it, so the listener the worker owns is closed by then. this is
 /// checked through the worker's own handle, since a freed port may at once belong to a test

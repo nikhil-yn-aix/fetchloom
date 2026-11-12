@@ -452,3 +452,32 @@ fn output_writes_the_file_whole_and_replaces_one_only_with_force() -> Result {
     assert_eq!(force_alone.status.code(), Some(2));
     Ok(())
 }
+
+/// a ctrl-c once `export -o` has checked its inventory and marked its work as finishing lets it
+/// write the file and end with its closing line, exit 0, rather than say it stops and then that it
+/// stopped, with the file written.
+#[cfg(unix)]
+#[test]
+fn a_ctrl_c_past_the_exports_mark_lets_it_write_the_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (routes, _) = server()?;
+    added(&sandbox, &routes, &["iris.csv"])?;
+    let (running, release) = crate::support::held_at_its_mark(
+        &sandbox,
+        &mut sandbox.command(&["export", "-o", "sums.txt"]),
+    )?;
+    assert!(
+        !sandbox.work().join("sums.txt").exists(),
+        "the mark comes before the write"
+    );
+    let stderr = crate::support::finished_anyway(running, &release)?;
+    assert!(
+        stderr.contains("   Exported 1 file to sums.txt\n"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("sums.txt"))?,
+        format!("{}  data/iris/iris.csv\n", sha256(IRIS))
+    );
+    Ok(())
+}

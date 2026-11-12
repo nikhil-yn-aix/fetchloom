@@ -158,7 +158,7 @@ error: 4 of 4 links could not be fetched
   help: fetched links stay in place and downloaded files stay in the cache. fix the errors above, then run `fetchloom get -i links.txt` again
 ```
 
-an interruption, a refused question about the total size or a cache that cannot open still stops the whole run. during placement, ctrl-c stops new files and checks between copy blocks. completed files stay; unfinished copies never take their final names.
+an interruption, a refused question about the total size or a cache that cannot open still stops the whole run. during placement, ctrl-c stops new files and checks between copy blocks. completed files stay; unfinished copies never take their final names. once the last file is placed, while the disk keeps the copies, or once `-o` starts writing its file, a ctrl-c lets get finish: it prints `Finishing what it started (ctrl-c again to quit at once)`, ends with its closing line and exits 0.
 
 ## link lists
 

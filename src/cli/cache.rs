@@ -315,13 +315,16 @@ fn sweep(context: &Context, cache: &Cache, found: &Found, now: bool) -> Result<F
     } else {
         crate::cache::GRACE
     };
-    cache.sweep_with_stop(
+    let freed = cache.sweep_with_stop(
         &found.needed,
         &found.stale_projects,
         SystemTime::now(),
         grace,
         &context.stop,
-    )
+    )?;
+    // the sweep looked for a stop last, so what it freed is told whatever is asked from here
+    context.stop.finish();
+    Ok(freed)
 }
 
 /// tells what a sweep `freed`, keeping the files `projects` registered projects need, after
@@ -527,6 +530,8 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
         },
         &context.stop,
     )?;
+    // the hashing looked for a stop last, so what it found is told whatever is asked from here
+    context.stop.finish();
     drop((bar, ticker));
     if let Err(error) = report_checked(context, &cache, &checked) {
         let result = serde_json::to_value(&checked).map_err(|err| {
