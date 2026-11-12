@@ -27,6 +27,6 @@ a reference that names a version keeps it under `lock --upgrade`; to move to ano
 
 ## credentials and limits
 
-public articles need no account; [signing in](../signing-in.md) says how to give fetchloom a figshare key. an embargoed article, or one whose owner turned downloads off, is refused with `auth.required`, exit 40, and no filter gets around that; ask the owner for a copy you may download.
+public articles need no account, and data.lock records them with `access = "public"`; [signing in](../signing-in.md) says how to give fetchloom a figshare key. an embargoed article, or one whose owner turned downloads off, is refused with `auth.required`, exit 40, and no filter gets around that; ask the owner for a copy you may download.
 
 follow [offline preparation](../concepts.md#offline) before disconnecting.

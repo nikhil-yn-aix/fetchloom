@@ -129,9 +129,16 @@ impl Article {
                 files.push(file.remote(&resolved, folder)?);
             }
         }
+        // the public api answers only for a published article, and says when its files are
+        // confidential
+        let access = if answer.is_public && !answer.is_confidential {
+            Access::Public
+        } else {
+            Access::Unknown
+        };
         Ok(Listing {
             within: Vec::new(),
-            access: Access::Unknown,
+            access,
             unavailable,
             warnings: Vec::new(),
             resolved: Reference::Figshare(resolved),
@@ -203,6 +210,10 @@ pub(super) fn is_portal(host: &str) -> bool {
 }
 
 #[derive(Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is a yes or no figshare's api answers with"
+)]
 struct Answer {
     id: u64,
     version: u32,
@@ -216,6 +227,10 @@ struct Answer {
     download_disabled: bool,
     #[serde(default)]
     is_embargoed: bool,
+    #[serde(default)]
+    is_public: bool,
+    #[serde(default)]
+    is_confidential: bool,
 }
 
 #[derive(Deserialize)]

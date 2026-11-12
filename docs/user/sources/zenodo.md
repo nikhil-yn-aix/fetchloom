@@ -33,4 +33,4 @@ metadata keeps zenodo's casing, so the iris record gives `license = "cc-by-4.0"`
 
 ## credentials and limits
 
-public records need no account. for a restricted, embargoed or closed record, request access on its zenodo page, then sign in with `fetchloom auth login zenodo`, or set `ZENODO_TOKEN`. zenodo lists such a record's files only to an account allowed to read them, so fetchloom downloads them when the key can, and otherwise stops with `auth.required` and the record's page. selection filters do not bypass that check.
+public records need no account, and data.lock records them with `access = "public"`. for a restricted, embargoed or closed record, request access on its zenodo page, then sign in with `fetchloom auth login zenodo`, or set `ZENODO_TOKEN`. zenodo lists such a record's files only to an account allowed to read them, so fetchloom downloads them when the key can and records `access = "login"`, and otherwise stops with `auth.required` and the record's page. selection filters do not bypass that check.

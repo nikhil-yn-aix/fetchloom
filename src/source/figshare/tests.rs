@@ -32,6 +32,7 @@ fn lists_every_field_without_requesting_files_twice() {
         listing.doi.as_deref(),
         Some("10.6084/m9.figshare.34744689.v1")
     );
+    assert_eq!(listing.access, Access::Public);
     assert_eq!(
         listing.files,
         vec![
@@ -183,6 +184,31 @@ fn access_refusals_require_authorization() {
             Recorded::default().on(ARTICLE, status, fixture_bytes("figshare/refused.json"));
         let error = block_on(Article::parse("34744689").unwrap().resolve(&recorded)).unwrap_err();
         assert_eq!(error.kind, Kind::AuthRequired);
+    }
+}
+
+/// figshare's public api calls a published article public, and one whose files it keeps
+/// confidential is not, so neither of those, nor an answer that does not say, counts as public.
+#[test]
+fn only_a_published_article_with_open_files_is_public() {
+    for (published, confidential, access) in [
+        (Some(true), false, Access::Public),
+        (Some(true), true, Access::Unknown),
+        (Some(false), false, Access::Unknown),
+        (None, false, Access::Unknown),
+    ] {
+        let body = changed(|value| {
+            match published {
+                Some(published) => value["is_public"] = published.into(),
+                None => {
+                    value.as_object_mut().unwrap().remove("is_public");
+                }
+            }
+            value["is_confidential"] = confidential.into();
+        });
+        let recorded = Recorded::default().on(ARTICLE, 200, body);
+        let listing = block_on(Article::parse("34744689").unwrap().resolve(&recorded)).unwrap();
+        assert_eq!(listing.access, access, "{published:?} {confidential}");
     }
 }
 

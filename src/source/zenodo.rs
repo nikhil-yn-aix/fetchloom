@@ -78,10 +78,10 @@ impl Record {
         if answer.id != self.id && concept != Some(self.id) {
             return Err(self.invalid("the record or concept id does not match"));
         }
-        match answer.metadata.access_right.as_str() {
-            "open" => (),
+        let access = match answer.metadata.access_right.as_str() {
+            "open" => Access::Public,
             // zenodo lists a restricted record's files only to an account allowed to read them
-            "restricted" | "embargoed" | "closed" if !answer.files.is_empty() => (),
+            "restricted" | "embargoed" | "closed" if !answer.files.is_empty() => Access::Login,
             "restricted" | "embargoed" | "closed" => {
                 let page = format!("https://zenodo.org/records/{}", answer.id);
                 return Err(Error::new(
@@ -94,7 +94,7 @@ impl Record {
                 .needs(crate::auth::Account::Zenodo, Some(page)));
             }
             _ => return Err(self.invalid("the access condition is not recognized")),
-        }
+        };
         let resolved = Record { id: answer.id };
         // the records API embeds all files, including the 1,123 in record 7793716.
         // its separate files endpoint is unpaged, so another request adds no files.
@@ -105,7 +105,7 @@ impl Record {
             .collect::<Result<_, _>>()?;
         Ok(Listing {
             within: Vec::new(),
-            access: Access::Unknown,
+            access,
             unavailable: Vec::new(),
             warnings: Vec::new(),
             resolved: Reference::Zenodo(resolved),
@@ -216,6 +216,7 @@ mod tests {
         assert_eq!(listing.title.as_deref(), Some("DatasetIris"));
         assert_eq!(listing.license.as_deref(), Some("cc-by-4.0"));
         assert_eq!(listing.doi.as_deref(), Some("10.5281/zenodo.3608990"));
+        assert_eq!(listing.access, Access::Public);
         assert_eq!(
             listing.files,
             vec![Remote {
@@ -346,12 +347,17 @@ mod tests {
         );
     }
 
+    /// zenodo lists the files of a record it holds back only to an account allowed to read
+    /// them, so the record needs a login.
     #[test]
-    fn a_restricted_record_listed_for_this_account_downloads() {
-        let body = changed(|value| value["metadata"]["access_right"] = "restricted".into());
-        let recorded = Recorded::default().on(IRIS, 200, body);
-        let listing = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap();
-        assert_eq!(listing.files.len(), 1);
+    fn a_held_back_record_listed_for_this_account_downloads_and_needs_a_login() {
+        for right in ["restricted", "embargoed", "closed"] {
+            let body = changed(|value| value["metadata"]["access_right"] = right.into());
+            let recorded = Recorded::default().on(IRIS, 200, body);
+            let listing = block_on(Record::parse("3608990").unwrap().resolve(&recorded)).unwrap();
+            assert_eq!(listing.files.len(), 1, "{right}");
+            assert_eq!(listing.access, Access::Login, "{right}");
+        }
     }
 
     /// a record answer fetchloom cannot trust is refused for its reason, with help.
