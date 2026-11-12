@@ -7,29 +7,62 @@ use std::process::Command;
 const HF: &[u8] = include_bytes!("../fixtures/sources/search/hf.json");
 const KAGGLE: &[u8] = include_bytes!("../fixtures/sources/search/kaggle.json");
 const ZENODO: &[u8] = include_bytes!("../fixtures/sources/search/zenodo.json");
+const ENA: &[u8] = include_bytes!("../fixtures/sources/search/ena.json");
+const GEO_SEARCH: &[u8] = include_bytes!("../fixtures/sources/search/geo-search.json");
+const GEO_SUMMARY: &[u8] = include_bytes!("../fixtures/sources/search/geo-summary.json");
+const DANDI: &[u8] = include_bytes!("../fixtures/sources/search/dandi.json");
+const OPENNEURO: &[u8] = include_bytes!("../fixtures/sources/search/openneuro.json");
+
+/// what ENA, GEO, dandi and openneuro answer a search that finds nothing, by the variable that
+/// stands in for each.
+const NOTHING_MORE: [(&str, &[&[u8]]); 4] = [
+    ("FETCHLOOM_TEST_ENA_API", &[br#"{"entries":[]}"#]),
+    (
+        "FETCHLOOM_TEST_GEO_API",
+        &[br#"{"esearchresult":{"idlist":[]}}"#],
+    ),
+    ("FETCHLOOM_TEST_DANDI_API", &[br#"{"results":[]}"#]),
+    (
+        "FETCHLOOM_TEST_OPENNEURO_API",
+        &[br#"{"data":{"advancedSearch":{"edges":[]}}}"#],
+    ),
+];
+
+/// a catalog that answers each request with the next of `answers`, as JSON.
+fn serve(answers: &[&[u8]]) -> Result<Server> {
+    Server::start(
+        "/",
+        answers
+            .iter()
+            .map(|body| reply("200 OK", &[("Content-Type", "application/json")], body))
+            .collect(),
+    )
+}
+
+/// ENA, GEO, dandi and openneuro, each answering `answers`, by the variable that stands in for
+/// each.
+fn others(answers: [(&'static str, &[&[u8]]); 4]) -> Result<Vec<(&'static str, Server)>> {
+    answers
+        .into_iter()
+        .map(|(variable, answers)| Ok((variable, serve(answers)?)))
+        .collect()
+}
 
 struct Catalogs {
     hf: Server,
     kaggle: Server,
     zenodo: Server,
+    others: Vec<(&'static str, Server)>,
 }
 
 impl Catalogs {
+    /// hugging face, kaggle and zenodo answering these, and the other catalogs finding nothing.
     fn new(hf: &[u8], kaggle: &[u8], zenodo: &[u8]) -> Result<Self> {
-        let serve = |body: &[u8]| {
-            Server::start(
-                "/",
-                vec![reply(
-                    "200 OK",
-                    &[("Content-Type", "application/json")],
-                    body,
-                )],
-            )
-        };
         Ok(Self {
-            hf: serve(hf)?,
-            kaggle: serve(kaggle)?,
-            zenodo: serve(zenodo)?,
+            hf: serve(&[hf])?,
+            kaggle: serve(&[kaggle])?,
+            zenodo: serve(&[zenodo])?,
+            others: others(NOTHING_MORE)?,
         })
     }
 
@@ -39,6 +72,9 @@ impl Catalogs {
             .env("FETCHLOOM_TEST_HF_API", &self.hf.url)
             .env("FETCHLOOM_TEST_KAGGLE_API", &self.kaggle.url)
             .env("FETCHLOOM_TEST_ZENODO_API", &self.zenodo.url);
+        for (variable, catalog) in &self.others {
+            command.env(variable, &catalog.url);
+        }
         command
     }
 }
@@ -222,7 +258,9 @@ fn search_prints_references_on_stdout_even_when_quiet() -> Result {
         if quiet {
             assert_eq!(stderr, "");
         } else {
-            assert!(stderr.contains("Searching hugging face, kaggle and zenodo for \"iris\""));
+            assert!(stderr.contains(
+                "Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for \"iris\""
+            ));
             assert!(stderr.contains("Found"));
             for hint in [
                 "each site's first 3 matches are shown; `--limit 20` shows up to 20 from each",
@@ -259,6 +297,150 @@ fn source_and_limit_narrow_the_search() -> Result {
         .command(&sandbox, &["search", "iris", "--source", "figshare"])
         .output()?;
     assert_eq!(output.status.code(), Some(2));
+    Ok(())
+}
+
+/// ENA, GEO, dandi and openneuro, each answering the matches recorded from it.
+fn finding() -> Result<Vec<(&'static str, Server)>> {
+    others([
+        ("FETCHLOOM_TEST_ENA_API", &[ENA]),
+        ("FETCHLOOM_TEST_GEO_API", &[GEO_SEARCH, GEO_SUMMARY]),
+        ("FETCHLOOM_TEST_DANDI_API", &[DANDI]),
+        ("FETCHLOOM_TEST_OPENNEURO_API", &[OPENNEURO]),
+    ])
+}
+
+/// ENA, GEO, dandi and openneuro are searched with the others, each through its own API: GEO
+/// finds series, then asks for their titles, and openneuro gets the header its API asks of a
+/// query sent by GET.
+#[test]
+fn ena_geo_dandi_and_openneuro_are_searched_with_the_others() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs {
+        others: finding()?,
+        ..Catalogs::new(b"[]", b"[]", br#"{"hits":{"hits":[]}}"#)?
+    };
+    let output = catalogs.command(&sandbox, &["search", "iris"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for \"iris\""
+        ),
+        "{stderr}"
+    );
+    let stdout = text(&output.stdout)?;
+    let references: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.split('\t').next())
+        .collect();
+    assert_eq!(
+        references,
+        [
+            "ena:SRP455996",
+            "geo:GSE318345",
+            "dandi:000623",
+            "openneuro:ds001037",
+            "ena:SRP630995",
+            "geo:GSE311178",
+            "dandi:000044",
+            "openneuro:ds007046",
+            "ena:SRP266745",
+            "geo:GSE320313",
+            "dandi:001361",
+        ],
+        "{stderr}"
+    );
+    let asked = |at: usize| catalogs.others[at].1.requests();
+    assert!(
+        asked(0)[0].starts_with(
+            "get /ebisearch/ws/rest/sra-study?query=iris&size=3&format=json&fields=name%2cdescription "
+        ),
+        "{:?}",
+        asked(0)
+    );
+    let geo = asked(1);
+    assert_eq!(geo.len(), 2, "{geo:?}");
+    assert!(
+        geo[0].starts_with("get /entrez/eutils/esearch.fcgi?db=gds&term=iris+and+gse%5betyp%5d&"),
+        "{geo:?}"
+    );
+    assert!(
+        geo[1].starts_with(
+            "get /entrez/eutils/esummary.fcgi?db=gds&id=200318345%2c200311178%2c200320313&"
+        ),
+        "{geo:?}"
+    );
+    assert!(
+        asked(2)[0].starts_with("get /api/dandisets/?search=iris&page_size=3&ordering=-stars "),
+        "{:?}",
+        asked(2)
+    );
+    let openneuro = asked(3);
+    assert!(
+        openneuro[0].starts_with("get /crn/graphql?query="),
+        "{openneuro:?}"
+    );
+    assert!(
+        openneuro[0].contains("\r\napollo-require-preflight: true\r\n"),
+        "{openneuro:?}"
+    );
+    Ok(())
+}
+
+/// `--source` names ENA, GEO, dandi and openneuro as references do, and each match carries the
+/// facts its catalog gives.
+#[test]
+fn source_names_ena_geo_dandi_and_openneuro_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs {
+        others: finding()?,
+        ..Catalogs::new(HF, KAGGLE, ZENODO)?
+    };
+    let output = catalogs
+        .command(
+            &sandbox,
+            &[
+                "search",
+                "iris",
+                "--source",
+                "ena,geo",
+                "--source",
+                "dandi,openneuro",
+                "--json",
+            ],
+        )
+        .output()?;
+    assert!(output.status.success(), "{}", text(&output.stderr)?);
+    let document = json(&output)?;
+    let candidates = &document["result"]["candidates"];
+    assert_eq!(candidates.as_array().map(Vec::len), Some(11), "{document}");
+    assert_eq!(
+        candidates[0],
+        serde_json::json!({
+            "reference": "ena:SRP455996", "title": "Iris germanica Assembly", "source": "ENA",
+            "size": null, "downloads": null, "note": null,
+        })
+    );
+    assert_eq!(candidates[1]["source"], "GEO");
+    assert_eq!(
+        candidates[2],
+        serde_json::json!({
+            "reference": "dandi:000623",
+            "title": "Data for: Multimodal single-neuron, intracranial EEG, and fMRI brain responses during movie watching in human patients",
+            "source": "dandi", "size": 27_744_749_325_u64, "downloads": null, "note": null,
+        })
+    );
+    assert_eq!(
+        candidates[3],
+        serde_json::json!({
+            "reference": "openneuro:ds001037", "title": "The brain of Chris",
+            "source": "openneuro", "size": 8_600_815, "downloads": 42, "note": null,
+        })
+    );
+    for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo] {
+        assert_eq!(catalog.requests(), Vec::<String>::new());
+    }
     Ok(())
 }
 
@@ -369,21 +551,15 @@ fn a_first_stop_while_a_catalog_searches_ends_add() -> Result {
     use crate::support::Part;
 
     let sandbox = Sandbox::new()?;
-    let answering = |body: &[u8]| {
-        Server::start(
-            "/",
-            vec![reply(
-                "200 OK",
-                &[("Content-Type", "application/json")],
-                body,
-            )],
-        )
-    };
-    let (hf, kaggle) = (answering(HF)?, answering(KAGGLE)?);
+    let (hf, kaggle) = (serve(&[HF])?, serve(&[KAGGLE])?);
     let (_release, held) = std::sync::mpsc::channel();
     let zenodo = Server::start("/", vec![vec![Part::Wait(held)]])?;
-    let mut child = sandbox
-        .command(&["-vv", "add", "iris"])
+    let others = others(NOTHING_MORE)?;
+    let mut command = sandbox.command(&["-vv", "add", "iris"]);
+    for (variable, catalog) in &others {
+        command.env(variable, &catalog.url);
+    }
+    let mut child = command
         .env("FETCHLOOM_TEST_HF_API", &hf.url)
         .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
         .env("FETCHLOOM_TEST_ZENODO_API", &zenodo.url)
@@ -552,7 +728,10 @@ fn a_local_path_or_name_is_refused_without_a_request() -> Result {
         serde_json::Value::Null,
         "which of the two the person meant is theirs to say"
     );
-    for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo] {
+    for catalog in [&catalogs.hf, &catalogs.kaggle, &catalogs.zenodo]
+        .into_iter()
+        .chain(catalogs.others.iter().map(|(_, catalog)| catalog))
+    {
         assert_eq!(catalog.requests(), Vec::<String>::new());
     }
     assert!(!sandbox.work().join("data.toml").exists());

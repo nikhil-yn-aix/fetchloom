@@ -41,4 +41,4 @@ GEO remakes a series' SOFT, MINiML and matrix files from time to time, as the da
 
 ## limits
 
-NCBI asks a program without a key to send no more than three requests a second, so fetchloom starts requests to NCBI's hosts at least a third of a second apart, downloads included. GEO is not in [search](../commands/search.md), and records GEO keeps private for reviewers are not listed.
+NCBI asks a program without a key to send no more than three requests a second, so fetchloom starts requests to NCBI's hosts at least a third of a second apart, downloads included. [search](../commands/search.md) finds GEO's series through NCBI's E-utilities, in two requests spaced the same way, and records GEO keeps private for reviewers are not listed.

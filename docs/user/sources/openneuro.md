@@ -45,4 +45,4 @@ the API refuses a query sent by a plain GET as a request another site may have f
 
 ## access and limits
 
-a private dataset, which openneuro shows only to the people its owners let in, is refused with `auth.required`, exit 40: fetchloom does not sign in to openneuro, and no key goes to it. a snapshot its owners deprecated is read with a warning that gives their reason. openneuro's search is not part of `fetchloom search`.
+a private dataset, which openneuro shows only to the people its owners let in, is refused with `auth.required`, exit 40: fetchloom does not sign in to openneuro, and no key goes to it. a snapshot its owners deprecated is read with a warning that gives their reason. [search](../commands/search.md) asks openneuro's own search and leaves out the private datasets it finds, and ones with no snapshot yet.

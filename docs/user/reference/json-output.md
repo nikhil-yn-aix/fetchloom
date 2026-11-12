@@ -200,9 +200,9 @@ the work counters still count metadata requests a dry run makes to resolve chang
 |---|---|
 | `reference` | canonical reference string to pass to add or get |
 | `title` | catalog title, or the repository id for hugging face |
-| `source` | `hugging face`, `kaggle` or `zenodo` |
-| `size` | byte count as the site lists it, which for kaggle is the zipped download; null when unknown |
-| `downloads` | catalog download count, or null |
+| `source` | `hugging face`, `kaggle`, `zenodo`, `ENA`, `GEO`, `dandi` or `openneuro` |
+| `size` | byte count as the site lists it: for kaggle the zipped download, for dandi the version's assets and for openneuro the snapshot; null when unknown, as always for ENA and GEO |
+| `downloads` | catalog download count, or null, as always for ENA, GEO and dandi |
 | `note` | access note, or null |
 
 [catalog search](../commands/search.md) defines ordering and interactive selection. `list.datasets` instead reflects the manifest and lock, with null lock-derived values when a dataset has no lock entry; a stale entry can still supply values.

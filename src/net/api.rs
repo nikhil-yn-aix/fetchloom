@@ -476,6 +476,10 @@ fn test_endpoint(url: &Url) -> Option<Url> {
         "huggingface.co" => "FETCHLOOM_TEST_HF_API",
         "api.kaggle.com" => "FETCHLOOM_TEST_KAGGLE_API",
         "zenodo.org" => "FETCHLOOM_TEST_ZENODO_API",
+        "www.ebi.ac.uk" => "FETCHLOOM_TEST_ENA_API",
+        "eutils.ncbi.nlm.nih.gov" => "FETCHLOOM_TEST_GEO_API",
+        "api.dandiarchive.org" => "FETCHLOOM_TEST_DANDI_API",
+        "openneuro.org" => "FETCHLOOM_TEST_OPENNEURO_API",
         _ => return None,
     };
     let mut local = local_test_server(variable)?;

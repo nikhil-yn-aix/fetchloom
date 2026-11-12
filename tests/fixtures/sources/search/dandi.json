@@ -1,0 +1,46 @@
+{
+  "results": [
+    {
+      "identifier": "000623",
+      "embargo_status": "OPEN",
+      "most_recent_published_version": {
+        "name": "Data for: Multimodal single-neuron, intracranial EEG, and fMRI brain responses during movie watching in human patients",
+        "size": 27744749325,
+        "asset_count": 29
+      },
+      "draft_version": {
+        "name": "Data for: Multimodal single-neuron, intracranial EEG, and fMRI brain responses during movie watching in human patients",
+        "size": 27744749325,
+        "asset_count": 29
+      }
+    },
+    {
+      "identifier": "000044",
+      "embargo_status": "OPEN",
+      "most_recent_published_version": {
+        "name": "Diversity in neural firing dynamics supports both rigid and learned hippocampal sequences",
+        "size": 73386417184,
+        "asset_count": 8
+      },
+      "draft_version": {
+        "name": "Diversity in neural firing dynamics supports both rigid and learned hippocampal sequences",
+        "size": 73386417184,
+        "asset_count": 8
+      }
+    },
+    {
+      "identifier": "001361",
+      "embargo_status": "OPEN",
+      "most_recent_published_version": {
+        "name": "A flexible hippocampal population code for experience relative to reward",
+        "size": 92448350544,
+        "asset_count": 152
+      },
+      "draft_version": {
+        "name": "A flexible hippocampal population code for experience relative to reward",
+        "size": 92448350544,
+        "asset_count": 152
+      }
+    }
+  ]
+}

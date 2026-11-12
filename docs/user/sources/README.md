@@ -7,7 +7,7 @@ fetchloom get zenodo:3608990
 fetchloom add zenodo:3608990 --select "*.csv"
 ```
 
-a dataset's page works as well as its id, so you can paste the link from your browser. words instead of a reference [search](../commands/search.md) hugging face, kaggle and zenodo.
+a dataset's page works as well as its id, so you can paste the link from your browser. words instead of a reference [search](../commands/search.md) hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro.
 
 | source | what it holds | write it as | an account is needed for |
 |---|---|---|---|

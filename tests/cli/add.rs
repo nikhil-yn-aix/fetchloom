@@ -734,7 +734,7 @@ fn a_first_add_that_fails_leaves_the_folder_as_it_was() -> Result {
 }
 
 #[cfg(debug_assertions)]
-const SEARCHED: [(&str, &[u8]); 3] = [
+const SEARCHED: [(&str, &[u8]); 7] = [
     (
         "FETCHLOOM_TEST_HF_API",
         include_bytes!("../fixtures/sources/search/hf.json"),
@@ -746,6 +746,16 @@ const SEARCHED: [(&str, &[u8]); 3] = [
     (
         "FETCHLOOM_TEST_ZENODO_API",
         include_bytes!("../fixtures/sources/search/zenodo.json"),
+    ),
+    ("FETCHLOOM_TEST_ENA_API", br#"{"entries":[]}"#),
+    (
+        "FETCHLOOM_TEST_GEO_API",
+        br#"{"esearchresult":{"idlist":[]}}"#,
+    ),
+    ("FETCHLOOM_TEST_DANDI_API", br#"{"results":[]}"#),
+    (
+        "FETCHLOOM_TEST_OPENNEURO_API",
+        br#"{"data":{"advancedSearch":{"edges":[]}}}"#,
     ),
 ];
 

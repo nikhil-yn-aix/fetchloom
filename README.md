@@ -13,7 +13,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
 ```
 
-`data.toml` lists the datasets you want, and `data.lock` pins their exact files, each with its SHA-256 and size. commit both, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock. `fetchloom add iris` finds a dataset by name on hugging face, kaggle and zenodo, and `fetchloom get <link>` downloads once, without a project.
+`data.toml` lists the datasets you want, and `data.lock` pins their exact files, each with its SHA-256 and size. commit both, not `data/`; in a git repository `add` and `sync` put `data/` in `.gitignore`. a clone runs `fetchloom sync` and gets the same bytes, checked against the lock. `fetchloom add iris` finds a dataset by name on hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro, and `fetchloom get <link>` downloads once, without a project.
 
 it reads links and DOIs; zenodo, figshare, dataverse, dryad, mendeley data and OSF; hugging face and kaggle; ENA, GEO, DANDI and OpenNeuro; github and gitlab releases; google drive and dropbox; and S3, services that speak its API, google cloud storage and azure blob storage. [sources](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/sources/README.md) shows how to write each, and [signing in](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/signing-in.md) covers private data.
 
@@ -61,7 +61,7 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name is looked up on hugging face, kaggle and zenodo. a link works too:
+a name is looked up on hugging face, kaggle, zenodo and more. a link works too:
   fetchloom add https://zenodo.org/records/3608990
 
 learn more: `fetchloom --help` lists the commands;

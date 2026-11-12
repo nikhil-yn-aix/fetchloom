@@ -1,0 +1,21 @@
+{
+  "result": {
+    "uids": [
+      "200318345",
+      "200311178",
+      "200320313"
+    ],
+    "200318345": {
+      "accession": "GSE318345",
+      "title": "Early eye organoids demonstrate cadherin and semaphorin disruption in PAX6-related aniridia"
+    },
+    "200311178": {
+      "accession": "GSE311178",
+      "title": "Pre-clinical validation of a novel AAV-based gene therapy improves visual function in a mouse model of KCNV2 retinopathy"
+    },
+    "200320313": {
+      "accession": "GSE320313",
+      "title": "A developmental and aging atlas of the killifish testis uncovers a mid-age inflection point"
+    }
+  }
+}

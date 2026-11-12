@@ -623,6 +623,10 @@ fn mirror_only_mode_makes_no_request_to_a_source() -> Result {
             .env("FETCHLOOM_TEST_HF_API", &catalogs.url)
             .env("FETCHLOOM_TEST_KAGGLE_API", &catalogs.url)
             .env("FETCHLOOM_TEST_ZENODO_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_ENA_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_GEO_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_DANDI_API", &catalogs.url)
+            .env("FETCHLOOM_TEST_OPENNEURO_API", &catalogs.url)
             .env("HF_TOKEN", "hf_unchecked")
             .output()
     };

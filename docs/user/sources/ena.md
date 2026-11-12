@@ -40,4 +40,4 @@ ENA sends a report whole: its portal API has no pages and refuses an `offset`. s
 
 ENA's file server can take half a minute to start sending a file, small ones too, as ENA's own documentation warns of downloads under load. fetchloom waits for the answer as long as `FETCHLOOM_TIMEOUT` allows after connecting, then tries again.
 
-ENA is not in [search](../commands/search.md).
+[search](../commands/search.md) finds ENA's studies through EBI's search, the most relevant first, as `ena:SRP455996`; adding one adds every run in it.

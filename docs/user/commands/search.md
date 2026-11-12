@@ -19,25 +19,27 @@ words may be quoted or separate arguments. no words at all is a usage error, exi
 
 | option | meaning |
 |---|---|
-| `--source <source>` | search only this site: `hf`, `kaggle` or `zenodo`. repeat it or separate names with commas. any other name is a usage error |
+| `--source <source>` | search only this site: `hf`, `kaggle`, `zenodo`, `ena`, `geo`, `dandi` or `openneuro`. repeat it or separate names with commas. any other name is a usage error |
 | `--limit <n>` | keep up to n matches from each site, 1 to 20. the default is 3; any other value is a usage error, exit 2 |
 
 [global options](README.md#global-options) apply.
 
 ## results
 
-fetchloom asks hugging face, kaggle and zenodo at once, or only the `--source` sites, and keeps up to `--limit` matches from each. it interleaves the sites by rank: each site's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's order, not a common relevance score.
+fetchloom asks hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro at once, or only the `--source` sites, and keeps up to `--limit` matches from each. it interleaves the sites by rank: each site's first match, then each second match, and so on. matches whose title or last id part equals the search words, ignoring case and treating spaces, `-` and `_` alike, then move to the front in that order. this is each site's order, not a common relevance score: hugging face lists the most downloaded first, zenodo the most viewed, dandi the most starred, and the others their own way.
+
+each site finds its own kind of dataset. ENA's matches are studies, found through EBI's search, and adding one adds every run in it. GEO's are series, found through NCBI's E-utilities, which take a second request for their titles. dandi leaves out embargoed dandisets and ones with no assets yet, and describes one never published by its draft. openneuro leaves out the private datasets it finds and ones with no snapshot yet.
 
 at a terminal, each match is one row with its reference, then title, size, download count and access note in columns, and no number, since `add` takes the reference, not a row's place in the list:
 
 ```text
-      Found 9 datasets for "iris"
+      Found 17 datasets for "iris"
             hf:datasets/scikit-learn/iris                                    18.1 KiB
             kaggle:uciml/iris                            Iris Species         3.6 KiB
             zenodo:23233774                              IRIS: ICESat-2…      1.1 GiB
 ```
 
-the reference is never cut. on a narrow terminal the download count gives way first, then the title; the size and the access note move to a line of their own when they do not fit. a fact the site does not give stays blank. sizes are as each site lists them: hugging face gives the size of a dataset's files, while kaggle gives the size of its zipped download, so the files `add` reports can be larger. kaggle lists a dataset it does not serve as files, such as one kept in bigquery, with 0 bytes and 0 downloads, which fetchloom shows as unknown.
+the reference is never cut. on a narrow terminal the download count gives way first, then the title; the size and the access note move to a line of their own when they do not fit. a fact the site does not give stays blank, as ENA and GEO give no size or download count, and dandi no download count. sizes are as each site lists them: hugging face gives the size of a dataset's files, while kaggle gives the size of its zipped download, so the files `add` reports can be larger. kaggle lists a dataset it does not serve as files, such as one kept in bigquery, with 0 bytes and 0 downloads, which fetchloom shows as unknown.
 
 with `-q`, a redirected stdout, or no interactive terminal, as under CI or with `TERM=dumb`, stdout gets one match per line: its reference, a tab, its title and, when the site gives a size, a tab and the size, so `cut -f1` reads the references. JSON returns `result.candidates`; [JSON output](../reference/json-output.md#search-candidates) defines the fields. figshare, osf, dataverse and the other sources have no keyword search; pass their links or ids to `add` and `get`.
 
@@ -61,21 +63,21 @@ with interactive stdin and stderr, an arrow-key picker asks which dataset you me
 with `FETCHLOOM_ACCESSIBLE=1` at a terminal, as for a screen reader, the same rows come once, numbered, and nothing on the screen moves: type the number of a row and press enter. a number not on the list asks again, and q cancels, as above. from a real run at a 100-column terminal, shortened:
 
 ```text
-  Searching hugging face, kaggle and zenodo for "iris"
+  Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
   which one?
     1 hf:datasets/scikit-learn/iris                                       18.1 KiB   12k downloads
     2 kaggle:uciml/iris                    Iris Species                    3.6 KiB  959k downloads
     3 zenodo:23233774                      IRIS: ICESat-2 River Surface…   1.1 GiB  2.4k downloads
     more matches: fetchloom search iris --limit 20
-  type a number from 1 to 9 and press enter, or q to cancel: 2
+  type a number from 1 to 17 and press enter, or q to cancel: 2
       Chose kaggle:uciml/iris
 ```
 
 without an interactive terminal, or with `--json`, fetchloom refuses to choose, even a single match: it exits 10 with `reference.ambiguous` and keeps the matches in `result.candidates`. stderr lists them first, in rows that fit the terminal, then says why nothing was added; with `-q` or `--json` the error's details list them instead. from a real run at a 100-column terminal with `TERM=dumb`, shortened:
 
 ```text
-  Searching hugging face, kaggle and zenodo for "iris"
-      Found 9 datasets for "iris"; add one by its id:
+  Searching hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro for "iris"
+      Found 17 datasets for "iris"; add one by its id:
             hf:datasets/scikit-learn/iris                                      18.1 KiB
             kaggle:uciml/iris                            Iris Species           3.6 KiB
             zenodo:23233774                              IRIS: ICESat-2...      1.1 GiB

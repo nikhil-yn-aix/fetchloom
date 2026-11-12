@@ -201,7 +201,7 @@ fetchloom sends nothing on its own: it has no telemetry, no account and no updat
 
 | what | goes to |
 |---|---|
-| search words, given to `search`, or to `add` or `get` in place of a link | the search of hugging face, kaggle and zenodo, or of the sites `--source` names |
+| search words, given to `search`, or to `add` or `get` in place of a link | the search of hugging face, kaggle, zenodo, ENA, GEO, dandi and openneuro, or of the sites `--source` names |
 | a reference | the site it names: a DOI to doi.org, which says where it points, an id such as `zenodo:3608990` to that site, a link to its host |
 | a download | the file's host, or a [mirror](mirrors.md#privacy) you named, which is asked by SHA-256 alone |
 | a key | its own host only, over https, as [where a key goes](signing-in.md#where-a-key-goes) says |

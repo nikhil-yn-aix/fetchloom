@@ -1,6 +1,9 @@
 //! dataset discovery across public catalogs, with no download or automatic selection.
 
-use std::pin::pin;
+use std::collections::HashMap;
+use std::future::{Future, poll_fn};
+use std::pin::Pin;
+use std::task::Poll;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize, Serializer};
@@ -40,10 +43,23 @@ pub(crate) enum Catalog {
     Hf,
     Kaggle,
     Zenodo,
+    Ena,
+    Geo,
+    Dandi,
+    #[value(name = "openneuro")]
+    OpenNeuro,
 }
 
 impl Catalog {
-    pub(crate) const ALL: [Catalog; 3] = [Catalog::Hf, Catalog::Kaggle, Catalog::Zenodo];
+    pub(crate) const ALL: [Catalog; 7] = [
+        Catalog::Hf,
+        Catalog::Kaggle,
+        Catalog::Zenodo,
+        Catalog::Ena,
+        Catalog::Geo,
+        Catalog::Dandi,
+        Catalog::OpenNeuro,
+    ];
 
     /// the catalog's name in the story and in `source`.
     pub(crate) fn label(self) -> &'static str {
@@ -51,6 +67,10 @@ impl Catalog {
             Catalog::Hf => "hugging face",
             Catalog::Kaggle => "kaggle",
             Catalog::Zenodo => "zenodo",
+            Catalog::Ena => "ENA",
+            Catalog::Geo => "GEO",
+            Catalog::Dandi => "dandi",
+            Catalog::OpenNeuro => "openneuro",
         }
     }
 
@@ -60,9 +80,34 @@ impl Catalog {
             Catalog::Hf => "hf",
             Catalog::Kaggle => "kaggle",
             Catalog::Zenodo => "zenodo",
+            Catalog::Ena => "ena",
+            Catalog::Geo => "geo",
+            Catalog::Dandi => "dandi",
+            Catalog::OpenNeuro => "openneuro",
+        }
+    }
+
+    /// the catalog's first `limit` matches for `words`, in its own order.
+    async fn find(
+        self,
+        api: &impl Api,
+        words: &str,
+        limit: usize,
+    ) -> Result<Vec<Candidate>, Error> {
+        match self {
+            Catalog::Hf => hugging_face(api, words, limit).await,
+            Catalog::Kaggle => kaggle(api, words, limit).await,
+            Catalog::Zenodo => zenodo(api, words, limit).await,
+            Catalog::Ena => ena(api, words, limit).await,
+            Catalog::Geo => geo(api, words, limit).await,
+            Catalog::Dandi => dandi(api, words, limit).await,
+            Catalog::OpenNeuro => openneuro(api, words, limit).await,
         }
     }
 }
+
+/// a catalog's search under way, which ends with the catalog's place among those asked.
+type Asking<'a> = Pin<Box<dyn Future<Output = (usize, Result<Vec<Candidate>, Error>)> + Send + 'a>>;
 
 /// the matches each catalog keeps when nobody asks for another number.
 pub(crate) const LIMIT: usize = 3;
@@ -80,50 +125,43 @@ pub(crate) async fn search(
     catalogs: &[Catalog],
     limit: usize,
 ) -> Result<Search, Error> {
-    let asked = |catalog: Catalog| catalogs.is_empty() || catalogs.contains(&catalog);
-    let mut hf = pin!(async {
-        if asked(Catalog::Hf) {
-            Some(hugging_face(api, words, limit).await)
-        } else {
-            None
-        }
-    });
-    let mut kaggle = pin!(async {
-        if asked(Catalog::Kaggle) {
-            Some(kaggle(api, words, limit).await)
-        } else {
-            None
-        }
-    });
-    let mut zenodo = pin!(async {
-        if asked(Catalog::Zenodo) {
-            Some(zenodo(api, words, limit).await)
-        } else {
-            None
-        }
-    });
-    let mut answers = [None, None, None];
+    let asked: Vec<Catalog> = Catalog::ALL
+        .into_iter()
+        .filter(|catalog| catalogs.is_empty() || catalogs.contains(catalog))
+        .collect();
+    let mut asking: Vec<Asking<'_>> = asked
+        .iter()
+        .enumerate()
+        .map(|(place, &catalog)| -> Asking<'_> {
+            Box::pin(async move { (place, catalog.find(api, words, limit).await) })
+        })
+        .collect();
+    let mut answers: Vec<Option<Result<Vec<Candidate>, Error>>> =
+        asked.iter().map(|_| None).collect();
     let mut late = None;
-    while answers.iter().any(Option::is_none) {
+    while !asking.is_empty() {
         tokio::select! {
-            answer = &mut hf, if answers[0].is_none() => answers[0] = Some(answer),
-            answer = &mut kaggle, if answers[1].is_none() => answers[1] = Some(answer),
-            answer = &mut zenodo, if answers[2].is_none() => answers[2] = Some(answer),
+            (place, answer) = poll_fn(|context| {
+                for at in 0..asking.len() {
+                    if let Poll::Ready(answered) = asking[at].as_mut().poll(context) {
+                        drop(asking.swap_remove(at));
+                        return Poll::Ready(answered);
+                    }
+                }
+                Poll::Pending
+            }) => {
+                answers[place] = Some(answer);
+                late.get_or_insert_with(|| Instant::now() + GRACE);
+            }
             () = tokio::time::sleep_until(late.unwrap_or_else(Instant::now)), if late.is_some() => {
                 break;
             }
-        }
-        if late.is_none() && answers.iter().flatten().any(Option::is_some) {
-            late = Some(Instant::now() + GRACE);
         }
     }
     let mut result = Search::default();
     let mut first_error = None;
     let mut lists = Vec::new();
-    for (catalog, answer) in [Catalog::Hf, Catalog::Kaggle, Catalog::Zenodo]
-        .into_iter()
-        .zip(answers)
-    {
+    for (catalog, answer) in asked.into_iter().zip(answers) {
         let source = catalog.label();
         match answer {
             None => result.warnings.push(format!(
@@ -132,9 +170,8 @@ pub(crate) async fn search(
                 GRACE.as_secs(),
                 catalog.name()
             )),
-            Some(None) => {}
-            Some(Some(Ok(candidates))) => lists.push(candidates.into_iter()),
-            Some(Some(Err(error))) => {
+            Some(Ok(candidates)) => lists.push(candidates.into_iter()),
+            Some(Err(error)) => {
                 result
                     .warnings
                     .push(format!("{source} search failed: {error}"));
@@ -414,13 +451,18 @@ struct Stats {
     unique_downloads: Option<u64>,
 }
 
-async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+/// the words a catalog with a query language reads as words alone: letters, digits, `-` and `_`,
+/// lowercase, so a word such as OR stays a word rather than an operator.
+fn plain_words(words: &str) -> Vec<String> {
     let words: String = words
         .chars()
         .filter(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '-' | '_'))
         .collect();
-    // lowercase, so a word such as OR stays a word rather than an operator
-    let words: Vec<String> = words.split_whitespace().map(str::to_lowercase).collect();
+    words.split_whitespace().map(str::to_lowercase).collect()
+}
+
+async fn zenodo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let words = plain_words(words);
     let mut matches = zenodo_titles(api, &words.join(" AND "), limit).await?;
     if matches.is_empty() && words.len() > 1 {
         matches = zenodo_titles(api, &words.join(" OR "), limit).await?;
@@ -463,6 +505,335 @@ async fn zenodo_titles(
     let response = api.get(&url).await?;
     let matches: ZenodoMatches = super::json(&url, &response)?;
     Ok(matches.hits.hits)
+}
+
+/// ENA's studies, as EBI's search lists them: by accession, with a title or a description.
+#[derive(Deserialize)]
+struct Studies {
+    entries: Vec<Study>,
+}
+
+#[derive(Deserialize)]
+struct Study {
+    acc: String,
+    #[serde(default)]
+    fields: StudyFields,
+}
+
+#[derive(Default, Deserialize)]
+struct StudyFields {
+    #[serde(default)]
+    name: Vec<String>,
+    #[serde(default)]
+    description: Vec<String>,
+}
+
+/// the studies EBI's search finds in ENA, the most relevant first. a study names every run in
+/// it, and EBI's search gives no size or downloads.
+async fn ena(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let words = plain_words(words);
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = query(
+        "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study",
+        &[
+            ("query", &words.join(" ")),
+            ("size", &limit.to_string()),
+            ("format", "json"),
+            ("fields", "name,description"),
+        ],
+    )?;
+    let response = api.get(&url).await?;
+    let studies: Studies = super::json(&url, &response)?;
+    studies
+        .entries
+        .into_iter()
+        .take(limit)
+        .map(|study| {
+            let fields = study.fields;
+            let title = fields
+                .name
+                .into_iter()
+                .chain(fields.description)
+                .find(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| study.acc.clone());
+            Ok(Candidate {
+                reference: reference(&format!("ena:{}", study.acc))?,
+                title,
+                source: Catalog::Ena.label(),
+                size: None,
+                downloads: None,
+                note: None,
+            })
+        })
+        .collect()
+}
+
+/// NCBI's E-utilities, which search GEO and summarize what they find.
+const EUTILS: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+
+#[derive(Deserialize)]
+struct Found {
+    esearchresult: FoundIds,
+}
+
+#[derive(Deserialize)]
+struct FoundIds {
+    idlist: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct Summaries {
+    result: Summarized,
+}
+
+/// each summary by the id the search found, beside the list of those ids.
+#[derive(Deserialize)]
+struct Summarized {
+    #[serde(default, rename = "uids")]
+    _ids: serde::de::IgnoredAny,
+    #[serde(flatten)]
+    series: HashMap<String, Series>,
+}
+
+#[derive(Deserialize)]
+struct Series {
+    accession: String,
+    title: String,
+}
+
+/// the GEO series NCBI's search finds, in its order, then their titles from a second request.
+/// GEO gives no size or downloads.
+async fn geo(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let words = plain_words(words);
+    if words.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = query(
+        &format!("{EUTILS}/esearch.fcgi"),
+        &[
+            ("db", "gds"),
+            ("term", &format!("{} AND gse[ETYP]", words.join(" "))),
+            ("retmax", &limit.to_string()),
+            ("retmode", "json"),
+            ("tool", "fetchloom"),
+        ],
+    )?;
+    let response = api.get(&url).await?;
+    let found: Found = super::json(&url, &response)?;
+    let ids: Vec<String> = found.esearchresult.idlist.into_iter().take(limit).collect();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let url = query(
+        &format!("{EUTILS}/esummary.fcgi"),
+        &[
+            ("db", "gds"),
+            ("id", &ids.join(",")),
+            ("retmode", "json"),
+            ("tool", "fetchloom"),
+        ],
+    )?;
+    let response = api.get(&url).await?;
+    let mut summaries: Summaries = super::json(&url, &response)?;
+    ids.iter()
+        .filter_map(|id| summaries.result.series.remove(id))
+        .map(|series| {
+            Ok(Candidate {
+                reference: reference(&format!("geo:{}", series.accession))?,
+                title: series.title,
+                source: Catalog::Geo.label(),
+                size: None,
+                downloads: None,
+                note: None,
+            })
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct Dandisets {
+    results: Vec<Dandiset>,
+}
+
+#[derive(Deserialize)]
+struct Dandiset {
+    identifier: String,
+    embargo_status: Option<String>,
+    most_recent_published_version: Option<DandiVersion>,
+    draft_version: Option<DandiVersion>,
+}
+
+#[derive(Deserialize)]
+struct DandiVersion {
+    name: String,
+    size: Option<u64>,
+    asset_count: Option<u64>,
+}
+
+/// the most starred dandisets whose text holds the words, as their newest version or draft
+/// describes them, but for embargoed ones, which fetchloom cannot download, and empty ones.
+async fn dandi(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let url = query(
+        "https://api.dandiarchive.org/api/dandisets/",
+        &[
+            ("search", words.trim()),
+            ("page_size", &limit.to_string()),
+            ("ordering", "-stars"),
+        ],
+    )?;
+    let response = api.get(&url).await?;
+    let found: Dandisets = super::json(&url, &response)?;
+    found
+        .results
+        .into_iter()
+        .filter(|dandiset| {
+            dandiset
+                .embargo_status
+                .as_deref()
+                .is_none_or(|status| status == "OPEN")
+        })
+        .filter_map(|dandiset| {
+            let version = dandiset
+                .most_recent_published_version
+                .or(dandiset.draft_version)?;
+            (version.asset_count != Some(0)).then_some((dandiset.identifier, version))
+        })
+        .take(limit)
+        .map(|(identifier, version)| {
+            Ok(Candidate {
+                reference: reference(&format!("dandi:{identifier}"))?,
+                title: version.name,
+                source: Catalog::Dandi.label(),
+                size: version.size,
+                downloads: None,
+                note: None,
+            })
+        })
+        .collect()
+}
+
+/// what openneuro's search asks of each dataset it finds.
+const DATASETS: &str = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
+
+/// the words and the count of a search, sent apart from the query so no word can change it.
+#[derive(Serialize)]
+struct Variables<'a> {
+    words: [&'a str; 1],
+    first: usize,
+}
+
+#[derive(Deserialize)]
+struct Searched {
+    data: Option<SearchedData>,
+    #[serde(default)]
+    errors: Vec<Problem>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchedData {
+    advanced_search: Option<Datasets>,
+}
+
+#[derive(Deserialize)]
+struct Datasets {
+    edges: Vec<Option<Edge>>,
+}
+
+#[derive(Deserialize)]
+struct Edge {
+    node: Option<Node>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Node {
+    id: String,
+    latest_snapshot: Option<Snapshot>,
+    analytics: Option<Analytics>,
+}
+
+#[derive(Deserialize)]
+struct Snapshot {
+    size: Option<u64>,
+    description: Option<Description>,
+}
+
+#[derive(Deserialize)]
+struct Description {
+    #[serde(rename = "Name")]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Analytics {
+    downloads: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct Problem {
+    message: String,
+}
+
+/// the datasets openneuro's search ranks first, at their newest snapshot, but for private ones,
+/// answered with an error in their place, and ones with no snapshot to download.
+async fn openneuro(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidate>, Error> {
+    let variables = serde_json::to_string(&Variables {
+        words: [words.trim()],
+        first: limit,
+    })
+    .map_err(|error| {
+        Error::new(
+            Kind::SourceInvalid,
+            format!("could not make a search link: {error}"),
+        )
+    })?;
+    let url = query(
+        super::openneuro::API,
+        &[("query", DATASETS), ("variables", &variables)],
+    )?;
+    let response = api.get_with(&url, super::openneuro::PREFLIGHT).await?;
+    let searched: Searched = super::json(&url, &response)?;
+    let Some(datasets) = searched.data.and_then(|data| data.advanced_search) else {
+        let said = match searched.errors.first() {
+            Some(problem) => format!(
+                "an error: {}",
+                problem.message.lines().next().unwrap_or_default()
+            ),
+            None => "no datasets".to_owned(),
+        };
+        return Err(Error::new(
+            Kind::SourceInvalid,
+            format!("openneuro.org answered the search with {said}"),
+        )
+        .help(crate::error::report_answer()));
+    };
+    datasets
+        .edges
+        .into_iter()
+        .filter_map(|edge| {
+            let node = edge?.node?;
+            Some((node.id, node.latest_snapshot?, node.analytics))
+        })
+        .take(limit)
+        .map(|(id, snapshot, analytics)| {
+            let title = snapshot
+                .description
+                .and_then(|description| description.name)
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| id.clone());
+            Ok(Candidate {
+                reference: reference(&format!("openneuro:{id}"))?,
+                title,
+                source: Catalog::OpenNeuro.label(),
+                size: snapshot.size,
+                downloads: analytics.and_then(|analytics| analytics.downloads),
+                note: None,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

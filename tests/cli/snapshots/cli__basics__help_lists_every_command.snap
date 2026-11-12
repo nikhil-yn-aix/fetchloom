@@ -19,7 +19,7 @@ commands:
   cache        show the cache, free what no project needs, or verify it
   settings     show each setting, its value and where it came from
   get          fetch something once, without a project
-  search       find datasets on hugging face, kaggle and zenodo
+  search       find datasets on hugging face, kaggle, zenodo and other sites
   auth         sign in for private data, or data with terms to accept
   completions  print a script that completes fetchloom's commands in a shell
   help         explain the ideas behind fetchloom, or one command

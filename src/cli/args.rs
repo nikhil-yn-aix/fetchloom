@@ -195,7 +195,7 @@ pub(crate) const INTRO: &str =
   fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name is looked up on hugging face, kaggle and zenodo. a link works too:
+a name is looked up on hugging face, kaggle, zenodo and more. a link works too:
   fetchloom add https://zenodo.org/records/3608990
 
 learn more: `fetchloom --help` lists the commands;
@@ -562,7 +562,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom get [options] <link>...", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
 
-    /// find datasets on hugging face, kaggle and zenodo
+    /// find datasets on hugging face, kaggle, zenodo and other sites
     #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
     Search(Search),
 
@@ -771,7 +771,8 @@ pub(crate) struct Search {
     #[arg(value_name = "words", required = true, num_args = 1.., help_heading = "arguments")]
     pub(crate) words: Vec<String>,
 
-    /// search only this site: hf, kaggle or zenodo. repeat it or use commas for more
+    /// search only this site: hf, kaggle, zenodo, ena, geo, dandi or openneuro. repeat it or use
+    /// commas for more
     #[arg(
         long,
         value_name = "source",

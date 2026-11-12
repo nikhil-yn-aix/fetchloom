@@ -1,4 +1,5 @@
-//! captured with Invoke-WebRequest on 2026-10-31, keeping only fields read by search.
+//! captured with Invoke-WebRequest on 2026-10-31, and from ENA, GEO, dandi and openneuro with curl
+//! on 2026-11-12, keeping only fields read by search.
 
 use super::*;
 use crate::error::Kind;
@@ -8,12 +9,37 @@ const HF: &str = "https://huggingface.co/api/datasets?search=iris&limit=3&sort=d
 const KAGGLE: &str = "https://api.kaggle.com/v1/datasets/list?search=iris&page=1";
 const ZENODO: &str =
     "https://zenodo.org/api/records?q=title%3A%28iris%29&type=dataset&sort=mostviewed&size=3";
+const ENA: &str = "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=iris&size=3&format=json&fields=name%2Cdescription";
+const GEO: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=iris+AND+gse%5BETYP%5D&retmax=3&retmode=json&tool=fetchloom";
+const GEO_SUMMARIES: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=gds&id=200318345%2C200311178%2C200320313&retmode=json&tool=fetchloom";
+const DANDI: &str =
+    "https://api.dandiarchive.org/api/dandisets/?search=iris&page_size=3&ordering=-stars";
+
+/// openneuro's search for `words`, a GraphQL query sent by GET with the words as a variable.
+fn openneuro(words: &str, first: usize) -> String {
+    let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size description{Name}} analytics{downloads}}}}}";
+    let variables = format!(
+        r#"{{"words":[{}],"first":{first}}}"#,
+        serde_json::to_string(words).unwrap()
+    );
+    let mut url = Url::parse("https://openneuro.org/crn/graphql").unwrap();
+    url.query_pairs_mut()
+        .append_pair("query", query)
+        .append_pair("variables", &variables);
+    url.to_string()
+}
 
 fn recorded() -> Recorded {
     Recorded::default()
         .fixture(HF, "search/hf.json")
         .fixture(KAGGLE, "search/kaggle.json")
         .fixture(ZENODO, "search/zenodo.json")
+        .fixture(ENA, "search/ena.json")
+        .fixture(GEO, "search/geo-search.json")
+        .fixture(GEO_SUMMARIES, "search/geo-summary.json")
+        // dandi has no dandiset for iris
+        .on(DANDI, 200, br#"{"results":[]}"#.to_vec())
+        .fixture(&openneuro("iris", 3), "search/openneuro.json")
 }
 
 #[test]
@@ -57,12 +83,20 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
             "hf:datasets/scikit-learn/iris",
             "kaggle:uciml/iris",
             "zenodo:23233774",
+            "ena:SRP455996",
+            "geo:GSE318345",
+            "openneuro:ds001037",
             "hf:datasets/fatdove/Iris_Database",
             "kaggle:himanshunakrani/iris-dataset",
             "zenodo:1319069",
+            "ena:SRP630995",
+            "geo:GSE311178",
+            "openneuro:ds007046",
             "hf:datasets/irisreto/HAL",
             "kaggle:arshid/iris-flower-dataset",
             "zenodo:4135078",
+            "ena:SRP266745",
+            "geo:GSE320313",
         ]
     );
     for text in references {
@@ -85,6 +119,24 @@ fn captured_catalogs_interleave_by_rank_and_keep_canonical_references() {
     assert_eq!(zenodo.source, "zenodo");
     assert_eq!(zenodo.size, Some(1_147_253_099));
     assert_eq!(zenodo.downloads, Some(2400));
+    // EBI's search gives a study's title as its description, and no size or downloads
+    let ena = &result.candidates[3];
+    assert_eq!(ena.title, "Iris germanica Assembly");
+    assert_eq!(ena.source, "ENA");
+    assert_eq!((ena.size, ena.downloads), (None, None));
+    let geo = &result.candidates[4];
+    assert_eq!(
+        geo.title,
+        "Early eye organoids demonstrate cadherin and semaphorin disruption in PAX6-related aniridia"
+    );
+    assert_eq!(geo.source, "GEO");
+    assert_eq!((geo.size, geo.downloads), (None, None));
+    // openneuro's first match is a private dataset it would not show, so its second leads
+    let openneuro = &result.candidates[5];
+    assert_eq!(openneuro.title, "The brain of Chris");
+    assert_eq!(openneuro.source, "openneuro");
+    assert_eq!(openneuro.size, Some(8_600_815));
+    assert_eq!(openneuro.downloads, Some(42));
 }
 
 #[test]
@@ -116,7 +168,7 @@ fn private_repositories_are_skipped_and_gated_ones_marked() {
 fn a_failed_source_warns_without_discarding_the_others() {
     let api = recorded().on(KAGGLE, 403, b"denied".to_vec());
     let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
-    assert_eq!(result.candidates.len(), 6);
+    assert_eq!(result.candidates.len(), 14);
     assert_eq!(result.candidates[1].source, "zenodo");
     assert_eq!(result.warnings.len(), 1);
     assert!(result.warnings[0].starts_with("kaggle search failed: "));
@@ -127,7 +179,11 @@ fn all_failed_sources_return_the_first_error() {
     let api = recorded()
         .on(HF, 403, Vec::new())
         .on(KAGGLE, 400, Vec::new())
-        .on(ZENODO, 404, Vec::new());
+        .on(ZENODO, 404, Vec::new())
+        .on(ENA, 500, Vec::new())
+        .on(GEO, 400, Vec::new())
+        .on(DANDI, 404, Vec::new())
+        .on(&openneuro("iris", 3), 400, Vec::new());
     let error = block_on(search(&api, "iris", &[], LIMIT)).unwrap_err();
     assert_eq!(error.kind, Kind::AuthRequired);
     assert!(error.message.contains("huggingface.co"));
@@ -138,17 +194,21 @@ fn empty_success_is_not_an_all_sources_failure() {
     let api = recorded()
         .on(HF, 200, b"[]".to_vec())
         .on(KAGGLE, 403, Vec::new())
-        .on(ZENODO, 403, Vec::new());
+        .on(ZENODO, 403, Vec::new())
+        .on(ENA, 403, Vec::new())
+        .on(GEO, 403, Vec::new())
+        .on(DANDI, 403, Vec::new())
+        .on(&openneuro("iris", 3), 403, Vec::new());
     let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
     assert!(result.candidates.is_empty());
-    assert_eq!(result.warnings.len(), 2);
+    assert_eq!(result.warnings.len(), 6);
 }
 
 #[test]
 fn invalid_json_warns_instead_of_hiding_successful_catalogs() {
     let api = recorded().on(HF, 200, b"not json".to_vec());
     let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
-    assert_eq!(result.candidates.len(), 6);
+    assert_eq!(result.candidates.len(), 14);
     assert!(result.warnings[0].starts_with("hugging face search failed: "));
 }
 
@@ -158,11 +218,16 @@ fn query_words_are_encoded_and_lucene_syntax_is_removed() {
         .on("https://huggingface.co/api/datasets?search=fashion+%28mnist%29%3A*%26&limit=3&sort=downloads&direction=-1&expand%5B%5D=downloads&expand%5B%5D=mainSize&expand%5B%5D=gated&expand%5B%5D=private", 200, b"[]".to_vec())
         .on("https://api.kaggle.com/v1/datasets/list?search=fashion+%28mnist%29%3A*%26&page=1", 200, b"[]".to_vec())
         .on("https://zenodo.org/api/records?q=title%3A%28fashion+AND+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec())
-        .on("https://zenodo.org/api/records?q=title%3A%28fashion+OR+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec());
+        .on("https://zenodo.org/api/records?q=title%3A%28fashion+OR+mnist%29&type=dataset&sort=mostviewed&size=3", 200, br#"{"hits":{"hits":[]}}"#.to_vec())
+        .on("https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=fashion+mnist&size=3&format=json&fields=name%2Cdescription", 200, br#"{"entries":[]}"#.to_vec())
+        .on("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=fashion+mnist+AND+gse%5BETYP%5D&retmax=3&retmode=json&tool=fetchloom", 200, br#"{"esearchresult":{"idlist":[]}}"#.to_vec())
+        .on("https://api.dandiarchive.org/api/dandisets/?search=fashion+%28mnist%29%3A*%26&page_size=3&ordering=-stars", 200, br#"{"results":[]}"#.to_vec())
+        .on(&openneuro("fashion (mnist):*&", 3), 200, br#"{"data":{"advancedSearch":{"edges":[]}}}"#.to_vec());
     let result = block_on(search(&api, "fashion (mnist):*&", &[], LIMIT)).unwrap();
     assert!(result.candidates.is_empty());
     assert_eq!(result.warnings, Vec::<String>::new());
-    assert_eq!(api.asked().len(), 4);
+    // GEO, having found no series, asks for no summaries
+    assert_eq!(api.asked().len(), 8);
 }
 
 #[test]
@@ -173,7 +238,7 @@ fn oversized_pages_are_limited_to_three_matches_each() {
     kaggle.as_array_mut().unwrap().push(extra);
     let api = recorded().on(KAGGLE, 200, serde_json::to_vec(&kaggle).unwrap());
     let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
-    assert_eq!(result.candidates.len(), 9);
+    assert_eq!(result.candidates.len(), 17);
 }
 
 /// kaggle lists a dataset it cannot serve as files, such as one kept in bigquery, with no bytes
@@ -205,15 +270,22 @@ fn kaggle_zero_bytes_are_an_unknown_size_and_count() {
 fn a_slow_catalog_cannot_hold_up_the_others() {
     use std::time::Duration;
 
-    /// answers zenodo after `zenodo`, never when none, and the other catalogs after `others`.
+    /// answers zenodo's first request after `zenodo`, never when none, and each other catalog's
+    /// first after `others`. the requests after a catalog's first, as GEO's for its summaries,
+    /// get their answers at once.
     struct Late {
         recorded: Recorded,
         zenodo: Option<Duration>,
         others: Duration,
+        answered: std::sync::Mutex<std::collections::HashSet<String>>,
     }
     impl Api for Late {
         async fn get(&self, url: &url::Url) -> Result<crate::net::Response, Error> {
-            let wait = if url.host_str() == Some("zenodo.org") {
+            let host = url.host_str().unwrap_or_default().to_owned();
+            let first = self.answered.lock().unwrap().insert(host.clone());
+            let wait = if !first {
+                Some(Duration::ZERO)
+            } else if host == "zenodo.org" {
                 self.zenodo
             } else {
                 Some(self.others)
@@ -228,14 +300,15 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
     let minute = Duration::from_secs(60);
     let soon = GRACE.checked_sub(Duration::from_secs(1)).unwrap();
     for (zenodo, others, found, took) in [
-        (None, Duration::ZERO, 6, GRACE),
-        (Some(soon), Duration::ZERO, 9, soon),
-        (Some(minute), minute, 9, minute),
+        (None, Duration::ZERO, 14, GRACE),
+        (Some(soon), Duration::ZERO, 17, soon),
+        (Some(minute), minute, 17, minute),
     ] {
         let api = Late {
             recorded: recorded(),
             zenodo,
             others,
+            answered: std::sync::Mutex::default(),
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -257,7 +330,7 @@ fn a_slow_catalog_cannot_hold_up_the_others() {
             (found, took),
             "{zenodo:?}"
         );
-        if found == 6 {
+        if found == 14 {
             assert_eq!(
                 result.warnings,
                 ["zenodo did not answer within 10 s of the others; \
@@ -308,12 +381,12 @@ fn sources_are_asked_concurrently() {
                 .poll(&mut Context::from_waker(Waker::noop()))
                 .is_pending()
         );
-        assert_eq!(api.started.load(Ordering::Relaxed), 3);
+        assert_eq!(api.started.load(Ordering::Relaxed), 7);
         api.can_answer.store(true, Ordering::Relaxed);
         pending.await
     })
     .unwrap();
-    assert_eq!(result.candidates.len(), 9);
+    assert_eq!(result.candidates.len(), 17);
 }
 
 #[test]
@@ -363,7 +436,7 @@ fn invalid_catalog_ids_never_become_candidates() {
         br#"[{"ref":"not a reference","title":"bad"}]"#.to_vec(),
     );
     let result = block_on(search(&api, "iris", &[], LIMIT)).unwrap();
-    assert_eq!(result.candidates.len(), 6);
+    assert_eq!(result.candidates.len(), 14);
     assert!(result.warnings[0].contains("invalid dataset id"));
 }
 
@@ -400,9 +473,26 @@ fn a_limit_asks_each_catalog_for_that_many() {
             "https://zenodo.org/api/records?q=title%3A%28iris%29&type=dataset&sort=mostviewed&size=1",
             200,
             fixture_bytes("search/zenodo.json"),
-        );
+        )
+        .fixture(
+            "https://www.ebi.ac.uk/ebisearch/ws/rest/sra-study?query=iris&size=1&format=json&fields=name%2Cdescription",
+            "search/ena.json",
+        )
+        .fixture(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term=iris+AND+gse%5BETYP%5D&retmax=1&retmode=json&tool=fetchloom",
+            "search/geo-search.json",
+        )
+        .fixture(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=gds&id=200318345&retmode=json&tool=fetchloom",
+            "search/geo-summary.json",
+        )
+        .fixture(
+            "https://api.dandiarchive.org/api/dandisets/?search=iris&page_size=1&ordering=-stars",
+            "search/dandi.json",
+        )
+        .fixture(&openneuro("iris", 1), "search/openneuro.json");
     let result = block_on(search(&api, "iris", &[], 1)).unwrap();
-    assert_eq!(result.candidates.len(), 3);
+    assert_eq!(result.candidates.len(), 7);
 }
 
 #[test]
@@ -465,7 +555,8 @@ fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
             200,
             fixture_bytes("search/zenodo.json"),
         );
-    let result = block_on(search(&api, "iris dataset", &[], LIMIT)).unwrap();
+    let three = [Catalog::Hf, Catalog::Kaggle, Catalog::Zenodo];
+    let result = block_on(search(&api, "iris dataset", &three, LIMIT)).unwrap();
     let references: Vec<_> = result
         .candidates
         .iter()
@@ -479,5 +570,75 @@ fn matches_named_exactly_as_the_words_come_first_in_catalog_order() {
             "hf:datasets/scikit-learn/iris",
             "zenodo:23233774",
         ]
+    );
+}
+
+/// dandi's search lists embargoed dandisets, which fetchloom cannot download, and dandisets with
+/// no assets yet; both are left out. one dandi never published is described by its draft, which
+/// is what fetchloom then reads.
+#[test]
+fn dandi_leaves_out_embargoed_and_empty_dandisets_and_reads_a_draft() {
+    let mut dandi: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("search/dandi.json")).unwrap();
+    dandi["results"][0]["embargo_status"] = "EMBARGOED".into();
+    dandi["results"][1]["most_recent_published_version"] = serde_json::Value::Null;
+    dandi["results"][1]["draft_version"]["name"] = "the draft's title".into();
+    dandi["results"][1]["draft_version"]["size"] = 7.into();
+    let mut empty = dandi["results"][2].clone();
+    empty["identifier"] = "000999".into();
+    empty["most_recent_published_version"] = serde_json::Value::Null;
+    empty["draft_version"]["asset_count"] = 0.into();
+    dandi["results"].as_array_mut().unwrap().insert(2, empty);
+    let api = Recorded::default().on(
+        "https://api.dandiarchive.org/api/dandisets/?search=hippocampus&page_size=3&ordering=-stars",
+        200,
+        serde_json::to_vec(&dandi).unwrap(),
+    );
+    let result = block_on(search(&api, "hippocampus", &[Catalog::Dandi], LIMIT)).unwrap();
+    let found: Vec<_> = result
+        .candidates
+        .iter()
+        .map(|item| (item.reference.to_string(), item.title.as_str(), item.size))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("dandi:000044".to_owned(), "the draft's title", Some(7)),
+            (
+                "dandi:001361".to_owned(),
+                "A flexible hippocampal population code for experience relative to reward",
+                Some(92_448_350_544)
+            ),
+        ]
+    );
+    assert!(
+        result
+            .candidates
+            .iter()
+            .all(|item| item.source == "dandi" && item.downloads.is_none())
+    );
+}
+
+/// openneuro answers a query sent by GET only with the header that guards it against other
+/// sites, and answers a query it cannot run with errors and no data: that fails the catalog,
+/// while errors beside data, as for a private dataset in place of a match, do not.
+#[test]
+fn openneuro_is_asked_with_its_header_and_fails_on_errors_alone() {
+    let url = openneuro("iris", 3);
+    let api = Recorded::default().on(
+        &url,
+        200,
+        br#"{"errors":[{"message":"Cannot query field \"advancedSearch\" on type \"Query\".\nmore"}],"data":null}"#
+            .to_vec(),
+    );
+    let error = block_on(search(&api, "iris", &[Catalog::OpenNeuro], LIMIT)).unwrap_err();
+    assert_eq!(error.kind, Kind::SourceInvalid);
+    assert_eq!(
+        error.message,
+        "openneuro.org answered the search with an error: Cannot query field \"advancedSearch\" on type \"Query\"."
+    );
+    assert_eq!(
+        api.asked(),
+        [format!("{url} apollo-require-preflight: true")]
     );
 }

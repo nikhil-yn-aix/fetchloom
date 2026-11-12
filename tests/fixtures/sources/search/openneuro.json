@@ -1,0 +1,42 @@
+{
+  "errors": [
+    {
+      "message": "You do not have access to read this dataset."
+    }
+  ],
+  "data": {
+    "advancedSearch": {
+      "edges": [
+        null,
+        {
+          "node": {
+            "id": "ds001037",
+            "latestSnapshot": {
+              "size": 8600815,
+              "description": {
+                "Name": "The brain of Chris"
+              }
+            },
+            "analytics": {
+              "downloads": 42
+            }
+          }
+        },
+        {
+          "node": {
+            "id": "ds007046",
+            "latestSnapshot": {
+              "size": 71568032567,
+              "description": {
+                "Name": "Vision for action"
+              }
+            },
+            "analytics": {
+              "downloads": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

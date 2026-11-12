@@ -17,11 +17,11 @@ use crate::error::{Error, Kind};
 use crate::glob::Glob;
 use crate::net::Api;
 
-const API: &str = "https://openneuro.org/crn/graphql";
+pub(super) const API: &str = "https://openneuro.org/crn/graphql";
 const SITE: &str = "https://openneuro.org";
 /// the header openneuro's API asks of a query sent by GET, as its guard against requests from
 /// other sites.
-const PREFLIGHT: &[(&str, &str)] = &[("apollo-require-preflight", "true")];
+pub(super) const PREFLIGHT: &[(&str, &str)] = &[("apollo-require-preflight", "true")];
 /// what each query asks of a file or folder.
 const FIELDS: &str = "id filename size directory annexed urls";
 /// `DataLad`'s own folder at the top of every dataset, which holds none of its data.

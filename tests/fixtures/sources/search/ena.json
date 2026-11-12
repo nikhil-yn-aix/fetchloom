@@ -1,0 +1,31 @@
+{
+  "entries": [
+    {
+      "acc": "SRP455996",
+      "fields": {
+        "name": [],
+        "description": [
+          "Iris germanica Assembly"
+        ]
+      }
+    },
+    {
+      "acc": "SRP630995",
+      "fields": {
+        "name": [],
+        "description": [
+          "Iris kuschakewiczii Genome sequencing"
+        ]
+      }
+    },
+    {
+      "acc": "SRP266745",
+      "fields": {
+        "name": [],
+        "description": [
+          "Iris germanica Transcriptome or Gene expression"
+        ]
+      }
+    }
+  ]
+}

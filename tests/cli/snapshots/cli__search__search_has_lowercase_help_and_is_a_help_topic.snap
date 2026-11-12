@@ -2,7 +2,7 @@
 source: tests/cli/search.rs
 expression: help
 ---
-find datasets on hugging face, kaggle and zenodo
+find datasets on hugging face, kaggle, zenodo and other sites
 
 usage: fetchloom search [options] <words>...
 
@@ -16,9 +16,10 @@ arguments:
   <words>...  dataset names or keywords, with or without quotes
 
 options:
-      --source <source>  search only this site: hf, kaggle or zenodo. repeat it
-                         or use commas for more [possible values: hf, kaggle,
-                         zenodo]
+      --source <source>  search only this site: hf, kaggle, zenodo, ena, geo,
+                         dandi or openneuro. repeat it or use commas for more
+                         [possible values: hf, kaggle, zenodo, ena, geo, dandi,
+                         openneuro]
       --limit <n>        keep up to this many matches from each site, 1 to 20
                          [default: 3]
   [global options]

@@ -15,7 +15,7 @@ fetchloom puts the exact research data a project needs into its data/ folder.
   fetchloom get iris    download it once, without a project
   fetchloom sync        fill data/ in a project you cloned
 
-a name is looked up on hugging face, kaggle and zenodo. a link works too:
+a name is looked up on hugging face, kaggle, zenodo and more. a link works too:
   fetchloom add https://zenodo.org/records/3608990
 
 learn more: `fetchloom --help` lists the commands;
