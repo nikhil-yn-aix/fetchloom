@@ -190,12 +190,8 @@ pub(crate) fn dataset_name_problem(text: &str) -> Option<String> {
             crate::units::grouped((others.len() - shown) as u64)
         ));
     }
-    if let [first @ .., last] = held.as_slice() {
-        return Some(if first.is_empty() {
-            format!("it holds {last}")
-        } else {
-            format!("it holds {} and {last}", first.join(", "))
-        });
+    if !held.is_empty() {
+        return Some(format!("it holds {}", crate::units::listed(&held, "and")));
     }
     if text.starts_with(['-', '_']) {
         return Some("it does not start with a letter or a digit".to_owned());

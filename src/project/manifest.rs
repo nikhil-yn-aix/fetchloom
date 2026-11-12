@@ -412,10 +412,7 @@ fn recipes_read_known_datasets(datasets: &BTreeMap<String, Entry>) -> Result<(),
     } else {
         let mut names: Vec<&str> = cycle[..cycle.len() - 1].to_vec();
         names.sort_unstable();
-        let names = match names.split_last() {
-            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-            _ => names.join(""),
-        };
+        let names = crate::units::listed(&names, "and");
         format!(
             "datasets {names} are made from each other: {}",
             cycle.join(" \u{2192} ")
