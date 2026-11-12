@@ -65,9 +65,10 @@ jobs:
         if: always()
         with:
           name: linux-coverage-${{ github.run_attempt }}
+          # nextest keeps its store under the workspace's target/, whatever the build's target dir
           path: |
             target/coverage-report/
-            target/coverage/nextest/ci/junit.xml
+            target/nextest/ci/junit.xml
           if-no-files-found: warn
           retention-days: 14
 
