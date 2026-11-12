@@ -18,7 +18,7 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 | [data.toml](../../user/reference/data-toml.md) | UTF-8 TOML without a version field; unknown keys fail |
 | [data.lock](../../user/reference/data-lock.md) | `version = 1`; the reader accepts this version only. a higher value asks for a newer executable; other unsupported or broken locks require explicit recovery |
 | [exit codes](../../user/reference/exit-codes.md) | stable kind-to-exit mappings; scripts use kinds rather than prose |
-| [python helper](../../user/scripting.md#python-helper) | typed `path()` and `sync()` functions around the executable's JSON interface |
+| [python helper](../../user/scripting.md#python-helper) | typed `path()`, `sync()` and `get()` functions around the executable's JSON interface |
 
 ## internal formats
 
@@ -37,4 +37,4 @@ commands, options, environment settings, exit codes, error kinds, JSON fields, m
 
 fetchloom depends on web APIs it does not control. the [live checks](ci.md#live-source-checks) exercise the configured public services each monday; they do not cover every adapter. a removed source can still leave usable cached bytes when the manifest and lock remain unchanged.
 
-dependabot updates github actions monthly. crates are updated by hand, through the full test gate and `cargo deny` under the [dependency policy](ci.md#native-tests).
+dependabot proposes github actions and crate updates monthly, once a release is a week old. every update goes through the full test gate and `cargo deny` under the [dependency policy](ci.md#native-tests).
