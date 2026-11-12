@@ -850,8 +850,12 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
+        // fetchloom installs the crypto provider only once it goes online, and a test may run
+        // in a process of its own; no proxy, so the refusal is the port's own
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let err = runtime
-            .block_on(reqwest::Client::new().get(url.clone()).send())
+            .block_on(client.get(url.clone()).send())
             .unwrap_err();
         let Failure::Transient { reason, .. } = classify(&url, None, &err, Offline::No) else {
             panic!("a refusal is tried again")
