@@ -1065,32 +1065,49 @@ fn way_down(
     true
 }
 
+/// compares paths with an implicit final `/`, so `a-` cannot separate `a` from `a/x`.
+fn folder_order(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (left, right) = (left.as_bytes(), right.as_bytes());
+    let end = left.len().min(right.len());
+    left[..end]
+        .cmp(&right[..end])
+        .then_with(|| match (left.get(end), right.get(end)) {
+            (Some(left), None) => left.cmp(&b'/').then(Ordering::Greater),
+            (None, Some(right)) => b'/'.cmp(right).then(Ordering::Less),
+            _ => Ordering::Equal,
+        })
+}
+
 /// `folders`, paths in the project inside `data_dir`, without those inside another of them,
 /// which listing that other one covers.
 fn outermost(data_dir: &str, folders: &[String]) -> Vec<String> {
-    let mut outer: Vec<String> = Vec::new();
+    if folders.iter().any(|folder| folder == data_dir) {
+        return vec![data_dir.to_owned()];
+    }
     let mut sorted: Vec<&String> = folders.iter().collect();
-    sorted.sort_by_key(|folder| folder.len());
-    for folder in sorted {
-        if folder == data_dir {
-            return vec![folder.clone()];
-        }
-        if !outer.iter().any(|kept| is_inside(folder, kept)) {
-            outer.push(folder.clone());
+    sorted.sort_unstable_by(|left, right| folder_order(left, right));
+    sorted.dedup_by(|folder, parent| is_inside(folder, parent));
+    sorted.into_iter().cloned().collect()
+}
+
+/// whether `path` is in the disjoint, ordered `folders` returned by `outermost`.
+fn inside_any(path: &str, folders: &[String]) -> bool {
+    match folders {
+        [] => false,
+        [folder] => is_inside(path, folder),
+        _ => {
+            let end = folders.partition_point(|folder| folder_order(folder, path).is_le());
+            end.checked_sub(1)
+                .is_some_and(|at| is_inside(path, &folders[at]))
         }
     }
-    outer
 }
 
 /// whether `path` is `folder` or inside it, both paths in the project.
 pub(crate) fn is_inside(path: &str, folder: &str) -> bool {
     path.strip_prefix(folder)
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-}
-
-/// whether `path` is inside one of `folders`.
-fn inside_any(path: &str, folders: &[String]) -> bool {
-    folders.iter().any(|folder| is_inside(path, folder))
 }
 
 fn visit_files(
@@ -1288,6 +1305,81 @@ mod tests {
         }
     }
 
+    #[test]
+    fn folder_order_matches_a_terminal_separator() {
+        let paths = [
+            "", "a", "a-", "a.", "a/", "a//", "a/b", "a0", "é", "é-", "é/", "/", "/a",
+        ];
+        for left in paths {
+            for right in paths {
+                assert_eq!(
+                    folder_order(left, right),
+                    format!("{left}/").cmp(&format!("{right}/")),
+                    "{left:?}, {right:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn selected_folders_keep_separator_boundaries_and_shared_paths() {
+        let folders = [
+            "data/a/inner",
+            "data/a-",
+            "data/a",
+            "data/a",
+            "data/z/inner",
+            "data/café/child",
+            "data/café-",
+            "data/café",
+        ]
+        .map(String::from);
+        let roots = outermost("data", &folders);
+        assert_eq!(
+            roots.iter().map(String::as_str).collect::<HashSet<_>>(),
+            HashSet::from([
+                "data/a",
+                "data/a-",
+                "data/z/inner",
+                "data/café",
+                "data/café-"
+            ])
+        );
+        for (path, expected) in [
+            ("data/a", true),
+            ("data/a/x", true),
+            ("data/a/inner/x", true),
+            ("data/a-", true),
+            ("data/a-/x", true),
+            ("data/a--/x", false),
+            ("data/ab/x", false),
+            ("data/a.b/x", false),
+            ("data", false),
+            ("data/z", false),
+            ("data/z/inner", true),
+            ("data/z/inner/x", true),
+            ("data/z/inner-/x", false),
+            ("data/café/x", true),
+            ("data/café-/x", true),
+            ("data/café--/x", false),
+            ("other/data/a/x", false),
+            ("", false),
+        ] {
+            assert_eq!(inside_any(path, &roots), expected, "{path}");
+        }
+        let roots = outermost("data", &["data/a".into(), "data".into(), "data/a-".into()]);
+        assert_eq!(roots, ["data"]);
+        for (path, expected) in [
+            ("data", true),
+            ("data/a/x", true),
+            ("data-", false),
+            ("database/x", false),
+        ] {
+            assert_eq!(inside_any(path, &roots), expected, "{path}");
+        }
+        assert!(!inside_any("data/a/x", &outermost("data", &[])));
+    }
+
     /// a survey of named folders lists them alone, and what stands on the way down to them, as
     /// a survey of the whole data folder would see it: a link there is never followed.
     #[test]
@@ -1300,6 +1392,7 @@ mod tests {
         for path in [
             "data/a/x",
             "data/a/inner/y",
+            "data/a-/v",
             "data/b/z",
             "data/ab/w",
             "data/f",
@@ -1310,7 +1403,13 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("data/a"), root.join("data/link")).unwrap();
         let mut state = State::default();
-        for path in ["data/a/x", "data/a/inner/y", "data/b/z", "data/ab/w"] {
+        for path in [
+            "data/a/x",
+            "data/a/inner/y",
+            "data/a-/v",
+            "data/b/z",
+            "data/ab/w",
+        ] {
             let placed = record(root, path, path.as_bytes(), Method::Copy);
             state.files.insert(path.to_owned(), placed);
         }
@@ -1321,9 +1420,11 @@ mod tests {
             paths
         };
         let whole = Survey::read(&project, "data", Threads::default());
-        assert_eq!(whole.disk.len(), 5);
-        assert_eq!(whole.state.files.len(), 4);
+        assert_eq!(whole.disk.len(), 6);
+        assert_eq!(whole.state.files.len(), 5);
         let within = [
+            "data/a",
+            "data/a-",
             "data/a",
             "data/a/inner",
             "data/link",
@@ -1334,16 +1435,27 @@ mod tests {
         let survey = Survey::read_within(&project, "data", &within, Threads::default());
         assert_eq!(
             sorted(survey.disk.keys().collect()),
-            ["data/a/inner/y", "data/a/x", "data/f"]
+            ["data/a-/v", "data/a/inner/y", "data/a/x", "data/f"]
         );
         assert_eq!(
             sorted(survey.state.files.keys().collect()),
-            ["data/a/inner/y", "data/a/x"]
+            ["data/a-/v", "data/a/inner/y", "data/a/x"]
         );
         assert_eq!(survey.entries.get("data/a"), Some(&Entry::Folder));
         #[cfg(unix)]
         assert_eq!(survey.entries.get("data/link"), Some(&Entry::Link));
         assert!(survey.edited.is_empty());
+        let all = Survey::read_within(
+            &project,
+            "data",
+            &["data/a".to_owned(), "data".to_owned()],
+            Threads::default(),
+        );
+        assert_eq!(all.disk, whole.disk);
+        assert_eq!(all.state.files, whole.state.files);
+        let none = Survey::read_within(&project, "data", &[], Threads::default());
+        assert_eq!(none.disk.len(), 0);
+        assert_eq!(none.state.files.len(), 0);
     }
 
     #[test]

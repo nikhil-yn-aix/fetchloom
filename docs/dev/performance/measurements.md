@@ -45,6 +45,7 @@ every change measured with the current harness, one row each: what it gained whe
 | placement | small copies instead of reflinks on xfs | xfs s4 1.245 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | parent folder handles kept between batches | s5 1.268 and 1.297 | dropped | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | placement | stop the copy loop after a short completed block | ext4 primitive 0.941; tmpfs noisy; no whole-command win established | dropped, below the bar | [short copies](#short-copy-eof-dispatch-2026-11-12) |
+| project state | indexed selected-folder ranges | 40,000 named datasets: ratios 0.1312 glibc and 0.0687 musl; musl stress peak +0.75 MiB | kept | [folder ranges](#searching-selected-folder-ranges-2026-11-12) |
 | project state | reuse an intact racy hash within one survey | `status --verify` of 32 MiB: musl 0.544, glibc 0.563; controls and memory within noise | kept | [racy hashes](#reusing-racy-hashes-within-a-survey-2026-11-12) |
 | project state | project scan in bounded parallel batches | status at 100,000 files 0.600 to 0.442 s | kept | [lab](#ab-passes-on-the-linux-lab-2026-11) |
 | project state | one pool of scan workers for the whole walk | settled sync of 100,000 files 0.902, but of 10,000 1.052 | dropped | [nine jobs](#ab-passes-from-a-profile-of-nine-jobs-2026-11-12) |
@@ -997,3 +998,59 @@ the fixed independent v2 confirmation again found the glibc 1,000-input slowdown
 each v3 row has 32 clean wall pairs. the larger fan-out ladder was not repeated for v3 after these controls rejected it. the stated keep rule rejects a reproducible time regression elsewhere, so the large fan-out gain was not enough.
 
 correctness checks passed: `shared_recipe_inputs_are_read_once` first failed with two calculations instead of one, then passed with the memo and failed again when reuse was bypassed. `reading_again_uses_the_current_pin_and_member_filters`, `content_memo_keeps_pin_and_member_identities_apart`, `frozen_inputs_do_not_cross_pin_or_filter_identity` and `frozen_inputs_leave_code_and_derived_trees_live` covered identity changes and live code/derived values. the revised source also integrated the newly landed strict-sync check. v2 and v3 each passed 19 affected unit tests and all-target clippy. these tests, the switches and prototype code were removed from the product with the rejected change; their patches, binaries, full first-pass and independent-control records remain with the sweep outside the repository. no allocator policy was changed.
+
+## searching selected folder ranges, 2026-11-12
+
+kept. `outermost` sorts borrowed folder paths once, removes duplicate and nested roots, and clones only the roots the survey needs. the state predicate uses binary predecessor lookup over those same roots, with direct checks for zero or one root. paths compare as if they ended in `/`: ordinary byte order would put `a-` between `a` and `a/x` and could hide the right ancestor. the comparison allocates no query string. the change is confined to folder normalization and membership in `sync/disk.rs`; verification scheduling, the state format, candidates and flags are unchanged.
+
+the source base includes 066a6416 and the kept rename change. one stock release executable per libc carried `FETCHLOOM_EXP_FOLDER_RANGES`, read once before the survey. both arms used the same binary and settled, offline fixtures. a plain sync established each fixture, then an independent check verified the state's complete marker and both manifest/lock text hashes. every reported JSON answer matched between arms.
+
+`sync` named all datasets at 1, 10, 1,000 and 40,000. a second ladder named 1, 10 or 1,000 within the same 40,000-dataset project. controls named the sole folder of a 100,000-file dataset or ran plain sync of the wide project. n is the selected dataset count, except the ordinary file control, where it counts files. JSON output was discarded only during timing.
+
+`abh.py` shuffled paired arms on cores 12–23 at nice 0, with a warmup after each acquisition. counter-backed window budgets targeted 250 s; the longest observed lock hold was 225.9 s, below five minutes. whole load-burst pairs stayed in the raw records but were excluded and replaced. small cases have at least 64 clean pairs, controls 32, and large-gain cases 10. the median and paired-log-ratio intervals use `bench/ab.py`'s 20,000-resample 95% percentile bootstrap.
+
+native RSS and instructions ran separately on cores 0–11 at nice 10 without the wall lock. small-n RSS has 32 observations per arm, other cases through 1,000 have five, and larger ones three. RSS cells show median [minimum, maximum] of per-process peaks in MiB, not the Python parent's inherited high-water mark. at 40,000 selected datasets glibc's median peak falls by about 1 MiB; musl spends 0.75 MiB more. the wide-manifest musl workloads already exceed the ordinary 150 MB target, a miss still shown here. the ordinary 100,000-file control stays below that target on both libc builds. no protected time interval establishes a slowdown.
+
+| libc | workload | n | before ms [95%] | after ms [95%] | paired ratio [95%] | peak RSS MiB, before → after |
+|---|---|---:|---|---|---|---|
+| glibc | all named datasets | 1 | 4.442 [4.361, 4.546] | 4.400 [4.348, 4.531] | 1.0052 [0.9914, 1.0146] | 13.10 [11.86, 13.38] → 13.04 [11.87, 13.50] |
+| musl | all named datasets | 1 | 4.149 [4.050, 4.235] | 4.080 [4.038, 4.130] | 0.9783 [0.9625, 1.0091] | 17.14 [17.13, 17.14] → 17.14 [17.13, 17.14] |
+| glibc | all named datasets | 10 | 4.370 [4.342, 4.440] | 4.406 [4.320, 4.453] | 0.9946 [0.9835, 1.0103] | 13.23 [12.12, 13.58] → 13.16 [12.05, 13.63] |
+| musl | all named datasets | 10 | 4.032 [3.967, 4.077] | 4.035 [3.962, 4.083] | 0.9970 [0.9862, 1.0231] | 17.14 [17.13, 17.14] → 17.14 [17.13, 17.14] |
+| glibc | all named datasets | 1,000 | 29.208 [28.860, 29.696] | 25.170 [24.981, 25.740] | 0.8683 [0.8483, 0.8832] | 16.23 [16.16, 16.63] → 16.47 [15.91, 16.55] |
+| musl | all named datasets | 1,000 | 31.637 [31.162, 31.874] | 24.002 [23.682, 24.227] | 0.7591 [0.7499, 0.7707] | 25.45 [25.45, 25.46] → 25.45 [25.41, 25.46] |
+| glibc | all named datasets | 40,000 | 7354.738 [7332.877, 7604.208] | 969.291 [963.004, 972.418] | 0.1312 [0.1275, 0.1325] | 137.77 [137.66, 137.79] → 136.75 [136.42, 136.88] |
+| musl | all named datasets | 40,000 | 11742.476 [11683.997, 11879.797] | 812.972 [804.548, 814.583] | 0.0687 [0.0681, 0.0697] | 159.30 [159.30, 159.30] → 160.05 [160.05, 160.05] |
+| glibc | named subset of 40,000 datasets | 1 | 277.834 [276.250, 278.580] | 277.943 [276.465, 278.782] | 0.9995 [0.9980, 1.0033] | 109.40 [108.60, 109.88] → 109.50 [108.60, 109.88] |
+| musl | named subset of 40,000 datasets | 1 | 175.960 [175.762, 176.291] | 176.217 [175.945, 176.473] | 1.0004 [0.9989, 1.0020] | 143.46 [143.16, 143.46] → 143.46 [143.21, 143.46] |
+| glibc | named subset of 40,000 datasets | 10 | 285.787 [285.456, 286.711] | 284.567 [284.087, 285.715] | 0.9958 [0.9941, 0.9996] | 109.52 [108.43, 109.92] → 109.53 [108.79, 109.98] |
+| musl | named subset of 40,000 datasets | 10 | 181.299 [181.104, 181.622] | 180.195 [179.958, 180.607] | 0.9940 [0.9928, 0.9947] | 143.46 [143.16, 145.46] → 143.46 [143.16, 145.45] |
+| glibc | named subset of 40,000 datasets | 1,000 | 481.233 [476.623, 484.055] | 301.272 [299.214, 304.834] | 0.6285 [0.6206, 0.6359] | 109.73 [109.65, 109.88] → 109.88 [109.36, 110.07] |
+| musl | named subset of 40,000 datasets | 1,000 | 465.832 [465.351, 466.473] | 200.341 [199.682, 201.059] | 0.4303 [0.4288, 0.4314] | 147.47 [147.17, 147.47] → 147.48 [147.47, 147.48] |
+| glibc | one folder, files control | 100,000 | 400.094 [397.251, 401.771] | 401.855 [398.962, 405.866] | 1.0025 [0.9966, 1.0121] | 80.98 [80.64, 81.56] → 81.23 [81.18, 81.33] |
+| musl | one folder, files control | 100,000 | 372.510 [370.601, 373.263] | 372.619 [371.055, 374.074] | 1.0012 [0.9939, 1.0051] | 95.55 [95.49, 105.56] → 95.57 [95.49, 101.54] |
+| glibc | plain sync, no selector | 40,000 | 798.946 [792.103, 804.972] | 797.362 [787.379, 806.083] | 0.9985 [0.9955, 1.0046] | 117.61 [117.53, 117.88] → 117.81 [117.76, 117.81] |
+| musl | plain sync, no selector | 40,000 | 649.631 [648.297, 653.055] | 649.089 [647.844, 651.650] | 1.0007 [0.9977, 1.0027] | 156.96 [156.96, 156.96] → 156.96 [156.95, 156.96] |
+
+| libc | workload | n | instructions M, before → after | clean pairs | excluded burst pairs |
+|---|---|---:|---:|---:|---:|
+| glibc | all named datasets | 1 | 3.404 → 3.404 | 64 | 0 |
+| musl | all named datasets | 1 | 2.660 → 2.660 | 64 | 0 |
+| glibc | all named datasets | 10 | 4.002 → 3.995 | 64 | 0 |
+| musl | all named datasets | 10 | 3.161 → 3.160 | 64 | 0 |
+| glibc | all named datasets | 1,000 | 109.356 → 75.193 | 10 | 0 |
+| musl | all named datasets | 1,000 | 147.564 → 67.697 | 10 | 0 |
+| glibc | all named datasets | 40,000 | 58171.889 → 3157.121 | 10 | 0 |
+| musl | all named datasets | 40,000 | 112333.961 → 2900.111 | 10 | 0 |
+| glibc | named subset of 40,000 datasets | 1 | 1475.979 → 1475.714 | 64 | 0 |
+| musl | named subset of 40,000 datasets | 1 | 1312.024 → 1311.786 | 64 | 0 |
+| glibc | named subset of 40,000 datasets | 10 | 1520.715 → 1517.891 | 64 | 0 |
+| musl | named subset of 40,000 datasets | 10 | 1366.942 → 1358.448 | 64 | 0 |
+| glibc | named subset of 40,000 datasets | 1,000 | 2941.925 → 1608.699 | 10 | 8 |
+| musl | named subset of 40,000 datasets | 1,000 | 4131.916 → 1452.009 | 10 | 0 |
+| glibc | one folder, files control | 100,000 | 2017.887 → 2025.549 | 32 | 7 |
+| musl | one folder, files control | 100,000 | 2493.082 → 2493.294 | 32 | 0 |
+| glibc | plain sync, no selector | 40,000 | 2297.916 → 2297.917 | 32 | 0 |
+| musl | plain sync, no selector | 40,000 | 2105.640 → 2105.638 | 32 | 0 |
+
+`selected_folders_keep_separator_boundaries_and_shared_paths` and the extended `a_survey_within_folders_lists_and_keeps_only_them` passed on the old algorithm first. they cover nested roots, shared/duplicate paths, `a` versus `a-` and `ab`, unicode, the data root, empty selection, links, missing folders and a file blocking a folder. `folder_order_matches_a_terminal_separator` independently checks the custom comparison against explicit suffixed strings. replacing it with ordinary string order made the new assertions fail; restoring it passed. the existing partial-state test still verifies that selected records, candidates and sync flags round-trip. after switch removal, the full survey characterization exercises the indexed path itself. the old paths and experiment switch are removed; raw fixtures, binaries, counters, paired runs and mutation logs remain with the sweep outside the repository.
