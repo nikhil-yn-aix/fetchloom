@@ -33,7 +33,7 @@ warning: put back data/uci/iris.names, which was deleted or moved, since data.lo
      Synced 2 datasets into data
 ```
 
-`fetchloom drop` leaves a file out for good by writing a pattern into data.toml, so every clone leaves it out too. the help names it only for a file drop takes: a file a recipe makes comes from the recipe's step, and the only file of a dataset goes with `fetchloom remove`. drop works for files inside archives as well:
+`fetchloom drop` leaves a file out for good by writing a pattern into data.toml, so every clone leaves it out too. it works for files inside archives as well:
 
 ```text
 $ fetchloom drop data/uci/bezdekIris.data
@@ -55,7 +55,7 @@ exclude = ["bezdekIris.data"]
 
 ## editing raw files
 
-placed files are read-only, so writing to one fails with permission denied. this protects the cache's copy: a hardlinked file is the same file in every project linked to it. for a dataset whose files you edit, set `copy = true` in data.toml:
+placed files are read-only, so writing to one fails with permission denied. that protects the cache's copy, since a hardlinked file is the same file in every project linked to it. for a dataset whose files you edit, set `copy = true` in data.toml:
 
 ```toml
 [datasets.penguins]
@@ -84,7 +84,7 @@ once data.lock pins other bytes for that file, as after `fetchloom lock --upgrad
 
 the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a recipe, or, for a file that should not be there at all, in a drop.
 
-a [recipe](recipes.md) never reads the edit either: its step reads the bytes data.lock pins, from the cache. so when a recipe reads the dataset, `build` and `sync` say that instead of offering `--force`, which would replace your fix. stderr from a project where the recipe `mc` reads `m`, a table with `copy = true` whose missing value was filled in by hand:
+a [recipe](recipes.md) never reads the edit either: its step reads the bytes data.lock pins. so when a recipe reads the dataset, `build` and `sync` say so instead of offering `--force`, which would replace your fix. stderr from a project where the recipe `mc` reads `m`, a table with `copy = true` whose missing value was filled in by hand:
 
 ```text
 $ fetchloom build mc
