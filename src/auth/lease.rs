@@ -1,6 +1,5 @@
-//! a credential that may expire, such as a google access token or the keys an AWS program
-//! printed: kept while it has time left, and fetched again by one caller while the others wait
-//! for it, so requests at once share one fetch.
+//! a credential that may expire, such as a google token or a program's AWS keys: kept while it
+//! has time left, and fetched again by one caller while the others wait for it.
 
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -8,8 +7,7 @@ use std::time::{Duration, Instant};
 use crate::error::{Error, Kind};
 
 /// how long before it expires a credential is fetched again, so a request signed with it, such
-/// as a download that resumes, still has minutes to go. one that lives less than twice this is
-/// fetched again halfway.
+/// as a download that resumes, still has minutes to go.
 const MARGIN: Duration = Duration::from_mins(5);
 
 /// one credential, fetched when first needed and again shortly before it expires.
@@ -39,9 +37,7 @@ impl<T> Default for Lease<T> {
 
 impl<T: Clone> Lease<T> {
     /// the credential, fetched by `fetch` when none is held or the one held is due for renewal
-    /// at `now`. a caller that comes while another fetches waits for that fetch. `fetch` gives
-    /// the credential and how long it lives from when it was asked for, none for one that never
-    /// expires.
+    /// at `now`. `fetch` gives it and its lifetime from when it was asked, none if it never ends.
     ///
     /// # Errors
     ///
@@ -90,8 +86,7 @@ impl<T: PartialEq> Lease<T> {
 }
 
 /// when a credential asked for at `asked` that lives `lifetime` is fetched again: [`MARGIN`]
-/// before it expires, or halfway for one that lives less than twice that. none when that is
-/// past any time a clock can hold, as for a credential that lives for ages.
+/// before it expires, or halfway for a shorter one. none past any time a clock can hold.
 fn renewal(asked: Instant, lifetime: Duration) -> Option<Instant> {
     asked.checked_add(lifetime.saturating_sub(MARGIN.min(lifetime / 2)))
 }

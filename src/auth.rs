@@ -1,6 +1,5 @@
-//! accounts at the sources: which key each one takes, where that key is kept, how to check it,
-//! and how a person gets one. a key is kept where the source's own tools keep it, so one key
-//! works in fetchloom and in them, and a person never makes a second.
+//! accounts at the sources: which key each takes, where it is kept, how to check it and how a
+//! person gets one. a key lives where the source's own tools keep it, so one key serves both.
 
 pub(crate) mod aws;
 pub(crate) mod azure;
@@ -21,7 +20,7 @@ use crate::error::{Error, Kind};
 use crate::net::Credential;
 use crate::source::Var;
 
-/// one step of a sign-in guide: a page to open, or something to do.
+/// one step of a sign-in guide.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Step {
     Open(String),
@@ -39,10 +38,10 @@ pub(crate) enum Account {
     Dryad,
     GitHub,
     GitLab,
-    /// one installation: a dataverse key works only on the server that made it. the host, with
-    /// its port when that is not 443
+    /// one installation's host, with its port when that is not 443: a dataverse key works only
+    /// on the server that made it.
     Dataverse(String),
-    /// a username and password for one host, kept in `.netrc`, as for nasa earthdata or physionet
+    /// a username and password for one host, kept in `.netrc`, as for nasa earthdata or physionet.
     Login(String),
 }
 
@@ -103,7 +102,7 @@ impl fmt::Display for Origin {
 #[derive(Clone, Debug)]
 pub(crate) struct Found {
     pub(crate) origin: Origin,
-    /// the token, or for a login the username and password
+    /// the token, or for a login the username and password.
     pub(crate) secret: String,
     pub(crate) login: Option<String>,
 }
@@ -238,8 +237,7 @@ impl Account {
         }
     }
 
-    /// how a person gets a key, from an account they may not have yet to the terms some
-    /// datasets ask them to accept, as steps to follow in order.
+    /// how a person gets a key, as steps in order, from making an account to accepting terms.
     pub(crate) fn guide(&self) -> Vec<Step> {
         let join = |site: &str| {
             Step::Do(format!(
@@ -567,11 +565,11 @@ impl Account {
 /// where a key is saved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Home {
-    /// a file the source's own tools read
+    /// a file the source's own tools read.
     File(PathBuf),
-    /// the `.netrc` curl and wget read
+    /// the `.netrc` curl and wget read.
     Netrc(PathBuf),
-    /// the credential store, or the person's own file when the system has none
+    /// the credential store, or the person's own file when the system has none.
     Store,
 }
 
@@ -661,8 +659,7 @@ pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
     accounts
 }
 
-/// the token file the hugging face tools read: `HF_TOKEN_PATH`, else `token` in `HF_HOME`, else
-/// in the hugging face folder of the user's cache.
+/// the token file the hugging face tools read, found as they find it.
 pub(crate) fn hf_file(var: Var<'_>) -> Option<PathBuf> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
     set("HF_TOKEN_PATH")

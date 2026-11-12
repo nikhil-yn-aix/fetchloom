@@ -1,6 +1,5 @@
-//! keys for sources whose own tools keep no file: the system's credential store, or, when the
-//! person agrees, a file only they can read. an index lists what was saved where, so fetchloom
-//! never asks the credential store about sources a person never signed in to.
+//! keys for sources whose own tools keep no file: the credential store, or a private file the
+//! person agreed to. an index of what went where means the store is asked only for keys it holds.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,14 +14,13 @@ const SERVICE: &str = "fetchloom";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Place {
-    /// windows credential manager, the macos keychain or the linux secret service
+    /// windows credential manager, the macos keychain or the linux secret service.
     Keyring,
-    /// `credentials.json` in fetchloom's folder, readable by its owner only
+    /// `credentials.json` in fetchloom's folder, readable by its owner only.
     File,
 }
 
-/// fetchloom's folder for settings: `%APPDATA%\fetchloom`, `~/Library/Application Support/
-/// fetchloom` on macos, else `$XDG_CONFIG_HOME/fetchloom` or `~/.config/fetchloom`.
+/// fetchloom's folder for settings, where each system keeps a program's settings.
 pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
     let set = |name: &str| {
         var(name)
@@ -43,9 +41,8 @@ pub(crate) fn folder(var: Var<'_>) -> Option<PathBuf> {
         .map(|config| config.join("fetchloom"))
 }
 
-/// whether the system's credential store can be used. `FETCHLOOM_KEYRING` can turn it off, and a
-/// linux session without a message bus has none, which is checked first so a server never waits
-/// on a bus that is not there.
+/// whether the system's credential store can be used. a linux session without a message bus has
+/// none, checked first so a server never waits on a bus that is not there.
 pub(crate) fn keyring_usable(var: Var<'_>) -> bool {
     if !keyring_allowed(var) {
         return false;
@@ -180,10 +177,8 @@ fn json<T: serde::Serialize>(value: &T) -> io::Result<Vec<u8>> {
 }
 
 /// writes `bytes` to `path` through a new file beside it, so a crash leaves the old file or the
-/// new one. the new file gets a random name and is created, never opened, so nobody who can write
-/// to the folder can plant a file or a link there to read the key or redirect the write. on unix
-/// only the owner may read it; on windows it takes the folder's permissions, which keep other
-/// users out of the profile folders the sources use by default.
+/// new one, and nobody can plant a file or a link in its place. only its owner may read it on
+/// unix; on windows it takes the folder's permissions, which keep others out of profile folders.
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let folder = path
         .parent()
@@ -260,8 +255,7 @@ mod tests {
         }
     }
 
-    /// `FETCHLOOM_KEYRING` keeps keys out of the system's credential store when it is false or 0,
-    /// in any case, and leaves the store in use when it is unset, empty, true or 1.
+    /// in any letter case; unset, empty, true or 1 leave the store in use.
     #[test]
     fn the_keyring_variable_turns_the_store_off_with_false_or_0() {
         for (value, allowed) in [

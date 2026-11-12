@@ -1,9 +1,6 @@
-//! AWS keys where the AWS tools keep them: the environment, then the profile `AWS_PROFILE` names,
-//! else `default`, in the shared credentials and config files. a profile that signs in to IAM
-//! identity center or takes on a role gets its keys from the AWS CLI, and one with a
-//! `credential_process` from that program, each run as [`program`] says. a profile is never
-//! passed over for another identity, and keys reach an S3-compatible endpoint only where the
-//! person's own AWS settings send them there.
+//! AWS keys where the AWS tools keep them: the environment, then the chosen profile in the shared
+//! files. a profile is never passed over for another identity, and keys reach an S3-compatible
+//! endpoint only where the person's own AWS settings send them.
 
 mod program;
 
@@ -98,11 +95,9 @@ impl Source {
     }
 }
 
-/// the keys that sign for `endpoint`, or for AWS itself when it is none. the environment's keys,
-/// else the chosen profile's, sign where the settings send S3 requests: AWS, unless
-/// `AWS_ENDPOINT_URL_S3`, `AWS_ENDPOINT_URL` or the profile names an endpoint. another endpoint
-/// takes the keys of the one profile whose `endpoint_url` names it. none when no keys are there.
-/// a program that gives a profile's keys is found here and run only once keys are needed.
+/// the keys that sign for `endpoint`, AWS when none: the environment's or the chosen profile's
+/// where the settings send S3 requests, else the one profile's whose `endpoint_url` names it. a
+/// program that gives keys runs only once they are needed.
 ///
 /// # Errors
 ///
@@ -186,9 +181,8 @@ pub(crate) fn find(
     }
 }
 
-/// where the keys that sign S3 requests would come from, as `auth` lists them: found as [`find`]
-/// finds them for the endpoint the settings send S3 requests to, none for AWS itself. a program
-/// is named and never run, and written keys show only their id's last four characters.
+/// where the keys that sign S3 requests would come from, as `auth` lists them. a program is
+/// named and never run, and written keys show only their id's last four characters.
 pub(crate) struct Described {
     /// the endpoint the settings send S3 requests to, none for AWS itself.
     pub(crate) endpoint: Option<url::Origin>,
@@ -301,9 +295,8 @@ fn half_in_environment(given: &str, missing: &str) -> Error {
     ))
 }
 
-/// where a profile's keys come from, in the order the AWS tools try them: the AWS CLI, for a
-/// profile that takes on a role or signs in to IAM identity center, which fetchloom leaves to
-/// it; keys in the credentials file; the profile's `credential_process`; keys in the config file.
+/// where a profile's keys come from, in the order the AWS tools try them; a role or an IAM
+/// identity center sign-in is left to the AWS CLI.
 fn profile_keys(
     var: Var<'_>,
     files: &Files,
@@ -486,8 +479,7 @@ impl Files {
     }
 
     /// where requests made with the environment's keys or `profile`'s go, when not to AWS, and
-    /// the setting that says so. the variables come first, the S3 one before the general one,
-    /// then the profile's own settings.
+    /// the setting that says so.
     fn sends_to(
         &self,
         var: Var<'_>,
@@ -761,7 +753,6 @@ mod tests {
         path
     }
 
-    /// the program an identity runs for its keys.
     fn program(identity: &Identity) -> &Program {
         match &identity.source {
             Source::Program { program, .. } => program,

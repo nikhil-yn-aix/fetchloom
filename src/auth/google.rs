@@ -1,8 +1,5 @@
-//! google's application default credentials, found where google's own libraries look: the file
-//! `GOOGLE_APPLICATION_CREDENTIALS` names, else the one `gcloud auth application-default login`
-//! wrote. a service account's key signs a request for an access token, and a person's login
-//! refreshes one. other kinds of credentials are refused by name, never passed over for another
-//! identity, and no metadata server is asked.
+//! google's application default credentials, found where google's own libraries look. other kinds
+//! are refused by name, never passed over for another identity; no metadata server is asked.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -104,8 +101,7 @@ fn found(var: Var<'_>, windows: bool) -> Result<Option<Credentials>, Error> {
     }
 }
 
-/// where gcloud keeps application default credentials: in `CLOUDSDK_CONFIG`, else in `gcloud` in
-/// `APPDATA` on windows and in `~/.config` elsewhere.
+/// where gcloud keeps application default credentials.
 fn gcloud_file(var: Var<'_>, windows: bool) -> Option<PathBuf> {
     let folder = match set(var, "CLOUDSDK_CONFIG") {
         Some(folder) => PathBuf::from(folder),
@@ -138,8 +134,7 @@ impl Credentials {
         }
     }
 
-    /// the form that asks the token endpoint for a token of `scope` at `now`: a service
-    /// account's assertion signed with its key, or a login's refresh token. a login's token
+    /// the form that asks the token endpoint for a token of `scope` at `now`. a login's token
     /// carries every scope the person granted, whatever `scope` asks.
     ///
     /// # Errors

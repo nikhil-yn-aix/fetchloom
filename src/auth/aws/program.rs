@@ -1,9 +1,5 @@
-//! a program that prints AWS keys: a profile's `credential_process`, or `aws configure
-//! export-credentials` for a profile that signs in to IAM identity center or takes on a role,
-//! which fetchloom leaves to the AWS CLI. its words are split as the AWS CLI splits them, never
-//! by a shell, and it is found by a full path, never through a folder PATH names relatively,
-//! which would be whatever folder fetchloom runs in. it runs as [`process`] runs a program, and
-//! what it prints is read as version 1 JSON.
+//! a program that prints AWS keys: a profile's `credential_process`, or the AWS CLI for a role or
+//! IAM identity center. it runs without a shell, by a full path, never from a relative PATH folder.
 
 use std::iter::repeat_n;
 use std::path::{Path, PathBuf};
@@ -49,10 +45,8 @@ pub(super) enum By {
 }
 
 impl Program {
-    /// the `credential_process` `text` of `profile`: its words as the AWS CLI splits them, by posix
-    /// shell quoting, or on windows by the rules windows programs read their command line with,
-    /// with nothing a shell does, such as variables, `~` or pipes. the program is a full path, or
-    /// a name found in a folder on PATH.
+    /// the `credential_process` `text` of `profile`, split as the AWS CLI splits it, with nothing a
+    /// shell does, such as variables, `~` or pipes. the program is a full path, or a name on PATH.
     ///
     /// # Errors
     ///
@@ -298,9 +292,8 @@ fn days(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
-/// the words of a command line as the AWS CLI splits a `credential_process`: by posix shell
-/// quoting, or on `windows` by the rules windows programs read their command line with. none
-/// for a quote that never closes, or a posix line that ends in a lone `\`.
+/// the words of a `credential_process` as the AWS CLI splits them, by posix or `windows` rules.
+/// none for a quote that never closes, or a posix line that ends in a lone `\`.
 fn words(text: &str, windows: bool) -> Option<Vec<String>> {
     if windows {
         windows_words(text)
@@ -351,9 +344,8 @@ fn posix_words(text: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-/// words as the microsoft C runtime reads a command line: spaces and tabs part words outside
-/// double quotes, and backslashes are kept as they are unless they come before a double quote,
-/// where each pair is one backslash and one left over makes the quote a character.
+/// words as the microsoft C runtime reads a command line: backslashes are literal except before
+/// a double quote, where each pair is one backslash and an odd one makes the quote a character.
 fn windows_words(text: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word: Option<String> = None;
@@ -400,8 +392,7 @@ fn windows_words(text: &str) -> Option<Vec<String>> {
 }
 
 /// the first file named `name` this user may run, `name.exe` on windows, in a folder PATH names
-/// by its full path. a folder named relatively, such as `.`, is never searched: it would be
-/// whatever folder fetchloom runs in, which a cloned project could fill.
+/// by its full path. a relative one such as `.` is never searched: a cloned project could fill it.
 fn installed(name: &str, var: Var<'_>) -> Option<PathBuf> {
     let file = if cfg!(windows) && Path::new(name).extension().is_none() {
         format!("{name}.exe")

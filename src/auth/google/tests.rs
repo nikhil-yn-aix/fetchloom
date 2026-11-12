@@ -101,7 +101,6 @@ fn decode(text: &str) -> Vec<u8> {
     bytes
 }
 
-/// the pairs of a form.
 fn pairs(form: &str) -> Vec<(String, String)> {
     url::form_urlencoded::parse(form.as_bytes())
         .into_owned()
@@ -187,8 +186,7 @@ fn credentials_come_from_the_named_file_before_gclouds_own() {
     assert_eq!(shown(&machine(empty.path(), &[]), true), None);
 }
 
-/// a file the person named stops the search when it cannot be used, rather than leaving
-/// fetchloom to sign in as whoever gcloud's file names.
+/// so fetchloom never signs in as whoever gcloud's file names instead.
 #[test]
 fn a_named_file_that_cannot_be_used_stops_the_search() {
     let home = tempfile::tempdir().unwrap();
@@ -440,8 +438,7 @@ fn a_refused_grant_says_what_google_said_and_how_to_sign_in_again() {
     assert_eq!(noisy.details, ["google said invalid_grant: two\\nlines"]);
 }
 
-/// no secret of a credentials file, nor a token, reaches a message, however the file or the
-/// answer is wrong.
+/// however the credentials file or the token endpoint's answer is wrong.
 #[test]
 fn no_secret_reaches_a_message() {
     let path = Path::new("/home/ada/key.json");
