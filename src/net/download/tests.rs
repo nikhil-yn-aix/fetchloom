@@ -552,6 +552,23 @@ fn a_dropbox_page_never_enters_the_cache_as_a_file() {
     assert!(cache.url_record(shared.as_str()).is_none());
 }
 
+/// a 304 says the copy a request named is still current, so one to a request that named no
+/// copy says nothing about the file: it is refused, once, and nothing enters the cache.
+#[test]
+fn a_304_to_a_request_that_named_no_copy_is_refused() {
+    let (url, asked) = serve(vec![reply("304 Not Modified", &[], b"")]);
+    let file = url.join("file").unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch::new(file.clone());
+    let error = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkStatus);
+    assert_eq!(error.message, format!("127.0.0.1 answered 304 for {file}"));
+    assert_eq!(lines(&asked), ["GET /file HTTP/1.1"]);
+    assert!(cache.objects().is_empty());
+    assert!(cache.url_record(file.as_str()).is_none());
+}
+
 fn source_fetch(source: &str, from: &Url) -> Fetch {
     let source = Url::parse(source).unwrap();
     Fetch {
