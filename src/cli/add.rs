@@ -1000,7 +1000,7 @@ async fn add_list_held(
             extract,
         )
         .await
-        .map_err(|error| on_lines(error, &lines))?;
+        .map_err(|error| on_lines(error, &list.name, &lines))?;
     }
     let found = listings.into_iter().zip(entries).collect();
     let NewDatasets {
@@ -1035,7 +1035,7 @@ async fn add_list_held(
         &promised,
     )
     .await
-    .map_err(|error| on_lines(error, &lines))?;
+    .map_err(|error| on_lines(error, &list.name, &lines))?;
     tell_started(&work, starting);
     ignore_data(&work, &manifest)?;
     tell_list(&work, &manifest, &names, &already, here)?;
@@ -1325,9 +1325,16 @@ fn moved_on(at: &str) -> String {
     format!("check the link on {at} in a browser. if it moved, put the new link there")
 }
 
-/// `error` from downloading what the lines of a list name, each failed file with the line it
-/// came from: the line whose link its message names, or whose dataset holds the file.
-fn on_lines(mut error: Error, lines: &[FromLine]) -> Error {
+/// the help for links of the list `list_name` that moved, each fixed on its own line of it.
+fn moved_in(list_name: &str) -> String {
+    format!(
+        "check each link in a browser. if it moved, put the new link on its line of {list_name}"
+    )
+}
+
+/// `error` from downloading what the lines of the list `list_name` name, each failed file with
+/// the line it came from: the line whose link its message names, or whose dataset holds the file.
+fn on_lines(mut error: Error, list_name: &str, lines: &[FromLine]) -> Error {
     let from = |file: &str, message: &str| {
         lines
             .iter()
@@ -1364,14 +1371,25 @@ fn on_lines(mut error: Error, lines: &[FromLine]) -> Error {
             Some(at) => on_line(error, at),
             None => error,
         },
-        _ => match ats.split_last() {
-            Some((last, [])) => error.detail(format!("the link on {last} failed")),
-            Some((last, rest)) => error.detail(format!(
-                "the links on {} and {last} failed",
-                rest.join(", ")
-            )),
-            None => error,
-        },
+        _ => {
+            let moved = format!("help: {}", crate::net::MOVED_HELP);
+            for detail in &mut error.details {
+                if *detail == moved {
+                    *detail = format!("help: {}", moved_in(list_name));
+                }
+            }
+            if error.help.as_deref() == Some(crate::net::MOVED_HELP) {
+                error.help = Some(moved_in(list_name).into());
+            }
+            match ats.split_last() {
+                Some((last, [])) => error.detail(format!("the link on {last} failed")),
+                Some((last, rest)) => error.detail(format!(
+                    "the links on {} and {last} failed",
+                    rest.join(", ")
+                )),
+                None => error,
+            }
+        }
     }
 }
 

@@ -1174,3 +1174,40 @@ fn a_missing_link_in_a_list_names_its_line() -> Result {
     assert!(!sandbox.work().join("data.toml").exists());
     Ok(())
 }
+
+/// links of a list that fail are fixed on their lines of the list, which the error names, never
+/// on the command line or in data.toml: the help says so whether the links failed alike or not.
+#[test]
+fn links_of_a_list_that_fail_are_fixed_on_their_lines() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        ("/files/a.csv".to_owned(), file(b"a\n1\n", "\"a1\"")),
+        (
+            "/files/denied.csv".to_owned(),
+            reply("403 Forbidden", &[("Content-Length", "0")], b""),
+        ),
+    ])?;
+    sandbox.allow(&server.url);
+    let help =
+        "check each link in a browser. if it moved, put the new link on its line of links.txt";
+    for (lines, shared) in [
+        (["gone-1.csv", "a.csv", "gone-2.csv"], true),
+        (["gone-1.csv", "denied.csv", "gone-2.csv"], false),
+    ] {
+        let list: Vec<String> = lines
+            .iter()
+            .map(|file| format!("{}/files/{file}", server.url))
+            .collect();
+        fs::write(sandbox.work().join("links.txt"), list.join("\n"))?;
+        let output = sandbox.run(&["--json", "add", "-i", "links.txt"])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(10), "{document}");
+        if shared {
+            assert_eq!(document["errors"][0]["help"], help, "{document}");
+        }
+        let story = text(&sandbox.run(&["add", "-i", "links.txt"])?.stderr)?;
+        assert!(story.contains(&format!("help: {help}\n")), "{story}");
+        assert!(!story.contains("on the command line"), "{story}");
+    }
+    Ok(())
+}
