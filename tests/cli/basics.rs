@@ -647,6 +647,32 @@ fn json_gets_one_document_whatever_the_command_line() -> Result {
     Ok(())
 }
 
+/// `--json` at a terminal is indented for a person to read, and in a pipe stays on one line for
+/// a program; both are the same one document, with no color and no progress.
+#[cfg(target_os = "linux")]
+#[test]
+fn json_is_indented_at_a_terminal_and_one_line_in_a_pipe() -> Result {
+    let sandbox = Sandbox::new()?;
+    let piped = text(&sandbox.run(&["--json", "--version"])?.stdout)?;
+    assert_eq!(piped.lines().count(), 1, "{piped}");
+    let version = sandbox.command(&["--json", "--version"]);
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &version, "", "", "")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(screen.starts_with("{\n  \"schema\": 1,\n"), "{screen}");
+    assert!(!screen.contains('\u{1b}'), "{screen}");
+    let mut documents = [
+        serde_json::from_str::<Value>(&screen)?,
+        serde_json::from_str::<Value>(&piped)?,
+    ];
+    for document in &mut documents {
+        document["work"]["elapsed_ms"] = 0.into();
+    }
+    assert_eq!(documents[0], documents[1]);
+    Ok(())
+}
+
 /// a mistyped command, option or dataset name exits 2, changes nothing and suggests the line
 /// typed with that one word fixed. `cli::usage::tests` guesses each word and
 /// `cli::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines; these

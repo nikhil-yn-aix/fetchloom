@@ -74,6 +74,9 @@ pub(crate) struct Output {
     stopped_by: std::sync::OnceLock<Interrupt>,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
     report_color: bool,
+    /// whether the `--json` document is indented for a person, as at a terminal; a program
+    /// reading a pipe gets it on one line.
+    indented: bool,
     /// every bar made, so a first ctrl-c redraws each at once to say it is stopping.
     drawn: Mutex<Vec<indicatif::WeakProgressBar>>,
     /// how long work that is usually quick goes untold at a terminal.
@@ -289,6 +292,7 @@ impl Output {
             terminated: AtomicBool::new(false),
             stopped_by: std::sync::OnceLock::new(),
             report_color: Style::stdout_colored(),
+            indented: std::io::stdout().is_terminal(),
             drawn: Mutex::new(Vec::new()),
             untold: progress::UNTOLD,
             moment: progress::moment(),
@@ -952,7 +956,12 @@ impl Output {
             },
         };
         // encoding can fail on a non-unicode path; stdout cannot retract a partial document.
-        let bytes = match serde_json::to_vec(&document) {
+        let encoded = if self.indented {
+            serde_json::to_vec_pretty(&document)
+        } else {
+            serde_json::to_vec(&document)
+        };
+        let bytes = match encoded {
             Ok(bytes) => bytes,
             Err(cause) => {
                 let error = Error::new(
