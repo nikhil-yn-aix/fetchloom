@@ -602,7 +602,9 @@ fn tick(
 
 /// the line a batch tells once it has run `elapsed`: the `first` time what it does, after that
 /// how far it got of `total`, which is known once every file's size is. a download with every
-/// byte in waits only for the disk to keep its files, so it says that.
+/// byte in waits only for the disk to keep its files, so it says that, and an unpack that has
+/// read every byte of its archives says it is finishing, as its bar does, while their files are
+/// written and put in the cache.
 fn report(
     verb: &'static str,
     what: &str,
@@ -625,6 +627,9 @@ fn report(
             "Waiting",
             format!("for the disk to finish writing {what} · {elapsed}"),
         );
+    }
+    if verb == "Unpacking" && every_byte_in(done, total) {
+        return ("Finishing", format!("{what} · {elapsed}"));
     }
     (
         verb,
@@ -1040,8 +1045,29 @@ mod tests {
             "a batch of empty files has had no byte yet"
         );
         assert_eq!(
-            told("Unpacking", 57, Some(57)),
-            ("Unpacking", "57 B of 57 B · 10 s".to_owned())
+            told("Unpacking", 20, Some(57)),
+            ("Unpacking", "20 B of 57 B · 10 s".to_owned())
+        );
+    }
+
+    /// an unpack that has read every byte of its archives still writes their files and puts
+    /// them in the cache, so its plain line says it is finishing, as its bar does, rather than
+    /// a count that stands full.
+    #[test]
+    fn a_plain_line_says_an_unpack_that_read_every_byte_is_finishing() {
+        let ten = Duration::from_secs(10);
+        assert_eq!(
+            report("Unpacking", "set/set.tar", (57, Some(57)), ten, false),
+            ("Finishing", "set/set.tar · 10 s".to_owned())
+        );
+        assert_eq!(
+            report("Unpacking", "2 archives", (57, Some(80)), ten, false),
+            ("Unpacking", "57 B of 80 B · 10 s".to_owned())
+        );
+        assert_eq!(
+            report("Unpacking", "set/set.tar", (57, Some(57)), ten, true),
+            ("Unpacking", "set/set.tar · 57 B".to_owned()),
+            "the first line says what the batch does"
         );
     }
 
