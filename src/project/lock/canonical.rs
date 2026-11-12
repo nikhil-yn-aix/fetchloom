@@ -11,10 +11,21 @@ use crate::digest::{Md5, Sha256};
 use crate::name;
 use crate::source::Access;
 
+/// [`read_only`] of every dataset with its files.
+#[cfg(test)]
+pub(super) fn read(text: &str, comments: bool) -> Option<Vec<Parsed>> {
+    read_only(text, comments, &|_| true)
+}
+
 /// the datasets `text` gives, when it is in the exact form [`super::Lock::render`] writes, with
 /// either line ending. `comments` additionally accepts blank lines and valid TOML comments around
-/// it.
-pub(super) fn read(text: &str, comments: bool) -> Option<Vec<Parsed>> {
+/// it. the lines of the files of a source `keep` refuses by name are passed over unread where
+/// they cannot hide a line of the lock, and that source is read with no files.
+pub(super) fn read_only(
+    text: &str,
+    comments: bool,
+    keep: &dyn Fn(&str) -> bool,
+) -> Option<Vec<Parsed>> {
     let mut lines = Lines {
         rest: text,
         comments,
@@ -34,7 +45,7 @@ pub(super) fn read(text: &str, comments: bool) -> Option<Vec<Parsed>> {
         if lines.next()? != "[[dataset]]" {
             return None;
         }
-        let dataset = dataset(&mut lines)?;
+        let dataset = dataset(&mut lines, keep)?;
         if datasets
             .last()
             .is_some_and(|last| last.name() >= dataset.name())
@@ -104,6 +115,28 @@ impl<'a> Lines<'a> {
         integer(digits)
     }
 
+    /// passes over the lines of a list of files up to the line `]` that closes it, unread, when
+    /// none of them can hold that line in a string: the writer's form, with no literal or
+    /// multi-line string. false, having passed nothing, otherwise.
+    fn pass_files(&mut self) -> bool {
+        if self.comments {
+            return false;
+        }
+        let mut rest = self.rest;
+        while let Some((line, after)) = rest.split_once('\n') {
+            if line.strip_suffix('\r').unwrap_or(line) == "]" {
+                let passed = &self.rest[..self.rest.len() - rest.len()];
+                if passed.contains('\'') || passed.contains("\"\"\"") {
+                    return false;
+                }
+                self.rest = after;
+                return true;
+            }
+            rest = after;
+        }
+        false
+    }
+
     /// whether the next line sets `key`, leaving it unread.
     fn sets(&mut self, key: &str) -> bool {
         if self.skip_comments().is_none() {
@@ -139,7 +172,7 @@ fn uncommented(line: &str) -> Option<&str> {
     Some(line.trim_end_matches([' ', '\t']))
 }
 
-fn dataset(lines: &mut Lines) -> Option<Parsed> {
+fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
     let name = lines.value("name")?;
     if lines.sets("from") {
         return recipe(name, lines);
@@ -171,6 +204,7 @@ fn dataset(lines: &mut Lines) -> Option<Parsed> {
     let mut listed = None;
     match lines.next()? {
         "files = []" => {}
+        "files = [" if !keep(&name) && lines.pass_files() => {}
         "files = [" => loop {
             let line = lines.next()?;
             if line == "]" {

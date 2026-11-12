@@ -376,7 +376,7 @@ impl Lock {
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<Lock, Error> {
-        let mut parsed = parse(text)?;
+        let mut parsed = parse_only(text, keep)?;
         parsed.retain(|entry| keep(entry.name()));
         resolve(parsed, Some(root))
     }
@@ -552,8 +552,14 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
 /// the datasets the text of a lock gives, in name order: through the narrow reader when the text
 /// is in the writer's form, otherwise through the general TOML reader.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
+    parse_only(text, &|_| true)
+}
+
+/// [`parse`], where the files of a source `keep` refuses by name may be left unread.
+fn parse_only(text: &str, keep: &dyn Fn(&str) -> bool) -> Result<Vec<Parsed>, Error> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let parsed = match canonical::read(text, false).or_else(|| canonical::read(text, true)) {
+    let read = |comments| canonical::read_only(text, comments, keep);
+    let parsed = match read(false).or_else(|| read(true)) {
         Some(parsed) => parsed,
         None => parse_toml(text)?,
     };
@@ -1206,6 +1212,58 @@ mod tests {
         }
         let text = lock.render();
         (root, text)
+    }
+
+    /// a read of some datasets leaves the others out, passing over the lines of their files
+    /// unread where no string among them could hide a line of the lock, and reads the ones it
+    /// keeps as a read of the whole lock does.
+    #[test]
+    fn a_read_of_some_datasets_reads_them_as_a_whole_read_does() {
+        let mut lock = Lock {
+            derived: vec![clean()],
+            ..sample()
+        };
+        let (root, text) = written(&lock);
+        let whole = Lock::read(&text, root.path()).unwrap();
+        for keep in [&["iris"][..], &["zeta", "clean"], &[]] {
+            let read = Lock::read_only(&text, root.path(), &|name| keep.contains(&name)).unwrap();
+            let kept: Vec<&Locked> = whole
+                .datasets
+                .iter()
+                .filter(|dataset| keep.contains(&dataset.name.as_str()))
+                .collect();
+            assert_eq!(read.datasets.iter().collect::<Vec<_>>(), kept);
+            assert_eq!(read.derived.len(), usize::from(keep.contains(&"clean")));
+        }
+        let files = |text: &str, name: &str| {
+            canonical::read_only(text, false, &|kept| kept == "iris")
+                .unwrap()
+                .into_iter()
+                .find_map(|parsed| match parsed {
+                    Parsed::Source(dataset, _) if dataset.name == name => Some(dataset.files.len()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(files(&text, "iris"), 2);
+        assert_eq!(files(&text, "zeta"), 0, "passed over unread");
+        let hiding = text.replace("path = \"z.csv\"", "path = \"\"\"z.csv\"");
+        assert_eq!(
+            canonical::read_only(&hiding, false, &|kept| kept == "iris"),
+            None,
+            "three quotes could start a string, so the line is read and refused"
+        );
+        let quoted = LockedFile {
+            path: "it's.csv".to_owned(),
+            ..lock.datasets[0].files[0].clone()
+        };
+        lock.datasets[0].files.push(quoted);
+        let (_root, text) = written(&lock);
+        assert_eq!(
+            files(&text, "zeta"),
+            2,
+            "a quote could start a string, so it is read"
+        );
     }
 
     #[test]
