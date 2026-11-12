@@ -253,8 +253,8 @@ pub(super) fn refusal(url: &Url, status: StatusCode, headers: &HeaderMap) -> Fai
             retry_after: retry_after(headers),
         };
     }
-    if status == StatusCode::FORBIDDEN
-        && let Some(error) = crate::source::refused_download(url)
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+        && let Some(error) = crate::source::refused_download(url, code)
     {
         return Failure::Final(error);
     }

@@ -33,6 +33,7 @@ pub(crate) enum Account {
     Zenodo,
     Figshare,
     Osf,
+    Dryad,
     /// one installation: a dataverse key works only on the server that made it. the host, with
     /// its port when that is not 443
     Dataverse(String),
@@ -46,7 +47,7 @@ const HARVARD: &str = "dataverse.harvard.edu";
 
 /// what a person types after `fetchloom auth login`.
 pub(crate) const NAMES: &str =
-    "hf, kaggle, zenodo, figshare, osf, dataverse, earthdata, physionet or a host name";
+    "hf, kaggle, zenodo, figshare, osf, dryad, dataverse, earthdata, physionet or a host name";
 
 /// what a refused request needs: the account to sign in to, and a page whose terms the person
 /// must accept first, when a key alone is not enough.
@@ -132,6 +133,7 @@ impl Account {
             "zenodo" | "zenodo.org" => Account::Zenodo,
             "figshare" | "figshare.com" => Account::Figshare,
             "osf" | "osf.io" => Account::Osf,
+            "dryad" | "datadryad.org" => Account::Dryad,
             "dataverse" => match host {
                 None => Account::Dataverse(HARVARD.to_owned()),
                 Some(host) => Account::Dataverse(dataverse_host(host).ok_or_else(|| {
@@ -182,6 +184,7 @@ impl Account {
             "zenodo.org" => Account::Zenodo,
             "api.figshare.com" | "figshare.com" | "ndownloader.figshare.com" => Account::Figshare,
             "api.osf.io" | "osf.io" | "files.osf.io" => Account::Osf,
+            "datadryad.org" => Account::Dryad,
             _ => return None,
         })
     }
@@ -194,6 +197,7 @@ impl Account {
             Account::Zenodo => "zenodo".to_owned(),
             Account::Figshare => "figshare".to_owned(),
             Account::Osf => "osf".to_owned(),
+            Account::Dryad => "dryad".to_owned(),
             Account::Dataverse(host) => format!("dataverse:{host}"),
             Account::Login(host) => format!("login:{host}"),
         }
@@ -261,6 +265,11 @@ impl Account {
                 Step::Open("https://osf.io/settings/tokens/".into()),
                 Step::Do("create a token with the osf.full_read scope".into()),
             ],
+            Account::Dryad => vec![
+                Step::Do("sign in at datadryad.org with your ORCID; dryad makes the account then".into()),
+                Step::Open("https://datadryad.org/account".into()),
+                Step::Do("make an API account there if you have none, then get a token; it lasts 10 hours".into()),
+            ],
             Account::Dataverse(host) => vec![
                 Step::Open(format!("https://{host}/dataverseuser.xhtml?selectTab=apiTokenTab")),
                 Step::Do(format!("sign in to {host}, then create or copy the api token there; it works on that server only")),
@@ -322,6 +331,12 @@ impl Account {
             ),
             Account::Osf => (
                 "api.osf.io".to_owned(),
+                "authorization",
+                bearer(token),
+                false,
+            ),
+            Account::Dryad => (
+                "datadryad.org".to_owned(),
                 "authorization",
                 bearer(token),
                 false,
@@ -391,6 +406,12 @@ impl Account {
             Account::Osf => ("https://api.osf.io/v2/users/me/".into(), |v| {
                 text(&v["data"]["attributes"]["full_name"])
             }),
+            Account::Dryad => ("https://datadryad.org/api/v2/test".into(), |v| {
+                text(&v["message"]).map(|said| {
+                    said.trim_start_matches("Welcome application owner ")
+                        .to_owned()
+                })
+            }),
             Account::Dataverse(host) => (format!("https://{host}/api/users/:me"), |v| {
                 text(&v["data"]["displayName"]).or_else(|| text(&v["data"]["identifier"]))
             }),
@@ -451,6 +472,7 @@ impl Account {
             Account::Zenodo => set("ZENODO_TOKEN").or_else(|| stored(&self.id())),
             Account::Figshare => set("FIGSHARE_TOKEN").or_else(|| stored(&self.id())),
             Account::Osf => set("OSF_TOKEN").or_else(|| stored(&self.id())),
+            Account::Dryad => set("DRYAD_TOKEN").or_else(|| stored(&self.id())),
             Account::Dataverse(host) => {
                 let named = var("DATAVERSE_URL")
                     .and_then(|value| value.into_string().ok())
@@ -513,6 +535,7 @@ pub(crate) fn credentials(var: Var<'_>) -> Vec<Credential> {
         Account::Zenodo,
         Account::Figshare,
         Account::Osf,
+        Account::Dryad,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut found: Vec<Credential> = accounts
@@ -560,6 +583,7 @@ pub(crate) fn listed(var: Var<'_>) -> Vec<Account> {
         Account::Zenodo,
         Account::Figshare,
         Account::Osf,
+        Account::Dryad,
     ];
     accounts.extend(dataverses(var).into_iter().map(Account::Dataverse));
     let mut logins: Vec<String> = netrc::read(var)

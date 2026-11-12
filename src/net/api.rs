@@ -235,11 +235,18 @@ fn test_endpoint(url: &Url) -> Option<Url> {
     Some(local)
 }
 
+/// the test server a CLI test stands in with for `url`'s host, a bucket's or a repository's, if
+/// it set one.
+#[cfg(debug_assertions)]
+pub(super) fn stand_in(url: &Url) -> Option<Url> {
+    test_bucket(url).or_else(|| test_source(url))
+}
+
 /// local object storage for CLI tests, listings and object bytes alike: a request to an S3 or
 /// cloud storage host goes to `/<host><path>` on the test server instead. release builds never
 /// read this override.
 #[cfg(debug_assertions)]
-pub(super) fn test_bucket(url: &Url) -> Option<Url> {
+fn test_bucket(url: &Url) -> Option<Url> {
     let host = url.host_str()?;
     let storage = host.ends_with(".amazonaws.com")
         || host == "storage.googleapis.com"
@@ -248,6 +255,22 @@ pub(super) fn test_bucket(url: &Url) -> Option<Url> {
         return None;
     }
     let mut local = local_test_server("FETCHLOOM_TEST_BUCKETS")?;
+    local.set_path(&format!("/{host}{}", url.path()));
+    local.set_query(url.query());
+    local.set_fragment(None);
+    Some(local)
+}
+
+/// a local stand-in for the repositories whose CLI tests download as well as list: a request to
+/// one of their hosts, API or file, goes to `/<host><path>` on the test server instead. release
+/// builds never read this override.
+#[cfg(debug_assertions)]
+fn test_source(url: &Url) -> Option<Url> {
+    let host = url.host_str()?;
+    if !matches!(host, "datadryad.org") {
+        return None;
+    }
+    let mut local = local_test_server("FETCHLOOM_TEST_SOURCES")?;
     local.set_path(&format!("/{host}{}", url.path()));
     local.set_query(url.query());
     local.set_fragment(None);

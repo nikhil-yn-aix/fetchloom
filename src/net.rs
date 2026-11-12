@@ -546,7 +546,7 @@ impl Net {
         let bucket = self.signing.locate(url);
         let stored = self.google.locate(url);
         #[cfg(debug_assertions)]
-        let local = api::test_bucket(url).inspect(|local| self.typed(local));
+        let local = api::stand_in(url).inspect(|local| self.typed(local));
         #[cfg(debug_assertions)]
         let url = local.as_ref().unwrap_or(url);
         let wire = self.wire().map_err(Failure::Final)?;

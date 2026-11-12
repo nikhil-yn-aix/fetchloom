@@ -5,12 +5,13 @@ use super::scripted::{reply, serve};
 use super::*;
 use crate::source::recorded::block_on;
 
-const OWNERS: [(&str, &str); 5] = [
+const OWNERS: [(&str, &str); 6] = [
     ("zenodo.org", "Bearer zenodo-test"),
     ("api.figshare.com", "token figshare-test"),
     ("api.osf.io", "Bearer osf-test"),
     ("huggingface.co", "Bearer hf-test"),
     ("api.kaggle.com", "Bearer kaggle-test"),
+    ("datadryad.org", "Bearer dryad-test"),
 ];
 
 fn net() -> Net {
@@ -21,6 +22,7 @@ fn net() -> Net {
             "OSF_TOKEN" => "osf-test",
             "HF_TOKEN" => "hf-test",
             "KAGGLE_API_TOKEN" => "kaggle-test",
+            "DRYAD_TOKEN" => "dryad-test",
             _ => return None,
         };
         Some(OsString::from(token))

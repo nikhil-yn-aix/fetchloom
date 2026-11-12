@@ -97,6 +97,7 @@ fetchloom talks to each source's public web API. when a source changes its API, 
 | zenodo | REST API under `/api` | zenodo.org |
 | figshare | API v2 | api.figshare.com |
 | dataverse | native API: `/api/datasets/:persistentId`, `/api/access/datafile` | dataverse.harvard.edu |
+| dryad | API v2: datasets, versions and files | datadryad.org for listings; downloads, which need an API account, against a local stand-in |
 | osf | API v2 and its file storage links | api.osf.io |
 | hugging face | hub API under `/api` and `resolve` links | huggingface.co |
 | kaggle | public API v1 | api.kaggle.com |

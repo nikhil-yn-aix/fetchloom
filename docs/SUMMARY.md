@@ -33,6 +33,7 @@
     - [zenodo](user/sources/zenodo.md)
     - [figshare](user/sources/figshare.md)
     - [dataverse](user/sources/dataverse.md)
+    - [dryad](user/sources/dryad.md)
     - [OSF](user/sources/osf.md)
     - [hugging face](user/sources/hugging-face.md)
     - [kaggle](user/sources/kaggle.md)

@@ -33,6 +33,7 @@ mod push;
 mod recipes;
 mod recovery;
 mod remove;
+mod repositories;
 mod scope;
 mod search;
 mod secrets;

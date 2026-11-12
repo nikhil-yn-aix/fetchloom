@@ -8,6 +8,7 @@ mod dataverse;
 mod doi;
 mod drive;
 mod dropbox;
+mod dryad;
 mod figshare;
 mod hf;
 pub(crate) mod kaggle;
@@ -94,6 +95,7 @@ pub(crate) enum Reference {
     Url(Url),
     Doi(doi::Doi),
     Zenodo(zenodo::Record),
+    Dryad(dryad::Dataset),
     Figshare(figshare::Article),
     Dataverse(dataverse::Dataset),
     Osf(osf::Node),
@@ -287,6 +289,7 @@ impl Reference {
             "http" | "https" => link(text),
             "doi" => whole(Reference::Doi(doi::Doi::parse(rest)?)),
             "zenodo" => whole(Reference::Zenodo(zenodo::Record::parse(rest)?)),
+            "dryad" => whole(Reference::Dryad(dryad::Dataset::parse(rest)?)),
             "figshare" => whole(Reference::Figshare(figshare::Article::parse(rest)?)),
             "dataverse" => whole(Reference::Dataverse(dataverse::Dataset::parse(rest)?)),
             "osf" => whole(Reference::Osf(osf::Node::parse(rest)?)),
@@ -386,6 +389,7 @@ impl Reference {
             )
             .help("open the DOI in a browser and use the dataset page or a direct file link")),
             Reference::Zenodo(record) => record.resolve(api).await,
+            Reference::Dryad(dataset) => dataset.resolve(api).await,
             Reference::Figshare(article) => article.resolve(api).await,
             Reference::Dataverse(dataset) => dataset.resolve(api).await,
             Reference::Osf(node) => node.resolve(api).await,
@@ -406,6 +410,7 @@ impl fmt::Display for Reference {
             Reference::Url(url) => write!(f, "{url}"),
             Reference::Doi(doi) => write!(f, "{doi}"),
             Reference::Zenodo(record) => write!(f, "{record}"),
+            Reference::Dryad(dataset) => write!(f, "{dataset}"),
             Reference::Figshare(article) => write!(f, "{article}"),
             Reference::Dataverse(dataset) => write!(f, "{dataset}"),
             Reference::Osf(node) => write!(f, "{node}"),
@@ -441,8 +446,12 @@ pub(crate) fn may_wrap(url: &Url) -> bool {
 }
 
 /// a source's own error for a download it refused, when it says more than the status.
-pub(crate) fn refused_download(url: &Url) -> Option<Error> {
-    kaggle::refused_download(url)
+pub(crate) fn refused_download(url: &Url, status: u16) -> Option<Error> {
+    match status {
+        401 => dryad::refused_download(url),
+        403 => kaggle::refused_download(url).or_else(|| dryad::refused_download(url)),
+        _ => None,
+    }
 }
 
 impl Remote {
@@ -534,6 +543,9 @@ fn link(text: &str) -> Result<Parsed, Error> {
                 .map(|(record, file)| parsed(Reference::Zenodo(record), file))
         })
         .or_else(|| {
+            dryad::Dataset::from_link(&url).map(|dataset| parsed(Reference::Dryad(dataset), None))
+        })
+        .or_else(|| {
             figshare::Article::from_link(&url)
                 .map(|article| parsed(Reference::Figshare(article), None))
         });
@@ -614,6 +626,7 @@ fn raw_link(url: &Url) -> Option<Url> {
 fn known_host(url: &Url) -> Option<&'static str> {
     Some(match url.host_str()? {
         "zenodo.org" | "www.zenodo.org" => "zenodo",
+        "datadryad.org" | "www.datadryad.org" => "dryad",
         host if figshare::is_portal(host) && !url.path().starts_with("/ndownloader/") => "figshare",
         "osf.io" | "www.osf.io" => "osf",
         "huggingface.co" | "www.huggingface.co" | "hf.co" => "hugging face",
@@ -962,6 +975,15 @@ mod tests {
             (
                 "https://example.org/data.csv",
                 "https://example.org/data.csv",
+            ),
+            ("dryad:10.5061/DRYAD.J1FD7@2", "dryad:10.5061/dryad.j1fd7@2"),
+            (
+                "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7",
+                "dryad:10.5061/dryad.j1fd7",
+            ),
+            (
+                "https://datadryad.org/stash/dataset/doi:10.5061/dryad.j1fd7",
+                "dryad:10.5061/dryad.j1fd7",
             ),
         ];
         for (text, canonical) in cases {

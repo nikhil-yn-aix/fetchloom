@@ -18,7 +18,7 @@ fn changed(change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
 }
 
 #[test]
-fn all_four_real_handle_urls_route_without_getting_the_landing_page() {
+fn every_real_handle_url_routes_without_getting_the_landing_page() {
     let cases = [
         (
             "10.5281/zenodo.3608990",
@@ -43,6 +43,12 @@ fn all_four_real_handle_urls_route_without_getting_the_landing_page() {
             "https://doi.org/api/handles/10.17605%2Fosf.io%2Fezcuj",
             "doi/osf.json",
             "osf:ezcuj",
+        ),
+        (
+            "10.5061/dryad.j1fd7",
+            "https://doi.org/api/handles/10.5061%2Fdryad.j1fd7",
+            "doi/dryad.json",
+            "dryad:10.5061/dryad.j1fd7",
         ),
     ];
     for (doi, url, fixture, target) in cases {

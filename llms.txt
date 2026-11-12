@@ -59,6 +59,7 @@ agents and scripts pass `--json`, which makes stdout one JSON document with no c
 - [zenodo](docs/user/sources/zenodo.md): records and record files
 - [figshare](docs/user/sources/figshare.md): article versions
 - [dataverse](docs/user/sources/dataverse.md): published dataset and file versions
+- [dryad](docs/user/sources/dryad.md): published dataset versions, downloaded with an API account's key
 - [OSF](docs/user/sources/osf.md): osfstorage files and folders
 - [hugging face](docs/user/sources/hugging-face.md): repository commits and gated access
 - [kaggle](docs/user/sources/kaggle.md): dataset versions and competitions

@@ -7,7 +7,7 @@ use std::process::{Command, Output, Stdio};
 use crate::support::{Result, Routes, Sandbox, Server, json, reply, text, workspace};
 
 /// runs `command` with `input` on stdin.
-fn with_stdin(mut command: Command, input: &str) -> Result<Output> {
+pub(crate) fn with_stdin(mut command: Command, input: &str) -> Result<Output> {
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -59,7 +59,7 @@ fn auth_alone_lists_every_account() -> Result {
     let story = text(&plain.stderr)?;
     assert!(
         story.lines().any(|line| line.starts_with(
-            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, earthdata, physionet"
+            "  Signed in to none of hf, kaggle, zenodo, figshare, osf, dryad, earthdata, physionet"
         )),
         "{story}"
     );

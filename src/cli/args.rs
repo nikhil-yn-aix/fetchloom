@@ -739,7 +739,7 @@ pub(crate) enum AuthAction {
 /// options of `auth login`.
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Login {
-    /// hf, kaggle, zenodo, figshare, osf, dataverse, earthdata, physionet or a host name
+    /// hf, kaggle, zenodo, figshare, osf, dryad, dataverse, earthdata, physionet or a host name
     #[arg(value_name = "account", help_heading = "arguments")]
     pub(crate) account: String,
 

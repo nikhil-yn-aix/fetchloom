@@ -78,6 +78,7 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
             ("ZENODO_TOKEN", "z"),
             ("FIGSHARE_TOKEN", "f"),
             ("OSF_TOKEN", "o"),
+            ("DRYAD_TOKEN", "d"),
             ("DATAVERSE_URL", "https://demo.dataverse.org/"),
             ("DATAVERSE_API_TOKEN", "dv"),
         ],
@@ -90,6 +91,7 @@ fn each_key_goes_to_its_own_host_in_its_own_header() {
     let expected = [
         ("api.figshare.com", "authorization", "token f", false),
         ("api.osf.io", "authorization", "Bearer o", false),
+        ("datadryad.org", "authorization", "Bearer d", false),
         ("demo.dataverse.org", "x-dataverse-key", "dv", false),
         ("files.osf.io", "authorization", "Bearer o", true),
         ("huggingface.co", "authorization", "Bearer hf_abc", false),
