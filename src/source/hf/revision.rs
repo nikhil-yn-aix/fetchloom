@@ -69,6 +69,8 @@ impl Repo {
         let info: Info = match crate::source::json(self, &response) {
             Ok(info) => info,
             Err(err) if err.kind == Kind::AuthRequired => return Err(self.unseen(api, err).await),
+            // with a key it takes, the hub answers 404 for a repository it does not show
+            Err(err) if err.kind == Kind::ReferenceUnresolved => return Err(err.unseen()),
             Err(err) => return Err(err),
         };
         if !is_commit(&info.sha) || !is_id(&info.id) {
@@ -144,7 +146,8 @@ impl Repo {
                 .detail(format!("the key in {name} went with the request"))
                 .help(format!(
                     "check the name at {page}. a private repository needs a key that can read it: if the key in {name} is old or wrong, set {name} to a current one from {TOKENS}"
-                )),
+                ))
+                .unseen(),
             Some(origin) => error
                 .detail(format!("{} went with the request", key(&origin)))
                 .help(format!(

@@ -112,6 +112,9 @@ pub(crate) struct Error {
     pub(crate) failures: Box<[FileFailure]>,
     /// the account that would let the request through, so a person can sign in and retry.
     pub(crate) need: Option<Box<crate::auth::Need>>,
+    /// the source showed no dataset of the name asked: none exists, or none this machine may
+    /// see, so the name may be what is wrong.
+    pub(crate) unseen: bool,
     /// what the person cancelled, such as "the download of x.zip", when they ended a question
     /// on purpose. a person reads that as a plain line, not as an error; `--json` and the exit
     /// code report the error as before.
@@ -127,6 +130,7 @@ impl Error {
             result: None,
             failures: Box::default(),
             need: None,
+            unseen: false,
             cancelled: None,
             help: (kind == Kind::NetworkStatus).then(|| {
                 "check the link in a browser, then run the same command again, or ask its owner for a direct download link"
@@ -174,6 +178,13 @@ impl Error {
             terms: None,
             maybe_missing: true,
         }));
+        self.unseen()
+    }
+
+    /// marks the error as a source's answer that it shows no dataset of the name asked, which
+    /// may be a typo.
+    pub(crate) fn unseen(mut self) -> Error {
+        self.unseen = true;
         self
     }
 

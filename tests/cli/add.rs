@@ -1338,10 +1338,12 @@ fn a_moved_link_data_toml_has_is_fixed_there() -> Result {
     Ok(())
 }
 
-/// a hugging face and a kaggle on this machine that answer for a dataset nobody may see, as
-/// both answer for a typo, and list the public datasets of its owner, `scikit-learn` and `uciml`.
+/// a hugging face and a kaggle on this machine that answer for a dataset they do not show as
+/// both answer for a typo, hugging face with `hidden`: 401 without a key or with one it refuses,
+/// 404 with one it takes. they list the datasets of its owner, `scikit-learn` and `uciml`, a
+/// private one a typo away first.
 #[cfg(debug_assertions)]
-fn typo_sources() -> Result<(Routes, Routes)> {
+fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
     let json = |status: &str, body: &str| {
         let length = body.len().to_string();
         reply(
@@ -1358,16 +1360,16 @@ fn typo_sources() -> Result<(Routes, Routes)> {
             "/api/datasets/scikit-learn/{name}/revision/main?expand=sha&expand=gated&expand=private&expand=tags&expand=cardData"
         )
     };
-    let hidden = r#"{"error":"Invalid username or password."}"#;
+    let refusal = r#"{"error":"Invalid username or password."}"#;
     let hub = Routes::start(vec![
-        (revision("irsi"), json("401 Unauthorized", hidden)),
-        (revision("zzzz"), json("401 Unauthorized", hidden)),
+        (revision("irsi"), json(hidden, refusal)),
+        (revision("zzzz"), json(hidden, refusal)),
         (
             "/api/datasets?author=scikit-learn&sort=downloads&direction=-1&limit=100&expand%5B%5D=private"
                 .to_owned(),
             json(
                 "200 OK",
-                r#"[{"id":"scikit-learn/wine","private":false},{"id":"scikit-learn/iris","private":false},{"id":"scikit-learn/irsx","private":true}]"#,
+                r#"[{"id":"scikit-learn/irsx","private":true},{"id":"scikit-learn/wine","private":false},{"id":"scikit-learn/iris","private":false}]"#,
             ),
         ),
     ])?;
@@ -1394,7 +1396,7 @@ fn typo_sources() -> Result<(Routes, Routes)> {
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant() -> Result {
     let sandbox = Sandbox::new()?;
-    let (hub, kaggle) = typo_sources()?;
+    let (hub, kaggle) = typo_sources("401 Unauthorized")?;
     let add = |args: &[&str]| {
         sandbox
             .command(args)
@@ -1441,7 +1443,7 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
 #[test]
 fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
     let sandbox = Sandbox::new()?;
-    let (hub, _kaggle) = typo_sources()?;
+    let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
     for (name, after, keys, asked) in [
         ("irsi", "did you mean", "", false),
         ("zzzz", "sign in to hugging face now?", "\r", true),
@@ -1457,6 +1459,51 @@ fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
             screen.contains("sign in to hugging face now?"),
             asked,
             "{screen}"
+        );
+    }
+    Ok(())
+}
+
+/// a signed-in person's typo gets the command meant too, whether hugging face takes their key
+/// and answers 404 or refuses an old one, and when kaggle names no sign-in: none of these stops
+/// the look at the owner's datasets. a private one a typo away is never named.
+#[cfg(debug_assertions)]
+#[test]
+fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (hidden, link, code, meant) in [
+        (
+            "404 Not Found",
+            "hf:datasets/scikit-learn/irsi",
+            10,
+            "hf:datasets/scikit-learn/iris",
+        ),
+        (
+            "401 Unauthorized",
+            "hf:datasets/scikit-learn/irsi",
+            40,
+            "hf:datasets/scikit-learn/iris",
+        ),
+        (
+            "404 Not Found",
+            "kaggle:uciml/irsi",
+            40,
+            "kaggle:uciml/iris",
+        ),
+    ] {
+        let (hub, kaggle) = typo_sources(hidden)?;
+        let output = sandbox
+            .command(&["add", link])
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
+            .env("HF_TOKEN", "hf_FAKEfakeFAKEfakeFAKEfake1234")
+            .env("KAGGLE_API_TOKEN", "KGAT_fakefakefakefakefake1234")
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{hidden}: {stderr}");
+        assert!(
+            stderr.contains(&format!("help: did you mean `fetchloom add {meant}`?\n")),
+            "{hidden}: {stderr}"
         );
     }
     Ok(())

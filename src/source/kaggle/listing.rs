@@ -98,6 +98,7 @@ impl Dataset {
             err.message = format!("kaggle has no dataset {name}, or this account cannot see it");
             err.need = None;
             err.help(format!("check the name at {}", self.page()))
+                .unseen()
         } else {
             err.message = format!("kaggle has no dataset {name}, or it is private");
             err.help(format!(

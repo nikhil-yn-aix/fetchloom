@@ -72,7 +72,7 @@ error: huggingface.co has no dataset acme-lab/field-notes, or it is private
 sign in to hugging face now? [y/N]
 ```
 
-`add` first asks the source, once, for the public datasets of the same owner. when one is a typo away, signing in could not help, so no sign-in is offered and the help gives your command with the name fixed. `--json` and offline runs ask nothing more:
+`add` first asks the source, once, for the public datasets of the same owner, signed in or not. when one is a typo away, signing in could not help, so no sign-in is offered and the help gives your command with the name fixed; signed in, the error above it reads `hf:datasets/scikit-learn/irsi does not exist, or is not public`. `--json` and offline runs ask nothing more:
 
 ```text
 error: huggingface.co has no dataset scikit-learn/irsi, or it is private
