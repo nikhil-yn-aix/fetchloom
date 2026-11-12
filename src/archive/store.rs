@@ -1,8 +1,6 @@
-//! the threads that turn members into cache objects while one thread reads the archive. creating,
-//! flushing and closing a file costs far more than writing a few kilobytes into it, on windows
-//! most of all, so small members travel to the writers whole and are written in parallel. no
-//! object is put in place until the whole archive passed every check, so a refused archive leaves
-//! nothing in the cache, and an object another process already uses is never taken back.
+//! writer threads that store members while one thread reads the archive, since creating and
+//! flushing a file costs far more than writing a few kilobytes into it, on windows most of all.
+//! nothing is put in place until the whole archive passed every check.
 
 mod stream;
 
@@ -22,11 +20,11 @@ use crate::cache::{Cache, MOST_FLUSHED_ALONE, Member, NewObject, Sealed, Staging
 use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 
-/// members up to this size reach a writer as bytes in memory. larger ones stream to a writer
-/// or stay on the reader when the handoff would not pay for itself.
+/// members up to this size reach a writer as bytes in memory.
 const SMALL: usize = 1 << 20;
 
-/// leaves room to repay the handoff above the in-memory spill threshold.
+/// members declared larger stream to a writer. those between [`SMALL`] and this stay on the
+/// reader, since the handoff does not pay for itself.
 const LARGE: u64 = 4 << 20;
 
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
@@ -102,9 +100,8 @@ impl Writers<'_> {
     }
 }
 
-/// runs `read` with writers that seal every member it keeps, then puts them all in place and
-/// returns them, with how many of them were new to the cache. when anything fails, what was
-/// sealed is removed and nothing is put in place.
+/// runs `read` with writers that seal each member it keeps, then puts them all in place, with
+/// which were new. on any failure what was sealed goes and nothing is put in place.
 pub(super) fn store_all(
     cache: &Cache,
     cap: Option<usize>,
@@ -186,7 +183,7 @@ fn store_with(
             failed: &failed,
             streaming: threads > 1,
         };
-        // with no live consumer the reader stores inline; joining before closing would hang.
+        // with no live consumer the reader stores inline; joining before closing would hang
         let result = read(&writers);
         drop(writers);
         for worker in workers {
@@ -212,9 +209,8 @@ fn store_with(
     publish_all(cache, sealed, threads)
 }
 
-/// puts every sealed member in place on `threads` threads, and returns the members with the
-/// digests of those new to the cache. what is left after a failure is removed, and what was put
-/// in place stays for others to use or for gc to free.
+/// puts every sealed member in place on `threads` threads, returning them with the new digests.
+/// after a failure the rest is removed, while what was put in place stays for others or gc.
 fn publish_all(
     cache: &Cache,
     sealed: Vec<(String, Sealed)>,
@@ -304,9 +300,8 @@ fn seal(
     }
 }
 
-/// the handles that wrote an archive's first members. on linux an archive of a few members
-/// flushes each through its own handle, since one flush of the filesystem also waits for
-/// everything other programs wrote there. none are kept once the archive has more.
+/// the handles that wrote an archive's first few members, which linux flushes one by one, since
+/// a whole-filesystem flush also waits for other programs. none are kept once there are more.
 struct Few(Mutex<Option<Vec<File>>>);
 
 impl Few {
@@ -449,8 +444,7 @@ mod tests {
         .map(|(members, _)| members)
     }
 
-    /// an archive of a few members flushes each through its own handle, never its whole
-    /// filesystem; only a larger one flushes the filesystem once.
+    /// a few members flush through their own handles; only a larger archive flushes the filesystem.
     #[cfg(target_os = "linux")]
     #[test]
     fn only_an_archive_of_many_members_waits_for_one_flush() {

@@ -1,7 +1,5 @@
-//! archives that come in parts. `split` and 7-Zip cut an archive's bytes into files such as
-//! `scans.zip.001` to `.003` or `train.tar.gz.aa` and `.ab`, which read one after another are
-//! the archive itself. rar volumes and zips spanned over `.z01` files are no such cut: only their
-//! own tools join them, so they stay packed.
+//! archives cut into parts, as `split` and 7-Zip cut `scans.zip.001` to `.003`, which read in
+//! order are the archive. rar volumes and spanned zips, which only their tools join, stay packed.
 
 use std::collections::HashMap;
 
@@ -22,16 +20,14 @@ pub(crate) struct Split {
 /// an archive in volumes only its own tools join.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Volumes {
-    /// every volume, the one those tools open first: the first rar volume, or a spanned zip's
-    /// `.zip`.
+    /// every volume, first the one those tools open: the first rar volume or a spanned `.zip`.
     pub(crate) files: Vec<usize>,
     /// `rar` or `zip`.
     pub(crate) format: &'static str,
 }
 
-/// the split archives, rar volumes and spanned zips among `paths`. parts belong together only
-/// within one folder, under one archive name and one way of numbering, and only from a first
-/// part on: a lone `scans.zip.002` is a file like any other.
+/// the split archives, rar volumes and spanned zips among `paths`. parts group by folder, archive
+/// name and numbering, from a first part on: a lone `scans.zip.002` is a plain file.
 pub(crate) fn split<'a>(paths: impl IntoIterator<Item = &'a str>) -> Split {
     let mut groups: HashMap<Group<'_>, Vec<(&str, usize)>> = HashMap::new();
     let mut rars: HashMap<&str, Vec<(u64, usize)>> = HashMap::new();
@@ -112,8 +108,7 @@ pub(crate) fn whole(part: &str) -> Option<&str> {
     self::part(part).map(|part| part.archive)
 }
 
-/// the parts of one archive under one numbering: the archive's path, what comes between it and
-/// each counter, and the alphabet the counters are written in.
+/// the parts of one archive under one numbering.
 #[derive(PartialEq, Eq, Hash)]
 struct Group<'a> {
     archive: &'a str,
@@ -155,10 +150,8 @@ struct Part<'a> {
     alphabet: Alphabet,
 }
 
-/// `path` read as a part of an archive fetchloom unpacks: the archive's path, `.`, `.part`,
-/// `.part-`, `.part_` or `.part.`, then a counter of digits or lowercase letters. a bare `.`
-/// takes a counter of two characters or more, as `split` and 7-Zip write them, so a copy named
-/// `data.tar.gz.1` stays a file of its own.
+/// `path` read as a part of an archive fetchloom unpacks: its path, `.` or a `.part` separator,
+/// then a counter, of two or more characters after a bare `.` so `data.tar.gz.1` stays a file.
 fn part(path: &str) -> Option<Part<'_>> {
     let (stem, tail) = name_ending(path)?;
     if by_name(path).is_some() {
@@ -192,8 +185,7 @@ fn part(path: &str) -> Option<Part<'_>> {
     })
 }
 
-/// a rar volume named `<stem>.part<number>.rar`, as rar 3 and later name them: its stem and
-/// number.
+/// a rar volume named `<stem>.part<number>.rar`, as rar 3 on names them: its stem and number.
 fn rar_volume(path: &str) -> Option<(&str, u64)> {
     let (head, ending) = name_ending(path)?;
     let (stem, word) = name_ending(head)?;
@@ -272,9 +264,8 @@ fn written(mut value: u64, width: usize, alphabet: Alphabet) -> Option<String> {
     String::from_utf8(text).ok()
 }
 
-/// the way `counters`, sorted, are numbered, and how many of them it names in a row from the
-/// first: all of them for a set whose parts are all there. none when the first counter starts no
-/// numbering, as `002` does not.
+/// how the sorted `counters` are numbered, and how many in a row from the first it names, all for
+/// a complete set. none when the first starts no numbering, as `002` does not.
 fn numbering(counters: &[&str], alphabet: Alphabet) -> Option<(Scheme, usize)> {
     let width = counters.first()?.len();
     let schemes = match alphabet {

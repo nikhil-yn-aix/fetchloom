@@ -29,12 +29,8 @@ pub(crate) enum Detected {
 
 const BLOCK: usize = 512;
 
-/// tells an archive from any other file by its first bytes. the cache names files by hash, so a
-/// document that is a zip inside, such as `.xlsx`, is kept whole earlier, by its listed name.
-///
-/// # Errors
-///
-/// `local.io` when the archive's files cannot be read.
+/// tells an archive from any other file by its first bytes, `local.io` when they cannot be read.
+/// the cache names files by hash, so documents that are zips, as `.xlsx`, are kept whole earlier.
 pub(crate) fn detect(input: &Input) -> Result<Detected, Error> {
     let mut file = Joined::open(input).map_err(|(path, err)| unreadable(path, &err))?;
     let unread = |err: io::Error| unreadable(input.first(), &err);
@@ -82,9 +78,8 @@ fn compression(head: &[u8]) -> Option<Format> {
     }
 }
 
-/// whether the stream decompresses to a tar header. a stream that fails to decompress is no
-/// archive, unless xz or zstd asks for more memory than unpacking allows: unpacking then refuses
-/// it and says why, rather than a tar staying packed unnoticed.
+/// whether the stream decompresses to a tar header. one that fails is no archive, unless xz or
+/// zstd asks for too much memory: unpacking then refuses it and says why, never leaving it packed.
 fn holds_tar(format: Format, file: Joined) -> bool {
     let memory = super::Limits::current().memory;
     let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {

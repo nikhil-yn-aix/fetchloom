@@ -25,16 +25,14 @@ const PER_NAME: u64 = 64;
 pub(super) enum Named {
     /// a file to unpack, at this path: NFC, with `/` between folders.
     File(String),
-    /// a file a system writes by itself, such as finder's `.DS_Store` or one under `__MACOSX`,
-    /// at this path. it is no data, so it is left out, as a folder import leaves it out.
+    /// at this path, a file a system writes by itself, as finder's `.DS_Store`: no data, left out.
     System(String),
     /// a folder. folders are implied by the paths of the files inside them.
     Folder,
 }
 
-/// every name one archive used so far, compared the way a case-insensitive disk compares them.
-/// folders form a tree, so a path keeps each of its names once rather than every folder above it
-/// whole.
+/// every name one archive used so far, compared as a disk that ignores case compares them, kept
+/// as a tree so a folder's name is stored once rather than in every path below it.
 pub(super) struct Names {
     /// every folder and file, by the id of the folder holding it and its own name folded. the
     /// archive's root is folder 0.
@@ -68,9 +66,8 @@ impl Names {
         }
     }
 
-    /// checks an entry's name. `is_folder` is what the archive says the entry is; a name that
-    /// ends with `/` is a folder too. a name a system writes by itself takes no place in the tree,
-    /// since nothing is unpacked at it.
+    /// checks an entry's name. a name ending in `/` is a folder whatever `is_folder` says, and a
+    /// file a system writes by itself takes no place in the tree, since nothing unpacks there.
     pub(super) fn add(&mut self, raw: &str, is_folder: bool) -> Result<Named, Error> {
         if raw.len() > LONGEST_PATH {
             return Err(too_long(raw));
@@ -131,8 +128,7 @@ impl Names {
         })
     }
 
-    /// the path in NFC of the file an earlier entry named `raw`, a hardlink's target as the
-    /// archive spells it, when one did, spelled the same.
+    /// the NFC path of the earlier file spelled exactly `raw`, as a hardlink's target names it.
     pub(super) fn earlier_file(&self, raw: &str) -> Option<String> {
         let mut path = raw;
         while let Some(rest) = path.strip_prefix("./") {
@@ -158,8 +154,7 @@ impl Names {
         None
     }
 
-    /// adds the last name in `path`, which starts at byte `at`, to the folder `folder`, and
-    /// returns its id.
+    /// adds the last name in `path`, starting at byte `at`, to `folder`, and returns its id.
     fn insert(
         &mut self,
         folder: usize,
@@ -245,8 +240,7 @@ mod tests {
         Named::File(path.to_owned())
     }
 
-    /// what a system makes is named apart only once the checks every name passes let it through,
-    /// and takes no place in the tree, so it clashes with nothing.
+    /// what a system makes passes every name check first, then takes no place in the tree.
     #[test]
     fn what_a_system_makes_is_named_apart_after_the_checks() {
         assert_eq!(
@@ -399,9 +393,8 @@ mod tests {
         );
     }
 
-    /// the limit holds for a name as it unpacks too: U+0958 takes 3 bytes as spelled and 6 once
-    /// NFC splits it in two, so 33 parts of 40 fit as spelled, in 3,992 bytes, and unpacked, in
-    /// 7,952, do not.
+    /// the limit holds after NFC too: U+0958 takes 3 bytes as spelled and 6 once NFC splits it,
+    /// so 33 parts of 40 fit as spelled, in 3,992 bytes, but not unpacked, in 7,952.
     #[test]
     fn a_path_that_nfc_lengthens_past_4096_bytes_is_refused() {
         let part = "\u{958}".repeat(40);

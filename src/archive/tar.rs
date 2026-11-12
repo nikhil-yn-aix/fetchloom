@@ -24,9 +24,8 @@ const HEADERS_CAP: u64 = 16 << 20;
 /// while a header of a few bytes may ask for 4 GiB before any output.
 pub(super) const XZ_MEMORY: u64 = 256 << 20;
 
-/// the largest window a zstd frame may ask for, as a power of two: half of `memory`, as the window
-/// shares it with the decoder's buffers, never less than libzstd's own default of 128 MiB, which
-/// `zstd --long` stays within, and at most the 2 GiB that `--long=31` asks for.
+/// the largest zstd window, as a power of two: half of `memory`, which the decoder's buffers share,
+/// at least libzstd's default 128 MiB, which `zstd --long` uses, and at most `--long=31`'s 2 GiB.
 fn zstd_window_log(memory: u64) -> u32 {
     (memory / 2).max(1).ilog2().clamp(27, 31)
 }
@@ -73,8 +72,7 @@ pub(super) fn needs_too_large_window(err: &(dyn std::error::Error + 'static)) ->
         .is_some_and(|inner| inner.to_string() == window_too_large)
 }
 
-/// an archive whose decompressed stream could not be read: refused when its zstd frame asks for
-/// too large a window, and damaged otherwise.
+/// the error for a stream that would not decompress: too large a zstd window, else damage.
 pub(super) fn unreadable_stream(
     at: Option<&str>,
     err: &(dyn std::error::Error + 'static),
@@ -180,9 +178,8 @@ pub(super) fn unpack(
     Ok(())
 }
 
-/// takes the hardlink `raw`, which holds the bytes of the file it points at, as tar writes a
-/// file's second name. its target must be a file earlier in the archive; any other could reach
-/// outside it.
+/// takes the hardlink `raw`, tar's way of writing a file's second name, as that file's bytes. its
+/// target must be an earlier file in the archive; any other could reach outside it.
 fn hardlink(
     guard: &mut Guard<'_>,
     raw: &str,
@@ -283,8 +280,7 @@ impl Headers {
     }
 }
 
-/// the decompressed stream, failing once the tar crate reads more than [`HEADERS_CAP`] outside
-/// a member's bytes.
+/// the decompressed stream, failing once the tar crate reads past [`HEADERS_CAP`] outside members.
 struct Capped<'h, R> {
     inner: R,
     headers: &'h Headers,
@@ -462,9 +458,8 @@ mod tests {
         tar.append(&header, &[][..]).unwrap();
     }
 
-    /// tar writes a file's second name as a hardlink to its first, so a hardlink to a file before
-    /// it unpacks to that file's bytes again. any other target, a later file, a folder or a path
-    /// outside the archive, is refused, since a link could reach outside it.
+    /// a hardlink to an earlier file unpacks to that file's bytes again; a later file, a folder or
+    /// a path outside the archive is refused, since such a link could reach outside it.
     #[test]
     fn a_hardlink_to_an_earlier_file_unpacks_as_that_file() {
         let tar = built(|tar| {

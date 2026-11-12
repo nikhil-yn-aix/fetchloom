@@ -32,8 +32,7 @@ impl Scratch {
         path
     }
 
-    /// `bytes` cut at each offset in `cuts`, as `split` cuts an archive, each part a file of its
-    /// own.
+    /// `bytes` cut at each offset in `cuts`, as `split` cuts an archive, each part a file.
     pub(super) fn parts(&self, bytes: &[u8], cuts: &[usize]) -> Input {
         let mut ends = cuts.to_vec();
         ends.push(bytes.len());
@@ -121,8 +120,7 @@ pub(super) fn tar_of(files: &[(&str, &[u8])]) -> Vec<u8> {
     tar.into_inner().unwrap()
 }
 
-/// appends an entry whose name and type go into the header as they are, unchecked, the way a
-/// hostile tool would write them.
+/// appends an entry with `name` and `kind` in its header unchecked, as a hostile tool writes them.
 pub(super) fn raw_entry(tar: &mut Builder<Vec<u8>>, name: &[u8], kind: EntryType, bytes: &[u8]) {
     let mut header = Header::new_ustar();
     header.as_ustar_mut().unwrap().name[..name.len()].copy_from_slice(name);
@@ -174,9 +172,8 @@ pub(super) fn seven_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
     })
 }
 
-/// a 7z of what `write` pushes into it, in LZMA2 at level 1 unless `write` sets its methods:
-/// the writer's default level takes seconds over a test's few MiB, and the tar.xz builder uses
-/// level 1 too.
+/// a 7z of what `write` pushes into it, in LZMA2 at level 1 unless `write` sets its methods, since
+/// the default level takes seconds over a test's few MiB.
 pub(super) fn seven_zip_with(write: impl FnOnce(&mut ArchiveWriter<Cursor<Vec<u8>>>)) -> Vec<u8> {
     let mut writer = ArchiveWriter::new(Cursor::new(Vec::new())).unwrap();
     writer.set_content_methods(vec![Lzma2Options::from_level(1).into()]);

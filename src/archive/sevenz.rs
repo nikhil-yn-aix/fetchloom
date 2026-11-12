@@ -1,7 +1,5 @@
-//! 7z archives. 7z keeps many files in one compressed block that reads only from its start, so
-//! every entry passes the guard in order as the block decompresses, as tar entries do. the
-//! decoders get the memory [`Limits`](super::Limits) gives one archive, and no password: an
-//! encrypted archive is refused.
+//! 7z archives, decoded a block at a time so every entry passes the guard in order, as tar's do.
+//! the decoders get the memory [`Limits`](super::Limits) allows, and no password to decrypt with.
 
 use std::borrow::Cow;
 use std::io::{self, Read};
@@ -114,8 +112,6 @@ fn encrypted() -> Error {
     refused("the archive is encrypted, and fetchloom unpacks no encrypted archive")
 }
 
-/// why a 7z could not unpack: encrypted, compressed in a way fetchloom does not decode, asking for
-/// more memory than one archive may take, unreadable on this machine, or damaged.
 fn failed(err: sevenz_rust2::Error) -> Error {
     use sevenz_rust2::Error as Seven;
     match err {

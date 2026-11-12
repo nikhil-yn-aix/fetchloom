@@ -408,7 +408,7 @@ pub(super) mod tests {
             ("nested/", b""),
             ("nested/data.csv", b"x,y\n1,2\n"),
         ]);
-        // dropbox marks entries as unix, with permission bits and DOS directory or archive flags.
+        // dropbox marks entries as unix, with permission bits and DOS directory or archive flags
         for at in signatures(&bytes, *b"PK\x01\x02") {
             bytes[at + 5] = 3;
             let length = usize::from(u16::from_le_bytes([bytes[at + 28], bytes[at + 29]]));

@@ -1,6 +1,5 @@
-//! an archive's bytes as its readers take them: one file, or the parts of a split archive read in
-//! order as one, with one file open at a time. zip and 7z read them buffered and seekable through
-//! [`Source`], which counts every byte read for the ratio check.
+//! an archive's bytes as its readers take them: one file, or a split archive's parts in order,
+//! one file open at a time. zip and 7z read through [`Source`], which counts every byte read.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
@@ -10,8 +9,7 @@ use super::guard::Meter;
 use super::{BUFFER, unreadable};
 use crate::error::Error;
 
-/// the bytes of an archive: one file, or the parts of a split archive, each with its size, in
-/// order.
+/// an archive's bytes: one file, or a split archive's parts in order, each with its size.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Input {
     File(PathBuf),
@@ -27,8 +25,7 @@ impl Input {
         }
     }
 
-    /// opens the archive, and caps `meter` at its size: seeks may read bytes again, but cannot
-    /// make the archive larger.
+    /// opens the archive, capping `meter` at its size, since seeks may reread but not enlarge it.
     pub(super) fn open(&self, meter: &Meter) -> Result<BufReader<Joined>, Error> {
         let joined = Joined::open(self).map_err(|(path, err)| unreadable(path, &err))?;
         meter.cap_at(joined.size());
@@ -36,8 +33,7 @@ impl Input {
     }
 }
 
-/// an archive's bytes as one stream. only the part holding the next byte to read is open, so a
-/// set of a hundred parts costs one file handle.
+/// an archive's bytes as one stream, with only the part holding the next byte open.
 pub(crate) struct Joined {
     parts: Vec<PathBuf>,
     /// where each part starts in the archive, and last, where the archive ends.
@@ -49,7 +45,7 @@ pub(crate) struct Joined {
 
 impl Joined {
     /// opens `input`, checking that each part holds the bytes its size says: one shorter or
-    /// longer would move every byte after it. on failure, says which file failed.
+    /// longer would move every byte after it.
     pub(crate) fn open(input: &Input) -> Result<Joined, (&Path, io::Error)> {
         match input {
             Input::File(path) => {
@@ -94,7 +90,6 @@ impl Joined {
         }
     }
 
-    /// the archive's size: every part's together.
     pub(crate) fn size(&self) -> u64 {
         self.starts.last().copied().unwrap_or_default()
     }
@@ -236,8 +231,7 @@ mod tests {
         Input::Joined(parts)
     }
 
-    /// a folder is no archive file, though linux opens one: it is refused at once as a local
-    /// problem, whatever size its disk gives a folder, never read as an archive cut short.
+    /// a folder, which linux opens, is refused at once as a local problem, not read as an archive.
     #[test]
     fn a_folder_is_refused_as_no_file() {
         let folder = tempfile::tempdir().unwrap();
@@ -285,8 +279,7 @@ mod tests {
         Ok(position.to_le_bytes().to_vec())
     }
 
-    /// reads and seeks over parts cut anywhere, parts of no bytes too, give what they give over
-    /// the archive whole.
+    /// parts cut anywhere, empty ones too, read and seek as the archive whole.
     #[test]
     fn joined_parts_read_and_seek_as_the_whole() {
         bolero::check!()
@@ -325,7 +318,6 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
-    /// what joining costs: one file handle, whatever the number of parts.
     #[cfg(target_os = "linux")]
     #[test]
     fn only_the_part_being_read_is_open() {

@@ -101,8 +101,7 @@ fn hostile_archives_made_by_real_tools_are_refused() {
     }
 }
 
-/// one format from each family: zip read through its directory, tar read as a stream, and 7z
-/// read block by block.
+/// one format of each family: zip by its directory, tar as a stream and 7z block by block.
 const FAMILIES: [Format; 3] = [Format::Zip, Format::TarZst, Format::SevenZ];
 
 fn archive(format: Format, files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -115,9 +114,8 @@ fn archive(format: Format, files: &[(&str, &[u8])]) -> Vec<u8> {
 
 const FILES: &[(&str, &[u8])] = &[("a.csv", b"1"), ("b.csv", b"2"), ("c/d.csv", b"3")];
 
-/// what a system writes by itself is no data, so every format leaves it out as a folder import
-/// does: finder's `__MACOSX` twins and `.DS_Store`, and the `._` files a mac's own tar adds.
-/// none of it is stored or recorded, so the tree and a members table see only the data.
+/// every format leaves out what a system writes by itself, as finder's `__MACOSX` twins and the
+/// `._` files a mac's tar adds, storing and recording none of it.
 #[test]
 fn what_a_system_makes_is_left_out_and_counted() {
     let files: &[(&str, &[u8])] = &[
@@ -173,8 +171,7 @@ fn found(bytes: &[u8], pattern: &[u8]) -> Vec<usize> {
         .collect()
 }
 
-/// an archive cut anywhere into parts, a zip inside a local header or its central directory
-/// too, unpacks from them to what it unpacks to whole.
+/// the cuts fall anywhere, in a zip inside a local header or its central directory too.
 #[test]
 fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
     let files: &[(&str, &[u8])] = &[
@@ -213,9 +210,8 @@ fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
     }
 }
 
-/// the ratio counts each byte of every part once: a split archive well inside the ratio unpacks,
-/// though counting only one part would put it far past, and rereads of a zip's shared data still
-/// cannot raise the count past the parts' total.
+/// the ratio counts each byte of every part once: a split archive within it unpacks, and rereads
+/// of a zip's shared data cannot raise the count past the parts' total.
 #[test]
 fn the_ratio_counts_every_part_once() {
     let mut rng = fastrand::Rng::with_seed(7);
@@ -376,8 +372,7 @@ fn names_unpack_in_nfc() {
     }
 }
 
-/// a tar holds no checksum over its files, so bytes that changed in the cache unpack to another
-/// tree without any error. what the archive unpacked to when data.lock pinned it must survive.
+/// a tar has no checksum of its files, so changed cached bytes unpack to another tree silently.
 #[test]
 fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
     let scratch = Scratch::new();
@@ -405,8 +400,7 @@ fn unpacking_again_never_replaces_the_tree_data_lock_pins() {
     assert_eq!(scratch.cache.unpacked_tree(&archive.digest), Some(pinned));
 }
 
-/// an archive whose unpacking cannot get a folder in the cache, or cannot save the list of files
-/// it holds there, names the cache folder rather than fetchloom's own steps.
+/// a folder that cannot be made, or a file list that cannot be saved, both name the cache folder.
 #[test]
 fn unpacking_that_cannot_write_to_the_cache_names_the_cache_folder() {
     for (folder, expected) in [
@@ -440,8 +434,7 @@ fn unpacking_that_cannot_write_to_the_cache_names_the_cache_folder() {
     }
 }
 
-/// `zstd --long=28` and above write frames asking for more than libzstd's 128 MiB window. such a
-/// tar must be refused by unpacking, never left packed as if it were no archive.
+/// `zstd --long=28` and above write frames asking for more than libzstd's 128 MiB window.
 #[test]
 fn a_tar_zst_asking_for_a_large_window_is_refused_not_left_packed() {
     let scratch = Scratch::new();
@@ -534,9 +527,8 @@ fn a_rar_left_packed_has_a_next_step_for_each_system() {
     );
 }
 
-/// an archive that came inside another stays packed, and the next step unpacks it beside itself
-/// with what each system has: unzip or powershell for a zip, tar for the rest, and on linux
-/// bsdtar for a 7z, which gnu tar does not read.
+/// a nested archive stays packed, with a next step for each system: unzip or powershell for a
+/// zip, tar for the rest, and on linux bsdtar for a 7z, which gnu tar does not read.
 #[test]
 fn an_archive_inside_another_has_a_next_step_for_each_system() {
     let step = |system, name| super::unpack_inner(system, &format!("data/x/{name}"), "data/x/");
@@ -574,8 +566,7 @@ fn an_archive_inside_another_has_a_next_step_for_each_system() {
     );
 }
 
-/// a zip spanned over `.z01` files stays packed, and the next step joins its parts with zip, or
-/// on windows unpacks them with 7-Zip, which reads them all from the `.zip`.
+/// zip joins the parts, and on windows 7-Zip reads them all from the `.zip`.
 #[test]
 fn a_spanned_zip_left_packed_has_a_next_step_for_each_system() {
     let step =
@@ -662,8 +653,7 @@ fn refused_archive_workers_keep_every_member_without_a_queue_wait() {
     }
 }
 
-/// a member larger than the cache's disk holds, as FAT32 holds no file of 4 GiB or more, is
-/// refused by the size the archive declares for it, before any of its bytes are written.
+/// as on FAT32, which holds no file of 4 GiB, by the size the archive declares for the member.
 #[test]
 fn a_member_the_cache_disk_cannot_hold_is_refused_before_it_is_written() {
     let limits = Limits::default();
@@ -716,9 +706,8 @@ fn noise(length: usize) -> Vec<u8> {
         .collect()
 }
 
-/// a tar that ends too soon, as an upload stopped part way leaves one, is told in plain words
-/// rather than in its decoder's, whatever compresses it. a failure of the disk itself stays one,
-/// since no fixed copy of the archive helps.
+/// a tar cut short, however compressed, is told in plain words rather than its decoder's, while a
+/// failure of the disk itself stays one, since no fixed copy of the archive helps.
 #[test]
 fn a_tar_cut_short_is_told_in_plain_words() {
     let bytes = noise(64 << 10);
@@ -745,8 +734,7 @@ fn a_tar_cut_short_is_told_in_plain_words() {
     assert_eq!(super::damaged(None, &disk).kind, Kind::LocalIo);
 }
 
-/// a name too long for a disk is shown once and cut to fit a screen, and so is any long name an
-/// archive is refused for.
+/// any long name an archive is refused for is shown short too.
 #[test]
 fn a_huge_member_name_is_shown_once_and_short() {
     let long = format!("{}.wav", "x".repeat(300));
@@ -770,9 +758,8 @@ fn a_huge_member_name_is_shown_once_and_short() {
     );
 }
 
-/// once its readers took every file from an archive, the caller hears the whole archive as read,
-/// though bytes after its last file stay unread, as in a tar `tar -b 2048` pads to 1 MiB: what
-/// is left is writing and publishing the files, which a bar then tells apart from reading.
+/// once every file is read, the caller hears the whole archive as read, though a tar `tar -b 2048`
+/// padded to 1 MiB has bytes left, so a bar tells writing the files apart from reading.
 #[test]
 fn the_end_of_reading_is_heard_as_the_whole_archive() {
     let mut padded = tar_of(FILES);

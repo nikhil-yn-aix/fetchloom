@@ -1,6 +1,5 @@
-//! numbered tar files in one folder: the shards webdataset loaders read packed. unpacking them
-//! turns a few large files into many small ones, which costs inodes and a cluster's metadata
-//! server, so a person who sees them before anything downloads can keep them packed.
+//! numbered tar shards that webdataset loaders read packed. unpacking them costs inodes and a
+//! cluster's metadata server, so a person told before anything downloads can keep them packed.
 
 use std::collections::HashMap;
 
@@ -25,9 +24,8 @@ const FEWEST: u64 = 8;
 const ENDINGS: [&str; 3] = [".tar", ".tar.gz", ".tgz"];
 
 impl Shards<'_> {
-    /// the hint for these shards in `owner`, a dataset or a link, with `keep`, how the command
-    /// that found them keeps archives packed, and for the project's dataset `dataset`, the one
-    /// members table that keeps only some files of every shard.
+    /// the hint for these shards in `owner`, a dataset or a link: how `keep` keeps them packed and,
+    /// for a project's `dataset`, the one members table that keeps some files of each.
     pub(crate) fn hint(&self, owner: &str, keep: &str, dataset: Option<&str>) -> String {
         let packed = format!(
             "{owner} holds {}, which webdataset loaders read packed. keep them packed with {keep}",
@@ -42,7 +40,7 @@ impl Shards<'_> {
         }
     }
 
-    /// how many there are, and the folder that holds them, as `8 numbered .tar shards in wds`.
+    /// how many there are and their folder, as `8 numbered .tar shards in wds`.
     pub(crate) fn told(&self) -> String {
         let shards = units::count(self.count, "numbered .tar shard", "numbered .tar shards");
         if self.folder.is_empty() {
@@ -52,8 +50,7 @@ impl Shards<'_> {
         }
     }
 
-    /// the members table key that matches every one of them, as `wds/shard-*.tar`: the folder
-    /// and prefix as written, `*` for the number, and the ending they share.
+    /// the members table key that matches every one of them, as `wds/shard-*.tar`.
     pub(crate) fn key(&self) -> String {
         let folder = if self.folder.is_empty() {
             String::new()
@@ -72,9 +69,8 @@ struct Group<'a> {
     ending: Option<&'a str>,
 }
 
-/// the largest group of at least 8 files in one folder named `<prefix><digits>.tar`, `.tar.gz`
-/// or `.tgz`, such as `train-000123.tar` or `00000000.tar`, with one prefix and one digit width.
-/// one pass over `paths`, keyed by slices of them, so a listing of millions costs no copy of it.
+/// the largest group of at least 8 files in one folder named `<prefix><digits>.tar`, `.tar.gz` or
+/// `.tgz` with one prefix and digit width, found in one pass that copies no path.
 pub(crate) fn shards<'a>(paths: impl IntoIterator<Item = &'a str>) -> Option<Shards<'a>> {
     let mut groups: HashMap<(&str, &str, usize), Group<'a>> = HashMap::new();
     let mut most: Option<Shards<'a>> = None;

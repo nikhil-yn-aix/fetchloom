@@ -82,23 +82,20 @@ impl<'a> Guard<'a> {
         }
     }
 
-    /// a guard for members written to the cache at `cache`, on a disk formatted as
-    /// `filesystem`.
     pub(super) fn writing_to(mut self, cache: &'a Path, filesystem: Filesystem) -> Self {
         self.disk = filesystem.largest_file().map(|largest| (cache, largest));
         self
     }
 
-    /// a guard for members written to the cache at `cache`, whose disk holds no file past
-    /// `largest` bytes, as FAT32's holds none past 4 GiB.
+    /// as if the cache's disk held no file past `largest` bytes, as FAT32 holds none past 4 GiB.
     #[cfg(test)]
     pub(super) fn holding_at_most(mut self, cache: &'a Path, largest: u64) -> Self {
         self.disk = Some((cache, largest));
         self
     }
 
-    /// refuses the member at `path`, declared to hold `size` bytes, when the disk it is written
-    /// to cannot hold a file that large, before any of its bytes are written.
+    /// refuses the member at `path` before any of it is written when its declared `size` is more
+    /// than the disk holds in one file.
     pub(super) fn fits(&self, path: &str, size: u64) -> Result<(), Error> {
         match self.disk {
             Some((cache, largest)) if size > largest => Err(Error::new(
@@ -153,8 +150,7 @@ impl<'a> Guard<'a> {
         self.names.earlier_file(raw)
     }
 
-    /// notes the file at `path` as a hardlink to the earlier file at `target`, whose bytes it
-    /// holds.
+    /// notes the file at `path` as a hardlink to the earlier file at `target`, holding its bytes.
     pub(super) fn link(&mut self, path: String, target: String) {
         self.links.push((path, target));
     }
@@ -164,8 +160,7 @@ impl<'a> Guard<'a> {
         std::mem::take(&mut self.links)
     }
 
-    /// copies one member into `to`, refusing the archive as soon as what was written passes a
-    /// limit.
+    /// copies one member into `to`, refusing the archive once what was written passes a limit.
     pub(super) fn copy(
         &mut self,
         path: &str,
@@ -195,8 +190,7 @@ impl<'a> Guard<'a> {
         self.check_ratio(None)
     }
 
-    /// reads to the end of the entry at `path`, which no file keeps, counting what it decoded as
-    /// [`Guard::skip`] does.
+    /// reads past the entry at `path`, which no file keeps, counting it as [`Guard::skip`] does.
     pub(super) fn pass(&mut self, path: &str, read: &mut dyn Read) -> Result<(), Error> {
         let mut buffer = [0; 16 << 10];
         loop {
@@ -216,7 +210,6 @@ impl<'a> Guard<'a> {
         self.system.first.get_or_insert(path);
     }
 
-    /// what [`Guard::leave_out`] noted.
     pub(super) fn left_out(&mut self) -> Skipped {
         std::mem::take(&mut self.system)
     }

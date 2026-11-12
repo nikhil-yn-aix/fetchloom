@@ -1,5 +1,4 @@
-//! archives unpacked member by member into the cache, and refused whole when anything in them is
-//! unsafe.
+//! archives unpacked into the cache member by member, and refused whole if anything is unsafe.
 
 mod detect;
 mod guard;
@@ -45,9 +44,8 @@ pub(crate) enum Packed {
     Unsupported(&'static str),
 }
 
-/// what the name of the file at `path` says it is. only a name decides whether a file may
-/// unpack, so every machine decides alike from the listing, and documents such as `.xlsx` or
-/// `.npz`, which are zips inside, stay whole.
+/// what the file name in `path` says it is. only the name decides, so every machine decides alike
+/// from the listing, and documents that are zips inside, as `.xlsx` and `.npz`, stay whole.
 pub(crate) fn by_name(path: &str) -> Option<Packed> {
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     if UNPACKED.iter().any(|ending| name.ends_with(ending)) {
@@ -59,9 +57,8 @@ pub(crate) fn by_name(path: &str) -> Option<Packed> {
     is_rar.then_some(Packed::Unsupported("rar"))
 }
 
-/// whether the bytes the cache holds under `digest` are a zip of the one file `path` names, as a
-/// source sends a file it wrapped: `train.csv` as `train.csv.zip`. once their own bytes are
-/// dropped, what this machine unpacked them to answers.
+/// whether the bytes under `digest` are a zip of only the file `path` names, as `train.csv.zip`
+/// holds `train.csv`. once they are dropped, the record of what they unpacked to answers.
 pub(crate) fn wraps(cache: &Cache, digest: &Sha256, path: &str) -> bool {
     // unpacked members are recorded in NFC, so both answers compare in it on every machine
     let nfc = |text: &str| {
@@ -113,7 +110,6 @@ pub(crate) enum System {
 }
 
 impl System {
-    /// the system this build runs on.
     pub(crate) const RUNNING: System = if cfg!(windows) {
         System::Windows
     } else if cfg!(target_os = "macos") {
@@ -122,9 +118,8 @@ impl System {
         System::Linux
     };
 
-    /// `text` as one word of a command typed into this system's usual shell, a unix shell or
-    /// powershell, with `\` between folders on windows. a word either shell would split or
-    /// expand is single-quoted.
+    /// `text` as one word for this system's usual shell, a unix shell or powershell: `\` between
+    /// folders on windows, and single-quoted when either shell would split or expand it.
     fn word(self, text: &str) -> String {
         let text = match self {
             System::Windows => text.replace('/', "\\"),
@@ -149,11 +144,8 @@ impl System {
     }
 }
 
-/// how a person on `system` unpacks the archive at `path`, which fetchloom leaves packed: a
-/// command that unpacks it into a folder named after it in `parent`, both as they read from
-/// where fetchloom runs, then `stop`, what keeps the archive packed without this warning. a
-/// project's `parent` is the archive's own folder, inside the data folder git ignores; `get`'s
-/// is outside the folder it fills, which a later `get` would otherwise refuse to fill again.
+/// how a person on `system` unpacks the archive at `path`, left packed, into a folder named after
+/// it in `parent`, both as seen from where fetchloom runs, then that `stop` stops this warning.
 pub(crate) fn unpack_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
     format!("{}. {stop} stops this warning", unrar(system, path, parent))
 }
@@ -185,10 +177,8 @@ fn unrar(system: System, path: &str, parent: &str) -> String {
     }
 }
 
-/// how a person on `system` unpacks the archive at `path`, which came inside another archive and
-/// so stays packed, into a folder named after it in `parent`, both as they read from where
-/// fetchloom runs: with a program the system has, or for a 7z on linux bsdtar, which reads every
-/// format fetchloom unpacks, and for a rar as [`unpack_elsewhere`] says.
+/// how a person on `system` unpacks an archive that came inside another, as [`unpack_elsewhere`]
+/// says: with a program the system has, or on linux bsdtar for a 7z, which gnu tar cannot read.
 pub(crate) fn unpack_inner(system: System, path: &str, parent: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     if by_name(name) == Some(Packed::Unsupported("rar")) {
@@ -221,10 +211,8 @@ pub(crate) fn unpack_inner(system: System, path: &str, parent: &str) -> String {
     }
 }
 
-/// how a person on `system` unpacks the zip at `path` whose bytes go on in `.z01` files beside
-/// it, which fetchloom leaves packed, as [`unpack_elsewhere`] tells it for a rar: zip joins the
-/// parts into one archive in `parent` for unzip to unpack, and on windows 7-Zip reads the parts
-/// itself.
+/// [`unpack_elsewhere`] for a zip spanned over `.z01` files: zip joins the parts in `parent` for
+/// unzip to unpack, and on windows 7-Zip reads them itself.
 pub(crate) fn join_elsewhere(system: System, path: &str, parent: &str, stop: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     let folder = format!("{parent}{}-unpacked", stem(name));
@@ -248,10 +236,8 @@ pub(crate) fn join_elsewhere(system: System, path: &str, parent: &str, stop: &st
     }
 }
 
-/// what an archive may unpack to. every limit counts the bytes actually written, never the sizes
-/// the archive declares. they guard against archives built to fill a disk, so only the person
-/// running fetchloom moves them, through `FETCHLOOM_ARCHIVE_*` or the settings file, and never a
-/// data.toml someone else wrote.
+/// what an archive may unpack to, against archives built to fill a disk. only
+/// `FETCHLOOM_ARCHIVE_*` or the settings file set it, never a data.toml someone else wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limits {
     /// entries of any kind, folders included.
@@ -275,10 +261,8 @@ impl Default for Limits {
     }
 }
 
-/// the limits of this run, once it read its settings.
 static LIMITS: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
 
-/// sets the limits every archive in the run unpacks within.
 pub(crate) fn set_limits(limits: Limits) {
     let _ = LIMITS.set(limits);
 }
@@ -312,15 +296,14 @@ pub(crate) struct Skipped {
 /// stores a guarded member, using its declared size only as a storage-scheduling hint.
 type Keep<'k> = dyn FnMut(&mut Guard<'_>, String, u64, &mut dyn Read) -> Result<(), Error> + 'k;
 
-/// unpacks every file in `input` into the cache. an archive refused part way leaves no object
-/// behind. `writers` caps its writer threads; zero keeps storage on the reading thread.
+/// unpacks `input` into the cache, leaving no object behind when refused part way. `writers`
+/// caps the writer threads, zero storing on the reader. `watch` hears the bytes read, then the
+/// whole archive once reading ends, though files may still be written.
 ///
 /// # Errors
 ///
-/// `source.invalid` for an unsafe or damaged archive, `local.io` when the cached archive cannot
-/// be read or the cache cannot take its files, and `interrupted` once `watch` returns true. `watch` hears how many bytes of the
-/// archive were read so far, and the whole archive once its readers are done, while its files
-/// may still be written and published.
+/// `source.invalid` for an unsafe or damaged archive, `local.io` for a read or a cache write that
+/// fails, and `interrupted` once `watch` returns true.
 pub(crate) fn unpack(
     input: &Input,
     format: Format,
@@ -377,14 +360,9 @@ pub(crate) fn unpack(
     })
 }
 
-/// unpacks the archive the cache holds under `archive`, and records what it unpacked to when
-/// that is `tree`, or when no tree is known yet. bytes that changed in the cache unpack to other
-/// files, and recording those would replace the tree data.lock pins. none when its bytes turn
-/// out to be no archive fetchloom unpacks, so the file stays as it is.
-///
-/// # Errors
-///
-/// as [`unpack`], and `local.io` when the cache lost the archive or cannot record it.
+/// unpacks the cached `archive`, recording the result only when it is `tree` or none is known,
+/// so changed bytes never replace data.lock's pin. none when it is no archive fetchloom unpacks.
+/// fails as [`unpack`] does, or `local.io` when the cache lost the archive or cannot record it.
 pub(crate) fn unpack_cached(
     cache: &Cache,
     archive: &Sha256,
@@ -397,12 +375,8 @@ pub(crate) fn unpack_cached(
     unpack_recorded(cache, archive, &Input::File(object), tree, watch, writers)
 }
 
-/// [`unpack_cached`] for an archive split into `parts`, each the SHA-256 and size of an object
-/// the cache holds, in order. what it unpacked to is recorded under the key [`parts_key`] gives.
-///
-/// # Errors
-///
-/// as [`unpack_cached`].
+/// [`unpack_cached`], failing as it does, for an archive split into `parts`, each the SHA-256 and
+/// size of a cached object, in order. its tree is recorded under the key [`parts_key`] gives.
 pub(crate) fn unpack_cached_parts(
     cache: &Cache,
     parts: &[(Sha256, u64)],
@@ -463,15 +437,13 @@ fn refused(message: impl Into<String>) -> Error {
     Error::new(Kind::SourceInvalid, message).help(REFUSED_HELP)
 }
 
-/// an archive past a limit the person running fetchloom may move, as `variable` and the
-/// settings file's `key` do.
+/// an archive past a limit that `variable` or the settings file's `key` raises.
 fn past(message: impl Into<String>, variable: &str, key: &str) -> Error {
     Error::new(Kind::SourceInvalid, message).help(format!(
         "if you trust the archive, raise {variable}, or {key} in the settings file. otherwise {REFUSED_HELP}"
     ))
 }
 
-/// an archive holding a member that fetchloom refuses for its name or its kind.
 fn refused_member(path: &str, reason: &str) -> Error {
     refused(format!(
         "the archive holds \"{}\", which fetchloom refuses because {reason}",
@@ -479,8 +451,7 @@ fn refused_member(path: &str, reason: &str) -> Error {
     ))
 }
 
-/// an archive that could not be read to the end: cut short, corrupted or not what it seemed, or
-/// refused when its xz stream asks for too much memory.
+/// the error for an archive not read to its end; a disk's own failure stays `local.io`.
 fn damaged(at: Option<&str>, err: &(dyn std::error::Error + 'static)) -> Error {
     if let Some(error) = crate::error::io_cause(err) {
         let doing = match at {
@@ -537,7 +508,6 @@ fn ends_early(err: &(dyn std::error::Error + 'static)) -> bool {
 
 const DAMAGED_HELP: &str = "ask the dataset's authors for a fixed copy, or keep it packed with extract = false in data.toml or --no-extract";
 
-/// a zip whose end, which lists its files, is missing, as a download cut short leaves one.
 fn cut_short() -> Error {
     Error::new(
         Kind::SourceInvalid,
