@@ -110,8 +110,9 @@ pub(crate) fn from_cache_adding<'a>(
     cache: &Cache,
     added: &[String],
 ) -> Result<Plan<'a>, Error> {
+    let added: HashSet<&str> = added.iter().map(String::as_str).collect();
     let patterns = |dataset: &str| {
-        if added.iter().any(|name| name == dataset) {
+        if added.contains(dataset) {
             Patterns::OnCommandLine
         } else {
             Patterns::InDataToml

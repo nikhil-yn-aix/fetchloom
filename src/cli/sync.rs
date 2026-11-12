@@ -7,7 +7,7 @@ pub(super) mod place;
 pub(super) mod rename;
 pub(super) mod unpack;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Instant, SystemTime};
@@ -602,7 +602,7 @@ impl<'a> Loop<'a> {
             mut drafts,
         } = self.sorted(manifest, old.datasets, upgrade, &mut whole)?;
         let (results, dropped, moved) = rename::results(manifest, old.derived);
-        let given: Vec<&str> = listed
+        let given: HashSet<&str> = listed
             .iter()
             .map(|(name, _)| name.as_str())
             .chain(whole.iter().map(|locked| locked.name.as_str()))
@@ -652,7 +652,7 @@ impl<'a> Loop<'a> {
             };
             return Err(cite_place(error, &manifest.datasets[name], "ref"));
         }
-        let added: Vec<String> = listed.iter().map(|(name, _)| name.clone()).collect();
+        let added: HashSet<String> = listed.iter().map(|(name, _)| name.clone()).collect();
         let listings = self.resolve_all(manifest, asks, listed).await?;
         for (name, listing) in listings {
             let entry = &manifest.datasets[&name];
@@ -892,14 +892,15 @@ impl<'a> Loop<'a> {
         &self,
         manifest: &Manifest,
         asks: Vec<(String, String)>,
-        mut given: Vec<(String, Listing)>,
+        given: Vec<(String, Listing)>,
     ) -> Result<Vec<(String, Listing)>, Error> {
+        let mut given: HashMap<String, Listing> = given.into_iter().collect();
         let mut listings = Vec::with_capacity(asks.len());
         let mut tasks = JoinSet::new();
         let mut asked = Vec::new();
         for (name, text) in asks {
-            if let Some(at) = given.iter().position(|(given_name, _)| *given_name == name) {
-                listings.push(given.swap_remove(at));
+            if let Some(listing) = given.remove(&name) {
+                listings.push((name, listing));
                 continue;
             }
             if self.net.offline().enabled() {

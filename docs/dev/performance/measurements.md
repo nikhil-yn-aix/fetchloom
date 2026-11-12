@@ -182,6 +182,15 @@ one file is under the batch rule's 64, so both ways flush it on its own; its row
 
 before's time was cpu, growing with the square of the list: 12.8 s of user time for 2,000 links, 414 s for 10,000. a trace of after's 10,000 links shows 3.1 s of downloads, 0.64 s relocking and 0.61 s placing, and at a terminal no gap of more than 0.85 s without a new line or bar. tmpfs leaves out the disk's flushes, which the change does not touch.
 
+relocking then still looked up each new dataset in lists of all the others, four times over: in `resolve_all`, `rename::carry`, `draft` and `plan::from_cache_adding`. those became set and map lookups. the same setup with lists past 10,000 links, which repeat a link with `?c=1` and on, as the server ignores the query; release builds of b3b182a (before) and of the change, three rounds each:
+
+| links | before, median and range | after, median and range | after/before |
+|---:|---|---|---:|
+| 10,000 | 4.76 s, 4.74 to 4.81 | 3.96 s, 3.90 to 4.07 | 0.823 |
+| 40,000 | 31.71 s, 29.97 to 32.49 | 21.58 s, 21.56 to 21.95 | 0.680 |
+
+a trace of after's 40,000 links shows relocking at 0.35 s, from 11.3 s before; placing them still takes 7.5 s, against 0.6 s for 10,000.
+
 ## upgrading a bucket prefix, 2026-11-12
 
 `lock --upgrade` of a dataset pinning five tar shards of 2,037,760 bytes from an s3-compatible stand-in on this machine, after a sixth appeared there. the stand-in states each object's size and an ETag in its listing and ignores conditional requests, as wf-audio's did; such a service's ETag is no MD5. the counts are the upgrade's alone, from `--json` work counters; one run each, since they do not vary.

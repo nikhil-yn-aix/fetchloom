@@ -2,6 +2,8 @@
 //! name data.toml no longer has. relocking carries that entry over to the new name, so a rename
 //! never asks the source again and never pins other bytes than the old name had.
 
+use std::collections::HashSet;
+
 use super::{Scope, Upgrade};
 use crate::project::lock::derived::Derived;
 use crate::project::lock::{Lock, Locked};
@@ -30,7 +32,7 @@ pub(in crate::cli) fn forecast(manifest: &Manifest, lock: Lock) -> (Lock, Vec<Re
         manifest,
         &Scope::All,
         &Upgrade::Nothing,
-        &[],
+        &HashSet::new(),
         &mut datasets,
         &mut others,
     ));
@@ -71,7 +73,7 @@ pub(super) fn carry(
     manifest: &Manifest,
     scope: &Scope,
     upgrade: &Upgrade,
-    given: &[&str],
+    given: &HashSet<&str>,
     kept: &mut Vec<Locked>,
     others: &mut Vec<Locked>,
 ) -> Vec<Rename> {
@@ -87,7 +89,7 @@ pub(super) fn carry(
             entry.source().is_some()
                 && scope.includes(name)
                 && !upgrade.includes(name)
-                && !given.contains(&name.as_str())
+                && !given.contains(name.as_str())
                 && !pinned(name)
         })
         .map(|(name, _)| name.as_str())
