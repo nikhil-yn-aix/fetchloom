@@ -219,12 +219,82 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 }
 
 /// warns of the files a commit would leave out that a clone needs: lists data.lock names and code
-/// recipes take in.
+/// recipes take in, and of lists data.lock no longer names, which a commit should not take.
 fn warn_git(output: &Output, project: &Project) -> Result<(), Error> {
     warn_untracked(output, project);
+    warn_unnamed(output, project);
     let (_, manifest) = project.manifest()?;
     super::project::warn_recipe_code(output, project, &manifest);
     Ok(())
+}
+
+/// the most lists a warning about lists nothing reads names in its command; `-v` names each.
+const NAMED_LISTS: usize = 5;
+
+/// warns of the lists in data.lock.d that data.lock no longer names, as one a build wrote before
+/// `git checkout` put an older data.lock back: nothing reads them, and `git add data.lock.d` would
+/// commit them. the help names the exact command that takes them away, `git rm` for those git
+/// has; status itself deletes nothing, since only data.lock's next write sweeps them.
+fn warn_unnamed(output: &Output, project: &Project) {
+    use crate::project::lock::{self, lists};
+    let Ok(text) = std::fs::read_to_string(project.root.join(lock::FILE)) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(project.root.join(lists::FOLDER)) else {
+        return;
+    };
+    let named: HashSet<String> = lock::parts(&text).into_iter().collect();
+    let mut unnamed: Vec<String> = entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|file| lists::is_part(file))
+        .map(|file| format!("{}/{file}", lists::FOLDER))
+        .filter(|part| !named.contains(part))
+        .collect();
+    if unnamed.is_empty() {
+        return;
+    }
+    unnamed.sort();
+    let tracked = std::env::var_os("PATH")
+        .and_then(|path| crate::project::git::find(Some(&path), &project.root))
+        .and_then(|git| crate::project::git::tracked(&git, &project.root, lists::FOLDER))
+        .unwrap_or_default();
+    let (in_git, loose): (Vec<String>, Vec<String>) =
+        unnamed.into_iter().partition(|part| tracked.contains(part));
+    for (parts, is_tracked) in [(in_git, true), (loose, false)] {
+        let Some(first) = parts.first() else {
+            continue;
+        };
+        let words = |parts: &[String]| {
+            parts
+                .iter()
+                .map(|part| super::shell_word(part).into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let (said, them) = match parts.len() {
+            1 => (format!("data.lock no longer names {first}"), "it"),
+            count => (
+                format!("data.lock no longer names {count} lists in data.lock.d, such as {first}"),
+                "them",
+            ),
+        };
+        let help = match (is_tracked, parts.len() <= NAMED_LISTS) {
+            (true, true) => format!("run `git rm {}`, then commit", words(&parts)),
+            (true, false) => format!(
+                "run `git rm` with their paths, as `git rm {}`, then commit",
+                super::shell_word(first)
+            ),
+            (false, true) => format!("delete {}", parts.join(", ")),
+            (false, false) => format!("delete {them}; `fetchloom status -v` names each"),
+        };
+        output.warn_with(&format!("{said}, so nothing reads {them}"), &help);
+        if parts.len() > 1 {
+            for part in &parts {
+                output.detail(part);
+            }
+        }
+    }
 }
 
 /// warns of the lists data.lock names in data.lock.d that git does not have, which a commit then

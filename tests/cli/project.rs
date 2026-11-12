@@ -2828,3 +2828,52 @@ fn the_commit_a_git_project_is_told_names_its_gitignore() -> Result {
     );
     Ok(())
 }
+
+/// a list in data.lock.d that data.lock no longer names, as one a build wrote before `git
+/// checkout` put the older data.lock back, is read by nothing: status names it with the exact
+/// command that takes it away, `git rm` once git has it, and deletes nothing itself.
+#[test]
+fn status_names_a_list_data_lock_no_longer_names() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let in_git = crate::merge::ok(&sandbox, &["init", "-q"])?.is_some();
+    let added = sandbox
+        .command(&["add", &server.url])
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let stale = "data.lock.d/iris.0123456789ab.tsv.zst";
+    fs::write(sandbox.work().join(stale), b"a list of another data.lock")?;
+    let unnamed = || -> Result<Vec<String>> {
+        let document = json(&sandbox.run(&["--json", "status"])?)?;
+        Ok(document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|warning| warning.contains("no longer names"))
+            .map(str::to_owned)
+            .collect())
+    };
+    assert_eq!(
+        unnamed()?,
+        [format!(
+            "data.lock no longer names {stale}, so nothing reads it; delete {stale}"
+        )]
+    );
+    if in_git {
+        crate::merge::ok(&sandbox, &["add", "data.lock.d"])?;
+        assert_eq!(
+            unnamed()?,
+            [format!(
+                "data.lock no longer names {stale}, so nothing reads it; run `git rm {stale}`, then commit"
+            )]
+        );
+    }
+    assert!(
+        sandbox.work().join(stale).is_file(),
+        "status deletes nothing"
+    );
+    Ok(())
+}
