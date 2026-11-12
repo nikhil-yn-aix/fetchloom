@@ -122,8 +122,8 @@ the pattern reads paths inside the archive, so in a dataset that is one archive 
 `drop --dry-run`, or `-n`, makes the same plan and stops before writing: `data.toml`, `data.lock` and `data/` stay as they are. `-v` names each file. stderr for the image above:
 
 ```text
-Would exclude 1 file of pets.zip in data.toml
-Would remove 1 file from data/ that no dataset needs
+      Would exclude 1 file of pets.zip in data.toml
+      Would remove 1 file from data/ that no dataset needs
          Ok dry run, nothing was changed
 ```
 

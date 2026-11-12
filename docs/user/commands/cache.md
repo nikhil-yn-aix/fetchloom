@@ -145,7 +145,7 @@ fetchloom cache gc --now --dry-run
 `--dry-run` runs the same sweep with every deletion recorded instead of made, so it applies the same age rules and keeps the same files. the cache, partial downloads and project registrations stay as they are, and a cache that does not exist yet is not created. explicit `FETCHLOOM_TRACE` output is still created or truncated. stderr when one unneeded 32-byte object is in the cache, matching a test:
 
 ```text
-Would remove 1 file · 32 B from the cache
+      Would remove 1 file · 32 B from the cache
          Ok dry run, nothing was changed
 ```
 
@@ -163,10 +163,10 @@ gc keeps every file a project needs, including the raw data of a dataset with [`
 
 ```text
     Checked 6 files · 99.5 MiB on /home/me/lab-mirror in 392 ms
- Would free adult · 5 files, 5.7 MiB of raw input that only builds read
+      Would free adult · 5 files, 5.7 MiB of raw input that only builds read
             /home/me/lab-mirror holds a copy of each, hashed in this run
       Costs rerunning clean fetches these 5.7 MiB back from /home/me/lab-mirror or adult's source
- Would free covid · 1 file, 93.8 MiB of raw input that only builds read
+      Would free covid · 1 file, 93.8 MiB of raw input that only builds read
             /home/me/lab-mirror holds a copy of it, hashed in this run
       Costs rerunning clean fetches these 93.8 MiB back from /home/me/lab-mirror or covid's source
 free adult and covid, 99.5 MiB, from the cache? [y/N] y
@@ -205,10 +205,10 @@ each file kept says why:
 the lines about adult in a dry run of the same project, after one copy on the mirror was damaged, its size kept and a byte changed:
 
 ```text
- Would free adult · 4 files, 1.9 MiB of raw input that only builds read
+      Would free adult · 4 files, 1.9 MiB of raw input that only builds read
             /home/me/lab-mirror holds a copy of each, hashed in this run
       Costs rerunning clean fetches these 1.9 MiB back from /home/me/lab-mirror or adult's source
- Would keep adult · 1 file, 3.8 MiB: its copy on /home/me/lab-mirror does not hash to its name
+      Would keep adult · 1 file, 3.8 MiB: its copy on /home/me/lab-mirror does not hash to its name
 ```
 
 [push](push.md) replaces a copy of another size by itself; delete one of the right size that does not hash to its name, and the next `push --inputs` writes it again.

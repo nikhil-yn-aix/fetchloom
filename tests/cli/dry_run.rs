@@ -54,7 +54,7 @@ fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
+        "      Would place data/iris · 1 file\n         Ok dry run, nothing was changed\n"
     );
     let document = json(
         &sandbox
@@ -100,7 +100,7 @@ fn sync_dry_run_lists_downloads_with_their_sizes_and_fetches_none() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would fetch iris/iris.csv · 32 B\nWould place data/iris · 1 file\nwarning: a sync would put back data/iris/iris.csv, which was deleted or moved, since data.lock pins it\n  help: data/iris/iris.csv is the only file of iris, so to leave it out for good, run `fetchloom remove iris`; keep files of your own in a folder outside data/\n         Ok dry run, nothing was changed\n"
+        "      Would fetch iris/iris.csv · 32 B\n      Would place data/iris · 1 file\nwarning: a sync would put back data/iris/iris.csv, which was deleted or moved, since data.lock pins it\n  help: data/iris/iris.csv is the only file of iris, so to leave it out for good, run `fetchloom remove iris`; keep files of your own in a folder outside data/\n         Ok dry run, nothing was changed\n"
     );
     let document = json(
         &sandbox
@@ -148,7 +148,7 @@ fn sync_dry_run_tells_the_lock_a_new_dataset_would_get() -> Result {
     assert_eq!(
         stderr,
         format!(
-            "  Would pin cows, new in data.lock: {} · 1 file · size unknown\nWould fetch cows/cows.csv · size unknown\nWould place data/cows · 1 file\n         Ok dry run, nothing was changed\n",
+            "      Would pin cows, new in data.lock: {} · 1 file · size unknown\n      Would fetch cows/cows.csv · size unknown\n      Would place data/cows · 1 file\n         Ok dry run, nothing was changed\n",
             other.url
         )
     );
@@ -192,7 +192,7 @@ fn sync_dry_run_with_force_tells_what_it_would_replace() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would renew data/iris · 1 file\nwarning: data/iris/iris.csv is your edit, and --force would replace it\n         Ok dry run, nothing was changed\n"
+        "      Would renew data/iris · 1 file\nwarning: data/iris/iris.csv is your edit, and --force would replace it\n         Ok dry run, nothing was changed\n"
     );
     let document = json(&sandbox.run(&["--json", "sync", "--force", "-n"])?)?;
     let result = &document["result"];
@@ -266,7 +266,7 @@ fn cache_gc_dry_run_tells_what_it_would_free() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr,
-        "Would remove 1 file · 32 B from the cache\n         Ok dry run, nothing was changed\n"
+        "      Would remove 1 file · 32 B from the cache\n         Ok dry run, nothing was changed\n"
     );
     let young = text(&sandbox.run(&["cache", "gc", "-n"])?.stderr)?;
     assert_eq!(
@@ -594,7 +594,7 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
     assert!(!stderr.contains("differs"), "{stderr}");
     assert!(
         stderr.contains(
-            "Would check data/iris · 1 file is already there; the download tells whether it holds the pinned bytes"
+            "      Would check data/iris · 1 file is already there; the download tells whether it holds the pinned bytes"
         ),
         "{stderr}"
     );

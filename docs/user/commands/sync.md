@@ -209,9 +209,9 @@ and a sync of every dataset when each has `place = false` says `Ok nothing to pl
 `sync --dry-run`, or `-n`, prints what sync would change without downloading files for placement, writing `data.lock` or state, changing `data/` or writing the cache. explicit `FETCHLOOM_TRACE` output is still created or truncated. to see whether `data.lock` would change, it resolves changed entries as `lock` does, so a source may still be asked what a link holds; for a kaggle competition whose rules the account may not have accepted, that means reading its smallest file when its listed size is at most 4 MiB. a zip wrapper can make the response larger; the probe uses the 64 MiB API-response limit and keeps none of the bytes. stderr after a dataset `cows` was added to `data.toml`, matching a test, where `[port]` stands for the test server's port:
 
 ```text
-  Would pin cows, new in data.lock: http://127.0.0.1:[port]/files/cows.csv · 1 file · size unknown
-Would fetch cows/cows.csv · size unknown
-Would place data/cows · 1 file
+      Would pin cows, new in data.lock: http://127.0.0.1:[port]/files/cows.csv · 1 file · size unknown
+      Would fetch cows/cows.csv · size unknown
+      Would place data/cows · 1 file
          Ok dry run, nothing was changed
 ```
 

@@ -46,8 +46,8 @@ if deleting files fails after metadata was written, fix the reported error and r
 `remove --dry-run`, or `-n`, makes the same plan and stops before writing: `data.toml`, `data.lock`, `data/` and the cache stay as they are, and nothing is asked of the network. explicit `FETCHLOOM_TRACE` output is still created or truncated. `-v` names each file it would delete. stderr for a dataset `a` with one placed file, matching a test snapshot:
 
 ```text
-Would remove a from data.toml and data.lock
-Would remove 1 file from data/ that no dataset needs
+      Would remove a from data.toml and data.lock
+      Would remove 1 file from data/ that no dataset needs
          Ok dry run, nothing was changed
 ```
 

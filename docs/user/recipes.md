@@ -77,7 +77,7 @@ no command but `build` runs a step. `sync` places a pinned result from the cache
 `fetchloom build --dry-run` lists the steps in the order a build runs them, each with its command, what it reads and where its result goes, and runs nothing:
 
 ```text
-  Would run clean · not built yet
+      Would run clean · not built yet
             python3 clean.py <build>/in/iris <build>/out
             reads iris and clean.py; writes data/clean
          Ok dry run, nothing was run or changed

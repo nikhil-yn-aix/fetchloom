@@ -2,9 +2,9 @@
 source: tests/cli/dry_run.rs
 expression: stderr
 ---
-  Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
-Would fetch iris/iris.csv · size unknown
-Would place data/iris · 1 file
-  Would add data/ to .gitignore, since its files come from data.lock
-  Would add iris to data.toml, its files in data/iris
+      Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · size unknown
+      Would fetch iris/iris.csv · size unknown
+      Would place data/iris · 1 file
+      Would add data/ to .gitignore, since its files come from data.lock
+      Would add iris to data.toml, its files in data/iris
          Ok dry run, nothing was changed

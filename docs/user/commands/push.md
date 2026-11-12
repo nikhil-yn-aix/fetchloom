@@ -148,21 +148,21 @@ error: the sources of iris and pets did not say who may read them, so pushing th
 `--dry-run` looks at each file's name in the mirror, as a push does, then says what it would write and what it would ask about. it writes nothing and asks nothing. a file the cache lacks counts as one it would copy from the data folder, as `Would copy 1 file · 21 B from data into the cache`, only when the push would take it. a file the project's state records with its pinned bytes, and that still looks as recorded, counts without being read, as sync trusts it; any other file there is read and hashed first, with nothing written. so a dry run in a copy whose `.fetchloom` came along reads no file of the data folder, one without it reads each such file once, and an edit of the pinned size, as one made through a hardlink `cp -a` kept, counts as missing in the dry run as in the push. a file it would download is named, as `Would fetch pets/pets.zip · 824 B`, and an archive it would unpack as `Would open pets/pets.zip`. the files of an archive this machine never unpacked are not counted, since only unpacking it tells them, and a dry run asks no mirror or server, so a file a mirror holds is named too. in the copy above:
 
 ```text
-Would copy 2 files · 3.9 KiB from data into the cache
-Would fetch pets/pets.zip · 824 B
- Would open pets/pets.zip
+      Would copy 2 files · 3.9 KiB from data into the cache
+      Would fetch pets/pets.zip · 824 B
+      Would open pets/pets.zip
   hint: an archive's files are known once it is unpacked, so they are not counted
-Would start a mirror in /mnt/lab/fetchloom
- Would push 2 files · 3.9 KiB to /mnt/lab/fetchloom
+      Would start a mirror in /mnt/lab/fetchloom
+      Would push 2 files · 3.9 KiB to /mnt/lab/fetchloom
          Ok dry run, nothing was changed
 ```
 
 a dry run of a project whose cache holds every file:
 
 ```text
-Would start a mirror in /mnt/lab/fetchloom
- Would push 6 files · 106 B to /mnt/lab/fetchloom
-  Would ask first: the sources of iris and pets did not say who may read them
+      Would start a mirror in /mnt/lab/fetchloom
+      Would push 6 files · 106 B to /mnt/lab/fetchloom
+      Would ask first: the sources of iris and pets did not say who may read them
          Ok dry run, nothing was changed
 ```
 

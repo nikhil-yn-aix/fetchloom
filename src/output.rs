@@ -1296,6 +1296,14 @@ fn verb_color(verb: &str) -> Tone {
 
 fn verb_line(verb: &str, text: &str, tone: Tone, color: bool) -> String {
     let style = toned(color, tone);
+    // a dry run's `Would` takes the verb column, its action the start of the line
+    if let Some(action) = verb.strip_prefix("Would ") {
+        return format!(
+            "{style}{:>11} {action}{style:#} {}",
+            "Would",
+            subject(&plain(text), color)
+        );
+    }
     format!(
         "{style}{verb:>11}{style:#} {}",
         subject(&plain(text), color)
@@ -2107,6 +2115,21 @@ mod tests {
         assert!(shown.ends_with("\\|__|\n\n"));
         assert!(!shown.contains('\u{1b}'));
         assert!(super::wordmark(100, true).contains('\u{1b}'));
+    }
+
+    /// a dry run's verb keeps `Would` in the verb column every other verb ends in, however long
+    /// its action is.
+    #[test]
+    fn a_dry_run_verb_sits_in_the_verb_column() {
+        let text = "1 file from data/ that no dataset needs";
+        assert_eq!(
+            super::verb_line("Would remove", text, super::Tone::Work, false),
+            format!("      Would remove {text}")
+        );
+        assert_eq!(
+            super::verb_line("Removed", text, super::Tone::Done, false),
+            format!("    Removed {text}")
+        );
     }
 
     #[test]

@@ -262,7 +262,7 @@ without names, `--accept` pins every kept rebuild. it refuses with exit 2, and c
 a dry run says what a build would do with each step, deciding each as the build does against the cache, the data folder and the mirrors, and shows the command of each step that would or may run, so you can read it before it runs as you. steps come in the order a build runs them: each after the datasets it is made from, ties by name. a dry run reads `data.toml`, `data.lock`, each recipe's code, the cache, the data folder and each folder [mirror](../mirrors.md), and changes nothing: no file is written, no step runs and nothing is downloaded. it asks no web mirror. this output is from a project where `clean` is made from `iris` and `tidy` from `clean`, neither built yet:
 
 ```text
-  Would run clean · not built yet
+      Would run clean · not built yet
             python3 clean.py <build>/in/iris <build>/out
             reads iris and clean.py; writes data/clean
     May run tidy · not built yet; clean is not built yet
@@ -287,10 +287,10 @@ each step has one of five actions, each the word for what the build after it rep
 in a fresh clone, whose cache holds none of the results data.lock pins, every step runs, and the dry run says so:
 
 ```text
-  Would run clean · its pinned result is not on this machine or a mirror
+      Would run clean · its pinned result is not on this machine or a mirror
             python3 clean.py <build>/in/iris <build>/out
             reads iris and clean.py; writes data/clean
-  Would run tidy · its pinned result is not on this machine or a mirror
+      Would run tidy · its pinned result is not on this machine or a mirror
             python3 tidy.py <build>/in/clean --out=<build>/out
             reads clean and tidy.py, with SEED=1; writes data/tidy
          Ok dry run, nothing was run or changed
@@ -300,15 +300,15 @@ in a fresh clone, whose cache holds none of the results data.lock pins, every st
 with a folder mirror that holds the results, as `fetchloom --mirror ../mirror build --dry-run` there, nothing runs. a cache that lost results the data folder still holds says `from data` instead, as the build copies them from there:
 
 ```text
-Would fetch clean · 1 file, 46 B as data.lock pins it, from ../mirror
-Would fetch tidy · 1 file, 46 B as data.lock pins it, from ../mirror
+      Would fetch clean · 1 file, 46 B as data.lock pins it, from ../mirror
+      Would fetch tidy · 1 file, 46 B as data.lock pins it, from ../mirror
          Ok no step would run; dry run, nothing was run or changed
 ```
 
 a step after one that runs for a changed recipe may run. here a comment was added to clean.py, so tidy runs again only if clean makes other files than before; the build that followed ran clean, which made the same file, and found tidy up to date:
 
 ```text
-  Would run clean · clean.py changed
+      Would run clean · clean.py changed
             python3 clean.py <build>/in/iris <build>/out
             reads iris and clean.py; writes data/clean
     May run tidy · runs again if clean's result changes
