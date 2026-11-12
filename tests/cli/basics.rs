@@ -707,6 +707,36 @@ fn json_is_indented_at_a_terminal_and_one_line_in_a_pipe() -> Result {
     Ok(())
 }
 
+/// `--json` at a terminal writes what could steer it from a quoted line as `\u` escapes: a c1
+/// control, which some terminals act on, and a bidi control, which shows the text around it in
+/// another order. both read back as the same text, which a pipe gets as it is.
+#[cfg(target_os = "linux")]
+#[test]
+fn json_at_a_terminal_escapes_what_could_steer_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    std::fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.x]\nref = \"zenodo:1\"\nbogus = \"\u{9b}2J \u{202e} evil\"\n",
+    )?;
+    let piped = text(&sandbox.run(&["--json", "status"])?.stdout)?;
+    let status = sandbox.command(&["--json", "status"]);
+    let Some((code, screen)) = crate::support::typed(&sandbox.work(), &status, "", "", "")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(50), "{screen}");
+    assert!(screen.contains(r"\u009b2J \u202e evil"), "{screen}");
+    assert!(!screen.contains(['\u{9b}', '\u{202e}']), "{screen:?}");
+    let mut documents = [
+        serde_json::from_str::<Value>(&screen)?,
+        serde_json::from_str::<Value>(&piped)?,
+    ];
+    for document in &mut documents {
+        document["work"]["elapsed_ms"] = 0.into();
+    }
+    assert_eq!(documents[0], documents[1]);
+    Ok(())
+}
+
 /// a mistyped command, option or dataset name exits 2, changes nothing and suggests the line
 /// typed with that one word fixed. `cli::usage::tests` guesses each word and
 /// `cli::tests::a_guess_keeps_every_other_word_of_the_command_line` rebuilds more lines; these

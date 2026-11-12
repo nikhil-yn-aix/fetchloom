@@ -10,7 +10,7 @@ fetchloom --json status
 
 `--json` prints one document on stdout, also for usage errors, the welcome, the version and help: `fetchloom help --json` describes every command, and `<command> --help --json` only that one, in the `help` result below. a text topic, such as `help exit-codes --json`, returns `result.topic` and `result.text`. stderr gets only debug logs you asked for, and with `--progress`, plain progress lines: at once for a download or a lookup, after 2 s for other work, then every 10 s. JSON mode never asks a question; use `--yes` when approval is needed.
 
-in a pipe or a file the document is one line. when stdout is a terminal, it is indented two spaces a level, so a person can read it; it is the same document, with no color, so read all of stdout rather than its first line.
+in a pipe or a file the document is one line. when stdout is a terminal, it is indented two spaces a level, so a person can read it; it is the same document, with no color, so read all of stdout rather than its first line. there, a c1 control (U+0080 to U+009F), which some terminals act on, or a bidi control, which shows the text around it in another order, in any string, such as a quoted line of data.toml, is written as a `\u` escape, such as `\u202e`, which a JSON reader reads back as the same text.
 
 a result JSON cannot represent, such as a path that is not UTF-8, returns a complete `local.io` error document instead, exit 50, and so does a failure to write stdout, though what the command did stays done. a reader that closes its pipe early is no failure.
 

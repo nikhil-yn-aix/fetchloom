@@ -1060,6 +1060,7 @@ impl Output {
             serde_json::to_vec(&document)
         };
         let bytes = match encoded {
+            Ok(bytes) if self.indented => escaped_for_terminal(bytes),
             Ok(bytes) => bytes,
             Err(cause) => {
                 let error = Error::new(
@@ -1934,21 +1935,43 @@ fn masked(secret: &str) -> String {
     )
 }
 
-/// `text` with control characters written out as escapes, so text from a server cannot move the
-/// cursor or recolor the terminal.
+/// `text` with control characters, bidi controls among them, written out as escapes, so text from
+/// a server or a quoted line cannot move the cursor, recolor the terminal or show its words in
+/// another order than they are.
 fn plain(text: &str) -> Cow<'_, str> {
-    if !text.contains(char::is_control) {
+    if !text.contains(crate::name::is_control) {
         return Cow::Borrowed(text);
     }
     let mut shown = String::with_capacity(text.len() + 8);
     for c in text.chars() {
-        if c.is_control() {
+        if crate::name::is_control(c) {
             shown.extend(c.escape_default());
         } else {
             shown.push(c);
         }
     }
     Cow::Owned(shown)
+}
+
+/// `json` as it goes to a terminal: c1 controls, which some terminals act on as escape codes, and
+/// bidi controls, which show the text around them in another order, written as `\u` escapes,
+/// which any reader of json reads back as the same characters. json holds them only in strings.
+fn escaped_for_terminal(json: Vec<u8>) -> Vec<u8> {
+    let steers = |c: char| matches!(c, '\u{80}'..='\u{9f}') || crate::name::is_bidi_control(c);
+    let text = match String::from_utf8(json) {
+        Ok(text) if text.contains(steers) => text,
+        Ok(text) => return text.into_bytes(),
+        Err(err) => return err.into_bytes(),
+    };
+    let mut escaped = String::with_capacity(text.len() + 16);
+    for c in text.chars() {
+        if steers(c) {
+            let _ = write!(escaped, "\\u{:04x}", u32::from(c));
+        } else {
+            escaped.push(c);
+        }
+    }
+    escaped.into_bytes()
 }
 
 #[cfg(test)]
@@ -2910,6 +2933,26 @@ mod tests {
         assert_eq!(plain("iris.csv · 4.1 KiB"), "iris.csv · 4.1 KiB");
         assert_eq!(plain("\u{1b}[2Jgone"), "\\u{1b}[2Jgone");
         assert_eq!(plain("two\nlines"), "two\\nlines");
+        assert_eq!(plain("\u{9b}2J"), "\\u{9b}2J");
+        // bidi controls would show a line's text in another order than its bytes
+        for (text, shown) in [
+            ("report\u{202e}txt.exe", "report\\u{202e}txt.exe"),
+            (
+                "a\u{61c}b\u{200e}c\u{200f}d",
+                "a\\u{61c}b\\u{200e}c\\u{200f}d",
+            ),
+            (
+                "\u{202a}\u{202b}\u{202c}\u{202d}",
+                "\\u{202a}\\u{202b}\\u{202c}\\u{202d}",
+            ),
+            (
+                "\u{2066}x\u{2067}y\u{2068}z\u{2069}",
+                "\\u{2066}x\\u{2067}y\\u{2068}z\\u{2069}",
+            ),
+            ("données \u{200e}· كلمة", "données \\u{200e}· كلمة"),
+        ] {
+            assert_eq!(plain(text), shown, "{text:?}");
+        }
     }
 
     #[test]
