@@ -223,9 +223,9 @@ fn hand_edits_survive_sync_until_forced() -> Result {
     fs::write(&placed, "my own notes\n")?;
     let status = sandbox.run(&["status"])?;
     assert!(
-        text(&status.stderr)?.contains("Edited data/iris/iris.csv"),
+        text(&status.stdout)?.contains("Edited data/iris/iris.csv"),
         "{}",
-        text(&status.stderr)?
+        text(&status.stdout)?
     );
     let kept = sandbox.run(&["sync"])?;
     assert_eq!(kept.status.code(), Some(0));
@@ -258,7 +258,7 @@ fn an_edit_in_place_through_a_shared_link_is_put_back_and_kept_beside_it() -> Re
     let added = json(&sandbox.run(&["--json", "add", &server.url])?)?;
     let placed = sandbox.work().join("data").join("iris").join("iris.csv");
     edit(&placed, b"changed in place\n")?;
-    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
     let preview = text(&sandbox.run(&["sync", "--dry-run"])?.stderr)?;
     let synced = json(&sandbox.run(&["--json", "sync"])?)?;
     let placement = &synced["result"]["placement"];
@@ -529,8 +529,13 @@ fn a_clone_without_data_lock_says_nothing_pins_its_files() -> Result {
     assert_eq!(locked.status.code(), Some(1));
     let status = sandbox.command_in(&clone, &["status"]).output()?;
     assert_eq!(status.status.code(), Some(0));
-    let stderr = format!("{}{}", text(&locked.stderr)?, text(&status.stderr)?);
-    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    let streams = format!(
+        "{}status stdout:\n{}status stderr:\n{}",
+        text(&locked.stderr)?,
+        text(&status.stdout)?,
+        text(&status.stderr)?
+    );
+    sandbox.filters().bind(|| insta::assert_snapshot!(streams));
     assert!(
         !clone.join("data.lock").exists(),
         "neither writes data.lock"
@@ -924,22 +929,67 @@ fn every_command_that_places_files_ignores_the_data_folder_in_git() -> Result {
     Ok(())
 }
 
+/// status prints each difference as a row on stdout, where a pipe or a file gets it, and its
+/// closing line and hints on stderr, so `fetchloom status | grep Missing` finds what is missing.
+/// `-v` rows go with their row, quiet prints none, and `--json` keeps stdout one document.
 #[test]
 fn status_lists_what_differs() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let folder = sandbox.work().join("data").join("iris");
+    let clean = sandbox.run(&["status"])?;
     assert_eq!(
-        text(&sandbox.run(&["status"])?.stderr)?,
+        text(&clean.stderr)?,
         "         Ok everything matches data.lock by size and time\n"
     );
+    assert!(clean.stdout.is_empty(), "{}", text(&clean.stdout)?);
+    // editors save by writing a new file in place of the old one
     delete(&folder.join("iris.csv"))?;
+    fs::write(folder.join("iris.csv"), "mine")?;
     fs::write(folder.join("notes.txt"), "mine")?;
+    let edited = sandbox.run(&["status"])?;
+    assert_eq!(
+        text(&edited.stdout)?,
+        "     Edited data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
+    );
+    let stderr = text(&edited.stderr)?;
+    assert!(
+        stderr.starts_with("      Found 2 differences from data.lock\n  hint: "),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("data/iris/"), "{stderr}");
+    delete(&folder.join("iris.csv"))?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0));
-    let stderr = text(&output.stderr)?;
-    sandbox.filters().bind(|| insta::assert_snapshot!(stderr));
+    let streams = format!(
+        "stdout:\n{}stderr:\n{}",
+        text(&output.stdout)?,
+        text(&output.stderr)?
+    );
+    sandbox.filters().bind(|| insta::assert_snapshot!(streams));
+    let quiet = sandbox.run(&["-q", "status"])?;
+    assert_eq!(quiet.status.code(), Some(0));
+    assert!(quiet.stdout.is_empty(), "{}", text(&quiet.stdout)?);
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
+    assert_eq!(document["result"]["extra"][0], "data/iris/notes.txt");
+    // a dataset set to place = false names the files the next sync removes, each with -v
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let manifest = sandbox.work().join("data.toml");
+    let written = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        written.replacen("[datasets.iris]\n", "[datasets.iris]\nplace = false\n", 1),
+    )?;
+    let retiring = sandbox.run(&["-v", "status"])?;
+    assert_eq!(
+        text(&retiring.stdout)?,
+        " Not placed iris · place = false in data.toml, so `fetchloom sync` removes its file from data/iris\n            data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
+    );
+    let stderr = text(&retiring.stderr)?;
+    assert!(!stderr.contains("data/iris/"), "{stderr}");
     Ok(())
 }
 
@@ -1312,10 +1362,12 @@ fn status_reports_datasets_removed_from_the_manifest() -> Result {
     let before = fs::read(clone.join("data.lock"))?;
     let output = sandbox.command_in(&clone, &["status"]).output()?;
     assert!(output.status.success());
+    let stdout = text(&output.stdout)?;
+    assert!(
+        stdout.contains("    Removed iris from data.toml; `fetchloom sync` updates data.lock\n"),
+        "{stdout}"
+    );
     let stderr = text(&output.stderr)?;
-    assert!(stderr.contains("Removed"), "{stderr}");
-    assert!(stderr.contains("iris from data.toml"), "{stderr}");
-    assert!(stderr.contains("fetchloom sync"), "{stderr}");
     assert!(!stderr.contains("everything matches"), "{stderr}");
     let output = sandbox.command_in(&clone, &["--json", "status"]).output()?;
     let report = json(&output)?;
@@ -1365,15 +1417,16 @@ fn status_caps_human_lists_but_keeps_all_differences_in_json() -> Result {
         )?;
     }
     let output = sandbox.run(&["--offline", "status"])?;
+    let stdout = text(&output.stdout)?;
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("Unlocked new"), "{stderr}");
-    assert!(stderr.contains("Removed old from data.toml"), "{stderr}");
-    assert!(stderr.contains("Missing data/set/file19.csv"), "{stderr}");
-    assert!(!stderr.contains("file20.csv"), "{stderr}");
-    assert!(stderr.contains("Extra data/extra19.txt"), "{stderr}");
-    assert!(!stderr.contains("extra20.txt"), "{stderr}");
-    assert_eq!(stderr.matches("and 5 more").count(), 2);
+    assert!(stdout.contains("Unlocked new"), "{stdout}");
+    assert!(stdout.contains("Removed old from data.toml"), "{stdout}");
+    assert!(stdout.contains("Missing data/set/file19.csv"), "{stdout}");
+    assert!(!stdout.contains("file20.csv"), "{stdout}");
+    assert!(stdout.contains("Extra data/extra19.txt"), "{stdout}");
+    assert!(!stdout.contains("extra20.txt"), "{stdout}");
+    assert_eq!(stdout.matches("and 5 more").count(), 2);
     assert!(stderr.contains("53 differences from data.lock"), "{stderr}");
     let output = sandbox.run(&["--offline", "--json", "status"])?;
     assert_eq!(output.status.code(), Some(0));

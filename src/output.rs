@@ -52,10 +52,6 @@ pub(crate) struct Output {
     /// set at the first ctrl-c, so every bar says the run is stopping.
     stopping: Arc<AtomicBool>,
     /// whether report rows on stdout take color, which stdout decides apart from stderr.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "no command prints report rows yet")
-    )]
     report_color: bool,
 }
 
@@ -810,10 +806,6 @@ impl Output {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no command prints report rows yet")
-)]
 impl Output {
     /// one row of a report on stdout, as `mark` draws it on stderr: a verb in its column, such
     /// as `Missing`, then its subject, so a pipe or a file gets the rows while the story stays on
@@ -832,7 +824,7 @@ impl Output {
     fn report_text(&self, verb: &str, text: &str) -> Option<String> {
         self.tells(Level::Normal).then(|| {
             shown(
-                &verb_line(verb, text, verb_color(verb), self.report_color),
+                &verb_line(verb, text, Tone::Warn, self.report_color),
                 self.style.unicode,
             )
             .into_owned()
@@ -1776,6 +1768,11 @@ mod tests {
             console::strip_ansi_codes(&row),
             "    Missing data/iris/iris.csv"
         );
+        // a row is a difference whatever its verb, as a mark is, never a finished step
+        let damaged = plain_story
+            .report_text("Damaged", "data/iris/iris.csv")
+            .unwrap_or_default();
+        assert_eq!(damaged.replace("Damaged", "Missing"), row);
         for (level, json) in [(Level::Quiet, false), (Level::Normal, true)] {
             let silent = Output::new(style(false), level, json, false);
             assert_eq!(silent.report_text("Missing", "data/iris/iris.csv"), None);

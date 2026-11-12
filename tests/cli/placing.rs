@@ -362,7 +362,7 @@ fn an_edit_a_coarse_clock_hides_is_found_by_hashing() -> Result {
     edit(&placed, &edited)?;
     set_time(&placed, second)?;
 
-    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
     let links = sandbox.links()?;
     if links.hardlinks_read_only() {
         // a hardlink is the cache's own copy, so the edit changed what every project reads, and
@@ -425,7 +425,7 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
         kept.contains("data/iris/iris.csv has changed, so it stays"),
         "{kept}"
     );
-    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(status.contains("Edited data/iris/iris.csv"), "{status}");
     let forced = sandbox.run(&["sync", "--force"])?;
     assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
@@ -1092,11 +1092,11 @@ fn status_files_a_changed_shared_copy_as_damaged_in_both_forms() -> Result {
         text(&verified.stderr)?
     );
     let status = sandbox.command_in(&other, &["status"]).output()?;
-    let stderr = text(&status.stderr)?;
+    let stdout = text(&status.stdout)?;
     assert!(
-        stderr
+        stdout
             .contains("Damaged data/iris/iris.csv · linked to the cache's copy, which was changed"),
-        "{stderr}"
+        "{stdout}"
     );
     let report = json(&sandbox.command_in(&other, &["--json", "status"]).output()?)?;
     let result = &report["result"];
@@ -1208,11 +1208,12 @@ fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
         .command_in(&other, &["status", "--verify"])
         .output()?;
 
-    let stderr = text(&status.stderr)?;
+    let stdout = text(&status.stdout)?;
     assert!(
-        stderr.contains("Damaged data/iris/iris.csv · linked to the cache's copy"),
-        "{stderr}"
+        stdout.contains("Damaged data/iris/iris.csv · linked to the cache's copy"),
+        "{stdout}"
     );
+    let stderr = text(&status.stderr)?;
     assert!(stderr.contains("`fetchloom sync --verify`"), "{stderr}");
     assert!(!stderr.contains("`fetchloom sync` places"), "{stderr}");
     Ok(())
@@ -1405,8 +1406,8 @@ fn read_only_files_of_a_dataset_that_asks_for_copies_need_a_sync() -> Result {
     )?;
 
     let status = sandbox.run(&["status"])?;
-    let stderr = text(&status.stderr)?;
-    assert!(stderr.contains("Outdated data/iris/iris.csv"), "{stderr}");
+    let stdout = text(&status.stdout)?;
+    assert!(stdout.contains("Outdated data/iris/iris.csv"), "{stdout}");
     let document: serde_json::Value =
         serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
     assert_eq!(
@@ -1564,14 +1565,16 @@ fn files_already_in_a_shared_folder_are_adopted_and_told_once() -> Result {
         )?;
         fs::write(raw.join(format!("{name}.csv")), bytes)?;
     }
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = sandbox.run(&["status"])?;
+    let told = text(&status.stdout)?;
     for name in ["a", "b", "c"] {
         let line = format!(
             "  Untracked data/raw/{name}.csv · it holds the pinned bytes, so `fetchloom sync` adopts it\n"
         );
         assert!(told.contains(&line), "{line:?} in\n{told}");
     }
-    assert!(!told.contains("--force"), "{told}");
+    let story = text(&status.stderr)?;
+    assert!(!format!("{told}{story}").contains("--force"), "{story}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(status["result"]["untracked"], serde_json::json!([]));
     assert_eq!(
@@ -1616,14 +1619,17 @@ fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     for (path, bytes) in &pulled {
         fs::write(path, bytes)?;
     }
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = sandbox.run(&["status"])?;
+    let told = text(&status.stdout)?;
     for line in [
         "      Extra data/penguins/notes.txt\n",
         "      Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so `fetchloom sync` removes it\n",
-        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n",
     ] {
         assert!(told.contains(line), "{line:?} in\n{told}");
     }
+    let hint =
+        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n";
+    assert!(text(&status.stderr)?.contains(hint), "{hint:?}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
         (&status["result"]["extra"], &status["result"]["unneeded"]),
@@ -2406,14 +2412,16 @@ fn verify_finds_and_puts_back_a_change_that_kept_its_size_and_time() -> Result {
         serde_json::json!(["data/iris/iris.csv"]),
         "{report}"
     );
-    let told = text(&sandbox.run(&["status", "--verify"])?.stderr)?;
+    let verified = sandbox.run(&["status", "--verify"])?;
+    let told = text(&verified.stdout)?;
     assert!(
         told.contains(
             "Damaged data/iris/iris.csv · its bytes changed though its size and time did not"
         ),
         "{told}"
     );
-    assert!(told.contains("`fetchloom sync --verify`"), "{told}");
+    let hints = text(&verified.stderr)?;
+    assert!(hints.contains("`fetchloom sync --verify`"), "{hints}");
     let plain = text(&sandbox.run(&["sync"])?.stderr)?;
     assert_eq!(
         plain,
@@ -2687,15 +2695,18 @@ fn status_says_an_unplaced_dataset_is_not_placed() -> Result {
     unplace(&sandbox, "flowers")?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let told = text(&output.stderr)?;
+    let told = text(&output.stdout)?;
     for line in [
         " Not placed flowers · place = false in data.toml, so `fetchloom sync` removes its file from data/flowers\n",
         "      Extra data/flowers/notes.txt\n",
-        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n",
     ] {
         assert!(told.contains(line), "{line:?} in\n{told}");
     }
-    assert!(!told.contains("petals.csv"), "{told}");
+    let story = text(&output.stderr)?;
+    let hint =
+        "  hint: `fetchloom sync` removes the files fetchloom placed that no dataset needs now\n";
+    assert!(story.contains(hint), "{hint:?} in\n{story}");
+    assert!(!format!("{told}{story}").contains("petals.csv"), "{told}");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
         document["result"]["unplaced"],

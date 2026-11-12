@@ -24,27 +24,37 @@ fetchloom status [options]
 
 1. read the manifest, lock and saved placement state.
 2. compare file sizes and modification times, hashing where those records need checking.
-3. report changed manifest entries, missing or different files, extra paths, unavailable archive trees and recipe results nothing here holds.
+3. report changed manifest entries, missing or different files, extra paths, unavailable archive trees and recipe results nothing here holds, one row on stdout for each, so `fetchloom status | grep Missing` or `fetchloom status > status.txt` gets them. the closing line, hints and warnings go to stderr; `-q` prints no rows.
 4. in a git repository, warn of each list in [`data.lock.d`](../reference/data-lock.md#big-datasets) that data.lock names and git does not have, with `git add data.lock.d` as help, since a commit without it leaves clones unable to read data.lock. it asks git with `git ls-files`, which reads only git's index, and says nothing without git or outside a repository.
 
 a project still as the last complete sync left it, with `data.toml` and `data.lock` unchanged byte for byte and every placed file looking as placed, is settled, as `sync` finds it: status lists only files fetchloom did not place as extra. that holds even when the cache no longer records what an archive held, as after moving the project and running `fetchloom cache gc --now` before any sync there.
 
 status changes no project files. without `--verify` it is not a full integrity scan: when nothing differs, its last line says what it compared, `Ok everything matches data.lock by size and time`, since a change that keeps a file's size and modification time does not show that way. `--verify` hashes every placed file, lists the ones whose bytes changed as damaged, and ends with `Ok everything matches data.lock, checked byte for byte` when none did; `fetchloom sync --verify` puts them back. [state records](../reference/project-folder.md#placement-state) explains when metadata can be trusted.
 
-stderr when `iris.csv` is missing and `notes.txt` is extra:
+when `iris.csv` is missing and `notes.txt` is extra, stdout holds the rows:
 
 ```text
     Missing data/iris/iris.csv
       Extra data/iris/notes.txt
+```
+
+and stderr the closing line and the hint:
+
+```text
       Found 2 differences from data.lock
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
 ```
 
-stderr in a fresh clone whose cache holds neither the recipe `clean`'s result nor `raw`, which has `place = false` and which clean is made from:
+in a fresh clone whose cache holds neither the recipe `clean`'s result nor `raw`, which has `place = false` and which clean is made from, stdout holds the row:
+
+```text
+    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is raw, which it is made from
+```
+
+and stderr the rest, since a dataset with `place = false` is no difference:
 
 ```text
  Not placed raw · place = false in data.toml
-    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is raw, which it is made from
       Found 1 difference from data.lock
   hint: `fetchloom build clean` makes it on this machine
 ```
@@ -67,7 +77,7 @@ stderr in a fresh clone whose cache holds neither the recipe `clean`'s result no
 | `unneeded` | a file fetchloom placed that no dataset needs now and that nobody changed, as one of a dataset gone from data.toml or one with `place = false`: the next sync removes it. its line says so, or the `Not placed` line of a dataset with `place = false` does for all of its files, as `Extra data/penguins/penguins.csv · fetchloom placed it and no dataset needs it now, so \`fetchloom sync\` removes it` |
 | `not_unpacked` | an archive's member record is unavailable here |
 | `unbuilt` | a recipe's pinned result has files missing from the data folder, or placed for an older pin, whose bytes neither the cache, another file in place in the data folder nor a folder [mirror](../mirrors.md) holds, so a sync leaves it out and only [`fetchloom build`](build.md) makes it here. its files are in no other list; the line names the datasets it is made from that neither the cache nor the data folder holds, which the build fetches first, and a hint names the build. an `adoptable` file counts as held, since the build copies its bytes as it would a placed one, and so does an archive whose own bytes `cache gc` freed once the cache held the files its members table keeps, since the build reads those. status asks no web mirror, so with one set it lists the files as missing, since sync asks it |
-| `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line names it. while files an earlier sync placed of it are left, as right after you set `place = false`, the line says the next sync removes them, as `Not placed images · place = false in data.toml, so \`fetchloom sync\` removes its 13 files from data/images`, and `-v` names each; they are `unneeded` files, which JSON lists there and the count of differences includes, and the hint says the sync removes them |
+| `unplaced` | no difference: a dataset with [`place = false`](../reference/data-toml.md#datasets-only-recipes-read), which has no files in the data folder; a faint `Not placed` line on stderr names it. while files an earlier sync placed of it are left, as right after you set `place = false`, a row on stdout says the next sync removes them, as `Not placed images · place = false in data.toml, so \`fetchloom sync\` removes its 13 files from data/images`, and `-v` names each; they are `unneeded` files, which JSON lists there and the count of differences includes, and the hint says the sync removes them |
 
 files modified too close to the state write are hashed because a coarse filesystem clock can hide an edit. that check can detect changed bytes even when the saved size and modification time still match.
 

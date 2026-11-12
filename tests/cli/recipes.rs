@@ -265,24 +265,28 @@ fn status_lists_a_result_no_cache_or_mirror_holds_as_unbuilt() -> Result {
     let document = json(&there(&["--json", "status"])?)?;
     assert_eq!(document["result"]["unbuilt"], json!(["clean"]));
     assert_eq!(document["result"]["missing"], json!(["data/iris/iris.csv"]));
-    let told = text(&there(&["status"])?.stderr)?;
+    let status = there(&["status"])?;
+    let told = text(&status.stdout)?;
     assert!(
         told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror, nor is iris, which it is made from\n"),
         "{told}"
     );
+    let hints = text(&status.stderr)?;
     assert!(
-        told.contains("hint: `fetchloom build clean` makes it on this machine\n"),
-        "{told}"
+        hints.contains("hint: `fetchloom build clean` makes it on this machine\n"),
+        "{hints}"
     );
     assert!(!told.contains("Missing data/clean"), "{told}");
     let synced = there(&["sync"])?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    let told = text(&there(&["status"])?.stderr)?;
+    let status = there(&["status"])?;
+    let told = text(&status.stdout)?;
     assert!(
         told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror\n"),
         "{told}"
     );
-    assert!(!told.contains("`fetchloom sync`"), "{told}");
+    let hints = text(&status.stderr)?;
+    assert!(!hints.contains("`fetchloom sync`"), "{hints}");
     Ok(())
 }
 
@@ -305,7 +309,7 @@ fn status_counts_an_input_the_build_copies_from_the_data_folder() -> Result {
             .command_in(&folder, &["status"])
             .env("FETCHLOOM_CACHE", &cache)
             .output()?
-            .stderr,
+            .stdout,
     )?;
     assert!(
         told.contains("    Unbuilt clean · its pinned result is not on this machine or a mirror\n"),
@@ -405,7 +409,7 @@ fn status_counts_an_archive_whose_kept_files_the_cache_holds() -> Result {
     // a sync on the other commit retired the result, which gc then freed
     delete(&work.join("data").join("made").join("made.csv"))?;
     delete(&object(&cache, b"made"))?;
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    let told = text(&sandbox.run(&["status"])?.stdout)?;
     assert!(
         told.contains("    Unbuilt made · its pinned result is not on this machine or a mirror\n"),
         "{told}"

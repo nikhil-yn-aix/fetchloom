@@ -2,7 +2,7 @@
 
 the files fetchloom places in the data folder are the raw inputs: pinned in data.lock, read-only, and put back by every sync. your own work goes beside them, and the few changes that belong to the inputs themselves, such as leaving out a bad sample, go into data.toml so every clone makes them too.
 
-the examples come from one real run, in order, in a project holding `penguins`, one CSV file, and `uci`, the UCI iris zip, which unpacks to four files. output is stderr.
+the examples come from one real run, in order, in a project holding `penguins`, one CSV file, and `uci`, the UCI iris zip, which unpacks to four files. output is stderr, except the rows `status` lists, which are stdout.
 
 ## where your own files go
 

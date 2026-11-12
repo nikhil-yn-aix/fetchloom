@@ -731,8 +731,9 @@ impl Status {
     }
 }
 
-/// a line for each dataset with `place = false`: faint, as no difference, once no file an earlier
-/// sync placed of it is left, and saying the next sync removes them while some are.
+/// a line for each dataset with `place = false`: faint on stderr, as no difference, once no file
+/// an earlier sync placed of it is left, and a row saying the next sync removes them while some
+/// are.
 fn tell_unplaced(output: &Output, status: &Status) {
     for name in &status.unplaced {
         let Some((folder, paths)) = status.retiring.get(name) else {
@@ -746,20 +747,20 @@ fn tell_unplaced(output: &Output, status: &Status) {
             1 => "its file".to_owned(),
             count => format!("its {count} files"),
         };
-        output.mark(
+        output.report(
             "Not placed",
             &format!(
                 "{name} · place = false in data.toml, so `fetchloom sync` removes {files} from {folder}"
             ),
         );
         for path in paths {
-            output.detail(path);
+            report_detail(output, path);
         }
     }
 }
 
-/// a line for each difference, at most `SHOWN` of each kind, after the lines of the datasets with
-/// `place = false`.
+/// a row on stdout for each difference, at most `SHOWN` of each kind, after the lines of the
+/// datasets with `place = false`, so a pipe or a file gets the rows and stderr keeps the story.
 fn list(output: &Output, status: &Status) {
     tell_unplaced(output, status);
     let unpinned = if status.lockless {
@@ -769,10 +770,10 @@ fn list(output: &Output, status: &Status) {
     };
     for name in &status.unlocked {
         let reason = status.building.get(name).map_or(unpinned, String::as_str);
-        output.mark("Unlocked", &format!("{name} · {reason}"));
+        output.report("Unlocked", &format!("{name} · {reason}"));
     }
     for name in &status.removed {
-        output.mark(
+        output.report(
             "Removed",
             &format!("{name} from data.toml; `fetchloom sync` updates data.lock"),
         );
@@ -792,29 +793,29 @@ fn list(output: &Output, status: &Status) {
             .collect();
         for path in paths.iter().copied().take(SHOWN) {
             if let Some(said) = said {
-                output.mark(verb, &format!("{path} · {said}"));
+                output.report(verb, &format!("{path} · {said}"));
             } else if status.shared.contains(path) {
-                output.mark(
+                output.report(
                     verb,
                     &format!("{path} · changed through a hardlink other projects may share"),
                 );
             } else if status.unsealed.contains(path) {
-                output.mark(
+                output.report(
                     verb,
                     &format!(
                         "{path} · a link to the cache's copy made writable, so an edit would change it for every project"
                     ),
                 );
             } else {
-                output.mark(verb, path);
+                output.report(verb, path);
             }
         }
         if paths.len() > SHOWN {
-            output.mark("", &format!("and {} more", paths.len() - SHOWN));
+            output.report("", &format!("and {} more", paths.len() - SHOWN));
         }
     }
     for archive in &status.not_unpacked {
-        output.mark(
+        output.report(
             "Missing",
             &format!("{archive} · not unpacked on this machine yet"),
         );
@@ -829,17 +830,17 @@ fn list(output: &Output, status: &Status) {
                 first.join(", ")
             ),
         };
-        output.mark("Unbuilt", &said);
+        output.report("Unbuilt", &said);
     }
     for blocker in status.blocked.iter().take(SHOWN) {
-        output.mark(
+        output.report(
             "Blocked",
             &format!("{} · {}", blocker.path, in_the_way(blocker)),
         );
     }
     if status.blocked.len() > SHOWN {
         let more = status.blocked.len() - SHOWN;
-        output.mark("", &format!("and {more} more"));
+        output.report("", &format!("and {more} more"));
     }
     for path in status.damaged.iter().take(SHOWN) {
         let cause = if status.linked.contains(path) {
@@ -847,25 +848,25 @@ fn list(output: &Output, status: &Status) {
         } else {
             "its bytes changed though its size and time did not"
         };
-        output.mark("Damaged", &format!("{path} · {cause}"));
+        output.report("Damaged", &format!("{path} · {cause}"));
     }
     if status.damaged.len() > SHOWN {
         let more = status.damaged.len() - SHOWN;
-        output.mark("", &format!("and {more} more"));
+        output.report("", &format!("and {more} more"));
     }
 }
 
-/// the line of a kept rebuild, and with `-v` each of its files that differs from data.lock with
+/// the row of a kept rebuild, and with `-v` each of its files that differs from data.lock with
 /// the cache file that holds the rebuild's bytes.
 fn tell_kept(output: &Output, kept: &Kept) {
     let name = &kept.name;
     if kept.stale {
-        output.mark(
+        output.report(
             "Kept",
             &format!("{name} · a rebuild from another recipe or pin than data.lock has now, so `fetchloom build --accept` refuses it"),
         );
     } else {
-        output.mark(
+        output.report(
             "Kept",
             &format!("{name} · a rebuild that differs from data.lock; `fetchloom build --accept {name}` pins it"),
         );
@@ -876,14 +877,24 @@ fn tell_kept(output: &Output, kept: &Kept) {
             how => how,
         };
         let path = &file.path;
-        output.detail(&match (&file.file, file.difference) {
-            (Some(found), _) => format!("{how} {path}: {}", found.display()),
-            (None, "missing") => format!("{how} {path}"),
-            (None, _) => format!("{how} {path}, which the cache no longer holds"),
-        });
+        report_detail(
+            output,
+            &match (&file.file, file.difference) {
+                (Some(found), _) => format!("{how} {path}: {}", found.display()),
+                (None, "missing") => format!("{how} {path}"),
+                (None, _) => format!("{how} {path}, which the cache no longer holds"),
+            },
+        );
     }
     if kept.files.len() > SHOWN {
-        output.detail(&format!("and {} more", kept.files.len() - SHOWN));
+        report_detail(output, &format!("and {} more", kept.files.len() - SHOWN));
+    }
+}
+
+/// a `-v` row under the row before it, on stdout with it.
+fn report_detail(output: &Output, text: &str) {
+    if output.shows_details() {
+        output.report("", text);
     }
 }
 

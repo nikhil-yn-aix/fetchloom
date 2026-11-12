@@ -179,11 +179,12 @@ fn status_names_what_changed() -> Result {
     fs::write(&manifest, text_now.replace("SEED = \"1\"", "SEED = \"2\""))?;
     let output = sandbox.run(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
-    let stderr = text(&output.stderr)?;
+    let stdout = text(&output.stdout)?;
     assert!(
-        stderr.contains("Unlocked clean · clean.py changed; env changed\n"),
-        "{stderr}"
+        stdout.contains("Unlocked clean · clean.py changed; env changed\n"),
+        "{stdout}"
     );
+    let stderr = text(&output.stderr)?;
     assert!(
         stderr
             .contains("hint: `fetchloom build --dry-run` shows the commands that would build them"),
@@ -1695,7 +1696,7 @@ fn a_rebuild_with_other_files_keeps_the_pin_and_the_rebuild() -> Result {
     assert_eq!(files(&sandbox.work().join("data"))?, data);
     let status = json(&there(&["--json", "status"])?)?;
     assert_eq!(kept_names(&status), ["clean"]);
-    let told = text(&there(&["status"])?.stderr)?;
+    let told = text(&there(&["status"])?.stdout)?;
     assert!(
         told.contains("       Kept clean · a rebuild that differs from data.lock; `fetchloom build --accept clean` pins it\n"),
         "{told}"
@@ -1769,7 +1770,7 @@ fn status_names_where_the_files_of_a_kept_rebuild_are() -> Result {
     );
     assert_eq!(fs::read(&pinned)?, fs::read(&placed)?);
     assert_ne!(fs::read(&rebuilt)?, fs::read(&placed)?);
-    let told = text(&sandbox.run(&["-v", "status"])?.stderr)?;
+    let told = text(&sandbox.run(&["-v", "status"])?.stdout)?;
     let line = format!("            changed random.bin: {}\n", rebuilt.display());
     assert!(told.contains(&line), "{line:?} in\n{told}");
     let told = text(&sandbox.run(&["status"])?.stderr)?;
@@ -2202,7 +2203,9 @@ fn accept_refuses_after_the_recipe_changed() -> Result {
     assert_eq!(stale()?, false);
     fs::write(sandbox.work().join("clean.py"), "print(2)\n")?;
     assert_eq!(stale()?, true);
-    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    let status = sandbox.run(&["status"])?;
+    // the row is on stdout and the hint on stderr
+    let told = format!("{}{}", text(&status.stdout)?, text(&status.stderr)?);
     for line in [
         "       Kept clean · a rebuild from another recipe or pin than data.lock has now, so `fetchloom build --accept` refuses it\n",
         "  hint: `fetchloom build --check clean` runs its step again as data.lock pins it now, and keeps its files when they differ\n",
