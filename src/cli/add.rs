@@ -2078,7 +2078,7 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
         context.output.warn_with(
             &format!(
                 "a later run downloads from {}, {what}, only once allowed_origins lists {them}",
-                listed(&named)
+                units::listed(&named, "and")
             ),
             &allowed.remedy(last),
         );
@@ -2098,14 +2098,6 @@ fn close(work: &Loop<'_>, private: &[url::Origin]) {
         "commit {committed}; anyone who clones adds `allowed_origins = [{}]` to their settings file, then runs `fetchloom sync`",
         quoted.join(", ")
     ));
-}
-
-/// `words` as a sentence lists them: `a`, `a and b`, or `a, b and c`.
-fn listed(words: &[String]) -> String {
-    match words.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-        _ => words.concat(),
-    }
 }
 
 /// restores both project files after a failed add of the datasets `names`, including their

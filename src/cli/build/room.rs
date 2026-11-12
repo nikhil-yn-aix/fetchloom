@@ -224,7 +224,7 @@ fn besides(unknown: &[&str]) -> String {
     match unknown {
         [] => String::new(),
         [name] => format!(", besides what {name} writes,"),
-        names => format!(", besides what {} write,", super::listed(names)),
+        names => format!(", besides what {} write,", units::listed(names, "and")),
     }
 }
 

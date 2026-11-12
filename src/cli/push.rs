@@ -1420,7 +1420,10 @@ fn everything(datasets: &[String]) -> String {
     match names.as_slice() {
         [] => "data.toml has no datasets yet, so there is nothing to push".to_owned(),
         [one] => format!("every file {one} needs is on the mirror"),
-        few if few.len() <= 3 => format!("every file {} need is on the mirror", listed(few)),
+        few if few.len() <= 3 => format!(
+            "every file {} need is on the mirror",
+            units::listed(few, "and")
+        ),
         many => format!(
             "every file the {} datasets need is on the mirror",
             units::grouped(many.len() as u64)
@@ -1433,22 +1436,9 @@ fn everything(datasets: &[String]) -> String {
 fn named(names: &[&str]) -> String {
     const FEW: usize = 5;
     if names.len() <= FEW + 1 {
-        return listed(names);
+        return units::listed(names, "and");
     }
-    format!(
-        "{} and {} more",
-        names[..FEW].join(", "),
-        units::grouped((names.len() - FEW) as u64)
-    )
-}
-
-/// `words` as a person reads a list: `a`, `a and b`, `a, b and c`.
-fn listed(words: &[&str]) -> String {
-    match words.split_last() {
-        None => String::new(),
-        Some((last, [])) => (*last).to_owned(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-    }
+    units::some_of(names, FEW)
 }
 
 #[cfg(test)]

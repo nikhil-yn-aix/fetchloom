@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::{BUILD, Course, course, listed, pin, pinned_as_asked, selected, shown, sized};
+use super::{BUILD, Course, course, pin, pinned_as_asked, selected, shown, sized};
 use crate::cache::{Cache, Member};
 use crate::cli::fetch::data_folder::DataFolder;
 use crate::cli::sync::Scope;
@@ -23,6 +23,7 @@ use crate::project::Project;
 use crate::project::lock::Lock;
 use crate::project::manifest::Manifest;
 use crate::recipe::{self, Change, Slot, Step};
+use crate::units;
 
 /// why a step whose key data.lock pins runs: the result is nowhere a build looks.
 const NOWHERE: &str = "its pinned result is not on this machine or a mirror";
@@ -349,11 +350,10 @@ fn foresee(
                     let files = pinned.files.clone();
                     let decided = match ahead.found(&files, &now) {
                         Found::Here(sources) => {
-                            let sources: Vec<&str> = sources.iter().map(String::as_str).collect();
                             let said = format!(
                                 "{} as data.lock pins it, from {}",
                                 sized(&files),
-                                listed(&sources)
+                                units::listed(&sources, "and")
                             );
                             (Action::WouldFetch, said)
                         }
@@ -445,7 +445,10 @@ fn waiting(
         (true, Some(Found::Here(_))) if !results.is_empty() => {
             return match results.as_slice() {
                 [one] => format!("runs again if {one}'s result changes"),
-                many => format!("runs again if the results of {} change", listed(many)),
+                many => format!(
+                    "runs again if the results of {} change",
+                    units::listed(many, "and")
+                ),
             };
         }
         (true, Some(Found::Web)) => parts.push(web_said(ahead)),
@@ -457,7 +460,7 @@ fn waiting(
         let first = if unnamed.len() == 1 { "runs" } else { "run" };
         parts.push(format!(
             "it reads {}, which {first} first",
-            listed(&unnamed)
+            units::listed(&unnamed, "and")
         ));
     }
     parts.join("; ")
@@ -465,20 +468,10 @@ fn waiting(
 
 /// why a step whose pinned result the cache lacks may run when only a web mirror could give it.
 fn web_said(ahead: &Ahead<'_>) -> String {
-    let web: Vec<&str> = ahead.web.iter().map(String::as_str).collect();
     format!(
         "its pinned result is not on this machine; it runs unless {} holds it",
-        either(&web)
+        units::listed(&ahead.web, "or")
     )
-}
-
-/// `words` as alternatives: `a`, `a or b`, `a, b or c`.
-fn either(words: &[&str]) -> String {
-    match words.split_last() {
-        None => String::new(),
-        Some((last, [])) => (*last).to_owned(),
-        Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
-    }
 }
 
 /// `step` as a dry run reports it, its folders named by where a build puts them.
@@ -560,7 +553,7 @@ fn tell(output: &Output, steps: &[Planned]) {
         };
         output.item(&format!(
             "reads {}{with}; writes {}",
-            listed(&read),
+            units::listed(&read, "and"),
             step.output
         ));
     }

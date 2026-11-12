@@ -166,9 +166,10 @@ fn tell_imported(output: &crate::output::Output, report: &Report, format: Format
         .iter()
         .map(|(name, _)| name.as_str())
         .collect();
-    let Some(datasets) = joined(&names) else {
+    if names.is_empty() {
         return;
-    };
+    }
+    let datasets = crate::units::listed(&names, "and");
     let (they_were, them) = if files == 1 {
         ("it was", "it")
     } else {
@@ -221,7 +222,8 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
             .collect()
     };
     let recipes = named(Reason::Recipe);
-    if let Some(datasets) = joined(&recipes) {
+    if !recipes.is_empty() {
+        let datasets = crate::units::listed(&recipes, "and");
         let makes = if recipes.len() == 1 {
             "a recipe makes its"
         } else {
@@ -232,22 +234,13 @@ fn tell_left_out(output: &crate::output::Output, report: &Report) {
         ));
     }
     let unplaced = named(Reason::NotPlaced);
-    if let Some(datasets) = joined(&unplaced) {
+    if !unplaced.is_empty() {
+        let datasets = crate::units::listed(&unplaced, "and");
         let its = if unplaced.len() == 1 { "its" } else { "their" };
         output.warn(&format!(
             "the list leaves out {datasets}: place = false keeps {its} files out of the data folder"
         ));
     }
-}
-
-/// `names` as a sentence lists them, as `a, b and c`, or none when there are none.
-fn joined(names: &[&str]) -> Option<String> {
-    let (last, rest) = names.split_last()?;
-    Some(if rest.is_empty() {
-        (*last).to_owned()
-    } else {
-        format!("{} and {last}", rest.join(", "))
-    })
 }
 
 /// what the datasets `names`, or every dataset when none is named, pin: the files placed from

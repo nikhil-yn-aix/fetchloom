@@ -690,7 +690,7 @@ fn tell(output: &Output, plan: &Plan, told: Told) {
             };
             output.item(&format!(
                 "{} {holds} a copy of {of}, hashed in this run",
-                listed(&mirrors)
+                units::listed(&mirrors, "and")
             ));
             if told != Told::After {
                 output.step("Costs", &costs(plan, group, &mirrors, bytes));
@@ -728,9 +728,9 @@ fn costs(plan: &Plan, group: &Group, mirrors: &[String], bytes: u64) -> String {
     };
     format!(
         "rerunning {} fetches these {} back from {}{source}",
-        listed_or(&group.readers),
+        units::listed(&group.readers, "or"),
         units::size(bytes),
-        listed_or(mirrors)
+        units::listed(mirrors, "or")
     )
 }
 
@@ -749,7 +749,7 @@ fn said(plan: &Plan, group: &Group, reason: Reason, at: Option<usize>, files: u6
             };
             format!(
                 "{} {reads} it and {is} not built as data.lock pins {it}",
-                listed(&group.unbuilt)
+                units::listed(&group.unbuilt, "and")
             )
         }
         Reason::Derived => "a recipe makes it, and the next build would put it back".to_owned(),
@@ -795,8 +795,12 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    let what = format!("{}, {},", listed(&names), units::size(inputs.freed_bytes));
-    let cancel = format!("freeing {} from the cache", listed(&names));
+    let what = format!(
+        "{}, {},",
+        units::listed(&names, "and"),
+        units::size(inputs.freed_bytes)
+    );
+    let cancel = format!("freeing {} from the cache", units::listed(&names, "and"));
     if output.can_ask() {
         tell(output, plan, Told::Would);
     }
@@ -807,7 +811,7 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
         Some(true) => Ok(true),
         Some(false) => Err(Error::new(
             Kind::Unconfirmed,
-            format!("did not free {}", listed(&names)),
+            format!("did not free {}", units::listed(&names, "and")),
         )
         .cancelled(cancel)
         .unchanged()),
@@ -827,25 +831,6 @@ fn ask(context: &Context, plan: &Plan) -> Result<bool, Error> {
                 })?;
             Err(error.with_result(result))
         }
-    }
-}
-
-/// `words` as a person reads a list: `a`, `a and b`, `a, b and c`.
-fn listed(words: &[String]) -> String {
-    joined(words, "and")
-}
-
-/// `words` as a person reads a choice: `a`, `a or b`, `a, b or c`.
-fn listed_or(words: &[String]) -> String {
-    joined(words, "or")
-}
-
-/// `words` with commas between them, and `last` before the last one.
-fn joined(words: &[String], last: &str) -> String {
-    match words.split_last() {
-        None => String::new(),
-        Some((only, [])) => only.clone(),
-        Some((final_word, rest)) => format!("{} {last} {final_word}", rest.join(", ")),
     }
 }
 

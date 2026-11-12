@@ -1,4 +1,5 @@
-//! one way to write sizes, rates, durations, counts and paths, everywhere fetchloom prints them.
+//! one way to write sizes, rates, durations, counts, lists and paths, everywhere fetchloom prints
+//! them.
 
 use std::path::{MAIN_SEPARATOR, Path};
 use std::time::Duration;
@@ -177,6 +178,31 @@ pub(crate) fn grouped(n: u64) -> String {
     grouped
 }
 
+/// `words` as a sentence lists them, `last` before the last one: `a`, `a and b`, `a, b and c`,
+/// or `a, b or c` for a choice.
+pub(crate) fn listed(words: &[impl AsRef<str>], last: &str) -> String {
+    let words: Vec<&str> = words.iter().map(AsRef::as_ref).collect();
+    match words.split_last() {
+        None => String::new(),
+        Some((only, [])) => (*only).to_owned(),
+        Some((final_word, rest)) => format!("{} {last} {final_word}", rest.join(", ")),
+    }
+}
+
+/// the first `most` of `words` and how many more there are, `a, b, c and 2 more`, or all of
+/// them [`listed`] when they are no more than `most`.
+pub(crate) fn some_of(words: &[impl AsRef<str>], most: usize) -> String {
+    if words.len() <= most {
+        return listed(words, "and");
+    }
+    let shown: Vec<&str> = words[..most].iter().map(AsRef::as_ref).collect();
+    format!(
+        "{} and {} more",
+        shown.join(", "),
+        grouped((words.len() - most) as u64)
+    )
+}
+
 /// free text on one line and at most `most` characters, cut after a whole word and ended with
 /// `more` when it is longer.
 pub(crate) fn clip(text: &str, most: usize, more: &str) -> String {
@@ -305,6 +331,39 @@ mod tests {
         assert_eq!(count(0, "file", "files"), "0 files");
         assert_eq!(count(1204, "file", "files"), "1,204 files");
         assert_eq!(count(1_000_000, "retry", "retries"), "1,000,000 retries");
+    }
+
+    /// a list reads as a sentence: commas between the words, and `and` or `or` before the last.
+    #[test]
+    fn lists_read_as_a_sentence() {
+        let cases: [(&[&str], &str, &str); 6] = [
+            (&[], "and", ""),
+            (&["a"], "and", "a"),
+            (&["a", "b"], "and", "a and b"),
+            (&["a", "b", "c"], "and", "a, b and c"),
+            (&["a", "b"], "or", "a or b"),
+            (&["a", "b", "c", "d"], "or", "a, b, c or d"),
+        ];
+        for (words, last, said) in cases {
+            assert_eq!(listed(words, last), said, "{words:?} with {last}");
+        }
+    }
+
+    /// a long list names its first few and counts the rest with thousands apart, and a short one
+    /// is listed whole.
+    #[test]
+    fn long_lists_name_a_few_and_count_the_rest() {
+        let words: Vec<String> = (1..=1_204).map(|n| n.to_string()).collect();
+        let cases: [(usize, &str); 5] = [
+            (0, ""),
+            (1, "1"),
+            (3, "1, 2 and 3"),
+            (4, "1, 2, 3 and 1 more"),
+            (1_204, "1, 2, 3 and 1,201 more"),
+        ];
+        for (given, said) in cases {
+            assert_eq!(some_of(&words[..given], 3), said, "{given} words");
+        }
     }
 
     #[test]

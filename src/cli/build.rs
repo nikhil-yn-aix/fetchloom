@@ -235,15 +235,6 @@ fn selected(manifest: &Manifest, names: &[String]) -> Vec<String> {
     }
 }
 
-/// `words` as a person reads a list: `a`, `a and b`, `a, b and c`.
-fn listed(words: &[&str]) -> String {
-    match words.split_last() {
-        None => String::new(),
-        Some((last, [])) => (*last).to_owned(),
-        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
-    }
-}
-
 /// the build `--prepare` readied this machine for, as a person types it there: without the
 /// network, with the recipes named and `--check` and `--locked` as `args` gave them.
 fn prepared_for(args: &args::Build) -> String {
@@ -343,12 +334,11 @@ impl<'a> Building<'a> {
         if let Some(instead) = current {
             let changed = repinned(&before, &lock);
             if !changed.is_empty() {
-                let names: Vec<&str> = changed.iter().map(String::as_str).collect();
                 return Err(Error::new(
                     Kind::Outdated,
                     format!(
                         "data.lock is out of date: building would change what it pins of {}",
-                        listed(&names)
+                        units::listed(&changed, "and")
                     ),
                 )
                 .help(format!(
@@ -1482,7 +1472,7 @@ fn differs(manifest: &Manifest, steps: &[Done]) -> Error {
             step.name,
             matched(compared)
         ),
-        _ => format!("{} differ from data.lock", listed(&names)),
+        _ => format!("{} differ from data.lock", units::listed(&names, "and")),
     };
     let mut error = Error::new(Kind::BuildDiffers, message);
     for (step, compared) in &differing {
