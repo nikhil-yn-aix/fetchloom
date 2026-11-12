@@ -637,7 +637,7 @@ impl Net {
                 .await
                 .map_err(Failure::Final)?;
             let tokened = self.google_bearer(stored.as_ref(), redirects).await?;
-            let blobbed = self.azure_hop(container.as_ref(), redirects)?;
+            let blobbed = self.azure_hop(container.as_ref(), redirects).await?;
             let ticket = self
                 .pace_holding(&hop, holding.as_mut())
                 .await
@@ -686,7 +686,7 @@ impl Net {
                     .insert(located.keyed(signer.as_ref()));
             }
             if self.google_again(&tokened, &mut response).await?
-                || self.azure_again(&blobbed, &mut response)?
+                || self.azure_again(&blobbed, &mut response).await?
             {
                 continue;
             }

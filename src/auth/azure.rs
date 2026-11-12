@@ -1,15 +1,29 @@
 //! azure storage's credentials where the az cli reads them: a SAS in `AZURE_STORAGE_SAS_TOKEN`
 //! or an account key in `AZURE_STORAGE_KEY`, each kept to the account `AZURE_STORAGE_ACCOUNT`
-//! names. [`crate::net`] decides which request carries which; the key only signs and is never
-//! sent.
+//! names, else a token of the az cli's login, from `az account get-access-token`, run as
+//! [`process`] runs a program. `AZURE_TOKEN_CREDENTIALS` chooses the sign-in as it does for
+//! azure's own libraries. [`crate::net`] decides which request carries which; the key only signs
+//! and is never sent.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde_json::Value;
+
+use crate::auth::process::{self, PATIENCE};
 use crate::error::{Error, Kind};
 use crate::source::{AzureContainer, Sas, Var, is_azure_account};
+use crate::stop::Stop;
+
+/// the resource whose tokens read azure storage, in any account their identity may read.
+pub(crate) const STORAGE: &str = "https://storage.azure.com/";
+
+/// how to sign in when a container needs it and the environment gives no SAS or key.
+const SIGN_IN: &str = "sign in with `az login`";
 
 /// what the environment gives for azure storage.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct Storage {
     /// the SAS `AZURE_STORAGE_SAS_TOKEN` holds.
     pub(crate) sas: Option<Sas>,
@@ -18,6 +32,32 @@ pub(crate) struct Storage {
     /// the account `AZURE_STORAGE_ACCOUNT` names, in lowercase, which the SAS and the key are
     /// kept to.
     pub(crate) account: Option<String>,
+    /// how a token is got, or what is wrong with how `AZURE_TOKEN_CREDENTIALS` asks for one,
+    /// told only once a container needs a token.
+    pub(crate) sign_in: Result<SignIn, Error>,
+}
+
+/// how a token for azure storage is got.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SignIn {
+    /// no way: no folder on PATH holds the az cli, and nothing asks for another way.
+    None,
+    /// `az account get-access-token`, with the az cli at this path.
+    Cli(PathBuf),
+}
+
+/// a token for azure storage, a secret, and how long it lives from when it was asked for.
+pub(crate) struct Token {
+    pub(crate) value: String,
+    pub(crate) lifetime: Duration,
+}
+
+impl fmt::Debug for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Token")
+            .field("lifetime", &self.lifetime)
+            .finish_non_exhaustive()
+    }
 }
 
 /// a storage account's key, which signs requests and never shows.
@@ -53,6 +93,7 @@ impl fmt::Debug for AccountKey {
 /// none of them repeats what a variable holds.
 pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, Error> {
     let set = |name: &str| var(name).filter(|value| !value.is_empty());
+    let sign_in = sign_in(var);
     let sas = set("AZURE_STORAGE_SAS_TOKEN")
         .map(|text| {
             text.to_str().and_then(Sas::parse).ok_or_else(|| {
@@ -66,7 +107,12 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
         .transpose()?;
     let key = set("AZURE_STORAGE_KEY");
     if sas.is_none() && key.is_none() {
-        return Ok(Storage::default());
+        return Ok(Storage {
+            sas,
+            key: None,
+            account: None,
+            sign_in,
+        });
     }
     let account = set("AZURE_STORAGE_ACCOUNT")
         .map(|account| {
@@ -120,7 +166,128 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
             .help("set AZURE_STORAGE_ACCOUNT to the account the SAS is for, or give each container its own SAS link in azure_containers"));
         }
     }
-    Ok(Storage { sas, key, account })
+    Ok(Storage {
+        sas,
+        key,
+        account,
+        sign_in,
+    })
+}
+
+/// how `AZURE_TOKEN_CREDENTIALS` asks for a token, read as azure's own libraries read it, any
+/// case alike: unset, `AzureCliCredential` or `dev` take the az cli's login, the one developer
+/// tool fetchloom reads, which a folder on PATH named by its full path must hold. unset, no az
+/// cli means no sign-in.
+///
+/// # Errors
+///
+/// `auth.required` for the az cli asked for by name with none on PATH, or a credential
+/// fetchloom does not read.
+fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
+    let written = var("AZURE_TOKEN_CREDENTIALS")
+        .and_then(|value| value.into_string().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let asked = written.as_deref().map(str::to_ascii_lowercase);
+    let cli = var("PATH").and_then(|path| {
+        let file = if cfg!(windows) { "az.cmd" } else { "az" };
+        crate::machine::installed(&path, file)
+    });
+    match asked.as_deref() {
+        None => Ok(cli.map_or(SignIn::None, SignIn::Cli)),
+        Some("azureclicredential" | "dev") => cli.map(SignIn::Cli).ok_or_else(|| {
+            Error::new(
+                Kind::AuthRequired,
+                "AZURE_TOKEN_CREDENTIALS asks for the az cli's login, and no folder on PATH holds the az cli",
+            )
+            .help("install the azure cli and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS")
+        }),
+        Some(_) => Err(Error::new(
+            Kind::AuthRequired,
+            format!(
+                "AZURE_TOKEN_CREDENTIALS asks for {}, which fetchloom does not read",
+                crate::auth::google::plain(written.as_deref().unwrap_or_default())
+            ),
+        )
+        .help("set it to AzureCliCredential to sign in with the az cli, or unset it")),
+    }
+}
+
+/// a token of the az cli's login at `path` that reads azure storage, from `az account
+/// get-access-token`, which must still hold at `now`.
+///
+/// # Errors
+///
+/// `interrupted` once `stop` asks; `auth.required` when the az cli could not start, failed, as
+/// it does without a login, ran past its time, or printed no token fetchloom reads or one that
+/// had expired by `now`. none of them repeats what it printed.
+pub(crate) async fn cli_token(path: &Path, now: SystemTime, stop: &Stop) -> Result<Token, Error> {
+    let named = "`az account get-access-token`";
+    let args = [
+        "account",
+        "get-access-token",
+        "--resource",
+        STORAGE,
+        "--output",
+        "json",
+    ]
+    .map(str::to_owned);
+    tracing::debug!(program = %path.display(), "asking the az cli for an azure storage token");
+    let printed = process::printed(path, &args, PATIENCE, stop)
+        .await
+        .map_err(|ran| {
+            let Some(message) = ran.said(named, "token", path, PATIENCE) else {
+                return Stop::stopped();
+            };
+            Error::new(Kind::AuthRequired, message).help(format!(
+                "{SIGN_IN}, or run `az account get-access-token --resource {STORAGE}` yourself to see what went wrong"
+            ))
+        })?;
+    let (value, expires) = read_cli(&printed).map_err(|wrong| {
+        Error::new(
+            Kind::AuthRequired,
+            format!("{named} printed no token fetchloom can read: {wrong}"),
+        )
+        .help("update the az cli to version 2.54 or later")
+    })?;
+    let Ok(lifetime) = expires.duration_since(now) else {
+        return Err(Error::new(
+            Kind::AuthRequired,
+            format!(
+                "the token the az cli gave expired at {}",
+                crate::project::lock::timestamp(expires)
+            ),
+        )
+        .help(format!("{SIGN_IN} again, and check this machine's clock")));
+    };
+    Ok(Token { value, lifetime })
+}
+
+/// the token `az account get-access-token --output json` printed, and when it expires, or what
+/// is wrong with what it printed, which never repeats it.
+fn read_cli(printed: &[u8]) -> Result<(String, SystemTime), &'static str> {
+    let value: Value = serde_json::from_slice(printed).map_err(|_| "it is not JSON")?;
+    let object = value.as_object().ok_or("it is not a JSON object")?;
+    if object
+        .get("tokenType")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| !kind.eq_ignore_ascii_case("bearer"))
+    {
+        return Err("its tokenType is not Bearer");
+    }
+    // a token goes in a header, so one a header cannot carry is no token
+    let token = object
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_graphic()))
+        .ok_or("it has no accessToken a request can carry")?;
+    let seconds = match object.get("expires_on") {
+        Some(Value::Number(number)) => number.as_u64(),
+        Some(Value::String(text)) => text.trim().parse().ok(),
+        _ => None,
+    }
+    .ok_or("it has no expires_on, which the az cli writes from version 2.54")?;
+    Ok((token.to_owned(), UNIX_EPOCH + Duration::from_secs(seconds)))
 }
 
 /// the bytes `text` writes in base64, with the standard alphabet and its padding.
@@ -236,5 +403,151 @@ mod tests {
             &[],
         );
         assert!(unused.is_ok());
+    }
+
+    /// a folder on PATH that holds a program called as the az cli is, for `sign_in` to find.
+    fn az_folder() -> (tempfile::TempDir, PathBuf) {
+        let folder = tempfile::tempdir().unwrap();
+        let az = folder
+            .path()
+            .join(if cfg!(windows) { "az.cmd" } else { "az" });
+        std::fs::write(&az, "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&az, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        (folder, az)
+    }
+
+    /// `AZURE_TOKEN_CREDENTIALS` chooses the sign-in as azure's libraries read it: the az cli
+    /// when unset and on PATH, or when asked for by name or as `dev`, in any case. asked for and
+    /// missing, or another credential, is an error.
+    #[test]
+    fn azure_token_credentials_chooses_the_sign_in() {
+        let (folder, az) = az_folder();
+        let path = folder.path().to_str().unwrap().to_owned();
+        let chosen = |asked: Option<&str>, path: Option<&str>| {
+            let asked = asked.map(str::to_owned);
+            let path = path.map(str::to_owned);
+            sign_in(&move |name: &str| match name {
+                "AZURE_TOKEN_CREDENTIALS" => asked.clone().map(OsString::from),
+                "PATH" => path.clone().map(OsString::from),
+                _ => None,
+            })
+        };
+        assert_eq!(chosen(None, None).unwrap(), SignIn::None);
+        for asked in [
+            None,
+            Some("AzureCliCredential"),
+            Some("DEV"),
+            Some(" azureclicredential "),
+        ] {
+            assert_eq!(
+                chosen(asked, Some(&path)).unwrap(),
+                SignIn::Cli(az.clone()),
+                "{asked:?}"
+            );
+        }
+        let missing = chosen(Some("AzureCliCredential"), Some("relative/folder")).unwrap_err();
+        assert_eq!(
+            missing.message,
+            "AZURE_TOKEN_CREDENTIALS asks for the az cli's login, and no folder on PATH holds the az cli"
+        );
+        let other = chosen(Some("EnvironmentCredential"), Some(&path)).unwrap_err();
+        assert_eq!(other.kind, Kind::AuthRequired);
+        assert_eq!(
+            other.message,
+            "AZURE_TOKEN_CREDENTIALS asks for EnvironmentCredential, which fetchloom does not read"
+        );
+    }
+
+    #[test]
+    fn the_az_clis_token_is_read_and_a_fault_never_repeats_it() {
+        let (token, expires) = read_cli(
+            br#"{"accessToken": "eyJ0eXAi.printed", "expiresOn": "2026-11-12 23:59:59.000000", "expires_on": 1794527999, "subscription": "s", "tenant": "t", "tokenType": "Bearer"}"#,
+        )
+        .unwrap();
+        assert_eq!(token, "eyJ0eXAi.printed");
+        assert_eq!(
+            crate::project::lock::timestamp(expires),
+            "2026-11-12T23:59:59Z"
+        );
+        assert!(read_cli(br#"{"accessToken": "a", "expires_on": "1794527999"}"#).is_ok());
+        for (printed, wrong) in [
+            ("printed-token", "it is not JSON"),
+            (r#"["printed-token"]"#, "it is not a JSON object"),
+            (
+                r#"{"accessToken": "printed-token", "expires_on": 1, "tokenType": "pop"}"#,
+                "its tokenType is not Bearer",
+            ),
+            (
+                r#"{"accessToken": "printed token", "expires_on": 1}"#,
+                "it has no accessToken a request can carry",
+            ),
+            (
+                r#"{"accessToken": "printed-token", "expiresOn": "2026-11-12 23:59:59.000000"}"#,
+                "it has no expires_on, which the az cli writes from version 2.54",
+            ),
+        ] {
+            assert_eq!(read_cli(printed.as_bytes()).err(), Some(wrong), "{printed}");
+        }
+    }
+
+    /// the az cli at a test's own path: `script` run by sh.
+    #[cfg(unix)]
+    fn az(folder: &Path, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = folder.join("az");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// the token comes from `az account get-access-token` for azure storage's resource, and an
+    /// az cli that fails, as it does without a login, or gives an expired token, says to sign in
+    /// without repeating what it printed.
+    #[cfg(unix)]
+    #[test]
+    fn the_az_cli_gives_a_token_or_says_to_sign_in() {
+        use crate::source::recorded::block_on;
+        let folder = tempfile::tempdir().unwrap();
+        let asked = folder.path().join("asked");
+        let now = UNIX_EPOCH + Duration::from_secs(1_794_524_399);
+        let path = az(
+            folder.path(),
+            &format!(
+                "printf '%s\\n' \"$@\" > '{}'\nprintf '{{\"accessToken\": \"printed-token\", \"expires_on\": 1794527999}}'",
+                asked.display()
+            ),
+        );
+        let token = block_on(cli_token(&path, now, &Stop::default())).unwrap();
+        assert_eq!(
+            (token.value.as_str(), token.lifetime),
+            ("printed-token", Duration::from_hours(1))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&asked).unwrap(),
+            "account\nget-access-token\n--resource\nhttps://storage.azure.com/\n--output\njson\n"
+        );
+        let later = now + Duration::from_hours(2);
+        let expired = block_on(cli_token(&path, later, &Stop::default())).unwrap_err();
+        assert_eq!(
+            expired.message,
+            "the token the az cli gave expired at 2026-11-12T23:59:59Z"
+        );
+        let path = az(
+            folder.path(),
+            "printf 'printed-token'\nprintf \"Please run 'az login' to setup account.\" >&2\nexit 1",
+        );
+        let failed = block_on(cli_token(&path, now, &Stop::default())).unwrap_err();
+        assert_eq!(failed.kind, Kind::AuthRequired);
+        assert_eq!(
+            failed.message,
+            "`az account get-access-token` exited with code 1"
+        );
+        let help = failed.help.unwrap_or_default();
+        assert!(help.starts_with("sign in with `az login`"), "{help}");
+        assert!(!format!("{}{help}", failed.message).contains("printed-token"));
     }
 }

@@ -245,14 +245,15 @@ impl Net {
                         Error::new(Kind::NetworkStatus, reason)
                     }
                 })?;
-        let blobbed = self
-            .azure_hop(container.as_ref(), 0)
-            .map_err(|failure| match failure {
-                Failure::Final(error) => error,
-                Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
-                    Error::new(Kind::NetworkStatus, reason)
-                }
-            })?;
+        let blobbed =
+            self.azure_hop(container.as_ref(), 0)
+                .await
+                .map_err(|failure| match failure {
+                    Failure::Final(error) => error,
+                    Failure::Transient { reason, .. } | Failure::Limited { reason, .. } => {
+                        Error::new(Kind::NetworkStatus, reason)
+                    }
+                })?;
         let request = match &signer {
             Some(signer) => super::signed(
                 client.get(url.clone()),

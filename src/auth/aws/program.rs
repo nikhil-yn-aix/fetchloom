@@ -2,33 +2,20 @@
 //! export-credentials` for a profile that signs in to IAM identity center or takes on a role,
 //! which fetchloom leaves to the AWS CLI. its words are split as the AWS CLI splits them, never
 //! by a shell, and it is found by a full path, never through a folder PATH names relatively,
-//! which would be whatever folder fetchloom runs in. it runs from its own folder with no input.
-//! what it prints on stdout is read up to 64 KiB as version 1 JSON and kept in memory alone;
-//! stderr is never read, so nothing it prints reaches a message, a log or a file. a stop, or a
-//! run past its time, ends it.
+//! which would be whatever folder fetchloom runs in. it runs as [`process`] runs a program, and
+//! what it prints is read as version 1 JSON.
 
-use std::io::Read as _;
 use std::iter::repeat_n;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
+use crate::auth::process::{self, PATIENCE, Ran};
 use crate::error::{Error, Kind};
 use crate::net::sign::Keys;
 use crate::source::Var;
 use crate::stop::Stop;
-
-/// the most a program may print: keys and a session token take a few KiB.
-const LARGEST: u64 = 64 << 10;
-
-/// how long a program may run, which leaves time to answer a question it asks on the terminal,
-/// such as the code of a second sign-in step.
-const PATIENCE: Duration = Duration::from_secs(60);
-
-/// how long a program that ended may hold its output open, as a process it started can.
-const DRAIN: Duration = Duration::from_secs(2);
 
 /// what is wrong with an `Expiration` fetchloom cannot read.
 const NO_TIME: &str = "its Expiration is not a time such as 2026-11-12T12:00:00Z";
@@ -59,19 +46,6 @@ pub(super) enum By {
     /// the AWS CLI, for a profile that signs in to IAM identity center when `signs_in`, else takes
     /// on a role.
     Cli { signs_in: bool },
-}
-
-/// how a run went wrong.
-enum Ran {
-    Unstarted(std::io::Error),
-    /// it ended with this exit code, none for a signal.
-    Failed(Option<i32>),
-    Late,
-    TooMuch,
-    /// it ended while a process it started held its output open.
-    Open,
-    Lost(std::io::Error),
-    Stopped,
 }
 
 impl Program {
@@ -184,7 +158,9 @@ impl Program {
     /// expired by `now`.
     pub(crate) async fn run(&self, now: SystemTime, stop: &Stop) -> Result<Issued, Error> {
         tracing::debug!(program = %self.path.display(), profile = %self.profile, "asking a program for AWS keys");
-        let printed = self.printed(stop).await.map_err(|ran| self.failed(ran))?;
+        let printed = process::printed(&self.path, &self.args, self.patience, stop)
+            .await
+            .map_err(|ran| self.failed(ran))?;
         let issued = read(&printed).map_err(|wrong| {
             Error::new(
                 Kind::AuthRequired,
@@ -221,83 +197,6 @@ impl Program {
         Ok(issued)
     }
 
-    /// what the program printed on stdout, once it ended well.
-    async fn printed(&self, stop: &Stop) -> Result<Vec<u8>, Ran> {
-        if stop.is_asked() {
-            return Err(Ran::Stopped);
-        }
-        let mut child = Command::new(&self.path)
-            .args(&self.args)
-            // started outside the project, so windows never loads a library the project holds
-            .current_dir(self.path.parent().unwrap_or(&self.path))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(Ran::Unstarted)?;
-        let Some(mut stdout) = child.stdout.take() else {
-            end(&mut child);
-            return Err(Ran::Lost(std::io::ErrorKind::BrokenPipe.into()));
-        };
-        let (sender, mut answer) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let read = (&mut stdout).take(LARGEST + 1).read_to_end(&mut bytes);
-            let _ = sender.send(read.map(|_| bytes));
-        });
-        let deadline = tokio::time::Instant::now() + self.patience;
-        let mut pause = Duration::from_millis(1);
-        let mut output = None;
-        loop {
-            if output.is_none() {
-                output = answer.try_recv().ok();
-            }
-            if let Some(Ok(bytes)) = &output
-                && bytes.len() as u64 > LARGEST
-            {
-                end(&mut child);
-                return Err(Ran::TooMuch);
-            }
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => break,
-                Ok(Some(status)) => return Err(Ran::Failed(status.code())),
-                Ok(None) => {}
-                Err(err) => {
-                    end(&mut child);
-                    return Err(Ran::Lost(err));
-                }
-            }
-            if tokio::time::Instant::now() >= deadline {
-                end(&mut child);
-                return Err(Ran::Late);
-            }
-            tokio::select! {
-                () = tokio::time::sleep(pause) => {}
-                () = stop.asked() => {
-                    end(&mut child);
-                    return Err(Ran::Stopped);
-                }
-            }
-            pause = (pause * 2).min(Duration::from_millis(50));
-        }
-        let output = if let Some(output) = output {
-            output
-        } else {
-            tokio::select! {
-                answered = tokio::time::timeout(DRAIN, answer) => match answered {
-                    Ok(Ok(output)) => output,
-                    _ => return Err(Ran::Open),
-                },
-                () = stop.asked() => return Err(Ran::Stopped),
-            }
-        };
-        let bytes = output.map_err(Ran::Lost)?;
-        if bytes.len() as u64 > LARGEST {
-            return Err(Ran::TooMuch);
-        }
-        Ok(bytes)
-    }
-
     /// how messages name the program.
     fn named(&self) -> String {
         match self.by {
@@ -312,22 +211,8 @@ impl Program {
     /// the error for a run that went wrong, which says nothing the program printed.
     fn failed(&self, ran: Ran) -> Error {
         let named = self.named();
-        let message = match ran {
-            Ran::Stopped => return Stop::stopped(),
-            Ran::Unstarted(err) => format!(
-                "{named} could not start {}: {}",
-                self.path.display(),
-                crate::error::said(&err)
-            ),
-            Ran::Failed(Some(code)) => format!("{named} exited with code {code}"),
-            Ran::Failed(None) => format!("{named} was ended by a signal"),
-            Ran::Late => format!(
-                "{named} gave no keys within {}, so fetchloom ended it",
-                crate::units::duration(self.patience)
-            ),
-            Ran::TooMuch => format!("{named} printed more than {} KiB", LARGEST >> 10),
-            Ran::Open => format!("{named} ended, but a program it started kept its output open"),
-            Ran::Lost(err) => format!("{named} could not be read: {}", crate::error::said(&err)),
+        let Some(message) = ran.said(&named, "keys", &self.path, self.patience) else {
+            return Stop::stopped();
         };
         let help = match self.by {
             By::Process => "run the credential_process yourself to see what went wrong; fetchloom shows nothing it prints, since that can hold keys".to_owned(),
@@ -342,12 +227,6 @@ impl Program {
         };
         Error::new(Kind::AuthRequired, message).help(help)
     }
-}
-
-/// ends a program that is still running, and waits for it.
-fn end(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// the keys a program printed, in version 1 of the form AWS gives `credential_process`, or what
@@ -738,7 +617,10 @@ mod tests {
         use crate::source::recorded::block_on;
         let folder = tempfile::tempdir().unwrap();
         let started = folder.path().join("started");
-        let made = Command::new("mkfifo").arg(&started).status().unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(&started)
+            .status()
+            .unwrap();
         assert!(made.success());
         let program = script(
             folder.path(),

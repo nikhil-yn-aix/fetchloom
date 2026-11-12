@@ -3,16 +3,19 @@
 //! only to the container's own blob host over https, before any redirect. the credential is the
 //! SAS the container's entry gives, else what the environment gives as the az cli reads it: the
 //! SAS in `AZURE_STORAGE_SAS_TOKEN`, or the key in `AZURE_STORAGE_KEY`, kept to the account
-//! `AZURE_STORAGE_ACCOUNT` names, as [`crate::auth::azure`] finds them. a key signs the request,
-//! as [`shared_key`] does, and is never sent. every first request to a blob host asks for the
-//! version of azure's API that listings are read in.
+//! `AZURE_STORAGE_ACCOUNT` names, else a token of the az cli's login, as [`crate::auth::azure`]
+//! finds them. a key signs the request, as [`shared_key`] does, and is never sent; a token is
+//! asked for when first needed and again shortly before it expires, by one request while the
+//! others wait. every first request to a blob host asks for the version of azure's API that
+//! listings are read in.
 
 mod shared_key;
 
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use reqwest::StatusCode;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
@@ -21,9 +24,11 @@ use url::Url;
 use super::failure::Failure;
 use super::google::Environment;
 use super::{Authorized, Net, Shown, host};
-use crate::auth::azure::{AccountKey, Storage};
+use crate::auth::azure::{AccountKey, SignIn, Storage};
+use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
 use crate::source::{AZURE_VERSION, AzureContainer, Sas, azure_account, is_azure_container};
+use crate::stop::Stop;
 
 /// what one run knows about azure access: the containers listed, what the environment gives,
 /// read when first needed, and which containers refused a request without a credential.
@@ -34,6 +39,30 @@ pub(crate) struct Azure {
     /// containers azure refused without a credential this run, as `account/container`, asked
     /// with one from then on.
     refused: Mutex<HashSet<String>>,
+    /// the sign-in's token, which reads every listed container its identity may read.
+    token: Lease<Bearer>,
+}
+
+/// who a token signs in as, as messages name it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignedIn {
+    /// the az cli's login.
+    Cli,
+}
+
+impl SignedIn {
+    fn phrase(self) -> &'static str {
+        match self {
+            SignedIn::Cli => "the az cli's login",
+        }
+    }
+}
+
+/// a token as a request carries it, in `authorization`, which logs never show.
+#[derive(Clone, PartialEq)]
+struct Bearer {
+    value: HeaderValue,
+    by: SignedIn,
 }
 
 /// where a SAS was given, as messages name it.
@@ -61,6 +90,8 @@ enum Credential {
     Sas(Sas, Given),
     /// a key of the container's account, which signs the request.
     Key(AccountKey),
+    /// a token of the sign-in.
+    Token(Bearer),
 }
 
 /// the azure container a request is for, as its link names it.
@@ -73,6 +104,8 @@ pub(crate) struct Located {
     signed: bool,
     /// the link as written, whose path and query a key signs.
     url: Url,
+    /// whether the request went again with a new token already, after one was turned away.
+    renewed: AtomicBool,
 }
 
 impl Located {
@@ -99,6 +132,8 @@ pub(crate) enum Sent {
     },
     /// signed with the key in `AZURE_STORAGE_KEY` of the container's account, `account`.
     Key { container: String, account: String },
+    /// with a token of `by`.
+    Token { container: String, by: SignedIn },
 }
 
 impl Default for Azure {
@@ -116,6 +151,7 @@ impl Azure {
             environment,
             storage: OnceLock::new(),
             refused: Mutex::default(),
+            token: Lease::default(),
         }
     }
 
@@ -135,6 +171,7 @@ impl Azure {
             container: container.to_owned(),
             signed: super::secret(url).is_some(),
             url: url.clone(),
+            renewed: AtomicBool::new(false),
         })
     }
 
@@ -145,13 +182,19 @@ impl Azure {
     }
 
     /// the credential for `located`: its entry's own SAS, else the environment's SAS, unless
-    /// that is kept to another account, else the key of its account. none for a container
-    /// nobody listed, or a link with a secret of its own.
+    /// that is kept to another account, else the key of its account, else a token of the
+    /// sign-in, asked for when none is held or the one held is due for renewal. none for a
+    /// container nobody listed, or a link with a secret of its own.
     ///
     /// # Errors
     ///
-    /// what [`crate::auth::azure::find`] finds wrong with the environment.
-    fn credential(&self, located: &Located) -> Result<Option<Credential>, Error> {
+    /// what [`crate::auth::azure::find`] finds wrong with the environment, or what getting a
+    /// token found wrong, the same for every later request, or `interrupted` once `stop` asks.
+    async fn credential(
+        &self,
+        located: &Located,
+        stop: &Stop,
+    ) -> Result<Option<Credential>, Error> {
         if located.signed {
             return Ok(None);
         }
@@ -172,11 +215,28 @@ impl Azure {
         {
             return Ok(Some(Credential::Sas(sas.clone(), Given::Environment)));
         }
-        Ok(storage
+        if let Some(key) = storage
             .key
             .clone()
             .filter(|_| account == Some(located.account.as_str()))
-            .map(Credential::Key))
+        {
+            return Ok(Some(Credential::Key(key)));
+        }
+        let SignIn::Cli(path) = storage.sign_in.as_ref().map_err(Clone::clone)? else {
+            return Ok(None);
+        };
+        // boxed, so the future of every request does not carry the az cli's run
+        let bearer = self
+            .token
+            .get(Instant::now, || {
+                Box::pin(async {
+                    let token =
+                        crate::auth::azure::cli_token(path, SystemTime::now(), stop).await?;
+                    Ok((bearer(&token.value, SignedIn::Cli)?, Some(token.lifetime)))
+                })
+            })
+            .await?;
+        Ok(Some(Credential::Token(bearer)))
     }
 
     fn refused_containers(&self) -> MutexGuard<'_, HashSet<String>> {
@@ -184,11 +244,27 @@ impl Azure {
     }
 }
 
+/// `token` of `by` as a request carries it.
+///
+/// # Errors
+///
+/// a token no request header can carry.
+fn bearer(token: &str, by: SignedIn) -> Result<Bearer, Error> {
+    let mut value = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|_| {
+        Error::new(
+            Kind::AuthRequired,
+            format!("{} gave a token no request header can carry", by.phrase()),
+        )
+    })?;
+    value.set_sensitive(true);
+    Ok(Bearer { value, by })
+}
+
 impl Sent {
     /// the bytes of text this holds, which a kept answer counts.
     pub(crate) fn bytes(&self) -> usize {
         match self {
-            Sent::Anonymous { container, .. } => container.len(),
+            Sent::Anonymous { container, .. } | Sent::Token { container, .. } => container.len(),
             Sent::Sas {
                 container, expiry, ..
             } => container.len() + expiry.as_ref().map_or(0, String::len),
@@ -206,6 +282,7 @@ impl Sent {
                 expiry,
             } => sas_refused(container, *given, expiry.as_deref(), &shown),
             Sent::Key { container, account } => key_refused(container, account, &shown),
+            Sent::Token { container, by } => token_refused(container, *by, &shown),
             Sent::Anonymous {
                 container,
                 listed: true,
@@ -234,6 +311,7 @@ impl Sent {
                 expiry,
             } => sas_refused(container, *given, expiry.as_deref(), prefix),
             Sent::Key { container, account } => key_refused(container, account, prefix),
+            Sent::Token { container, by } => token_refused(container, *by, prefix),
             Sent::Anonymous {
                 container,
                 listed: true,
@@ -279,17 +357,28 @@ fn key_refused(container: &str, account: &str, what: &str) -> Error {
     ))
 }
 
+fn token_refused(container: &str, by: SignedIn, what: &str) -> Error {
+    Error::new(
+        Kind::AuthRequired,
+        format!("azure refused {} for {what}", by.phrase()),
+    )
+    .help(format!(
+        "it needs a role that reads blobs, such as Storage Blob Data Reader, on {container}: ask the container's owner for one, or sign in as another account with `az login`"
+    ))
+}
+
 /// how to let fetchloom send credentials for `container`.
 fn trust(container: &str) -> String {
     format!(
-        "if you trust {container} with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN, or AZURE_STORAGE_KEY with AZURE_STORAGE_ACCOUNT"
+        "if you trust {container} with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and sign in with `az login` or set AZURE_STORAGE_SAS_TOKEN"
     )
 }
 
-/// how to give fetchloom credentials for `container`, which the settings list.
+/// how to give fetchloom credentials for `container`, which the settings list, when no az cli
+/// is on PATH to sign in with.
 fn missing(container: &str) -> String {
     format!(
-        "set AZURE_STORAGE_SAS_TOKEN to a SAS for {container}, or AZURE_STORAGE_KEY and AZURE_STORAGE_ACCOUNT to a key of its account, or give its SAS link as its entry in azure_containers in the settings file"
+        "install the azure cli and sign in with `az login`, or set AZURE_STORAGE_SAS_TOKEN to a SAS for {container}, or AZURE_STORAGE_KEY and AZURE_STORAGE_ACCOUNT to a key of its account"
     )
 }
 
@@ -313,6 +402,10 @@ impl Blobbed<'_> {
                 container,
                 account: located.account.clone(),
             },
+            Some(Credential::Token(bearer)) => Sent::Token {
+                container,
+                by: bearer.by,
+            },
             None => Sent::Anonymous {
                 container,
                 listed: located.listed,
@@ -335,7 +428,8 @@ impl Blobbed<'_> {
         Cow::Owned(url)
     }
 
-    /// the version of azure's API a request to a blob host asks for, or nothing.
+    /// the version of azure's API a request to a blob host asks for, and the token it carries,
+    /// or nothing.
     pub(super) fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         if self.located.is_some() {
@@ -343,6 +437,9 @@ impl Blobbed<'_> {
                 HeaderName::from_static("x-ms-version"),
                 HeaderValue::from_static(AZURE_VERSION),
             );
+        }
+        if let Some(Credential::Token(bearer)) = &self.credential {
+            headers.insert(header::AUTHORIZATION, bearer.value.clone());
         }
         headers
     }
@@ -392,16 +489,20 @@ impl Net {
     /// the hop after `redirects` redirects of a request for `located`: only the first asks for
     /// azure's version and, once its container refused a request without one, carries a
     /// credential.
-    pub(super) fn azure_hop<'r>(
+    pub(super) async fn azure_hop<'r>(
         &self,
         located: Option<&'r Located>,
         redirects: usize,
     ) -> Result<Blobbed<'r>, Failure> {
         let located = located.filter(|_| redirects == 0);
+        let refused =
+            located.is_some_and(|located| self.azure.refused_containers().contains(&located.key()));
         let credential = match located {
-            Some(located) if self.azure.refused_containers().contains(&located.key()) => {
-                self.azure.credential(located).map_err(Failure::Final)?
-            }
+            Some(located) if refused => self
+                .azure
+                .credential(located, &self.stop)
+                .await
+                .map_err(Failure::Final)?,
             _ => None,
         };
         if let Some(located) = located {
@@ -411,6 +512,7 @@ impl Net {
                 Some(Credential::Key(_)) => {
                     tracing::debug!(host, "signing the request with an azure account key");
                 }
+                Some(Credential::Token(_)) => tracing::debug!(host, "sending an azure token"),
                 None => {}
             }
         }
@@ -421,13 +523,15 @@ impl Net {
     }
 
     /// whether the request goes again after `response`: once, with a credential, when azure
-    /// refused it without one for a listed container one was found for. otherwise the response
-    /// is told how the request went.
+    /// refused it without one for a listed container one was found for, and once with a new
+    /// token when azure turned one away with 401, as an expired or revoked one is, which is then
+    /// forgotten. otherwise the response is told how the request went.
     ///
     /// # Errors
     ///
-    /// an environment that holds no credential fetchloom can read.
-    pub(super) fn azure_again(
+    /// an environment that holds no credential fetchloom can read, or a token that could not be
+    /// got.
+    pub(super) async fn azure_again(
         &self,
         hop: &Blobbed<'_>,
         response: &mut reqwest::Response,
@@ -435,11 +539,23 @@ impl Net {
         let Some(located) = hop.located.filter(|located| !located.signed) else {
             return Ok(false);
         };
+        if let Some(Credential::Token(bearer)) = &hop.credential
+            && response.status() == StatusCode::UNAUTHORIZED
+            && !located.renewed.swap(true, Ordering::Relaxed)
+        {
+            tracing::debug!(
+                host = host(response.url()),
+                "azure turned the token away, so the request goes again with a new one"
+            );
+            self.azure.token.forget(bearer).await;
+            return Ok(true);
+        }
         if hop.credential.is_none()
             && refused(response)
             && self
                 .azure
-                .credential(located)
+                .credential(located, &self.stop)
+                .await
                 .map_err(Failure::Final)?
                 .is_some()
         {

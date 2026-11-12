@@ -73,12 +73,15 @@ fn blob_host(signature: &'static str) -> (Url, Arc<Mutex<Vec<Asked>>>) {
 }
 
 /// a network that sends a SAS for the `listed` containers, with the environment `set` gives.
-fn azure_net(listed: &[&str], set: &[(&'static str, &'static str)]) -> Net {
+fn azure_net(listed: &[&str], set: &[(&str, &str)]) -> Net {
     let listed = listed
         .iter()
         .map(|text| AzureContainer::parse(text).unwrap())
         .collect();
-    let set = set.to_vec();
+    let set: Vec<(String, String)> = set
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect();
     let azure = Azure::new(
         listed,
         Arc::new(move |name: &str| {
@@ -414,4 +417,88 @@ fn an_account_key_signs_requests_to_its_own_account_alone() {
     );
     let key = KEY.to_ascii_lowercase();
     assert!(asked.iter().all(|asked| !asked.head.contains(&key)));
+}
+
+/// an az cli in `folder` that gives `printed-token-<n>` on its nth run, and the file that counts
+/// its runs, a line each.
+#[cfg(unix)]
+fn az(folder: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let runs = folder.join("runs");
+    let az = folder.join("az");
+    std::fs::write(
+        &az,
+        format!(
+            "#!/bin/sh\nprintf 'ran\\n' >> '{runs}'\nrun=$(wc -l < '{runs}')\nprintf '{{\"accessToken\": \"printed-token-%s\", \"expires_on\": 4102444800}}' $run\n",
+            runs = runs.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&az, std::fs::Permissions::from_mode(0o755)).unwrap();
+    runs
+}
+
+/// the az cli's login reads a listed container once it refused a request without credentials:
+/// its token goes in `authorization`, for the container's later requests too, from one run of
+/// the az cli, and never to a container nobody listed.
+#[cfg(unix)]
+#[test]
+fn the_az_clis_login_reads_a_listed_container_once_refused() {
+    let folder = tempfile::tempdir().unwrap();
+    let runs = az(folder.path());
+    let (local, asked) = server(|head, _| {
+        if head.contains("authorization: bearer printed-token-1\r\n") {
+            reply("200 OK", &[], b"blob")
+        } else {
+            reply("401 Unauthorized", &[], b"")
+        }
+    });
+    let net = azure_net(
+        &["azure:lab/raw"],
+        &[("PATH", folder.path().to_str().unwrap())],
+    );
+    for link in [
+        "https://lab.blob.core.windows.net/raw/a.csv",
+        "https://lab.blob.core.windows.net/raw/b.csv",
+    ] {
+        assert_eq!(through(&net, &local, link).unwrap().status(), 200, "{link}");
+    }
+    let unlisted = through(
+        &net,
+        &local,
+        "https://nobody.blob.core.windows.net/raw/a.csv",
+    );
+    assert_eq!(unlisted.unwrap().status(), 401);
+    assert_eq!(std::fs::read_to_string(&runs).unwrap(), "ran\n");
+    let heads: Vec<bool> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|asked| asked.head.contains("authorization"))
+        .collect();
+    assert_eq!(heads, [false, true, true, false]);
+}
+
+/// a token azure turns away with 401, as an expired one, is asked of the az cli again, once,
+/// and the request goes again with the new one.
+#[cfg(unix)]
+#[test]
+fn a_token_azure_turns_away_is_asked_for_again_once() {
+    let folder = tempfile::tempdir().unwrap();
+    let runs = az(folder.path());
+    let (local, asked) = server(|head, _| {
+        if head.contains("authorization: bearer printed-token-2\r\n") {
+            reply("200 OK", &[], b"blob")
+        } else {
+            reply("401 Unauthorized", &[], b"")
+        }
+    });
+    let net = azure_net(
+        &["azure:lab/raw"],
+        &[("PATH", folder.path().to_str().unwrap())],
+    );
+    let answer = through(&net, &local, "https://lab.blob.core.windows.net/raw/a.csv").unwrap();
+    assert_eq!(answer.status(), 200);
+    assert_eq!(std::fs::read_to_string(&runs).unwrap(), "ran\nran\n");
+    assert_eq!(asked.lock().unwrap().len(), 3);
 }

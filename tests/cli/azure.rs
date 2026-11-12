@@ -348,6 +348,58 @@ fn a_listed_private_container_is_read_with_its_account_key() -> Result {
     Ok(())
 }
 
+/// a listed private container is read with the az cli's login when the environment gives no
+/// SAS or key: `az account get-access-token` runs once, found in a folder PATH names, and its
+/// token goes with the listing once refused, and with the blob. the token never shows.
+#[cfg(unix)]
+#[test]
+fn a_listed_private_container_is_read_with_the_az_clis_login() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/",
+        vec![
+            unauthenticated(),
+            page("raw", &[("scans/a.csv", A_CSV.len(), A_MD5)], None),
+            bytes(A_CSV),
+        ],
+    )?;
+    let bin = sandbox.folder("bin")?;
+    let asked = sandbox.folder("az")?.join("asked");
+    crate::buckets::program(
+        &bin.join("az"),
+        &format!(
+            "printf '%s\\n' \"$@\" >> '{}'\nprintf '{{\"accessToken\": \"printed-token\", \"expires_on\": 4102444800, \"tokenType\": \"Bearer\"}}'",
+            asked.display()
+        ),
+    )?;
+    let output = sandbox
+        .command(&["-vv", "add", "azure:lab/raw/scans/", "--as", "scans"])
+        .env("FETCHLOOM_TEST_BUCKETS", &server.url)
+        .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
+        .env("PATH", &bin)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(&asked)?,
+        "account\nget-access-token\n--resource\nhttps://storage.azure.com/\n--output\njson\n"
+    );
+    let heads = server.requests();
+    assert_eq!(heads.len(), 3, "{heads:?}");
+    assert!(!heads[0].contains("authorization"), "{}", heads[0]);
+    for head in &heads[1..] {
+        assert!(
+            head.contains("\r\nauthorization: bearer printed-token\r\n"),
+            "{head}"
+        );
+    }
+    assert_eq!(fs::read(sandbox.work().join("data/scans/a.csv"))?, A_CSV);
+    for said in [&stderr, &text(&output.stdout)?] {
+        assert!(!said.contains("printed-token"), "{said}");
+    }
+    Ok(())
+}
+
 /// a container nobody listed never gets the SAS, though one is on the machine, and the refusal
 /// says how to list it.
 #[test]

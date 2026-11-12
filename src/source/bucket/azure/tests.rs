@@ -146,7 +146,7 @@ fn a_refused_listing_says_how_to_send_a_sas() {
     assert_eq!(
         unlisted.help.as_deref(),
         Some(
-            "if you trust azure:lab/raw with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and set AZURE_STORAGE_SAS_TOKEN, or AZURE_STORAGE_KEY with AZURE_STORAGE_ACCOUNT"
+            "if you trust azure:lab/raw with your azure credentials, list it in azure_containers in the settings file or FETCHLOOM_AZURE_CONTAINERS, and sign in with `az login` or set AZURE_STORAGE_SAS_TOKEN"
         )
     );
     let listed_without = refused(

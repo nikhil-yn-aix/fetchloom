@@ -100,8 +100,8 @@ const ENVIRONMENT: &str = "fetchloom environment
                        private cloud storage buckets your google credentials
                        may sign in to, as gs://lab-data, separated by commas
   FETCHLOOM_AZURE_CONTAINERS
-                       private azure containers your SAS or account key may
-                       go to, as azure:lab/raw, separated by commas
+                       private azure containers your azure credentials may
+                       sign in to, as azure:lab/raw, separated by commas
   FETCHLOOM_DRIVE_FOLDERS
                        private google drive folders and files your google
                        credentials may read, by id or sharing link,
@@ -150,8 +150,9 @@ storage buckets in gcs_buckets and drive items in drive_folders, the key file
 that GOOGLE_APPLICATION_CREDENTIALS names, else the login that
 gcloud auth application-default login saved, and for azure containers in
 azure_containers, the SAS AZURE_STORAGE_SAS_TOKEN holds, else the key
-AZURE_STORAGE_KEY holds for AZURE_STORAGE_ACCOUNT. drive needs the google login
-made through an oauth client of your own: see the google drive page.
+AZURE_STORAGE_KEY holds for AZURE_STORAGE_ACCOUNT, else the az cli's login,
+as AZURE_TOKEN_CREDENTIALS chooses. drive needs the google login made through
+an oauth client of your own: see the google drive page.
 
 more: https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment.html";
 
