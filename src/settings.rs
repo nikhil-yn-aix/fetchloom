@@ -17,7 +17,7 @@ pub(crate) use resources::Level;
 use crate::error::{Error, Kind};
 use crate::machine::Machine;
 use crate::mirror::Location;
-use crate::source::{Bucket, GcsBucket};
+use crate::source::{Bucket, DriveId, GcsBucket};
 use crate::units;
 
 /// reads one environment variable, so tests can give each run its own.
@@ -42,7 +42,7 @@ const MOST_MEMORY: u64 = 4 << 30;
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
 /// the keys the settings file takes, each with the variable that overrides it.
-const KEYS: [(&str, &str); 19] = [
+const KEYS: [(&str, &str); 20] = [
     ("cache", "FETCHLOOM_CACHE"),
     ("resources", "FETCHLOOM_RESOURCES"),
     ("jobs", "FETCHLOOM_JOBS"),
@@ -58,6 +58,7 @@ const KEYS: [(&str, &str); 19] = [
     ("allowed_origins", "FETCHLOOM_ALLOWED_ORIGINS"),
     ("s3_buckets", "FETCHLOOM_S3_BUCKETS"),
     ("gcs_buckets", "FETCHLOOM_GCS_BUCKETS"),
+    ("drive_folders", "FETCHLOOM_DRIVE_FOLDERS"),
     ("mirrors", "FETCHLOOM_MIRRORS"),
     ("mirrors_only", "FETCHLOOM_MIRRORS_ONLY"),
     ("push_to", "FETCHLOOM_PUSH_TO"),
@@ -65,16 +66,23 @@ const KEYS: [(&str, &str); 19] = [
 ];
 /// the keys that hold a list: an array of text in the settings file, text separated by commas in
 /// a variable.
-const LISTS: [&str; 4] = ["allowed_origins", "s3_buckets", "gcs_buckets", "mirrors"];
+const LISTS: [&str; 5] = [
+    "allowed_origins",
+    "s3_buckets",
+    "gcs_buckets",
+    "drive_folders",
+    "mirrors",
+];
 /// the keys that hold true or false.
 const BOOLEANS: [&str; 1] = ["mirrors_only"];
 /// the keys an empty variable clears rather than leaving to the settings file: who may be
 /// reached, which buckets keys sign for, where requests go and where push writes, so blanking one
 /// for a run cannot leave the file's choice in force.
-const CLEARED: [&str; 6] = [
+const CLEARED: [&str; 7] = [
     "allowed_origins",
     "s3_buckets",
     "gcs_buckets",
+    "drive_folders",
     "mirrors",
     "mirrors_only",
     "push_to",
@@ -381,6 +389,9 @@ pub(crate) struct Settings {
     /// the cloud storage buckets a request may carry a token of this machine's google
     /// credentials for, after cloud storage refused it without one.
     pub(crate) gcs_buckets: Set<Vec<GcsBucket>>,
+    /// the google drive folders and files a request to drive's api may carry a token of this
+    /// machine's google credentials for, after drive refused them without one.
+    pub(crate) drive_folders: Set<Vec<DriveId>>,
     /// the folders and web servers asked for pinned files before their sources, in order.
     pub(crate) mirrors: Set<Vec<Location>>,
     /// whether requests may go to the mirrors alone, never to a source.
@@ -412,6 +423,7 @@ impl Settings {
             allowed_origins: Set::default(Vec::new()),
             s3_buckets: Set::default(Vec::new()),
             gcs_buckets: Set::default(Vec::new()),
+            drive_folders: Set::default(Vec::new()),
             mirrors: Set::default(Vec::new()),
             mirrors_only: Set::default(false),
             push_to: Set::default(None),
@@ -492,6 +504,7 @@ impl Settings {
             allowed_origins: origins(&given, "allowed_origins")?,
             s3_buckets: buckets(&given, "s3_buckets")?,
             gcs_buckets: gcs_buckets(&given, "gcs_buckets")?,
+            drive_folders: drive_folders(&given, "drive_folders")?,
             mirrors: mirrors(&given, "mirrors")?,
             mirrors_only: boolean(&given, "mirrors_only", false)?,
             push_to: push_folder(&given, "push_to")?,
@@ -872,6 +885,38 @@ fn gcs_buckets(given: &Given<'_>, key: &str) -> Result<Set<Vec<GcsBucket>>, Erro
         value: buckets,
         origin,
     })
+}
+
+/// the google drive folders and files `key` lists, separated by commas: ids, or the links drive
+/// gives when they are shared. none when it is unset or empty.
+fn drive_folders(given: &Given<'_>, key: &str) -> Result<Set<Vec<DriveId>>, Error> {
+    let Some((entries, origin, named)) = given.list(key) else {
+        return Ok(Set::default(Vec::new()));
+    };
+    let mut ids = Vec::new();
+    for entry in entries
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(id) = DriveId::parse(entry) else {
+            return Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "{named} holds \"{}\", which is not a google drive folder or file: its id or the link drive gives when you share it",
+                    crate::net::mask_query(entry)
+                ),
+            )
+            .help(format!(
+                "{} to send google credentials to drive for nothing, or list ids or sharing links, separated by commas",
+                undo(origin, key)
+            )));
+        };
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(Set { value: ids, origin })
 }
 
 /// the mirrors `key` lists, in order: folders, and http or https addresses. a relative folder in
@@ -1269,7 +1314,7 @@ mod tests {
         assert_eq!(
             unknown.help.as_deref(),
             Some(
-                "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, mirrors, mirrors_only, push_to, build_floor, each a number or text"
+                "the settings file takes cache, resources, jobs, host_jobs, retries, timeout, ask_above, memory, most_files, archive_files, archive_size, archive_ratio, allowed_origins, s3_buckets, gcs_buckets, drive_folders, mirrors, mirrors_only, push_to, build_floor, each a number or text"
             )
         );
     }
@@ -1763,6 +1808,68 @@ mod tests {
                 error.help.as_deref(),
                 Some(
                     "unset FETCHLOOM_GCS_BUCKETS to send google credentials to none, or list buckets as gs://name, separated by commas"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn drive_folders_name_drive_ids() {
+        const LAB: &str = "1AbCdEfGhIjKlMnOpQrStUvWxYz012345";
+        const SCANS: &str = "0B-ScansFolder_2019";
+        const NOTES: &str = "1notesFileIdOfTheLab";
+        let shown = |settings: &Settings| -> Vec<String> {
+            settings
+                .drive_folders
+                .value
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(read(&[], None).unwrap().drive_folders, Set::default(vec![]));
+        let listed = format!(
+            " {LAB}, https://drive.google.com/drive/folders/{SCANS}?usp=sharing ,drive:{NOTES},https://drive.google.com/file/d/{LAB}/view,"
+        );
+        let set = read(&[("FETCHLOOM_DRIVE_FOLDERS", listed.as_str())], None).unwrap();
+        assert_eq!(shown(&set), [LAB, SCANS, NOTES]);
+        assert_eq!(set.drive_folders.origin, Origin::Environment);
+        let filed = file(&format!("drive_folders = [\"drive:folders/{SCANS}\"]\n")).unwrap();
+        let set = Settings::read(&env(&[]), filed.clone(), machine(None)).unwrap();
+        assert_eq!(shown(&set), [SCANS]);
+        assert_eq!(set.drive_folders.origin, Origin::File);
+        // a blank variable clears what the file lists, so nothing on drive gets a token
+        let cleared = Settings::read(
+            &env(&[("FETCHLOOM_DRIVE_FOLDERS", " ")]),
+            filed,
+            machine(None),
+        )
+        .unwrap();
+        assert_eq!(
+            cleared.drive_folders,
+            Set {
+                value: Vec::new(),
+                origin: Origin::Environment
+            }
+        );
+        for entry in [
+            "lab-data",
+            "gs://lab-private",
+            "drive:folders/short",
+            "https://example.org/drive/folders/1AbCdEfGhIjKlMnOpQrStUvWxYz012345",
+            "1AbCdEfGhIjKlMnOp/QrStUvWxYz012345",
+        ] {
+            let error = read(&[("FETCHLOOM_DRIVE_FOLDERS", entry)], None).unwrap_err();
+            assert_eq!(error.kind, Kind::Usage, "{entry}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "FETCHLOOM_DRIVE_FOLDERS holds \"{entry}\", which is not a google drive folder or file: its id or the link drive gives when you share it"
+                )
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    "unset FETCHLOOM_DRIVE_FOLDERS to send google credentials to drive for nothing, or list ids or sharing links, separated by commas"
                 )
             );
         }

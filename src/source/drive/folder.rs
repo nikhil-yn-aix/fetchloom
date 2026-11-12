@@ -5,7 +5,7 @@ use std::collections::{HashSet, VecDeque};
 
 use url::Url;
 
-use super::{Item, ItemKind, file_url, html};
+use super::{Item, ItemKind, file_url, html, trust};
 use crate::error::{Error, Kind};
 use crate::net::Api;
 use crate::source::{Access, Listing, Reference, Remote, Unavailable, most_files, too_many_of};
@@ -140,6 +140,15 @@ impl Walk {
     }
 }
 
+/// whether drive shows folder `item` to anyone who has its link, by asking for its page.
+pub(super) async fn read_root(item: &Item, api: &impl Api) -> Result<(), Error> {
+    let root = Key {
+        id: item.id.clone(),
+        resource: item.resource.clone(),
+    };
+    read(item, api, &root, "").await.map(drop)
+}
+
 /// asks drive for the page of the folder `key` names, found at `path` inside the folder `item`.
 async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page, Error> {
     let mut url = Url::parse("https://drive.google.com/embeddedfolderview")
@@ -163,12 +172,11 @@ async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page
             Kind::AuthRequired,
             format!("{what} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google drive")),
-        404 | 410 => Err(Error::new(
-            Kind::ReferenceUnresolved,
-            format!("{what} does not exist"),
-        )
-        .help("check the link in a browser. a folder that was deleted cannot be fetched")),
+        .help(trust(&item.id))),
+        404 | 410 => Err(
+            Error::new(Kind::ReferenceUnresolved, format!("{what} does not exist"))
+                .help("check the link in a browser. a folder that was deleted cannot be fetched"),
+        ),
         status => Err(Error::new(
             Kind::NetworkStatus,
             format!("drive answered {status} for {what}"),
@@ -222,7 +230,7 @@ fn unreadable(item: &Item, reason: &str) -> Error {
 }
 
 /// a folder's link as drive shares it.
-fn link(id: &str) -> String {
+pub(super) fn link(id: &str) -> String {
     format!("https://drive.google.com/drive/folders/{id}")
 }
 

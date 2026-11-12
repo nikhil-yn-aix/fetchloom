@@ -3,7 +3,7 @@
 
 use url::Url;
 
-use super::{html, is_id};
+use super::{html, is_id, trust};
 use crate::error::{Error, Kind};
 
 /// the URL a confirmation form leads to, or why drive will not send the file.
@@ -31,7 +31,10 @@ pub(super) fn divert(page: &Url, status: u16, text: &str) -> Result<Url, Error> 
             Kind::AuthRequired,
             format!("{link} is not shared with anyone who has the link"),
         )
-        .help("ask its owner to share it with anyone with the link, then run the same command again. fetchloom does not sign in to google drive"));
+        .help(file_id(page).map_or_else(
+            || "ask its owner to share it with anyone who has the link".to_owned(),
+            |id| trust(&id),
+        )));
     }
     match status {
         200 => form(page, text).ok_or_else(|| {
@@ -81,9 +84,17 @@ fn form(page: &Url, text: &str) -> Option<Url> {
     (next.scheme() == "https").then_some(next)
 }
 
-/// the drive link of the file a page is about, found in the page's URL or, on a sign-in page, in
-/// the URL it continues to.
+/// the drive link of the file a page is about.
 fn file_link(page: &Url) -> String {
+    match file_id(page) {
+        Some(id) => format!("https://drive.google.com/file/d/{id}"),
+        None => "a drive file".to_owned(),
+    }
+}
+
+/// the id of the file a page is about, found in the page's URL or, on a sign-in page, in the URL
+/// it continues to.
+fn file_id(page: &Url) -> Option<String> {
     let query = |url: &Url, name: &str| {
         url.query_pairs()
             .find(|(key, _)| key == name)
@@ -93,10 +104,7 @@ fn file_link(page: &Url) -> String {
         let next = Url::parse(&query(page, "continue")?).ok()?;
         query(&next, "id")
     });
-    match id.filter(|id| is_id(id)) {
-        Some(id) => format!("https://drive.google.com/file/d/{id}"),
-        None => "a drive file".to_owned(),
-    }
+    id.filter(|id| is_id(id))
 }
 
 #[cfg(test)]
@@ -185,7 +193,12 @@ mod tests {
             err.message,
             "https://drive.google.com/file/d/15J0eCL77fHbItA249epT3i2iOx4VwJGI is not shared with anyone who has the link"
         );
-        assert!(err.help.unwrap().contains("anyone with the link"));
+        assert_eq!(
+            err.help.as_deref(),
+            Some(
+                "ask its owner to share it with anyone who has the link. if it is shared with your google account or a service account of yours, and you trust it with your google credentials, add 15J0eCL77fHbItA249epT3i2iOx4VwJGI to drive_folders in the settings file or FETCHLOOM_DRIVE_FOLDERS"
+            )
+        );
         // the refusal drive sent for the same item on its folder view
         let refusal = page("drive/folder-private.html");
         for status in [401, 403] {

@@ -25,6 +25,15 @@ pub(crate) trait Api: Sync {
     fn get_once(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
         self.get(url)
     }
+
+    /// tells the network that drive refused item `id` without a token, and asks whether drive's
+    /// api may be asked about it with one. a network that sends no google credentials says no.
+    fn drive_refused<'a>(
+        &'a self,
+        _id: &'a str,
+    ) -> impl Future<Output = Result<super::Private, Error>> + Send + 'a {
+        std::future::ready(Ok(super::Private::Unlisted))
+    }
 }
 
 /// what a server answered, with the few headers sources read.
@@ -45,6 +54,8 @@ pub(crate) struct Response {
     pub(crate) keyed: Option<crate::source::Keyed>,
     /// how a request for a cloud storage bucket went out: with a google token or not, and why.
     pub(crate) authorized: Option<super::Authorized>,
+    /// how a request to google drive's api went out: with a google token or not, and whose.
+    pub(crate) drive: Option<super::DriveAnswered>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -65,6 +76,13 @@ impl Response {
 impl Api for Net {
     async fn get(&self, url: &Url) -> Result<Response, Error> {
         self.get_for(url, false).await
+    }
+
+    fn drive_refused<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> impl Future<Output = Result<super::Private, Error>> + Send + 'a {
+        Net::drive_refused(self, id)
     }
 
     async fn get_once(&self, url: &Url) -> Result<Response, Error> {
@@ -173,6 +191,7 @@ impl Net {
         let region = text(header::HeaderName::from_static("x-amz-bucket-region"));
         let keyed = response.extensions().get::<crate::source::Keyed>().cloned();
         let authorized = response.extensions().get::<super::Authorized>().cloned();
+        let drive = response.extensions().get::<super::DriveAnswered>().cloned();
         let final_url = response.url().clone();
         let mut body = Vec::new();
         loop {
@@ -211,6 +230,9 @@ impl Net {
                 }
             }
         }
+        if let Some(answered) = &drive {
+            self.drive_heard(answered, status.as_u16(), &body)?;
+        }
         Ok(Response {
             status: status.as_u16(),
             url: final_url,
@@ -219,6 +241,7 @@ impl Net {
             region,
             keyed,
             authorized,
+            drive,
             body,
         })
     }
@@ -244,7 +267,9 @@ fn test_endpoint(url: &Url) -> Option<Url> {
 /// it set one.
 #[cfg(debug_assertions)]
 pub(super) fn stand_in(url: &Url) -> Option<Url> {
-    test_bucket(url).or_else(|| test_source(url))
+    test_bucket(url)
+        .or_else(|| test_source(url))
+        .or_else(|| test_drive(url))
 }
 
 /// local object storage for CLI tests, listings and object bytes alike: a request to an S3 or
@@ -286,6 +311,24 @@ fn test_source(url: &Url) -> Option<Url> {
         return None;
     }
     let mut local = local_test_server("FETCHLOOM_TEST_SOURCES")?;
+    local.set_path(&format!("/{host}{}", url.path()));
+    local.set_query(url.query());
+    local.set_fragment(None);
+    Some(local)
+}
+
+/// a local stand-in for google drive: its folder pages, its download host and its api. a request
+/// to one of their hosts goes to `/<host><path>` on the test server instead. release builds never
+/// read this override.
+#[cfg(debug_assertions)]
+fn test_drive(url: &Url) -> Option<Url> {
+    let host = url.host_str()?;
+    let drive = matches!(host, "drive.google.com" | "drive.usercontent.google.com")
+        || (host == "www.googleapis.com" && url.path().starts_with("/drive/"));
+    if !drive {
+        return None;
+    }
+    let mut local = local_test_server("FETCHLOOM_TEST_DRIVE")?;
     local.set_path(&format!("/{host}{}", url.path()));
     local.set_query(url.query());
     local.set_fragment(None);

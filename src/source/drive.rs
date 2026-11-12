@@ -1,18 +1,28 @@
 //! google drive: shared files and folders, pasted as links. a file downloads from drive's
-//! download host, which may first send a page that confirms the download or refuses it.
+//! download host, which may first send a page that confirms the download or refuses it. an item
+//! shared with an account rather than with anyone who has the link is read through drive's api,
+//! once drive refused it without a token, when the `drive_folders` setting names it.
 
 mod folder;
 mod html;
 mod link;
 mod page;
+mod private;
 
 use std::fmt;
 
 use url::Url;
 
+pub(crate) use self::private::{file, search};
 use super::{Access, Listing, Reference, Remote, malformed};
 use crate::error::{Error, Kind};
 use crate::net::{Api, Divert};
+
+/// where fetchloom's docs say how to let it read private drive items.
+pub(crate) const GUIDE: &str =
+    "https://nikhil-yn-aix.github.io/fetchloom/user/sources/google-drive.html";
+/// the login that grants the drive scope, which google keeps gcloud's own oauth client from.
+pub(crate) const LOGIN: &str = "`gcloud auth application-default login --client-id-file=CLIENT_FILE --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`";
 
 /// a shared drive file or folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,23 +112,40 @@ impl Item {
         is_id(&id).then_some(Item { id, kind, resource })
     }
 
-    /// a file is one download whose name the server sends. a folder lists its files.
+    /// a file is one download whose name the server sends. a folder lists its files, through
+    /// drive's api when drive refused its page and `drive_folders` names it.
     pub(super) async fn resolve(&self, api: &impl Api) -> Result<Listing, Error> {
         let opened = if self.kind == ItemKind::Open {
-            Some(self.opened(api).await?)
+            match self.opened(api).await {
+                Ok(opened) => Some(opened),
+                Err(refused) if refused.kind == Kind::AuthRequired => {
+                    return private::opened(self, api, refused).await;
+                }
+                Err(error) => return Err(error),
+            }
         } else {
             None
         };
         let item = opened.as_ref().unwrap_or(self);
         if item.kind == ItemKind::Folder {
-            return folder::list(item, api).await;
+            return match folder::list(item, api).await {
+                Err(refused) if refused.kind == Kind::AuthRequired => {
+                    private::refused(item, api, refused).await
+                }
+                listed => listed,
+            };
         }
+        item.lone()
+    }
+
+    /// a file alone, whose name its download tells.
+    fn lone(&self) -> Result<Listing, Error> {
         Ok(Listing {
             within: Vec::new(),
             access: Access::Unknown,
             unavailable: Vec::new(),
             warnings: Vec::new(),
-            resolved: Reference::Drive(item.clone()),
+            resolved: Reference::Drive(self.clone()),
             title: None,
             license: None,
             doi: None,
@@ -127,12 +154,43 @@ impl Item {
                 size: None,
                 sha256: None,
                 md5: None,
-                url: file_url(&item.id, item.resource.as_deref())?,
+                url: file_url(&self.id, self.resource.as_deref())?,
                 named_by_server: true,
                 etag: None,
             }],
         })
     }
+}
+
+/// the id of a drive file known by its `uc` link, as data.lock pins drive files.
+pub(crate) fn file_id(url: &Url) -> Option<String> {
+    if url.host_str() != Some("drive.google.com") || url.path() != "/uc" {
+        return None;
+    }
+    url.query_pairs()
+        .find(|(key, _)| key == "id")
+        .map(|(_, id)| id.into_owned())
+        .filter(|id| is_id(id))
+}
+
+/// how to let fetchloom send google credentials to drive for the item `id`, which drive refused
+/// to anyone with its link.
+pub(crate) fn trust(id: &str) -> String {
+    format!(
+        "ask its owner to share it with anyone who has the link. if it is shared with your google account or a service account of yours, and you trust it with your google credentials, add {id} to drive_folders in the settings file or FETCHLOOM_DRIVE_FOLDERS"
+    )
+}
+
+/// `refused`, the refusal of an item `drive_folders` names, when no google credentials were
+/// found to ask drive's api with.
+pub(crate) fn unsigned(mut refused: Error) -> Error {
+    refused.message = format!(
+        "{}, and no google application default credentials were found",
+        refused.message
+    );
+    refused.help(format!(
+        "set GOOGLE_APPLICATION_CREDENTIALS to the key file of a service account it is shared with, or sign in with an oauth client of your own: {LOGIN}. how: {GUIDE}"
+    ))
 }
 
 /// the lock's file identity, separate from the download host and its confirmation fields.
@@ -150,8 +208,37 @@ fn file_url(id: &str, resource: Option<&str>) -> Result<Url, Error> {
     Ok(url)
 }
 
+/// a file or folder the `drive_folders` setting names, by its drive id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DriveId(String);
+
+impl DriveId {
+    /// an id as drive writes it, or the id of a drive link or `drive:` reference.
+    pub(crate) fn parse(text: &str) -> Option<DriveId> {
+        let text = text.trim();
+        if is_id(text) {
+            return Some(DriveId(text.to_owned()));
+        }
+        let item = match text.strip_prefix("drive:") {
+            Some(rest) => Item::parse(rest).ok()?,
+            None => Item::from_link(&Url::parse(text).ok()?)?,
+        };
+        Some(DriveId(item.id))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for DriveId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// drive ids are long runs of letters, digits, `-` and `_`.
-fn is_id(text: &str) -> bool {
+pub(crate) fn is_id(text: &str) -> bool {
     text.len() >= 10
         && text
             .chars()

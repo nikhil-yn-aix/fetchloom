@@ -118,7 +118,7 @@ fn a_folder_shared_with_some_people_names_what_its_owner_can_do() {
             "https://drive.google.com/drive/folders/{DEEP} is not shared with anyone who has the link"
         )
     );
-    assert!(err.help.unwrap().contains("anyone with the link"));
+    assert_eq!(err.help.as_deref(), Some(super::trust(DEEP).as_str()));
 }
 
 #[test]

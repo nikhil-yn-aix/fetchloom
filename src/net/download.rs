@@ -483,7 +483,7 @@ impl Net {
             .sha256
             .and_then(|_| crate::source::unversioned(&fetch.from));
         let Some((current, version)) = versioned else {
-            return self.claim_and_download(fetch, cache, known, on).await;
+            return self.drive_download(fetch, cache, known, on).await;
         };
         let now = Fetch {
             url: fetch.url.clone(),
@@ -542,7 +542,7 @@ impl Net {
             .contains(bucket)
     }
 
-    async fn claim_and_download(
+    pub(in crate::net) async fn claim_and_download(
         &self,
         fetch: &Fetch,
         cache: &Cache,
@@ -914,6 +914,14 @@ impl Net {
             && let Some(authorized) = response.extensions().get::<super::Authorized>()
         {
             return Err(Failure::Final(authorized.refusal(from)));
+        }
+        if matches!(
+            status,
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ) && let Some(answered) = response.extensions().get::<super::DriveAnswered>().cloned()
+        {
+            let body = self.page(from, response).await?;
+            return Err(answered.failure(status.as_u16(), body.as_bytes()));
         }
         if let Some(divert) = fetch.divert
             && is_page(status, response.headers())

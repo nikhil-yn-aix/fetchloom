@@ -1,8 +1,11 @@
 //! which requests carry a google access token: those for a cloud storage bucket the
 //! `gcs_buckets` setting lists, once cloud storage refused one without a token this run, and only
-//! to storage.googleapis.com over https, before any redirect. the token comes from the
-//! application default credentials, asked of google's token endpoint when first needed and again
-//! shortly before it expires, by one request while the others wait.
+//! to storage.googleapis.com over https, before any redirect, and those to drive's api that
+//! [`drive`] lets through. the token comes from the application default credentials, asked of
+//! google's token endpoint when first needed and again shortly before it expires, by one request
+//! while the others wait.
+
+mod drive;
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -16,11 +19,13 @@ use url::Url;
 
 use super::failure::{self, Failure, Retry};
 use super::{Lane, Net, Shown, host};
-use crate::auth::google::{self, Credentials, STORAGE_READ, TOKEN_ENDPOINT};
+use crate::auth::google::{self, Credentials, DRIVE_READ, STORAGE_READ, TOKEN_ENDPOINT};
 use crate::auth::lease::Lease;
 use crate::error::{Error, Kind};
-use crate::source::GcsBucket;
+use crate::source::{DriveId, GcsBucket};
+
 use crate::work::Work;
+pub(crate) use drive::{Answered as DriveAnswered, Private};
 
 /// the host every cloud storage request with a token goes to.
 const STORAGE: &str = "storage.googleapis.com";
@@ -41,17 +46,23 @@ pub(crate) struct Google {
     /// buckets cloud storage refused without a token this run, asked with one from then on.
     refused: Mutex<HashSet<String>>,
     storage: Lease<Bearer>,
+    /// the drive folders and files listed, and what this run learned of them.
+    drive: drive::Drive,
     /// in debug builds, a server on this machine that stands in for google's token endpoint.
     #[cfg(debug_assertions)]
     token_endpoint: Option<Url>,
 }
 
-/// the cloud storage bucket a request is for, as its link names it.
+/// the cloud storage bucket or drive item a request is for, as its link names it.
 pub(crate) struct Located {
-    bucket: String,
-    listed: bool,
+    asked: Asked,
     /// whether the request went again with a new token already, after one was refused.
     renewed: AtomicBool,
+}
+
+enum Asked {
+    Bucket { bucket: String, listed: bool },
+    Drive(drive::Asked),
 }
 
 /// an access token as a request carries it, and whose it is.
@@ -60,6 +71,8 @@ pub(crate) struct Bearer {
     value: HeaderValue,
     /// who the token signs in as, as messages name it.
     identity: Arc<str>,
+    /// the service account's email, which an owner shares with. none for a person's login.
+    account: Option<Arc<str>>,
 }
 
 /// how a request for a cloud storage bucket went out, kept on its answer so a refusal can say
@@ -93,9 +106,17 @@ impl Google {
             credentials: OnceLock::new(),
             refused: Mutex::default(),
             storage: Lease::default(),
+            drive: drive::Drive::default(),
             #[cfg(debug_assertions)]
             token_endpoint: None,
         }
+    }
+
+    /// sends tokens to drive's api for the `listed` drive folders and files, and for what google
+    /// finds inside the folders.
+    pub(crate) fn with_drive(mut self, listed: Vec<DriveId>) -> Google {
+        self.drive = drive::Drive::new(listed);
+        self
     }
 
     /// asks the server at `endpoint` for tokens instead of google's token endpoint. only tests
@@ -108,8 +129,15 @@ impl Google {
 
     /// the bucket `url` is for, when it is a cloud storage request over https to
     /// storage.googleapis.com that carries no secret of its own: an object by its path, or the
-    /// JSON API's listing or download of one.
+    /// JSON API's listing or download of one. else the drive item it is for, when it is a request
+    /// to drive's api that [`drive::locate`] takes.
     pub(crate) fn locate(&self, url: &Url) -> Option<Located> {
+        if let Some(asked) = drive::locate(url) {
+            return Some(Located {
+                asked: Asked::Drive(asked),
+                renewed: AtomicBool::new(false),
+            });
+        }
         if url.scheme() != "https"
             || url.host_str() != Some(STORAGE)
             || url.port().is_some()
@@ -129,14 +157,17 @@ impl Google {
         };
         let bucket = GcsBucket::parse(name).filter(|bucket| bucket.name() == name)?;
         Some(Located {
-            listed: self.listed.contains(&bucket),
-            bucket: name.to_owned(),
+            asked: Asked::Bucket {
+                listed: self.listed.contains(&bucket),
+                bucket: name.to_owned(),
+            },
             renewed: AtomicBool::new(false),
         })
     }
 
     /// the token a request for `located` carries: none until cloud storage refused its bucket
-    /// without one this run, or when no credentials were found.
+    /// without one this run, for a drive item none unless [`drive`] lets it have one, and none
+    /// when no credentials were found.
     ///
     /// # Errors
     ///
@@ -146,9 +177,20 @@ impl Google {
         net: &Net,
         located: &Located,
     ) -> Result<Option<Bearer>, Error> {
-        if !located.listed || !self.refused_buckets().contains(&located.bucket) {
-            return Ok(None);
-        }
+        let (lease, scope) = match &located.asked {
+            Asked::Bucket { bucket, listed } => {
+                if !*listed || !self.refused_buckets().contains(bucket) {
+                    return Ok(None);
+                }
+                (&self.storage, STORAGE_READ)
+            }
+            Asked::Drive(asked) => {
+                if !self.drive.may_carry(asked.id()) {
+                    return Ok(None);
+                }
+                (&self.drive.token, DRIVE_READ)
+            }
+        };
         let Some(credentials) = self.credentials()? else {
             return Ok(None);
         };
@@ -157,9 +199,9 @@ impl Google {
         #[cfg(not(debug_assertions))]
         let endpoint = None;
         // boxed, so the future of every request does not carry the token request's retries
-        self.storage
+        lease
             .get(Instant::now, || {
-                Box::pin(net.google_token(&credentials, STORAGE_READ, endpoint))
+                Box::pin(net.google_token(&credentials, scope, endpoint))
             })
             .await
             .map(Some)
@@ -172,17 +214,24 @@ impl Google {
     ///
     /// what reading the credentials found wrong, such as a file of another kind.
     pub(crate) fn refused(&self, located: &Located) -> Result<bool, Error> {
-        if !located.listed {
+        let Asked::Bucket {
+            bucket,
+            listed: true,
+        } = &located.asked
+        else {
             return Ok(false);
-        }
-        self.refused_buckets().insert(located.bucket.clone());
+        };
+        self.refused_buckets().insert(bucket.clone());
         Ok(self.credentials()?.is_some())
     }
 
-    /// forgets `bearer`, which cloud storage refused as no longer valid, so the next request
-    /// asks for a new token.
-    pub(crate) async fn forget(&self, bearer: &Bearer) {
-        self.storage.forget(bearer).await;
+    /// forgets `bearer`, which google refused for `located` as no longer valid, so the next
+    /// request asks for a new token.
+    pub(crate) async fn forget(&self, located: &Located, bearer: &Bearer) {
+        match located.asked {
+            Asked::Bucket { .. } => self.storage.forget(bearer).await,
+            Asked::Drive(_) => self.drive.token.forget(bearer).await,
+        }
     }
 
     /// the credentials, read once a run.
@@ -204,18 +253,39 @@ fn api_bucket<'u>(mut segments: impl Iterator<Item = &'u str>) -> Option<&'u str
 }
 
 impl Located {
-    /// how the request went out, with `bearer` or not, whose token may lack the scope.
-    pub(crate) fn authorized(&self, bearer: Option<&Bearer>, lacks_scope: bool) -> Authorized {
-        match bearer {
-            Some(bearer) => Authorized::Token {
-                bucket: self.bucket.clone(),
-                identity: bearer.identity.to_string(),
-                lacks_scope,
-            },
-            None => Authorized::Anonymous {
-                bucket: self.bucket.clone(),
-                listed: self.listed,
-            },
+    /// tells `response` how its request went out, with `bearer` or not, so a refusal can say
+    /// why and a drive listing can teach what its folder holds.
+    fn tell(&self, response: &mut reqwest::Response, bearer: Option<&Bearer>) {
+        let status = response.status();
+        match &self.asked {
+            Asked::Bucket { bucket, listed } => {
+                let authorized = match bearer {
+                    Some(bearer) => Authorized::Token {
+                        bucket: bucket.clone(),
+                        identity: bearer.identity.to_string(),
+                        lacks_scope: status == StatusCode::FORBIDDEN
+                            && insufficient_scope(response.headers()),
+                    },
+                    None => Authorized::Anonymous {
+                        bucket: bucket.clone(),
+                        listed: *listed,
+                    },
+                };
+                response.extensions_mut().insert(authorized);
+            }
+            Asked::Drive(asked) => {
+                let answered = drive::Answered::new(asked, bearer, response.headers());
+                response.extensions_mut().insert(answered);
+            }
+        }
+    }
+
+    /// the bucket a request is for and whether it is listed, when it is for one.
+    #[cfg(test)]
+    fn bucket(&self) -> Option<(&str, bool)> {
+        match &self.asked {
+            Asked::Bucket { bucket, listed } => Some((bucket, *listed)),
+            Asked::Drive(_) => None,
         }
     }
 }
@@ -359,8 +429,12 @@ impl Net {
                 .map_err(Failure::Final)?,
             None => None,
         };
-        if bearer.is_some() {
-            tracing::debug!(host = STORAGE, "sending a google access token");
+        if let Some(stored) = stored.filter(|_| bearer.is_some()) {
+            let host = match stored.asked {
+                Asked::Bucket { .. } => STORAGE,
+                Asked::Drive(_) => drive::API,
+            };
+            tracing::debug!(host, "sending a google access token");
         }
         Ok(Tokened { stored, bearer })
     }
@@ -392,17 +466,14 @@ impl Net {
                     if status == StatusCode::UNAUTHORIZED
                         && !stored.renewed.swap(true, Ordering::Relaxed) =>
                 {
-                    tracing::debug!(url = %Shown(response.url()), "cloud storage refused the token, so it goes again with a new one");
-                    self.google.forget(sent).await;
+                    tracing::debug!(url = %Shown(response.url()), "google refused the token, so it goes again with a new one");
+                    self.google.forget(stored, sent).await;
                     return Ok(true);
                 }
                 _ => {}
             }
         }
-        let lacks_scope = status == StatusCode::FORBIDDEN && insufficient_scope(response.headers());
-        response
-            .extensions_mut()
-            .insert(stored.authorized(bearer, lacks_scope));
+        stored.tell(response, bearer);
         Ok(false)
     }
 
@@ -435,7 +506,9 @@ impl Net {
             let grant = credentials.grant(scope, SystemTime::now())?;
             let failure = match self.post_grant(&url, grant).await {
                 Ok((status, body)) => {
-                    let token = credentials.answer(status, &body)?;
+                    let token = credentials
+                        .answer(status, &body)
+                        .map_err(|error| drive::relogin(error, credentials, scope))?;
                     let mut value = HeaderValue::from_str(&format!("Bearer {}", token.value))
                         .map_err(|_| {
                             Error::new(
@@ -447,6 +520,7 @@ impl Net {
                     let bearer = Bearer {
                         value,
                         identity: credentials.shown().into(),
+                        account: credentials.described().1.map(Arc::from),
                     };
                     return Ok((bearer, Some(token.lifetime)));
                 }

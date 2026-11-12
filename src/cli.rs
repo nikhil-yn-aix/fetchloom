@@ -225,7 +225,8 @@ impl Context {
         let google = net::Google::new(
             self.settings.gcs_buckets.value.clone(),
             Arc::new(crate::auth::env),
-        );
+        )
+        .with_drive(self.settings.drive_folders.value.clone());
         #[cfg(debug_assertions)]
         let google = google.with_token_endpoint(net::test_token_endpoint());
         let net = Net::new(options, self.work.clone(), self.stop.clone(), notify)

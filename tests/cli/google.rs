@@ -27,6 +27,13 @@ const LOGIN_TOKEN: &str = "ya29.login-token-of-the-test";
 /// a login granted no scope that reads cloud storage, and the token it gets.
 const NARROW_LOGIN: &str = "refresh-token-without-the-storage-scope";
 const NARROW_TOKEN: &str = "ya29.narrow-token-of-the-test";
+/// a login granted cloud storage but not drive, as gcloud's own client grants, and its token.
+const CLOUD_LOGIN: &str = "refresh-token-without-the-drive-scope";
+const CLOUD_TOKEN: &str = "ya29.cloud-token-of-the-test";
+/// the token the stand-in gives a service account that asked for the drive scope.
+const DRIVE_SERVICE_TOKEN: &str = "ya29.drive-service-token-of-the-test";
+const STORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_only";
+const DRIVE_SCOPE: &str = "https://www.googleapis.com/auth/drive.readonly";
 /// the start every signed assertion has: `{"alg":"RS256",` in base64.
 const ASSERTION: &str = "eyJhbGciOiJSUzI1NiIs";
 const LISTING: &str = "/storage.googleapis.com/storage/v1/b/lab-private/o?prefix=raw%2F&fields=items%28name%2Csize%2Cmd5Hash%2Cgeneration%29%2CnextPageToken";
@@ -223,9 +230,16 @@ fn assertion_fault(assertion: &str) -> Option<String> {
         && header["kid"] == "test-key-id"
         && claims["iss"] == EMAIL
         && claims["aud"] == "https://oauth2.googleapis.com/token"
-        && claims["scope"] == "https://www.googleapis.com/auth/devstorage.read_only"
+        && [STORAGE_SCOPE, DRIVE_SCOPE].contains(&claims["scope"].as_str().unwrap_or_default())
         && lifetime == 3600;
     (!expected).then(|| format!("unexpected assertion {header} {claims}"))
+}
+
+/// the scope a service account's assertion asks for.
+fn assertion_scope(assertion: &str) -> Option<String> {
+    let claims = decode(assertion.split('.').nth(1)?)?;
+    let claims: serde_json::Value = serde_json::from_slice(&claims).ok()?;
+    claims["scope"].as_str().map(str::to_owned)
 }
 
 /// google's token endpoint: a token for a well signed assertion or the test's login, and
@@ -240,7 +254,7 @@ fn token(asked: &Asked) -> Vec<u8> {
         "refresh_token"
             if field("client_id") == CLIENT_ID
                 && field("client_secret") == CLIENT_SECRET
-                && [REFRESH_TOKEN, NARROW_LOGIN].contains(&field("refresh_token")) =>
+                && [REFRESH_TOKEN, NARROW_LOGIN, CLOUD_LOGIN].contains(&field("refresh_token")) =>
         {
             None
         }
@@ -256,7 +270,11 @@ fn token(asked: &Asked) -> Vec<u8> {
     }
     let token = match (field("grant_type"), field("refresh_token")) {
         ("refresh_token", NARROW_LOGIN) => NARROW_TOKEN,
+        ("refresh_token", CLOUD_LOGIN) => CLOUD_TOKEN,
         ("refresh_token", _) => LOGIN_TOKEN,
+        _ if assertion_scope(field("assertion")).as_deref() == Some(DRIVE_SCOPE) => {
+            DRIVE_SERVICE_TOKEN
+        }
         _ => SERVICE_TOKEN,
     };
     respond(
@@ -374,8 +392,11 @@ fn assert_no_secret(surfaces: &[(String, Vec<u8>)]) {
         let said = String::from_utf8_lossy(bytes);
         for secret in [
             SERVICE_TOKEN,
+            DRIVE_SERVICE_TOKEN,
             LOGIN_TOKEN,
             REFRESH_TOKEN,
+            CLOUD_LOGIN,
+            CLOUD_TOKEN,
             CLIENT_SECRET,
             ASSERTION,
             key_line,
@@ -599,3 +620,5 @@ fn a_login_google_refuses_or_without_the_scope_says_how_to_sign_in() -> Result {
     }
     Ok(())
 }
+
+mod drive;

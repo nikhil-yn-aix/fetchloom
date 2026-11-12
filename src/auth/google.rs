@@ -17,6 +17,8 @@ use crate::source::Var;
 
 /// the scope of a token that reads cloud storage.
 pub(crate) const STORAGE_READ: &str = "https://www.googleapis.com/auth/devstorage.read_only";
+/// the scope of a token that reads google drive: every file its account can see.
+pub(crate) const DRIVE_READ: &str = "https://www.googleapis.com/auth/drive.readonly";
 /// where every token comes from, whatever a credentials file names.
 pub(crate) const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 /// the token endpoints a credentials file may name: all google's, all answering as the first.
@@ -248,7 +250,7 @@ struct Answer {
 
 /// `said` with control characters escaped and at most 300 characters kept, so a server's words
 /// cannot rewrite a terminal or flood it.
-fn plain(said: &str) -> String {
+pub(crate) fn plain(said: &str) -> String {
     let mut shown = String::new();
     for (count, character) in said.chars().enumerate() {
         if count == 300 {

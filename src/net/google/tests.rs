@@ -9,7 +9,7 @@ use crate::source::recorded::block_on;
 
 /// one request a test server took: its request line and head in lowercase, and its body.
 #[derive(Clone, Debug)]
-struct Asked {
+pub(super) struct Asked {
     line: String,
     head: String,
     body: String,
@@ -17,7 +17,7 @@ struct Asked {
 
 impl Asked {
     /// the `authorization` this request carried, if any.
-    fn authorization(&self) -> Option<&str> {
+    pub(super) fn authorization(&self) -> Option<&str> {
         self.head
             .lines()
             .find_map(|line| line.strip_prefix("authorization:"))
@@ -27,7 +27,7 @@ impl Asked {
 
 /// a server on this machine that answers each request with what `answer` makes of it and of how
 /// many came before it, and keeps every request it took.
-fn server(
+pub(super) fn server(
     answer: impl Fn(&Asked, usize) -> Vec<u8> + Send + 'static,
 ) -> (Url, Arc<Mutex<Vec<Asked>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -69,7 +69,7 @@ fn server(
 }
 
 /// a token endpoint that gives `token-0`, `token-1` and so on, each for an hour.
-fn tokens() -> (Url, Arc<Mutex<Vec<Asked>>>) {
+pub(super) fn tokens() -> (Url, Arc<Mutex<Vec<Asked>>>) {
     server(|_, count| {
         reply(
             "200 OK",
@@ -83,7 +83,7 @@ fn tokens() -> (Url, Arc<Mutex<Vec<Asked>>>) {
 }
 
 /// a person's login, as gcloud saves it, in `folder`.
-fn login(folder: &Path) -> std::path::PathBuf {
+pub(super) fn login(folder: &Path) -> std::path::PathBuf {
     let path = folder.join("application_default_credentials.json");
     std::fs::write(
         &path,
@@ -126,7 +126,7 @@ fn google_net(listed: &[&str], credentials: Option<&Path>, endpoint: &Url) -> Ne
 
 /// a client that carries the requests `send` shapes to a server on this machine instead of
 /// their hosts. it is the test's own, so it installs the crypto provider itself.
-fn transport() -> reqwest::Client {
+pub(super) fn transport() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
         .no_proxy()
@@ -136,7 +136,7 @@ fn transport() -> reqwest::Client {
 }
 
 /// sends a GET of `link` through `net`, carried to `local` with every header `net` gave it.
-async fn sent(
+pub(super) async fn sent(
     net: &Net,
     client: &reqwest::Client,
     local: &Url,
@@ -152,7 +152,7 @@ async fn sent(
 }
 
 /// [`sent`], answered.
-async fn through(
+pub(super) async fn through(
     net: &Net,
     client: &reqwest::Client,
     local: &Url,
@@ -167,7 +167,7 @@ async fn through(
     }
 }
 
-fn authorizations(asked: &Mutex<Vec<Asked>>) -> Vec<Option<String>> {
+pub(super) fn authorizations(asked: &Mutex<Vec<Asked>>) -> Vec<Option<String>> {
     asked
         .lock()
         .unwrap()
@@ -205,11 +205,7 @@ fn a_token_goes_to_cloud_storage_over_https_alone() {
         ),
     ] {
         let located = google.locate(&Url::parse(link).unwrap()).unwrap();
-        assert_eq!(
-            (located.bucket.as_str(), located.listed),
-            (bucket, listed),
-            "{link}"
-        );
+        assert_eq!(located.bucket(), Some((bucket, listed)), "{link}");
     }
     for link in [
         "http://storage.googleapis.com/lab-private/a.csv",

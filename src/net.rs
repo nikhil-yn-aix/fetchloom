@@ -30,7 +30,7 @@ pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin
 pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
-pub(crate) use google::{Authorized, Google};
+pub(crate) use google::{Authorized, DriveAnswered, Google, Private};
 pub(crate) use rate::Rate;
 pub(crate) use shown::{Shown, mask_query, secret};
 

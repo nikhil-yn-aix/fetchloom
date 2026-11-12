@@ -6,7 +6,7 @@
 mod bucket;
 mod dataverse;
 mod doi;
-mod drive;
+pub(crate) mod drive;
 mod dropbox;
 mod dryad;
 mod ena;
@@ -33,6 +33,7 @@ use tracing::Instrument as _;
 use url::Url;
 
 pub(crate) use bucket::{Bucket, GcsBucket, Keyed, Signing, unversioned, with_version};
+pub(crate) use drive::DriveId;
 
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
@@ -1271,6 +1272,7 @@ mod tests {
                 region: None,
                 keyed: None,
                 authorized: None,
+                drive: None,
                 body: b"not json".to_vec(),
             };
             let error = json::<serde_json::Value>(&reference, &response).unwrap_err();

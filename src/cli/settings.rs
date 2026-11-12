@@ -179,16 +179,9 @@ fn rows(context: &Context) -> Vec<Shown> {
             .map(url::Origin::ascii_serialization),
         vec![settings.allowed_origins.origin],
     ));
-    shown.push(list(
-        "s3_buckets",
-        settings.s3_buckets.value.iter().map(ToString::to_string),
-        vec![settings.s3_buckets.origin],
-    ));
-    shown.push(list(
-        "gcs_buckets",
-        settings.gcs_buckets.value.iter().map(ToString::to_string),
-        vec![settings.gcs_buckets.origin],
-    ));
+    shown.push(targets("s3_buckets", &settings.s3_buckets));
+    shown.push(targets("gcs_buckets", &settings.gcs_buckets));
+    shown.push(targets("drive_folders", &settings.drive_folders));
     shown.push(mirrors(&context.mirrors.mirrors, settings.mirrors.origin));
     shown.push(Shown {
         name: "mirrors_only",
@@ -298,6 +291,15 @@ where
 }
 
 /// a setting that holds a list, shown as its items separated by commas, or none.
+/// a list setting of what a credential may go to, each item as its text.
+fn targets<T: ToString>(name: &'static str, set: &Set<Vec<T>>) -> Shown {
+    list(
+        name,
+        set.value.iter().map(ToString::to_string),
+        vec![set.origin],
+    )
+}
+
 fn list(name: &'static str, items: impl Iterator<Item = String>, origin: Vec<Origin>) -> Shown {
     let items: Vec<String> = items.collect();
     Shown {

@@ -14,6 +14,8 @@ use crate::net::{Api, Response};
 pub(crate) struct Recorded {
     answers: HashMap<String, Response>,
     asked: Mutex<Vec<String>>,
+    /// what the network says of a drive item drive refused without a token.
+    private: Option<crate::net::Private>,
 }
 
 impl Recorded {
@@ -28,6 +30,7 @@ impl Recorded {
             region: None,
             keyed: None,
             authorized: None,
+            drive: None,
             body: body.into(),
         };
         self.answers.insert(parsed.to_string(), response);
@@ -64,6 +67,23 @@ impl Recorded {
             .get_mut(&key)
             .unwrap_or_else(|| panic!("record {url} before how it went out"));
         answer.authorized = Some(authorized);
+        self
+    }
+
+    /// says how the request for `url` went out to drive's api, with a token or not.
+    pub(crate) fn drive(mut self, url: &str, answered: crate::net::DriveAnswered) -> Recorded {
+        let key = Url::parse(url).unwrap().to_string();
+        let answer = self
+            .answers
+            .get_mut(&key)
+            .unwrap_or_else(|| panic!("record {url} before how it went out"));
+        answer.drive = Some(answered);
+        self
+    }
+
+    /// says what the network makes of every drive item drive refused without a token.
+    pub(crate) fn private(mut self, private: crate::net::Private) -> Recorded {
+        self.private = Some(private);
         self
     }
 
@@ -120,6 +140,17 @@ impl Api for Recorded {
             .cloned()
             .unwrap_or_else(|| panic!("nothing recorded for {url}"));
         ready(Ok(answer))
+    }
+
+    fn drive_refused<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> impl Future<Output = Result<crate::net::Private, Error>> + Send + 'a {
+        self.asked
+            .lock()
+            .unwrap()
+            .push(format!("drive refused {id}"));
+        ready(Ok(self.private.unwrap_or(crate::net::Private::Unlisted)))
     }
 }
 
