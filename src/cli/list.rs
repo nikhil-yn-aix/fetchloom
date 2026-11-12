@@ -88,8 +88,9 @@ pub(super) fn run(context: &Context, name: Option<&str>) -> Result<Report, Error
     Ok(report)
 }
 
-/// one dataset's files on stdout, a path and a size per line. its title, license and DOI are an
-/// aside for a person, since data.lock and `--json` keep them.
+/// one dataset's files on stdout, a path and a size per line. a line naming the dataset, with
+/// its title, size, license and DOI, is an aside for a person, since data.lock and `--json` keep
+/// them.
 fn one(output: &crate::output::Output, dataset: &Listed) {
     let Some(files) = &dataset.held else {
         output.done("Ok", &format!("{} is not locked yet", dataset.name));
@@ -99,14 +100,7 @@ fn one(output: &crate::output::Output, dataset: &Listed) {
         ));
         return;
     };
-    let about: Vec<&str> = [&dataset.title, &dataset.license, &dataset.doi]
-        .into_iter()
-        .flatten()
-        .map(String::as_str)
-        .collect();
-    if !about.is_empty() {
-        output.aside(&about.join(" \u{b7} "));
-    }
+    output.aside(&heading(dataset));
     if files.is_empty() {
         output.done("Ok", &format!("{} has no files", dataset.name));
     } else {
@@ -114,17 +108,43 @@ fn one(output: &crate::output::Output, dataset: &Listed) {
     }
 }
 
+/// the line above a dataset's files: its name, title, how many files and bytes, license and DOI,
+/// each that data.lock has.
+fn heading(dataset: &Listed) -> String {
+    let mut facts = vec![dataset.name.clone()];
+    facts.extend(dataset.title.clone());
+    if let (Some(files), Some(bytes)) = (dataset.files, dataset.bytes) {
+        facts.push(format!(
+            "{} \u{b7} {}",
+            units::count(files, "file", "files"),
+            units::size(bytes)
+        ));
+    }
+    facts.extend(
+        dataset
+            .license
+            .as_ref()
+            .map(|license| format!("license {license}")),
+    );
+    facts.extend(dataset.doi.as_ref().map(|doi| format!("doi {doi}")));
+    facts.join(" \u{b7} ")
+}
+
+/// a path and a size per line, the sizes right-aligned so their units line up.
 fn file_lines(files: &[(String, u64)]) -> String {
     let width = files
         .iter()
         .map(|(path, _)| path.chars().count())
         .max()
         .unwrap_or_default();
+    let sizes: Vec<String> = files.iter().map(|(_, size)| units::size(*size)).collect();
+    let widest = sizes.iter().map(String::len).max().unwrap_or_default();
     files
         .iter()
-        .map(|(path, size)| {
+        .zip(&sizes)
+        .map(|((path, _), size)| {
             let pad = width - path.chars().count();
-            format!("{path}{:pad$}  {}", "", units::size(*size))
+            format!("{path}{:pad$}  {size:>widest$}", "")
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -361,7 +381,38 @@ mod tests {
         ];
         assert_eq!(
             file_lines(&files),
-            "iris.csv         4.4 KiB\ndocs/readme.txt  12 B"
+            "iris.csv         4.4 KiB\ndocs/readme.txt     12 B"
+        );
+    }
+
+    /// `list <name>` names the dataset on the line its license is on, never the license alone.
+    #[test]
+    fn the_heading_names_the_dataset_beside_its_license() {
+        let mut dataset = Listed {
+            name: "iris".to_owned(),
+            reference: Some("hf:datasets/scikit-learn/iris".to_owned()),
+            from: None,
+            resolved: None,
+            files: Some(4),
+            bytes: Some(18_534),
+            folder: "data/iris".to_owned(),
+            placed: true,
+            title: None,
+            license: Some("cc0-1.0".to_owned()),
+            doi: None,
+            access: None,
+            locked_files: None,
+            held: None,
+        };
+        assert_eq!(
+            heading(&dataset),
+            "iris · 4 files · 18.1 KiB · license cc0-1.0"
+        );
+        dataset.title = Some("Iris Species".to_owned());
+        dataset.doi = Some("10.5281/zenodo.1".to_owned());
+        assert_eq!(
+            heading(&dataset),
+            "iris · Iris Species · 4 files · 18.1 KiB · license cc0-1.0 · doi 10.5281/zenodo.1"
         );
     }
 
@@ -522,7 +573,7 @@ mod tests {
              other   https://example.org/other.zip   1 file · 512 B     data/other"
         );
         let images = report.datasets[0].held.as_deref().unwrap_or_default();
-        assert_eq!(file_lines(images), "a.png       1000 B\nlabels.csv  24 B");
+        assert_eq!(file_lines(images), "a.png       1000 B\nlabels.csv    24 B");
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(
             (
