@@ -55,7 +55,8 @@ pub(super) fn merge(
         .help("run `fetchloom lock` without them"));
     }
     let (manifest, lock) = sides(project, &conflicted);
-    let merged = merge::merge(&manifest, lock.as_ref(), &choices, &project.root)
+    let told = |line: &str| context.output.detail(line);
+    let merged = merge::merge(&manifest, lock.as_ref(), &choices, &project.root, &told)
         .map_err(|error| in_project(error, project))?;
     for warning in &merged.warnings {
         context.output.warn(warning);

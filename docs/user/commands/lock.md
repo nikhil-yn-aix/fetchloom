@@ -106,6 +106,20 @@ error: the merge needs a choice for udata
   help: choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat
 ```
 
+`-v` first shows what each side pins of a dataset that needs a choice: a recipe result's key, how many files and bytes, and up to 3 of the files only that side pins, each with its size and the first 12 digits of its SHA-256. it picks no side. the same merge, on the branch that removed `udata`:
+
+```sh
+$ fetchloom -v lock
+            udata, ours: not in data.lock
+            udata, theirs: 1 file · 11 B
+              u.csv · 11 B · sha256 2805e4684085
+error: the merge needs a choice for udata
+  udata: one side changed it and the other removed it
+  help: choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat
+  kind: unconfirmed
+            33 ms in all
+```
+
 run `fetchloom sync` next, then commit `data.toml` and `data.lock` to finish the merge.
 
 with `--json`, `result.merge` has the arrays `from_ours`, `from_theirs`, `same`, `removed` and `unpinned`, by dataset name, and `result.datasets` names the pins that changed from our side's. an `unconfirmed` error keeps `result.merge` with `conflicts`, the datasets that need a choice. its `fix` is null, since only a person picks a side.

@@ -68,7 +68,7 @@ fn merged(manifest: &Sides, locks: &Sides, choices: &[(&str, Side)]) -> Result<M
         .iter()
         .map(|(name, side)| ((*name).to_owned(), *side))
         .collect();
-    merge(manifest, Some(locks), &choices, root.path())
+    merge(manifest, Some(locks), &choices, root.path(), &|_| {})
 }
 
 fn names(lock: &Lock) -> Vec<&str> {
@@ -375,7 +375,7 @@ fn listed_datasets_merge_from_the_parts_of_the_side_kept() {
         Some(ours.render_with(1)),
     );
     let choices = Choices::new();
-    let merged = merge(&manifest, Some(&locks), &choices, root.path()).unwrap();
+    let merged = merge(&manifest, Some(&locks), &choices, root.path(), &|_| {}).unwrap();
     let lock = merged.lock.unwrap();
     assert_eq!(names(&lock), ["beta", "photos"]);
     assert_eq!(lock.datasets[1].files, upgraded.files);
@@ -424,12 +424,12 @@ fn recipe_results_merge_by_name() {
         Some(lock(vec![core.clone()])),
     );
     let choices = Choices::new();
-    let merged = merge(&manifest, Some(&added), &choices, root.path()).unwrap();
+    let merged = merge(&manifest, Some(&added), &choices, root.path(), &|_| {}).unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     assert_eq!(merged.summary.from_ours, ["clean"]);
     // the one result data.toml's recipe has is its pin, whatever the base was
     let unknown = sides(added.ours.clone(), added.theirs.clone(), None);
-    let merged = merge(&manifest, Some(&unknown), &choices, root.path()).unwrap();
+    let merged = merge(&manifest, Some(&unknown), &choices, root.path(), &|_| {}).unwrap();
     assert_eq!(merged.lock.unwrap().derived, std::slice::from_ref(&clean));
     let rebuilt = Lock {
         datasets: vec![core.clone()],
@@ -439,18 +439,18 @@ fn recipe_results_merge_by_name() {
         }],
     };
     let both = sides(with_result.render(), rebuilt.render(), None);
-    let error = merge(&manifest, Some(&both), &choices, root.path()).unwrap_err();
+    let error = merge(&manifest, Some(&both), &choices, root.path(), &|_| {}).unwrap_err();
     assert_eq!(error.message, "the merge needs a choice for clean");
     // a result goes with its recipe, as a fetched dataset's pin goes with its entry, unless the
     // other side built it anew: then removing the recipe waits for a choice
     let dropped = sides(text.clone(), toml(&[("core", "zenodo:3")]), Some(text));
-    let error = merge(&dropped, Some(&added), &choices, root.path()).unwrap_err();
+    let error = merge(&dropped, Some(&added), &choices, root.path(), &|_| {}).unwrap_err();
     assert_eq!(
         error.details,
         ["clean: one side changed it and the other removed it"]
     );
     let removal = Choices::from([("clean".to_owned(), Side::Theirs)]);
-    let merged = merge(&dropped, Some(&added), &removal, root.path()).unwrap();
+    let merged = merge(&dropped, Some(&added), &removal, root.path(), &|_| {}).unwrap();
     assert!(!merged.manifest.contains("clean"), "{}", merged.manifest);
     assert_eq!(merged.lock.unwrap().derived, []);
     let built_before = sides(
@@ -458,7 +458,14 @@ fn recipe_results_merge_by_name() {
         lock(vec![core.clone()]),
         Some(with_result.render()),
     );
-    let merged = merge(&dropped, Some(&built_before), &choices, root.path()).unwrap();
+    let merged = merge(
+        &dropped,
+        Some(&built_before),
+        &choices,
+        root.path(),
+        &|_| {},
+    )
+    .unwrap();
     assert_eq!(merged.lock.unwrap().derived, []);
     assert_eq!(merged.summary.removed, ["clean"]);
 }
@@ -671,7 +678,7 @@ fn a_pin_mixed_from_both_sides_is_never_kept() {
     let manifest = sides(text.clone(), text, None);
     let locks = sides(mixed, theirs_text.clone(), None);
     let choices = Choices::from([("photos".to_owned(), Side::Ours)]);
-    let error = merge(&manifest, Some(&locks), &choices, root.path()).unwrap_err();
+    let error = merge(&manifest, Some(&locks), &choices, root.path(), &|_| {}).unwrap_err();
     assert_eq!(error.kind, Kind::ProjectInvalid);
     assert_eq!(
         error.message,
@@ -690,6 +697,6 @@ fn a_pin_mixed_from_both_sides_is_never_kept() {
         whole: Some([ours_text, theirs_text]),
         ..locks
     };
-    let kept = merge(&manifest, Some(&whole), &choices, root.path()).unwrap();
+    let kept = merge(&manifest, Some(&whole), &choices, root.path(), &|_| {}).unwrap();
     assert_eq!(kept.lock.unwrap().datasets, [photos]);
 }

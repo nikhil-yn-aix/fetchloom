@@ -13,15 +13,17 @@ pub(crate) mod markers;
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::Path;
 
 use serde::Serialize;
 
 use self::markers::Sides;
 use super::derived::Derived;
-use super::{Lock, Locked, Parsed, parse, resolve, spec};
+use super::{Lock, Locked, LockedFile, Parsed, parse, resolve, spec};
 use crate::error::{Error, Kind};
 use crate::project::manifest::{self, Entry, Manifest};
+use crate::units;
 
 /// one side of a merge, as git's `--ours` and `--theirs` and the stages of its index name them.
 /// a rebase turns them around from the branch a person is on.
@@ -254,7 +256,7 @@ impl Manifests<'_> {
 /// data.toml and data.lock merged from their sides, `lock` none when neither side has a
 /// data.lock, with the lists of the datasets data.lock keeps read from below `root`. a dataset the
 /// sides disagree on without a base to settle it stops the merge, unless `choices` names a side
-/// for it.
+/// for it; what each side pins of it is `told` first, as `-v` shows it.
 ///
 /// # Errors
 ///
@@ -266,6 +268,7 @@ pub(crate) fn merge(
     lock: Option<&Sides>,
     choices: &Choices,
     root: &Path,
+    told: &dyn Fn(&str),
 ) -> Result<Merged, Error> {
     let manifests = read_manifests(manifest)?;
     let frame = frame(manifest)?;
@@ -298,6 +301,13 @@ pub(crate) fn merge(
     };
     let summary = summarize(&decided, &merged, records.as_deref());
     if !decided.conflicts.is_empty() {
+        if let Some(locks) = &locks {
+            for name in decided.conflicts.keys() {
+                for line in pinned_on_each_side(locks, name) {
+                    told(&line);
+                }
+            }
+        }
         let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
         return Err(undecided(&decided.conflicts, &summary, shown));
     }
@@ -907,6 +917,73 @@ fn answering<'a>(records: &'a [Parsed], name: &str, wanted: &str) -> Option<&'a 
 /// the entry of `records` for `name`, a recipe's result.
 fn result<'a>(records: &'a [Parsed], name: &str) -> Option<&'a Parsed> {
     find(records, name).filter(|record| matches!(record, Parsed::Derived(..)))
+}
+
+/// the most files a side's pin of a dataset that needs a choice shows of those only it pins.
+const SHOWN: usize = 3;
+
+/// what each side of a merge pins for `name`, a dataset that needs a choice, as lines a person
+/// compares: a recipe result's key, how many files and bytes, and up to [`SHOWN`] of the files
+/// only that side pins, with their sizes and hashes. it says nothing of which side to take.
+fn pinned_on_each_side(locks: &Locks, name: &str) -> Vec<String> {
+    let [ours, theirs] = [Side::Ours, Side::Theirs].map(|side| find(locks.of(side), name));
+    let mut lines = Vec::new();
+    for (side, record, other) in [(Side::Ours, ours, theirs), (Side::Theirs, theirs, ours)] {
+        let side = side.word();
+        let (key, files, listed): (_, &[LockedFile], _) = match record {
+            None => {
+                lines.push(format!("{name}, {side}: not in data.lock"));
+                continue;
+            }
+            Some(Parsed::Source(locked, listed)) => (None, &locked.files, listed.as_ref()),
+            Some(Parsed::Derived(derived, listed)) => (Some(derived.key), &[], Some(listed)),
+        };
+        let (count, bytes) = listed.map_or_else(
+            || (files.len() as u64, files.iter().map(|file| file.size).sum()),
+            |listed| (listed.count, listed.bytes),
+        );
+        let mut head = format!("{name}, {side}: ");
+        if let Some(key) = key {
+            let _ = write!(head, "key {}, ", key.short());
+        }
+        let _ = write!(
+            head,
+            "{} \u{b7} {}",
+            units::count(count, "file", "files"),
+            units::size(bytes)
+        );
+        if let Some(listed) = listed {
+            let _ = write!(head, ", listed in {}", listed.parts.join(", "));
+        }
+        lines.push(head);
+        let others: &[LockedFile] = match other {
+            Some(Parsed::Source(locked, None)) => &locked.files,
+            _ => &[],
+        };
+        let only: Vec<&LockedFile> = files
+            .iter()
+            .filter(|file| {
+                !others.iter().any(|other| {
+                    (&other.path, other.size, other.sha256) == (&file.path, file.size, file.sha256)
+                })
+            })
+            .collect();
+        for file in only.iter().take(SHOWN) {
+            lines.push(format!(
+                "  {} \u{b7} {} \u{b7} sha256 {}",
+                file.path,
+                units::size(file.size),
+                file.sha256.short()
+            ));
+        }
+        if only.len() > SHOWN {
+            lines.push(format!(
+                "  and {} only {side} pins",
+                units::count((only.len() - SHOWN) as u64, "more file", "more files")
+            ));
+        }
+    }
+    lines
 }
 
 /// whether two entries of data.lock pin the same thing, whenever each was pinned.

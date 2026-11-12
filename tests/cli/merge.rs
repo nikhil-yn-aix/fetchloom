@@ -304,6 +304,23 @@ fn lock_stops_on_competing_upgrades_and_takes_the_side_a_person_names() -> Resul
         conflicted,
         "nothing is written"
     );
+    // -v shows what each side pins, so the choice is not blind, and still chooses nothing
+    let verbose = run(&sandbox, &["-v", "lock"])?;
+    assert_eq!(verbose.status.code(), Some(1));
+    let told = text(&verbose.stderr)?;
+    for (side, bytes) in [("ours", b"2,left\n".as_slice()), ("theirs", b"3,right\n")] {
+        assert!(told.contains(&format!("version, {side}: 1 file")), "{told}");
+        let file = format!(
+            "version.csv · {} B · sha256 {}",
+            bytes.len(),
+            &sha256(bytes)[..12]
+        );
+        assert!(told.contains(&file), "{told}");
+    }
+    assert_eq!(
+        fs::read_to_string(sandbox.work().join("data.lock"))?,
+        conflicted
+    );
 
     succeeded(&run(&sandbox, &["lock", "--theirs", "version"])?)?;
     let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
