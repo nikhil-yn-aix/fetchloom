@@ -163,9 +163,10 @@ pub(super) async fn run(context: &Context, args: &args::Build) -> Result<Report,
         .map(|built| Report::Built(Box::new(built)))
 }
 
-/// SIGTERM, which a scheduler sends a job it ends, stops a build as ctrl-c does, and ends the
-/// group of the step running now at once, since a SIGKILL that ended fetchloom would leave the
-/// step running. a second one quits as a second ctrl-c does. dropping it stops listening.
+/// SIGTERM, which a scheduler sends a job it ends, stops a build as ctrl-c does, and when it
+/// stops, ends the group of the step running now at once, since a SIGKILL that ended fetchloom
+/// would leave the step running. past the build's mark it finishes, as after ctrl-c. a second
+/// one quits as a second ctrl-c does. dropping it stops listening.
 #[cfg(unix)]
 struct Terminate(tokio::task::AbortHandle);
 
@@ -179,11 +180,14 @@ impl Terminate {
             if terminate.recv().await.is_none() {
                 return;
             }
-            stop.ask();
-            output.stopping();
-            step::end_running();
+            let heard = super::first_ctrl_c(&stop, |heard| super::tell_heard(&output, heard));
+            if heard == crate::stop::Heard::Stop {
+                step::end_running();
+            }
             if terminate.recv().await.is_some() {
-                output.abandon();
+                step::end_running();
+                output.quit();
+                stop.quitting();
                 std::process::exit(130);
             }
         });
@@ -552,6 +556,7 @@ impl<'a> Building<'a> {
         if !check {
             self.ready_to_place().await?;
         }
+        self.last_look()?;
         let written = self.work.write_lock(&self.before, &self.lock)?;
         self.report.lock_changed = written.is_some();
         self.report.datasets = repinned(&self.before, &self.lock);
@@ -604,6 +609,16 @@ impl<'a> Building<'a> {
     }
 
     /// `error`, with what the build did so far beside it for `--json`.
+    /// the build's last look for a stop, right before it writes data.lock: a stop asked by then
+    /// leaves data.lock and the data folder as they were, and one asked later lets it finish.
+    fn last_look(&self) -> Result<(), Error> {
+        if self.context.stop.is_asked() {
+            return Err(self.kept(stopped()));
+        }
+        self.context.stop.finish();
+        Ok(())
+    }
+
     fn kept(&self, error: Error) -> Error {
         match serde_json::to_value(&self.report) {
             Ok(value) => error.with_result(value),
@@ -997,6 +1012,7 @@ impl<'a> Building<'a> {
         datasets.sort();
         datasets.dedup();
         let lock_read = if changed {
+            self.last_look()?;
             let text = self.lock.render();
             let text = self.work.write_rendered(&self.before, &self.lock, text)?;
             self.work.project.sweep_lists(&self.lock);

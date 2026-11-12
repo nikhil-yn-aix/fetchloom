@@ -65,14 +65,20 @@ impl Running {
     /// sends SIGINT, as ctrl-c at a terminal does.
     #[cfg(unix)]
     pub(crate) fn interrupt(&self) -> Result {
+        self.signal("-INT")
+    }
+
+    /// sends `signal`, such as `-TERM`, which a scheduler sends a job it ends, with `kill`.
+    #[cfg(unix)]
+    pub(crate) fn signal(&self, signal: &str) -> Result {
         let child = self.child.as_ref().ok_or("child already finished")?;
         let sent = Command::new("kill")
-            .args(["-INT", &child.id().to_string()])
+            .args([signal, &child.id().to_string()])
             .status()?;
         if sent.success() {
             Ok(())
         } else {
-            Err("kill -INT failed".into())
+            Err(format!("kill {signal} failed").into())
         }
     }
 

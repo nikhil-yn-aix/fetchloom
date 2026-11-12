@@ -1634,6 +1634,160 @@ fn a_stopped_step_leaves_no_process_behind() -> Result {
     Ok(())
 }
 
+/// a build that copies iris into `clean`, run with its first mark of finishing work held until
+/// the file `release` appears, once it wrote `<release>.held`, and what data.toml and data.lock
+/// held before it.
+#[cfg(unix)]
+fn held_after_the_mark(
+    sandbox: &Sandbox,
+    release: &Path,
+) -> Result<(Running, BTreeMap<String, Vec<u8>>)> {
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    with(sandbox, &server, COPY)?;
+    let pinned = pins(&sandbox.work())?;
+    let mut command = building_in(sandbox, &sandbox.work(), &["build"])?;
+    command.env("FETCHLOOM_TEST_HOLD_FINISH", release);
+    let running = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the build to mark its work as finishing", || {
+        Ok(Path::new(&held).exists())
+    })?;
+    Ok((running, pinned))
+}
+
+/// a SIGTERM once the build has run its steps and marked its work as finishing, right before it
+/// writes data.lock, no longer stops it: it says it finishes what it started, never that it is
+/// stopping, then pins and places the result and ends with its closing line.
+#[cfg(unix)]
+#[test]
+fn a_term_after_the_build_marks_its_work_lets_it_finish() -> Result {
+    let sandbox = Sandbox::new()?;
+    let release = sandbox.folder("hold")?.join("release");
+    let (running, pinned) = held_after_the_mark(&sandbox, &release)?;
+    assert_eq!(
+        pins(&sandbox.work())?,
+        pinned,
+        "the mark comes before data.lock is written"
+    );
+    running.signal("-TERM")?;
+    running.wait_for("Finishing")?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("  Finishing what it started (ctrl-c again to quit at once)\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Stopping"), "{stderr}");
+    assert!(
+        stderr.contains("         Ok pinned clean's result in data.lock\n"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data/clean/iris.csv"))?, IRIS);
+    Ok(())
+}
+
+/// a second SIGTERM quits a build at once, even past its mark, says so in one line and exits 130.
+#[cfg(unix)]
+#[test]
+fn a_second_term_quits_a_build_at_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let release = sandbox.folder("hold")?.join("release");
+    let (running, _) = held_after_the_mark(&sandbox, &release)?;
+    // only keeps a build that waits for the hold from holding the test for good
+    let deadline = release.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let _ = fs::write(deadline, b"");
+    });
+    running.signal("-TERM")?;
+    running.wait_for("Finishing")?;
+    running.signal("-TERM")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert!(!release.exists(), "the build waited for its hold: {stderr}");
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert!(stderr.ends_with("       Quit at once\n"), "{stderr}");
+    Ok(())
+}
+
+/// a SIGTERM once `--accept` has marked its work as finishing, right before it writes data.lock,
+/// lets it pin and place the kept rebuild and end with its closing line, never saying it stops.
+#[cfg(unix)]
+#[test]
+fn a_term_after_accept_marks_its_work_lets_it_finish() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    kept_rebuild(&sandbox, &server, &recipe(&["random"]))?;
+    let pinned = pins(&sandbox.work())?;
+    let release = sandbox.folder("hold")?.join("release");
+    let mut command = building_in(&sandbox, &sandbox.work(), &["build", "--accept"])?;
+    command.env("FETCHLOOM_TEST_HOLD_FINISH", &release);
+    let running = Running::start(&mut command)?;
+    let mut held = release.as_os_str().to_owned();
+    held.push(".held");
+    wait_until("the accept to mark its work as finishing", || {
+        Ok(Path::new(&held).exists())
+    })?;
+    assert_eq!(
+        pins(&sandbox.work())?,
+        pinned,
+        "the mark comes before data.lock is written"
+    );
+    running.signal("-TERM")?;
+    running.wait_for("Finishing")?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Stopping"), "{stderr}");
+    assert!(
+        stderr.contains("         Ok pinned clean's kept rebuild in data.lock\n"),
+        "{stderr}"
+    );
+    assert_ne!(pins(&sandbox.work())?, pinned);
+    Ok(())
+}
+
+/// a SIGTERM while a step runs stops the build: it says so before any line of the stopped
+/// build, ends the step, and leaves data.lock and the data folder as they were.
+#[cfg(unix)]
+#[test]
+fn a_term_during_a_step_is_told_before_the_build_stops() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let held = sandbox.folder("held")?;
+    let (marker, release) = (held.join("started"), held.join("release"));
+    with(
+        &sandbox,
+        &server,
+        &recipe(&["hold", &word(&marker), &word(&release)]),
+    )?;
+    let pinned = pins(&sandbox.work())?;
+    let data = files(&sandbox.work().join("data"))?;
+    let running = Running::start(&mut building_in(&sandbox, &sandbox.work(), &["build"])?)?;
+    wait_until("the step to start", || Ok(marker.exists()))?;
+    running.signal("-TERM")?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    let told: Vec<&str> = stderr.lines().collect();
+    let stopping = told
+        .iter()
+        .position(|line| *line == "   Stopping (press ctrl-c again to quit at once)");
+    let stopped = told.iter().position(|line| line.starts_with("    Stopped"));
+    assert!(
+        matches!((stopping, stopped), (Some(stopping), Some(stopped)) if stopping < stopped),
+        "{stderr}"
+    );
+    assert!(!release.exists());
+    assert_eq!(pins(&sandbox.work())?, pinned);
+    assert_eq!(files(&sandbox.work().join("data"))?, data);
+    Ok(())
+}
+
 /// a step that ends ends what it started and left running too, so nothing writes while its
 /// result is taken in.
 #[test]

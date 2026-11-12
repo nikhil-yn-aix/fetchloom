@@ -965,7 +965,9 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
         signal,
         already_stopped,
         tokio::signal::ctrl_c(),
-        move || first_ctrl_c(&stopping.stop, |heard| tell_heard(&stopping.output, heard)),
+        move || {
+            first_ctrl_c(&stopping.stop, |heard| tell_heard(&stopping.output, heard));
+        },
         move || {
             // a step's process group ends with fetchloom, so nothing it started runs on
             crate::build::step::end_running();
@@ -979,13 +981,14 @@ fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Er
 
 /// what a first ctrl-c does: stops the run, `tell`ing the person before any task sees the stop,
 /// so no line the stopping work prints comes first, or lets it finish where it has marked its
-/// work as finishing or only the disk is left.
-fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) {
+/// work as finishing or only the disk is left. says which it did.
+fn first_ctrl_c(stop: &Stop, tell: impl FnOnce(Heard)) -> Heard {
     let heard = stop.hear();
     tell(heard);
     if heard == Heard::Stop {
         stop.ask();
     }
+    heard
 }
 
 fn tell_heard(output: &Output, heard: Heard) {

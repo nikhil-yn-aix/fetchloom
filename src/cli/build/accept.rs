@@ -65,6 +65,11 @@ pub(super) async fn accept(
     for (step, candidate) in accepted {
         report.steps.push(take(&work, &mut lock, &step, candidate)?);
     }
+    // the last look for a stop: once data.lock changes, the accept runs to its end
+    if context.stop.is_asked() {
+        return Err(super::stopped());
+    }
+    context.stop.finish();
     let written = work.write_rendered(&before, &lock, lock.render())?;
     work.project.sweep_lists(&lock);
     forget(project, &wanted)?;

@@ -71,12 +71,21 @@ impl Stop {
         }
     }
 
-    /// asks every task to stop. a run that marked its work as finishing finishes anyway, which
-    /// [`Stop::on_late`] tells, unless a first ctrl-c already let it finish.
+    /// asks every task to stop. a run that marked its work as finishing finishes anyway, so its
+    /// work never sees the stop, which [`Stop::on_late`] tells, unless a first ctrl-c already let
+    /// it finish.
     pub(crate) fn ask(&self) {
-        let before = self.state.fetch_or(ASKED, Ordering::SeqCst);
-        self.asked.send_replace(true);
-        if before & (ASKED | FINISHED | LET_FINISH) == FINISHED {
+        let mut late = false;
+        // under the watch's lock, so a mark at the same moment comes wholly before or after
+        self.asked.send_if_modified(|asked| {
+            let before = self.state.fetch_or(ASKED, Ordering::SeqCst);
+            if before & FINISHED != 0 {
+                late = before & (ASKED | LET_FINISH) == 0;
+                return false;
+            }
+            !std::mem::replace(asked, true)
+        });
+        if late {
             self.tell_late();
         }
     }
@@ -116,12 +125,20 @@ impl Stop {
     /// marks the point past which the run completes its work, whatever is asked. a command marks
     /// it once it last looked for a stop where it could still stop, so a stop asked later, as by
     /// ctrl-c while it prints its last lines, leaves it finished. one asked in between, after
-    /// that look, is told late through [`Stop::on_late`].
+    /// that look, is told late through [`Stop::on_late`] and taken back, so no work after the
+    /// mark stops for it.
     pub(crate) fn finish(&self) {
-        let before = self.state.fetch_or(FINISHED, Ordering::SeqCst);
-        if before & (ASKED | FINISHED | LET_FINISH) == ASKED {
+        let mut late = false;
+        self.asked.send_if_modified(|asked| {
+            let before = self.state.fetch_or(FINISHED, Ordering::SeqCst);
+            late = before & (ASKED | FINISHED | LET_FINISH) == ASKED;
+            std::mem::replace(asked, false)
+        });
+        if late {
             self.tell_late();
         }
+        #[cfg(debug_assertions)]
+        held_at_finish();
     }
 
     /// what to tell when a stop is asked of a run that finishes anyway, as when the work marks
@@ -202,6 +219,24 @@ impl Stop {
     }
 }
 
+/// holds a run right after it marks its work as finishing: with `FETCHLOOM_TEST_HOLD_FINISH`
+/// naming a file, it writes `<file>.held`, then waits until that file appears, so a CLI test can
+/// land a stop past the mark. release builds never read it.
+#[cfg(debug_assertions)]
+fn held_at_finish() {
+    let Some(release) =
+        std::env::var_os("FETCHLOOM_TEST_HOLD_FINISH").map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    let mut held = release.clone().into_os_string();
+    held.push(".held");
+    let _ = std::fs::write(held, b"");
+    while !release.exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -243,11 +278,20 @@ mod tests {
         between.ask();
         assert_eq!(told.load(Ordering::SeqCst), 1);
         assert!(between.check_unfinished().is_ok());
+        assert!(
+            between.check().is_ok(),
+            "the work past the mark never sees it"
+        );
         let after = counting();
         after.ask();
+        assert!(after.is_asked());
         after.finish();
         after.finish();
         assert_eq!(told.load(Ordering::SeqCst), 2);
+        assert!(
+            !after.is_asked(),
+            "the mark takes back a stop the work did not look at"
+        );
         let let_finish = counting();
         let_finish.finish();
         assert_eq!(let_finish.hear(), Heard::Started);
