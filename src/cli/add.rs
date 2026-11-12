@@ -538,6 +538,8 @@ async fn near_miss(
         near.reference.to_string()
     };
     let meant = super::meant(&[link], &[&fixed], format!("fetchloom add {fixed}"));
+    // a public dataset one typo away makes a typo likelier than a missing sign-in
+    error.kind = Kind::ReferenceUnresolved;
     error.need = None;
     error.help(format!("did you mean `{meant}`?"))
 }

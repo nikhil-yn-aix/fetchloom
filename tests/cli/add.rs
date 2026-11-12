@@ -1485,7 +1485,8 @@ fn typo_sources(hidden: &str) -> Result<(Routes, Routes)> {
 
 /// a hugging face or kaggle id one typo from a public dataset of the same owner, which its source
 /// answers as it answers a private one, gets the command meant rather than a sign-in, from one
-/// request to the source's own list of the owner's datasets. `--json` asks nothing more.
+/// request to the source's own list of the owner's datasets, and exits 10 as an id the source
+/// does not have. `--json` asks nothing more, so it still says to sign in.
 #[cfg(debug_assertions)]
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant() -> Result {
@@ -1511,7 +1512,7 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
     ] {
         let output = add(&["add", link, "--dry-run"])?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert_eq!(output.status.code(), Some(10), "{stderr}");
         assert!(
             stderr.contains(&format!("help: did you mean `{meant}`?\n")),
             "{stderr}"
@@ -1538,9 +1539,9 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
 fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
     let sandbox = Sandbox::new()?;
     let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
-    for (name, after, keys, asked) in [
-        ("irsi", "did you mean", "", false),
-        ("zzzz", "sign in to hugging face now?", "\r", true),
+    for (name, after, keys, asked, exit) in [
+        ("irsi", "did you mean", "", false, 10),
+        ("zzzz", "sign in to hugging face now?", "\r", true, 40),
     ] {
         let mut add = sandbox.command(&["add", &format!("hf:datasets/scikit-learn/{name}")]);
         add.env("FETCHLOOM_TEST_HF_API", &hub.url);
@@ -1548,7 +1549,7 @@ fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
         else {
             return Ok(());
         };
-        assert_eq!(code, Some(40), "{screen}");
+        assert_eq!(code, Some(exit), "{screen}");
         assert_eq!(
             screen.contains("sign in to hugging face now?"),
             asked,
@@ -1565,25 +1566,18 @@ fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
 #[test]
 fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
     let sandbox = Sandbox::new()?;
-    for (hidden, link, code, meant) in [
+    for (hidden, link, meant) in [
         (
             "404 Not Found",
             "hf:datasets/scikit-learn/irsi",
-            10,
             "hf:datasets/scikit-learn/iris",
         ),
         (
             "401 Unauthorized",
             "hf:datasets/scikit-learn/irsi",
-            40,
             "hf:datasets/scikit-learn/iris",
         ),
-        (
-            "404 Not Found",
-            "kaggle:uciml/irsi",
-            40,
-            "kaggle:uciml/iris",
-        ),
+        ("404 Not Found", "kaggle:uciml/irsi", "kaggle:uciml/iris"),
     ] {
         let (hub, kaggle) = typo_sources(hidden)?;
         let output = sandbox
@@ -1594,7 +1588,7 @@ fn a_typo_in_an_id_gets_the_command_meant_when_signed_in() -> Result {
             .env("KAGGLE_API_TOKEN", "KGAT_fakefakefakefakefake1234")
             .output()?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(code), "{hidden}: {stderr}");
+        assert_eq!(output.status.code(), Some(10), "{hidden}: {stderr}");
         assert!(
             stderr.contains(&format!("help: did you mean `fetchloom add {meant}`?\n")),
             "{hidden}: {stderr}"
