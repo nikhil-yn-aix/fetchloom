@@ -1119,6 +1119,32 @@ mod tests {
 
     /// a settings file that is not TOML names the line and column where reading stopped, and
     /// never the text there, which may hold a login.
+    /// a settings file that is there but cannot be read stops the run, saying why, rather than
+    /// reading as no file and leaving its settings out. here `FETCHLOOM_SETTINGS` names a folder.
+    #[test]
+    fn a_settings_file_that_cannot_be_read_is_an_error_not_a_missing_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let named = folder.path().to_str().unwrap();
+        let Err(error) = File::read(&env(&[("FETCHLOOM_SETTINGS", named)])) else {
+            panic!("a folder was read as the settings file");
+        };
+        assert_eq!(error.kind, Kind::LocalIo);
+        let reading = format!("could not read the settings file {named}");
+        // windows refuses to open a folder as a file, and says so as a denied permission
+        if cfg!(windows) {
+            assert!(error.message.starts_with(&reading), "{}", error.message);
+        } else {
+            assert_eq!(
+                error.message,
+                format!("{reading}: it is a folder, not a file")
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some("unset FETCHLOOM_SETTINGS, or set it to a settings file fetchloom may read")
+            );
+        }
+    }
+
     #[test]
     fn a_settings_file_that_is_not_toml_names_where_reading_stopped() {
         let error = file("jobs = 16\n[extra\n").unwrap_err();
