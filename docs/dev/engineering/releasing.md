@@ -20,14 +20,14 @@ no release has been published yet. use [source installation](../../user/getting-
 | `windows-11-arm` | `aarch64-pc-windows-msvc` | same static C runtime check on native arm64; it needs no visual studio tool, so the arm64 image cannot skip it |
 | `ubuntu-24.04` | `x86_64-unknown-linux-musl` | static musl binary, native dependencies built with musl-gcc; checked with ldd |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | same static-musl checks on native arm64 |
-| `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |
+| `macos-15`, checked on `macos-15-intel` | `x86_64-apple-darwin` | links only libraries under `/usr/lib` and `/System/Library`, checked with `otool -L`; runs on macos 11 and later, checked with `otool -l` |
 | `macos-15` | `aarch64-apple-darwin` | same checks on native arm64 |
 
 `MACOSX_DEPLOYMENT_TARGET` is 11.0, the first macos that runs on apple silicon, for the binaries and the wheels alike. `COPYFILE_DISABLE` keeps macos tar from adding `._` files that carry extended attributes. the macos binaries are not signed or notarized; a file downloaded in a browser carries the quarantine flag, while `install.sh` and `pip` download with tools that do not set it.
 
 rustc writes the paths of the files it compiles into the binary, for panic messages among other uses. before building, each job adds `--remap-path-prefix` flags to its target's `CARGO_TARGET_<triple>_RUSTFLAGS`, naming the cargo home `/cargo` and the checkout `/src`, so registry sources and generated files no longer carry the runner's paths. the step fails if either path holds whitespace, since cargo splits these flags at whitespace. the workflow must never set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`: cargo uses the first of those that is set in place of every per-target variable, so the windows binaries would lose `+crt-static` and every binary its remapping. the per-target flags belong to artifacts.yml.
 
-build jobs have a 60-minute timeout. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel tests run the [installed loopback journey](ci.md#installed-artifacts), including `fl --version`, `python -m fetchloom --version`, successful helper calls and structured errors, in fresh venvs at the documented Python endpoints.
+build jobs have a 60-minute timeout and the intel check job 20 minutes. attestation and release each have 15 minutes. maturin 1.16.0 is installed from pinned wheel hashes and reuses the checked binary. wheel tests run the [installed loopback journey](ci.md#installed-artifacts), including `fl --version`, `python -m fetchloom --version`, successful helper calls and structured errors, in fresh venvs at the documented Python endpoints.
 
 `artifacts.yml` has only contents-read permission and also accepts manual dispatch. dispatching `release.yml` runs that same builder as a dry run: attestation and draft creation require a tag push and are skipped even when dispatch names a tag. neither rehearsal publishes packages or receives publishing secrets. the fourteen candidate files and their check receipts remain run artifacts.
 

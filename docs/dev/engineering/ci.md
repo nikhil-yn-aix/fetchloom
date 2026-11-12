@@ -69,10 +69,10 @@ the benchmark itself never runs here. cargo-deny's three migration notices remai
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-musl` | 3.15.2 |
 | `windows-2025` | `x86_64-pc-windows-msvc` | 3.15.2 and 3.10.11 |
 | `windows-11-arm` | `aarch64-pc-windows-msvc` | native 3.15.2 |
-| `macos-15-intel` | `x86_64-apple-darwin` | the image's 3.14 |
+| `macos-15-intel`, built on `macos-15` | `x86_64-apple-darwin` | the image's 3.14 |
 | `macos-15` | `aarch64-apple-darwin` | 3.15.2 |
 
-all six release archives are unpacked, checked for architecture, expected files and the build's executable hash, then run against a stdlib loopback server. [python/ci_journey.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_journey.py) checks downloaded bytes and SHA-256 pins, offline restoration from a shared cache, writable-copy edit preservation, checksum refusal without publication, and archive extraction. it checks the exact version and commit. macos also checks its default cache location, the no-hardlink decision for a recognized CloudStorage path, and loading bash/zsh completions. this folder-name test does not run a real cloud provider. static-musl, Windows CRT and macos system-library/deployment-target checks remain.
+the arm64 `macos-15` runner cross-builds `x86_64-apple-darwin`, since the same release build takes nearly twice as long on the intel runner; `macos-15-intel` downloads that archive, wheel and binary and runs every check below natively, with no rust toolchain. all six release archives are unpacked, checked for architecture, expected files and the build's executable hash, then run against a stdlib loopback server. [python/ci_journey.py](https://github.com/nikhil-yn-aix/fetchloom/blob/main/python/ci_journey.py) checks downloaded bytes and SHA-256 pins, offline restoration from a shared cache, writable-copy edit preservation, checksum refusal without publication, and archive extraction. it checks the exact version and commit. macos also checks its default cache location, the no-hardlink decision for a recognized CloudStorage path, and loading bash/zsh completions. this folder-name test does not run a real cloud provider. static-musl, Windows CRT and macos system-library/deployment-target checks remain.
 
 unpacked candidates, wheel venvs, source-install trees and receipts live under `.release/`, outside the cached Rust `target/`. a restored build cache must never supply an old installation or a successful receipt. only source-package compilation output is reused, through its explicit target directory.
 
