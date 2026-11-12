@@ -669,7 +669,7 @@ impl Command {
                     || lock.dry.dry_run
             }
             Command::Export(export) => !export.force,
-            Command::Get(get) => !get.force,
+            Command::Get(get) => !get.force || get.dry.dry_run,
             Command::Remove(Remove { dry, .. })
             | Command::Drop(Drop { dry, .. })
             | Command::Build(Build { dry, .. })
@@ -1120,6 +1120,9 @@ pub(crate) struct Get {
     /// keep zip, 7z and tar archives packed instead of unpacking them
     #[arg(long, help_heading = "options")]
     pub(crate) no_extract: bool,
+
+    #[command(flatten)]
+    pub(crate) dry: DryRun,
 }
 
 /// reads `search --limit`: how many matches to keep from each site.

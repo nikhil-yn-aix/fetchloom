@@ -512,7 +512,7 @@ fn without_link(err: &reqwest::Error) -> String {
 /// `get`, which keeps no project, words its own.
 pub(crate) const MOVED_HELP: &str = "check the link in a browser. if it moved, give the new link on the command line or as ref in data.toml";
 
-pub(super) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
+pub(crate) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
     if !pinned {
         // a new link has no fingerprint yet, so no cached file can stand in for it
         return Error::new(

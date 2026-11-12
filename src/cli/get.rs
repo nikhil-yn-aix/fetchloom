@@ -6,6 +6,7 @@
 
 mod file;
 mod folder;
+mod preview;
 mod remembered;
 
 use std::borrow::Cow;
@@ -49,6 +50,16 @@ pub(super) struct Report {
     files: Vec<Got>,
     /// what happened to each link, in the order given.
     items: Vec<Item>,
+    /// for `--dry-run`, what the get would change, shaped as a dry run of add shapes it.
+    #[serde(flatten)]
+    dry: Option<Dry>,
+}
+
+/// the part of a dry run's report that tells it is one, and what it would change.
+#[derive(Serialize)]
+struct Dry {
+    dry_run: bool,
+    changes: engine::place::Changes,
 }
 
 #[derive(Clone, Serialize)]
@@ -204,6 +215,9 @@ async fn run_links(context: &Context, args: Get) -> Result<Report, Error> {
         one.expected.get_or_insert(Expected::flag(sha256));
     }
     let net = Arc::new(context.net());
+    if args.dry.dry_run {
+        return preview::run(context, &net, &args, &asked).await;
+    }
     if let [one] = asked.as_slice()
         && args.input_file.is_none()
     {
@@ -439,6 +453,7 @@ async fn one_link(
         folder: Some(done.folder.clone()),
         files: done.files.clone(),
         items: vec![Item::done(&link, &done)],
+        dry: None,
     })
 }
 
@@ -451,6 +466,7 @@ fn wrote(context: &Context, args: &Get, link: &str, file: PathBuf, done: &Done) 
         folder: Some(done.folder.clone()),
         files: done.files.clone(),
         items: vec![Item::done(link, done)],
+        dry: None,
     }
 }
 
@@ -558,6 +574,7 @@ async fn many(
         folder: None,
         files: Vec::new(),
         items,
+        dry: None,
     };
     if failed.is_empty() {
         context.output.done(
@@ -1871,6 +1888,7 @@ mod tests {
                 exclude: Vec::new(),
             },
             no_extract: false,
+            dry: crate::cli::args::DryRun { dry_run: false },
         };
         let pasted = |file: &str| {
             Reference::parse(&format!(
@@ -1923,6 +1941,7 @@ mod tests {
                 exclude: vec!["old/*".to_owned()],
             },
             no_extract: true,
+            dry: crate::cli::args::DryRun { dry_run: false },
         };
         assert_eq!(
             pin_command(&args, "https://example.org/data.zip").as_deref(),

@@ -9,6 +9,7 @@ fetchloom get https://huggingface.co/datasets/scikit-learn/iris --dir iris
 fetchloom get https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz --no-extract
 fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
 fetchloom get -i links.txt
+fetchloom get https://example.org/flowers.zip --dry-run
 fetchloom get https://example.org/iris.csv -o iris.csv --sha256 d144ff83495e88cf892b8415db97343ff575bf11e47b6d08727499c4f32ffa9d
 ```
 
@@ -28,6 +29,7 @@ fetchloom get [options] <link>...
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
 | `--exclude <glob>` | drop matching files; repeat for more |
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
+| `-n`, `--dry-run` | tell what would be fetched and where it would land without downloading a file's bytes or writing anything; see [dry run](#dry-run) |
 
 [global options](README.md#global-options) also apply. plain words [search](search.md#choosing-a-dataset) as with `add`; quote several words, as in `fetchloom get "fashion mnist"`, since unquoted words read as several links. quote patterns too; they match the files a source lists, not the files inside an archive, and each select pattern must match at least one. a link to one file its site does not list is a usage error before any download, and its help names the file the link likely meant, as hugging face's `Iris.csv` for a typed `iris.csv`.
 
@@ -186,6 +188,23 @@ error: cows.csv does not match --sha256
   got      492d5ea496056f1a6a6592241032fab764c321596317930b4fa0e1e8bc3b7470
   help: check the hash given to --sha256, or ask the file's owner which bytes are right
 ```
+
+## dry run
+
+`--dry-run` resolves each link as get does, so a source may be asked what it holds, then tells what get would fetch and where the files would land, and stops there. it downloads no file's bytes and writes nothing: no folder, no file and no cache folder. a size the source does not state reads `size unknown`, and an archive this machine never unpacked keeps its files unknown, so they are not counted. from a real run:
+
+```text
+$ fetchloom get http://127.0.0.1:19430/flowers.zip --dry-run
+      Would fetch flowers.zip · size unknown
+      Would open flowers.zip
+  hint: an archive's files are known once it is unpacked, so they are not counted
+      Would put its files in flowers
+         Ok dry run, nothing was changed
+```
+
+a file the cache already holds is no download, and one fetched before with no hash to vouch for it reads `Would check`, since its server is asked whether it changed. with `-o`, the last line says whether get would write, replace or keep the file there, and refuses a file that holds other bytes as get would. offline, a dry run answers from the cache alone, and a file it would have to download fails with `offline.missing`, exit 20, as get does.
+
+with `--json`, `result` has `dry_run: true` and `changes`, shaped as a dry run of add shapes it: `download` lists each file with its `size`, or null when unknown, `unpack` the archives whose files only unpacking tells, and `place` and `replace` the paths the files would take, relative to the current folder; `folder`, or `file` with `-o`, is where they would land.
 
 ## existing folders
 

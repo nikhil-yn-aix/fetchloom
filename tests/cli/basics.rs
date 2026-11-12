@@ -347,6 +347,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
         (
             &[
                 &["add"][..],
+                &["get"],
                 &["remove"],
                 &["drop"],
                 &["sync"],
@@ -355,7 +356,7 @@ fn the_options_scope_names_are_the_ones_add_and_get_take() -> Result {
                 &["push"],
                 &["cache", "gc"],
             ][..],
-            "`add`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take ",
+            "`add`, `get`, `remove`, `drop`, `sync`, `lock`, `build`, `push` and `cache gc` also take ",
         ),
         (&[&["add"][..], &["get"]], "`add` and `get` also take "),
         (&[&["add"][..]], "`add` takes "),

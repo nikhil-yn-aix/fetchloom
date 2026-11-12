@@ -2302,6 +2302,7 @@ mod tests {
                     "--select",
                     "--exclude",
                     "--no-extract",
+                    "--dry-run",
                 ],
             ),
             ("search", true, &["--source", "--limit"]),

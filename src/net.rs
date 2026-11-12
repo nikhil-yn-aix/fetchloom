@@ -27,7 +27,7 @@ use url::Url;
 pub(crate) use address::Allowed;
 pub(crate) use api::{Api, Response};
 pub(crate) use download::{Divert, Event, Expect, Expired, Fetch, Fetched, Origin, Resumable};
-pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES};
+pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, Google};

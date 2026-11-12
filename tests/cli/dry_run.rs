@@ -612,3 +612,59 @@ fn a_file_already_in_place_is_not_called_different_before_the_download() -> Resu
     assert_eq!(server.requests().len(), 0);
     Ok(())
 }
+
+/// a dry get tells what it would fetch and where the files would land, a size its source does
+/// not state and an archive's files unknown until it is unpacked, as a dry add does, and changes
+/// nothing: no folder or file, no cache folder and no request for the bytes. offline it fails as
+/// the get would.
+#[test]
+fn get_dry_run_tells_what_it_would_fetch_and_changes_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let csv = Server::start(PATH, Vec::new())?;
+    let zip = Server::start("/files/flowers.zip", Vec::new())?;
+    let work = tree(&sandbox.work())?;
+    let output = sandbox.run(&["get", &csv.url, "--dry-run"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "      Would fetch iris.csv · size unknown\n      Would put 1 file in iris\n         Ok dry run, nothing was changed\n"
+    );
+    let output = sandbox.run(&["get", &zip.url, "-n"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr,
+        "      Would fetch flowers.zip · size unknown\n      Would open flowers.zip\n  hint: an archive's files are known once it is unpacked, so they are not counted\n      Would put its files in flowers\n         Ok dry run, nothing was changed\n"
+    );
+    let document = json(&sandbox.run(&["--json", "get", &csv.url, "-n", "-o", "iris.csv"])?)?;
+    let result = &document["result"];
+    assert_eq!(result["dry_run"], true, "{document}");
+    assert_eq!(
+        result["file"],
+        sandbox.work().join("iris.csv").display().to_string()
+    );
+    assert_eq!(
+        result["changes"],
+        serde_json::json!({
+            "place": ["iris.csv"],
+            "replace": [],
+            "remove": [],
+            "download": [{"path": "iris.csv", "size": null}],
+            "unpack": [],
+        })
+    );
+    assert_eq!(result["files"], serde_json::json!([]));
+    let offline = sandbox.run(&["--json", "--offline", "get", &csv.url, "-n"])?;
+    assert_eq!(
+        offline.status.code(),
+        Some(20),
+        "{}",
+        text(&offline.stdout)?
+    );
+    assert_eq!(json(&offline)?["errors"][0]["kind"], "offline.missing");
+    assert_eq!(tree(&sandbox.work())?, work, "nothing was written");
+    assert!(!sandbox.cache().exists(), "no cache folder was made");
+    assert!(csv.requests().is_empty() && zip.requests().is_empty());
+    Ok(())
+}

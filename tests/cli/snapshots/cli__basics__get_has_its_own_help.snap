@@ -38,6 +38,8 @@ options:
                            more
       --no-extract         keep zip, 7z and tar archives packed instead of
                            unpacking them
+  -n, --dry-run            show what would change on disk without changing it.
+                           sources may still be asked what a link holds
   [global options]
 
 on disk: writes one folder for each link, or with -o the one file it names,

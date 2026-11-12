@@ -417,19 +417,8 @@ fn unhashed(
     force: bool,
     destination: &Destination,
 ) -> Result<(), Error> {
-    let size = match fs::metadata(&destination.path) {
-        Ok(metadata) if metadata.is_file() && !force => metadata.len(),
-        _ => return Ok(()),
-    };
-    if let Some(stated) = remote.size.filter(|stated| *stated != size) {
-        return Err(
-            other_bytes(&destination.shown, Wanted::Served).detail(format!(
-                "{} is {}, and the link's file {}",
-                destination.shown,
-                crate::units::size(size),
-                crate::units::size(stated)
-            )),
-        );
+    if !there_unhashed(remote, force, destination)? {
+        return Ok(());
     }
     if !context.offline.enabled() {
         context.output.step(
@@ -441,6 +430,83 @@ fn unhashed(
         );
     }
     Ok(())
+}
+
+/// what writing `remote` at `path` would do, as a get decides it before downloading, with
+/// nothing downloaded or written: by the hash `--sha256` or its source gives, or offline by what
+/// the link served last time. a file already there that no hash speaks for is compared once the
+/// download is in. a file the get would refuse is refused the same way.
+pub(super) fn foreseen(
+    context: &Context,
+    cache: &Cache,
+    args: &Get,
+    remote: &Remote,
+    path: &Path,
+) -> Result<Foreseen, Error> {
+    let shown = path.display().to_string();
+    let destination = Destination {
+        path: std::path::absolute(path)
+            .map_err(|err| Error::io(format_args!("could not find where {shown} is"), &err))?,
+        shown,
+    };
+    let known = match (args.sha256, stated(cache, remote)) {
+        (Some(named), _) => Some((named, Wanted::Named)),
+        (None, Some(stated)) => Some((stated, Wanted::Stated)),
+        (None, None) => recorded(cache, remote)
+            .filter(|_| context.offline.enabled())
+            .map(|record| (record.sha256, Wanted::Recorded)),
+    };
+    let found = existing(&destination)?;
+    let Some((digest, wanted)) = known else {
+        return Ok(match found {
+            Existing::Missing => Foreseen::Write,
+            _ if args.force => Foreseen::Replace,
+            _ => {
+                there_unhashed(remote, false, &destination)?;
+                Foreseen::Compare
+            }
+        });
+    };
+    match decide(&found, &digest, args.force) {
+        Step::Write => Ok(Foreseen::Write),
+        Step::Keep => Ok(Foreseen::Keep),
+        Step::Replace => Ok(Foreseen::Replace),
+        Step::Refuse => Err(refused(&destination.shown, &found, wanted, &digest)),
+    }
+}
+
+/// what a get would do with the file `-o` names, as [`foreseen`] finds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Foreseen {
+    /// nothing is there, so the file takes the name.
+    Write,
+    /// the file there holds these bytes already and stays.
+    Keep,
+    /// `--force` replaces what is there.
+    Replace,
+    /// a file is there whose bytes only the download can compare.
+    Compare,
+}
+
+/// whether a file is at the path that no hash speaks for, which only the download can compare,
+/// refusing one of another size than the source states, which holds other bytes. `--force`
+/// replaces whatever is there.
+fn there_unhashed(remote: &Remote, force: bool, destination: &Destination) -> Result<bool, Error> {
+    let size = match fs::metadata(&destination.path) {
+        Ok(metadata) if metadata.is_file() && !force => metadata.len(),
+        _ => return Ok(false),
+    };
+    if let Some(stated) = remote.size.filter(|stated| *stated != size) {
+        return Err(
+            other_bytes(&destination.shown, Wanted::Served).detail(format!(
+                "{} is {}, and the link's file {}",
+                destination.shown,
+                crate::units::size(size),
+                crate::units::size(stated)
+            )),
+        );
+    }
+    Ok(true)
 }
 
 /// what the link served the last time it was downloaded here, for a link whose source states
@@ -725,7 +791,11 @@ fn refuse_zipped(cache: &Cache, remote: &Remote, digest: &Sha256) -> Result<(), 
 }
 
 /// the one file a link keeps for `-o`, or why `--dir` fits it instead.
-fn only(mut files: Vec<Remote>, parsed: &Parsed, listing: &Listing) -> Result<Remote, Error> {
+pub(super) fn only(
+    mut files: Vec<Remote>,
+    parsed: &Parsed,
+    listing: &Listing,
+) -> Result<Remote, Error> {
     if files.len() == 1
         && let Some(remote) = files.pop()
     {
