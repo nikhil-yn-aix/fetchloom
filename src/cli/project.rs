@@ -433,11 +433,7 @@ fn unbuilt_locked(stops: bool, report: Report) -> Result<Report, Error> {
     if !stops || unbuilt.is_empty() {
         return Ok(report);
     }
-    let error = engine::unbuilt_here(unbuilt);
-    Err(match serde_json::to_value(&report) {
-        Ok(value) => error.with_result(value),
-        Err(_) => error,
-    })
+    Err(engine::unbuilt_here(unbuilt).with_report(&report))
 }
 
 /// the datasets `names` asks `command` for: every one when it names none. a name data.toml does

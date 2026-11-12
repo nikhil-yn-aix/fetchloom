@@ -154,6 +154,15 @@ impl Error {
         self
     }
 
+    /// the error with `report`, what its command found or did so far, so `--json` still gives
+    /// it. a report that cannot be written as JSON leaves the error as it was.
+    pub(crate) fn with_report(self, report: &impl serde::Serialize) -> Error {
+        match serde_json::to_value(report) {
+            Ok(value) => self.with_result(value),
+            Err(_) => self,
+        }
+    }
+
     pub(crate) fn detail(mut self, line: impl Into<String>) -> Error {
         self.details.push(line.into());
         self
@@ -456,6 +465,25 @@ mod tests {
         assert_eq!(cancel.message, "did not download x");
         let failed = Error::new(Kind::LocalIo, "x").unchanged();
         assert_eq!((failed.cancelled, failed.message.as_str()), (None, "x"));
+    }
+
+    /// a failed command's report rides along as its `--json` result, and one that cannot be
+    /// written as JSON, such as a map keyed by pairs, leaves the error as it was.
+    #[test]
+    fn a_report_rides_along_as_the_result_when_json_can_hold_it() {
+        use std::collections::BTreeMap;
+        let cases = [
+            (BTreeMap::new(), Some(serde_json::json!({}))),
+            (BTreeMap::from([((1, 2), "a pair as a key")]), None),
+        ];
+        for (report, result) in cases {
+            let error = Error::new(Kind::Unconfirmed, "needs a yes").with_report(&report);
+            assert_eq!(error.result.as_deref(), result.as_ref(), "{report:?}");
+            assert_eq!(
+                (error.kind, error.message.as_str()),
+                (Kind::Unconfirmed, "needs a yes")
+            );
+        }
     }
 
     #[test]

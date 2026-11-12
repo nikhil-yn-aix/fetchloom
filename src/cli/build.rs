@@ -383,12 +383,15 @@ impl<'a> Building<'a> {
     /// data.lock pins for its key, which keeps what the build did so far for `--json`.
     async fn steps(&mut self) -> Result<(), Error> {
         for name in self.recipes.clone() {
-            let done = self.step(&name).await.map_err(|error| self.kept(error))?;
+            let done = self
+                .step(&name)
+                .await
+                .map_err(|error| error.with_report(&self.report))?;
             let kept = done.candidate.is_some();
             self.report.steps.push(done);
             if kept {
                 let error = differs(&self.manifest, &self.report.steps);
-                return Err(self.kept(error));
+                return Err(error.with_report(&self.report));
             }
         }
         Ok(())
@@ -402,7 +405,7 @@ impl<'a> Building<'a> {
             let done = self
                 .check_step(&name)
                 .await
-                .map_err(|error| self.kept(error))?;
+                .map_err(|error| error.with_report(&self.report))?;
             self.report.steps.push(done);
         }
         if self
@@ -412,7 +415,7 @@ impl<'a> Building<'a> {
             .any(|step| step.candidate.is_some())
         {
             let error = differs(&self.manifest, &self.report.steps);
-            return Err(self.kept(error));
+            return Err(error.with_report(&self.report));
         }
         let output = &self.context.output;
         if self.recipes.is_empty() {
@@ -618,17 +621,10 @@ impl<'a> Building<'a> {
     /// leaves data.lock and the data folder as they were, and one asked later lets it finish.
     fn last_look(&self) -> Result<(), Error> {
         if self.context.stop.is_asked() {
-            return Err(self.kept(stopped()));
+            return Err(stopped().with_report(&self.report));
         }
         self.context.stop.finish();
         Ok(())
-    }
-
-    fn kept(&self, error: Error) -> Error {
-        match serde_json::to_value(&self.report) {
-            Ok(value) => error.with_result(value),
-            Err(_) => error,
-        }
     }
 
     /// builds the recipe `name`: up to date when data.lock pins what building it now would make

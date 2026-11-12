@@ -126,7 +126,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
         return Ok(report);
     }
     if let Err(error) = complete(&report, args.format) {
-        return Err(with_report(error, &report));
+        return Err(error.with_report(&report));
     }
     let (text, count) = render(&report, args.format);
     let Some(path) = &args.output else {
@@ -142,7 +142,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     context.stop.finish();
     match publish(path, &text, args.force) {
         Ok(file) => report.file = Some(file),
-        Err(error) => return Err(with_report(error, &report)),
+        Err(error) => return Err(error.with_report(&report)),
     }
     let what = match args.format {
         Format::Sha256 => crate::units::count(count, "file", "files"),
@@ -248,14 +248,6 @@ fn joined(names: &[&str]) -> Option<String> {
     } else {
         format!("{} and {last}", rest.join(", "))
     })
-}
-
-/// `error` with what export found, so `--json` still lists it.
-fn with_report(error: Error, report: &Report) -> Error {
-    match serde_json::to_value(report) {
-        Ok(value) => error.with_result(value),
-        Err(_) => error,
-    }
 }
 
 /// what the datasets `names`, or every dataset when none is named, pin: the files placed from

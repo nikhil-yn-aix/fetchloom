@@ -568,11 +568,7 @@ async fn many(
         );
         return Ok(report);
     }
-    let mut error = some_failed(links, &failed);
-    if let Ok(result) = serde_json::to_value(&report) {
-        error = error.with_result(result);
-    }
-    Err(error)
+    Err(some_failed(links, &failed).with_report(&report))
 }
 
 /// resolves every link at once within the network's limits, each to its listing or to why it

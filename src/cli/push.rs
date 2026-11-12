@@ -222,7 +222,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
             &cache,
             &fetching(&planned),
         )
-        .map_err(|error| with_report(error, &report(&planned, Outcome::Stopped)))?;
+        .map_err(|error| error.with_report(&report(&planned, Outcome::Stopped)))?;
         // what the archives hold is known now, so the push plans again
         planned = plan(
             context,
@@ -250,7 +250,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
                 .map(|at| &planned.needed[*at])
                 .collect();
             let error = missing(&lacked, &planned.unknown);
-            return Err(with_report(error, &report(&planned, Outcome::Stopped)));
+            return Err(error.with_report(&report(&planned, Outcome::Stopped)));
         }
     }
     take(context, &project, &manifest, &lock, &cache, &planned)?;
@@ -439,7 +439,7 @@ fn settle(
         .map(|at| &planned.needed[*at])
         .collect();
     match mispinned(cache, lock, &lacked).or_else(|| unbuilt(&lacked)) {
-        Some(error) => Err(with_report(error, &report(planned, Outcome::Stopped))),
+        Some(error) => Err(error.with_report(&report(planned, Outcome::Stopped))),
         None => Ok(()),
     }
 }
@@ -534,14 +534,14 @@ fn take(
         .filter(|needed| rest.iter().any(|want| want.digest == needed.item.digest))
         .collect();
     if let Some(error) = unbuilt(&lacked) {
-        return Err(with_report(error, &report(planned, Outcome::Stopped)));
+        return Err(error.with_report(&report(planned, Outcome::Stopped)));
     }
     let names = lacked
         .iter()
         .map(|needed| needed.dataset.as_str())
         .collect();
     fetch(context, project, manifest, lock, cache, &names)
-        .map_err(|error| with_report(error, &report(planned, Outcome::Stopped)))
+        .map_err(|error| error.with_report(&report(planned, Outcome::Stopped)))
 }
 
 /// `needed` as the data folder is asked for it.
@@ -858,10 +858,9 @@ fn ask(context: &Context, planned: &Planned) -> Result<(), Error> {
             let help = format!(
                 "answer yes at a terminal, or add --yes once everyone who can read {target} may have {it}"
             );
-            Err(with_report(
-                error.help(help),
-                &report(planned, Outcome::Stopped),
-            ))
+            Err(error
+                .help(help)
+                .with_report(&report(planned, Outcome::Stopped)))
         }
     }
 }
@@ -1154,14 +1153,6 @@ fn refusal(root: &Path, refused: Refused) -> Error {
         Refused::NotAFolder => Error::new(Kind::LocalIo, format!("{shown} is not a folder"))
             .help("name a folder for the mirror"),
         Refused::Failed(err) => Error::io(format_args!("could not use the mirror {shown}"), &err),
-    }
-}
-
-/// `error` with what the push found, so `--json` still says it.
-fn with_report(error: Error, report: &Report) -> Error {
-    match serde_json::to_value(report) {
-        Ok(value) => error.with_result(value),
-        Err(_) => error,
     }
 }
 
