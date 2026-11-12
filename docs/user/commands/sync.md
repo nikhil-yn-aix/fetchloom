@@ -51,6 +51,8 @@ error: iris/iris.csv is not the file data.lock records
 
 a [folder mirror](../mirrors.md) that holds the pinned bytes gives them back; follow the upgrade only when you intend to change the input, since it pins what the source serves now. with `--json` the error's `fix` is null. [recovery](../concepts.md#recovery) covers expired download URLs and interrupted transfers.
 
+a failed sync reports the step it stopped in, not every problem. archives are fetched and unpacked before other files, so a missing archive stops the run before any other file is asked for, and those datasets go unchecked. files that did download and match their pins wait in the cache, since nothing is placed while a file failed. to place the datasets you need now, [name them](#named-datasets), as `fetchloom sync tips`.
+
 ## named datasets
 
 `fetchloom sync small` works on small alone. it resolves small when its entry in data.toml changed, downloads and places small's files, and removes the files fetchloom placed for small that small no longer pins. every other dataset keeps its entry in data.lock and its files as they are, even one data.toml changed, dropped or added: nothing of theirs is resolved, downloaded, placed, replaced or removed. stderr in a fresh clone of a project with datasets small and large, from a real run:
