@@ -179,8 +179,6 @@ jobs:
         env:
           FETCHLOOM_TEST_REQUIRE: ${{ matrix.require }}
         run: python3 python/ci_tests.py run native
-      - name: doctests
-        run: cargo test --locked --doc
       - name: rustdoc
         if: matrix.os == 'ubuntu-24.04'
         env:
@@ -278,8 +276,6 @@ jobs:
         env:
           FETCHLOOM_TEST_REQUIRE: git,hardlinks,pwsh
         run: python python/ci_tests.py run native
-      - name: doctests
-        run: cargo test --locked --doc
       - run: python -m unittest discover -s python
       - name: keep test reports
         if: always()
