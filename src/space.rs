@@ -141,10 +141,12 @@ fn probed(path: &Path) -> Filesystem {
     let Ok(path) = std::fs::canonicalize(path) else {
         return Filesystem::Other;
     };
-    let disks =
-        sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing());
+    let Ok(disks) =
+        sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing())
+    else {
+        return Filesystem::Other;
+    };
     disks
-        .list()
         .iter()
         .filter_map(|disk| {
             let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
@@ -186,9 +188,9 @@ fn measured(path: &Path) -> Option<u64> {
     let path = std::fs::canonicalize(path).ok()?;
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
         sysinfo::DiskRefreshKind::nothing().with_storage(),
-    );
+    )
+    .ok()?;
     disks
-        .list()
         .iter()
         .filter_map(|disk| {
             let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
@@ -221,9 +223,9 @@ fn sized(path: &Path) -> Option<u64> {
     let path = std::fs::canonicalize(path).ok()?;
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(
         sysinfo::DiskRefreshKind::nothing().with_storage(),
-    );
+    )
+    .ok()?;
     disks
-        .list()
         .iter()
         .filter_map(|disk| {
             let mount = std::fs::canonicalize(disk.mount_point()).ok()?;
@@ -358,7 +360,6 @@ mod tests {
         assert_eq!(short(u64::MAX, None), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_real_disk_tells_its_free_space() {
         let folder = tempfile::tempdir().unwrap();
