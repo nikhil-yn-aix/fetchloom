@@ -94,6 +94,27 @@ fn push_to_is_shown_with_where_it_came_from() -> Result {
     Ok(())
 }
 
+/// the closing `next:` line says where the settings file that names the mirror is.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_push_says_where_the_settings_file_is() -> Result {
+    let sandbox = Sandbox::new()?;
+    project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    let push = sandbox.command(&["--yes", "push", "--to", &root.to_string_lossy()]);
+    let Some(screen) = sandbox.on_a_terminal_running(&push)? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(&format!(
+            "next: teammates add mirrors = [\"{}\"] to their settings file, here ~/",
+            root.display()
+        )) && screen.contains("settings.toml; `fetchloom settings` shows where\n"),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// a push starts the mirror, writes each pinned file and the archive's list of files under their
 /// SHA-256, never the archive, and asks no server anything. the next push finds them after one
 /// look each, and replaces a copy someone damaged.

@@ -154,7 +154,7 @@ the sources of iris and pets did not say who may read them. anyone who can read 
     Started a mirror in /mnt/lab/fetchloom
      Pushed 6 files · 106 B to /mnt/lab/fetchloom
          Ok every file iris and pets need is on the mirror
-  next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file
+  next: teammates add mirrors = ["/mnt/lab/fetchloom"] to their settings file, here ~/.config/fetchloom/settings.toml; `fetchloom settings` shows where
 ```
 
 push copies the project's files alone, never the rest of a cache other projects share, and it asks first about data whose source wanted an account or accepted terms, or did not say who may read it. it writes folders only: a web mirror or a bucket gets a folder mirror through a copying tool such as rclone. a push replaces a copy of another size it finds; a copy of the right size with other bytes, which `sync` warns about, goes once someone deletes it and pushes again.

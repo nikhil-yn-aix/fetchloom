@@ -1,6 +1,26 @@
-//! one way to write sizes, rates, durations and counts, everywhere fetchloom prints them.
+//! one way to write sizes, rates, durations, counts and paths, everywhere fetchloom prints them.
 
+use std::path::{MAIN_SEPARATOR, Path};
 use std::time::Duration;
+
+/// `path` as a line a person reads shows it: below the home folder as `~/…`, else whole. a
+/// command to run keeps the whole path, since a shell reads no `~` inside quotes.
+pub(crate) fn path(path: &Path) -> String {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
+    below_home(path, home.as_deref().map(Path::new))
+}
+
+/// `path` with the home folder `home` written `~`.
+fn below_home(path: &Path, home: Option<&Path>) -> String {
+    let inside = home
+        .filter(|home| home.parent().is_some())
+        .and_then(|home| path.strip_prefix(home).ok());
+    match inside {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~{MAIN_SEPARATOR}{}", rest.display()),
+        None => path.display().to_string(),
+    }
+}
 
 /// a size in binary units: `512 B`, `4.1 KiB`, `3.4 GiB`.
 pub(crate) fn size(bytes: u64) -> String {
@@ -225,6 +245,30 @@ pub(crate) fn bytes(text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a path below the home folder reads from `~`; the home folder alone is `~`, and a path
+    /// elsewhere, or a home of `/`, stays whole.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_below_home_reads_from_the_tilde() {
+        let home = Some(Path::new("/home/ada"));
+        for (path, shown) in [
+            (
+                "/home/ada/.config/fetchloom/settings.toml",
+                "~/.config/fetchloom/settings.toml",
+            ),
+            ("/home/ada", "~"),
+            ("/home/adam/data", "/home/adam/data"),
+            ("/scratch/lab", "/scratch/lab"),
+        ] {
+            assert_eq!(below_home(Path::new(path), home), shown, "{path}");
+        }
+        assert_eq!(
+            below_home(Path::new("/srv/x"), Some(Path::new("/"))),
+            "/srv/x"
+        );
+        assert_eq!(below_home(Path::new("/srv/x"), None), "/srv/x");
+    }
 
     #[test]
     fn sizes() {
