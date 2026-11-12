@@ -111,12 +111,25 @@ fn names(current: &str, before: &[String]) -> Option<Vec<String>> {
 /// the names of the datasets data.toml's `text` has. a data.toml fetchloom wrote names each in a
 /// `[datasets.<name>]` header, which a look at each line finds; any other shape is parsed whole.
 fn dataset_names(text: &str) -> Option<Vec<String>> {
-    if let Some(names) = headed(text) {
-        return Some(names);
-    }
-    let manifest: toml::Table = text.parse().ok()?;
-    let datasets = manifest.get("datasets")?.as_table()?;
-    Some(datasets.keys().cloned().collect())
+    let names = if let Some(names) = headed(text) {
+        names
+    } else {
+        let manifest: toml::Table = text.parse().ok()?;
+        manifest
+            .get("datasets")?
+            .as_table()?
+            .keys()
+            .cloned()
+            .collect()
+    };
+    // data.toml may come from anyone, and a shell puts a completion on the command line as it
+    // is, so a name fetchloom would refuse, which could hold `$(…)`, is never offered
+    Some(
+        names
+            .into_iter()
+            .filter(|name| crate::name::is_dataset_name(name))
+            .collect(),
+    )
 }
 
 /// the names in `[datasets.<name>]` headers, or none where a line alone cannot tell them: no such
@@ -458,8 +471,10 @@ mod tests {
         ] {
             assert_eq!(dataset_names(text), Some(vec!["iris".into()]), "{text}");
         }
-        let quoted = "[datasets.\"v1.2\"]\nref = \"a\"\n";
-        assert_eq!(dataset_names(quoted), Some(vec!["v1.2".into()]));
+        let quoted = "[datasets.\"iris-2\"]\nref = \"a\"\n";
+        assert_eq!(dataset_names(quoted), Some(vec!["iris-2".into()]));
+        let refused = "[datasets.\"ir$(touch x)\"]\nref = \"a\"\n\n[datasets.\"v1.2\"]\nref = \"b\"\n\n[datasets.irises]\nref = \"c\"\n";
+        assert_eq!(dataset_names(refused), Some(vec!["irises".into()]));
         assert_eq!(dataset_names("[settings]\njobs = 2\n"), None);
         assert_eq!(dataset_names("[datasets.iris\n"), None);
     }
