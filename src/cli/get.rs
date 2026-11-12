@@ -727,7 +727,7 @@ fn hint_shards(context: &Context, wanted: &Wanted) {
     {
         context
             .output
-            .hint(&shards.hint(&wanted.parsed.reference.shown(), "--no-extract"));
+            .hint(&shards.hint(&wanted.parsed.reference.shown(), "--no-extract", None));
     }
 }
 

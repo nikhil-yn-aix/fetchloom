@@ -118,17 +118,17 @@ the parts of an archive missing one are placed as plain files. rar volumes and s
 
 ### webdataset shards
 
-webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. an `add` of a folder on this machine hints the same way before it copies anything into the cache, naming the folder as typed, as in `hint: ./shards holds 8 numbered .tar shards`. stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket:
+webdataset splits a large dataset into numbered tar files, shards such as `train-000000.tar` to `train-001023.tar`, and its loaders read them packed. unpacked, each shard becomes its many small files: while a sync runs, the cache holds both the shard and its files, and afterwards every file takes an inode, which a cluster's quota counts. so before anything downloads, `add`, `get` and a `sync` that adds or changes a dataset hint when the files that would unpack include at least 8 tars in one folder named `<prefix><digits>.tar`, `.tar.gz` or `.tgz`, with one prefix and one digit width. an `add` of a folder on this machine hints the same way before it copies anything into the cache, naming the folder as typed, as in `hint: ./shards holds 8 numbered .tar shards`. in a project, the hint ends with the one [members table](reference/data-toml.md#one-table-for-many-shards) that keeps only some files of every shard, its key made from the shards' own names. an excerpt of stderr from `fetchloom add s3://wds/shards/` with a local stand-in for the bucket, on a debug build:
 
 ```text
    Resolved s3://wds/shards/ · 1,024 files · 10.0 MiB
-  hint: shards holds 1,024 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml
- Downloaded 1,024 files · 10.0 MiB in 1.6 s · 6.2 MiB/s
+  hint: shards holds 1,024 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml. to unpack them and keep only some files of each, write one members table, [datasets.shards.members."train-*.tar"]
+ Downloaded 1,024 files · 10.0 MiB in 15.5 s · 659.5 KiB/s
 ```
 
 `sync` names only `extract = false in data.toml`, and `get` only `--no-extract`, the way each keeps archives packed. the hint shows when the dataset is new or a change to its entry lists the source again; a later sync, an upgrade and a switch of `extract` show none, and neither do `-q`, `--json` or `FETCHLOOM_NO_HINTS=1`. turning `extract` off later needs no new listing, but the shards come down again, since sync drops an archive's own bytes once its files are in; [data.lock](reference/data-lock.md#the-spec-hash) explains the switch.
 
-to unpack the shards and keep only some files of each, one [members table](reference/data-toml.md#one-table-for-many-shards) under a glob key chooses them in every shard, and in shards that arrive later, as `select = ["*.wav", "*.txt"]` under `[datasets.shards.members."shard-*.tar"]`.
+the members table the hint names chooses the same files in every shard, and in shards that arrive later, as `select = ["*.wav", "*.txt"]` under `[datasets.shards.members."train-*.tar"]`; `get` keeps no project, so its hint names none. a `select` written on the dataset itself for those files matches none the bucket lists, and its error moves the pattern to that table.
 
 ## offline
 

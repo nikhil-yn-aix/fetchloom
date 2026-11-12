@@ -295,7 +295,9 @@ impl Loop<'_> {
             } else {
                 "extract = false in data.toml"
             };
-            self.context.output.hint(&shards.hint(name, keep));
+            self.context
+                .output
+                .hint(&shards.hint(name, keep, Some(name)));
         }
     }
 

@@ -893,7 +893,17 @@ fn walk_import(
         && output.shows_hints()
         && let Some(shards) = archive::shards(walked.files.iter().map(|file| file.path.as_str()))
     {
-        output.hint(&shards.hint(shown, "--no-extract, or extract = false in data.toml"));
+        // a name data.toml has already takes a number once the files are in, so it is not told
+        let named = args.name.clone().unwrap_or_else(|| {
+            import::dataset_name(start, start.is_file()).unwrap_or_else(|| "dataset".to_owned())
+        });
+        let dataset = if args.name.is_none() && manifest.datasets.contains_key(&named) {
+            "<name>"
+        } else {
+            named.as_str()
+        };
+        let keep = "--no-extract, or extract = false in data.toml";
+        output.hint(&shards.hint(shown, keep, Some(dataset)));
     }
     Ok((supplied, source, walked))
 }

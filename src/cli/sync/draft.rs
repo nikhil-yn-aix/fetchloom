@@ -923,12 +923,15 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
     let archive = listing
         .paths()
         .find(|path| source.extract && archive::by_name(path) == Some(Packed::Archive));
+    let shards = archive.and_then(|_| archive::shards(listing.paths()));
     match (deeper, archive) {
         (Some(deeper), _) => error.help(format!(
             "patterns match the whole path. try \"{}\"",
             deeper.as_str()
         )),
-        (None, Some(archive)) => error.help(inside(name, glob, archive, written(entry))),
+        (None, Some(archive)) => {
+            error.help(inside(name, glob, archive, shards.as_ref(), written(entry)))
+        }
         (None, None) => error.help(match written(entry) {
             Patterns::OnCommandLine => {
                 "compare the pattern with the paths above, then fix --select"
@@ -941,17 +944,34 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
 }
 
 /// how to keep only the files inside `archive` that `glob`, a select pattern of dataset `name`
-/// that matched no file the source lists, was most likely meant for: a members table, or drop.
-/// a pattern on the command line may be get's, which keeps no project, so its advice works for
-/// get too and offers a project's tools only for a project.
-fn inside(name: &str, glob: &Glob, archive: &str, patterns: Patterns) -> String {
+/// that matched no file the source lists, was most likely meant for: a members table, one for
+/// every shard of `shards` when the source lists numbered tar shards, or drop. a pattern on the
+/// command line may be get's, which keeps no project, so its advice works for get too and
+/// offers a project's tools only for a project.
+fn inside(
+    name: &str,
+    glob: &Glob,
+    archive: &str,
+    shards: Option<&archive::Shards<'_>>,
+    patterns: Patterns,
+) -> String {
     let select = toml_edit::Value::from(glob.as_str());
-    match patterns {
-        Patterns::OnCommandLine => format!(
+    match (shards, patterns) {
+        (None, Patterns::OnCommandLine) => format!(
             "--select chooses among the files the link lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [{select}] under [datasets.<name>.members.\"{archive}\"] in data.toml, or `fetchloom drop <path>` leaves files out"
         ),
-        Patterns::InDataToml => format!(
+        (None, Patterns::InDataToml) => format!(
             "select chooses among the files the source lists, and {archive} is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [{select}] under [datasets.{name}.members.\"{archive}\"], or leave files out with `fetchloom drop <path>`"
+        ),
+        (Some(shards), Patterns::OnCommandLine) => format!(
+            "--select chooses among the files the link lists, and its {} are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [{select}] under [datasets.<name>.members.\"{}\"] in data.toml, or `fetchloom drop <path>` leaves files out",
+            shards.told(),
+            shards.key()
+        ),
+        (Some(shards), Patterns::InDataToml) => format!(
+            "select chooses among the files the source lists, and its {} are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [{select}] under [datasets.{name}.members.\"{}\"], or leave files out with `fetchloom drop <path>`",
+            shards.told(),
+            shards.key()
         ),
     }
 }
@@ -968,12 +988,24 @@ mod tests {
     fn a_pattern_meant_for_inside_an_archive_gets_advice_its_command_can_follow() {
         let glob = Glob::new("*.data").unwrap();
         assert_eq!(
-            inside("new", &glob, "iris.zip", Patterns::OnCommandLine),
+            inside("new", &glob, "iris.zip", None, Patterns::OnCommandLine),
             "--select chooses among the files the link lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, leave --select out and keep what you need from the folder it unpacks to, which --dir names for get. in a project, a members table keeps them instead, as select = [\"*.data\"] under [datasets.<name>.members.\"iris.zip\"] in data.toml, or `fetchloom drop <path>` leaves files out"
         );
         assert_eq!(
-            inside("uci", &glob, "iris.zip", Patterns::InDataToml),
+            inside("uci", &glob, "iris.zip", None, Patterns::InDataToml),
             "select chooses among the files the source lists, and iris.zip is one of them, unpacked whole. to keep only some files inside it, move the pattern to a members table, as select = [\"*.data\"] under [datasets.uci.members.\"iris.zip\"], or leave files out with `fetchloom drop <path>`"
+        );
+        let paths: Vec<String> = (0..8).map(|n| format!("wds/shard-{n:06}.tar")).collect();
+        let shards = archive::shards(paths.iter().map(String::as_str));
+        assert_eq!(
+            inside(
+                "new",
+                &glob,
+                "wds/shard-000000.tar",
+                shards.as_ref(),
+                Patterns::OnCommandLine
+            ),
+            "--select chooses among the files the link lists, and its 8 numbered .tar shards in wds are among them, each unpacked whole. to keep only some files inside them, leave --select out and keep what you need from the folders they unpack to, which --dir names for get. in a project, one members table keeps them for every shard instead, as select = [\"*.data\"] under [datasets.<name>.members.\"wds/shard-*.tar\"] in data.toml, or `fetchloom drop <path>` leaves files out"
         );
     }
     use crate::cache::tests::store;

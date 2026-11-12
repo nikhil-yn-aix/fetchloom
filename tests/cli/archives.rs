@@ -1050,7 +1050,7 @@ fn a_folder_of_shards_hints_keeping_them_packed() -> Result {
     ok(&added)?;
     let stderr = text(&added.stderr)?;
     let hinted = stderr.find(
-        "  hint: ../shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml\n",
+        "  hint: ../shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with --no-extract, or extract = false in data.toml. to unpack them and keep only some files of each, write one members table, [datasets.shards.members.\"part-*.tar\"]\n",
     );
     assert!(
         hinted.is_some() && hinted < stderr.find("Imported"),
@@ -1071,6 +1071,9 @@ mod shards {
 
     /// the hint's start for the 8 shards of [`bucket`] in a dataset named shards.
     const HINT: &str = "shards holds 8 numbered .tar shards, which webdataset loaders read packed. keep them packed with";
+
+    /// the hint's end for them in a project: one members table for every shard.
+    const MEMBERS: &str = "to unpack them and keep only some files of each, write one members table, [datasets.shards.members.\"train-*.tar\"]";
 
     /// a tar holding `files`, each a name and its bytes.
     fn tar_of(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
@@ -1166,7 +1169,7 @@ mod shards {
         ok(&added)?;
         hinted_before_downloading(
             &text(&added.stderr)?,
-            &format!("  hint: {HINT} --no-extract, or extract = false in data.toml\n"),
+            &format!("  hint: {HINT} --no-extract, or extract = false in data.toml. {MEMBERS}\n"),
         );
         assert_eq!(
             fs::read(sandbox.work().join("data/shards/sample-7.txt"))?,
@@ -1186,7 +1189,7 @@ mod shards {
         ok(&first)?;
         hinted_before_downloading(
             &text(&first.stderr)?,
-            &format!("  hint: {HINT} extract = false in data.toml\n"),
+            &format!("  hint: {HINT} extract = false in data.toml. {MEMBERS}\n"),
         );
         let unhinted = |args: &[&str]| -> Result {
             let output = run(&sandbox, &routes, args)?;
@@ -1237,6 +1240,28 @@ mod shards {
                 assert!(!told.contains("webdataset"), "{args:?}: {told}");
             }
         }
+        Ok(())
+    }
+
+    /// a select over the files inside shards matches none the bucket lists, and its help moves
+    /// the pattern to one members table for every shard, not a table for the first.
+    #[test]
+    fn a_select_over_shard_members_points_at_one_glob_table() -> Result {
+        let sandbox = Sandbox::new()?;
+        let routes = bucket()?;
+        fs::write(
+            sandbox.work().join("data.toml"),
+            format!("[datasets.shards]\nref = \"{LINK}\"\nselect = [\"*.txt\"]\n"),
+        )?;
+        let synced = run(&sandbox, &routes, &["sync"])?;
+        assert_eq!(synced.status.code(), Some(50));
+        let stderr = text(&synced.stderr)?;
+        assert!(
+            stderr.contains(
+                "  help: select chooses among the files the source lists, and its 8 numbered .tar shards are among them, each unpacked whole. to keep only some files inside them, move the pattern to one members table for every shard, as select = [\"*.txt\"] under [datasets.shards.members.\"train-*.tar\"], or leave files out with `fetchloom drop <path>`\n"
+            ),
+            "{stderr}"
+        );
         Ok(())
     }
 
