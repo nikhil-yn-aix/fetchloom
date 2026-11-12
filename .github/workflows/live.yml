@@ -34,9 +34,12 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
+      # the cache ci's test jobs keep warm on every push. this weekly job only reads it: a cache it
+      # saved could take that key without ci's clippy build
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: test
+          save-if: false
       - name: live Rust source checks
         run: |
           mkdir -p target/live
